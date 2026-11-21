@@ -24,7 +24,7 @@ use crate::gateway::shared::authority::Authority;
 use crate::gateway::shared::capture::{Inputs, Requirements};
 use crate::gateway::shared::ownership::Custody;
 use crate::gateway::shared::store::Store;
-use crate::policy_lock::PolicyRuntime;
+use crate::policy_source::PolicyRuntime;
 use crate::runtime_crypto::DeploymentKey;
 
 struct Fixture {
@@ -62,7 +62,7 @@ impl Fixture {
             serde_saphyr::from_str(include_str!("../../../../policy/default.yaml"))?;
         let pending = PendingEvalDecisionStore::default();
         let requirements = Requirements::from_config(&config, Some(&document))?;
-        let runtime = PolicyRuntime::from_document(&config, Some(document), pending.clone(), None)?;
+        let runtime = PolicyRuntime::from_document(&config, Some(document), pending.clone())?;
         let mut execution = crate::metering::shared::tests::fixture()?.event.execution;
         execution.state = bitrouter_ai::gateway::execution::ExecutionState::Accepted;
         execution.attempts.clear();
@@ -182,6 +182,7 @@ fn result() -> ExecutionResult {
         .into(),
         request_duration_ms: 999,
         upstream_duration_ms: Some(888),
+        #[cfg(feature = "server-tools")]
         server_tool_calls: vec![],
     }
 }

@@ -219,7 +219,7 @@ async fn remains_fenced(
         Duration::from_secs(30),
     );
     for result in [
-        retry.resolve(key).await,
+        retry.resolve_with_fallback(key, None).await,
         retry.recover(key, Some("original")).await,
     ] {
         ensure!(matches!(
@@ -309,7 +309,7 @@ async fn force_joins_shared_oauth_request_before_generation_and_telemetry() -> R
                     let Ok(owners) = serving.acquire_request() else {
                         return StatusCode::SERVICE_UNAVAILABLE;
                     };
-                    let _result = session.resolve(&key).await;
+                    let _result = session.resolve_with_fallback(&key, None).await;
                     drop(owners);
                     StatusCode::SERVICE_UNAVAILABLE
                 }

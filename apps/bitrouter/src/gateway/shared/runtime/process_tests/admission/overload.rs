@@ -1,7 +1,7 @@
-//! Bounded stock-process candidates for part of P1-A07, not load acceptance.
+//! Bounded overload and backpressure checks against stock gateway processes.
 //!
 //! Reuse the stock seed, counted HTTP provider, ordinary clients and strict
-//! owned-child cleanup. No new provider implementation or production hook.
+//! owned-child cleanup without a production hook.
 
 use std::io::ErrorKind;
 

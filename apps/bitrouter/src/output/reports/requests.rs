@@ -1,4 +1,4 @@
-//! `bro status --requests` — what the router has actually done.
+//! `bitrouter status --requests` — what the router has actually done.
 //!
 //! # Why this is a report and not a printer
 //!
@@ -376,9 +376,7 @@ impl CliReport for RequestsReport {
 fn window_label(window: TimeWindow) -> &'static str {
     match window {
         TimeWindow::LastMinute => "last minute",
-        TimeWindow::LastHour => "last hour",
         TimeWindow::Today => "today",
-        TimeWindow::ThisWeek => "this week",
         TimeWindow::ThisMonth => "this month",
         TimeWindow::Custom { .. } => "window",
     }
@@ -395,11 +393,7 @@ fn window_start(
     let midnight = now.date_naive().and_time(chrono::NaiveTime::MIN).and_utc();
     match window {
         TimeWindow::LastMinute => now - chrono::Duration::minutes(1),
-        TimeWindow::LastHour => now - chrono::Duration::hours(1),
         TimeWindow::Today => midnight,
-        TimeWindow::ThisWeek => {
-            midnight - chrono::Duration::days(now.weekday().num_days_from_monday().into())
-        }
         TimeWindow::ThisMonth => {
             let first = chrono::NaiveDate::from_ymd_opt(now.year(), now.month(), 1);
             match first {
@@ -747,7 +741,7 @@ mod tests {
         let fresh = report(None, Vec::new());
         assert_eq!(fresh.mode, Mode::Empty);
         assert!(
-            fresh.headline().contains("bro serve"),
+            fresh.headline().contains("bitrouter serve"),
             "an empty view must say what to do, not just show nothing"
         );
     }

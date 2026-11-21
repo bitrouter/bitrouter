@@ -57,16 +57,6 @@ async fn authenticated_old_policy_bytes_are_refused_on_every_current_open() -> R
     assert!(resources.validate_compiled(&historical).is_err());
     assert!(resources.validate_executable(&historical).is_err());
     assert!(resources.open_execution(&historical).is_err());
-    #[cfg(all(feature = "core", feature = "harness"))]
-    {
-        let check = || Ok(());
-        let budget = crate::storage::operation_budget::OperationBudget::new(&check);
-        assert!(
-            resources
-                .open_obligation_recovery(&historical, &budget)
-                .is_err()
-        );
-    }
     Ok(())
 }
 
@@ -142,18 +132,17 @@ async fn public_resource_name_equal_to_a_policy_tier_stays_distinct_through_pipe
     assert_eq!(tier[0].service_id, "cheap");
 
     let policy = route.policy().context("missing retained policy")?;
-    let runtime = crate::policy_lock::PolicyRuntime::from_document(
+    let runtime = crate::policy_source::PolicyRuntime::from_document(
         &checked(policy.configuration())?,
         Some(policy.document().clone()),
         PendingEvalDecisionStore::default(),
-        None,
     )?;
     let captured = Arc::new(Mutex::new(Vec::new()));
     let mut builder = PipelineBuilder::new();
     builder
         .routing_table(route)
         .model_selector(runtime)
-        .route_hook(crate::policy_lock::PredictiveSingleTargetRouteHook)
+        .route_hook(crate::policy_source::PredictiveSingleTargetRouteHook)
         .route_hook(CaptureTargets(captured.clone()))
         .executor(Arc::new(MockExecutor::always_text("retained tier")));
     let pipeline = builder.build()?;

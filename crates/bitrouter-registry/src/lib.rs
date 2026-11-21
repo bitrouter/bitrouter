@@ -3,6 +3,7 @@
 //! The complete public document is retained independently of execution support.
 //! No registry contents execute code or resolve ambient credentials here.
 
+pub mod curation;
 pub mod document;
 pub mod feed;
 pub mod json;

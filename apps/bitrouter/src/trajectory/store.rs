@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod fixtures;
+
 use anyhow::{Context, Result};
 use sea_orm::{
     ColumnTrait, DatabaseConnection, DatabaseTransaction, DbErr, EntityTrait, IntoActiveModel,
@@ -7,22 +10,15 @@ use sea_orm::{
 
 use super::correlation::CorrelationSource;
 use super::evaluation::{TRAJECTORY_EVAL_TOPIC, build_operational_evaluation};
-use super::guard::{
-    ProgressGuardInput, ProgressGuardPolicy, RouteIntent, RouteIntentClause,
-    RouteIntentClauseDisposition, evaluate, validate_persisted_route_intent,
-};
-use super::health::{PrefixReduction, reduce, reduce_prefix};
+use super::health::reduce;
+use super::route::RouteIntent;
 use super::types::{
     BeginRequest, EpisodeStart, HistoryCompleteness, KeyedDigest, OutboxWrite, PendingOutbox,
     RequestStatus, Settlement, StoredEpisode, StoredRequest, TRAJECTORY_SCHEMA_VERSION,
     TrajectoryEvent, TrajectoryEventKind, TrajectoryEvidence, TrajectorySnapshot, canonical_digest,
     validate_event, validate_keyed_component, validate_outbox_payload,
 };
-use crate::gateway::routing::workflow::ir::RouteProjection;
-use {
-    crate::gateway::routing::exploration::RouteAssignment,
-    bitrouter_ai::eval::RouteDecisionMeasurement,
-};
+use bitrouter_ai::{eval::RouteDecisionMeasurement, policy::RouteClass};
 
 pub(super) mod episode_entity {
     use sea_orm::entity::prelude::*;
@@ -169,7 +165,7 @@ pub(crate) struct CorrelateAndBegin {
     pub canonical_input_bytes: u64,
     pub protocol: String,
     pub captured_at: String,
-    pub guarded_route: Option<GuardedRouteInput>,
+    pub recorded_route: Option<RecordedRouteInput>,
 }
 
 pub(crate) struct CorrelateAndBeginResult {
@@ -177,10 +173,10 @@ pub(crate) struct CorrelateAndBeginResult {
     pub source: CorrelationSource,
     pub completeness: HistoryCompleteness,
     pub prior_events: Vec<TrajectoryEvent>,
-    pub guarded_route: Option<GuardedRouteResult>,
+    pub recorded_route: Option<RecordedRouteResult>,
 }
 
-#[cfg(feature = "core")]
+#[cfg(feature = "eval-publication")]
 pub(crate) struct OutboxBatchItem {
     pub outbox_id: String,
     pub owner_user_id: String,
@@ -211,42 +207,34 @@ pub enum EpisodeAudit {
     },
 }
 
+/// Immutable facts from model selection, recorded without changing the selection.
 #[derive(Debug, Clone)]
-pub(crate) struct GuardedRouteInput {
+pub(crate) struct RecordedRouteInput {
     pub route_event_id: String,
-    pub guard_event_id: String,
     pub policy_name: String,
-    pub route_projection: String,
+    pub route_class: RouteClass,
     pub request_key: String,
     pub baseline_tier: Option<String>,
     pub baseline_effort: Option<bitrouter_ai::types::ReasoningEffort>,
     pub tier_efforts: std::collections::BTreeMap<String, bitrouter_ai::types::ReasoningEffort>,
     pub preset: Option<String>,
-    pub projection: RouteProjection,
     pub candidate_tier: Option<String>,
+    pub selected_tier: Option<String>,
     pub policy_digest: String,
-    pub experiment: Option<RouteAssignment>,
     pub route_measurement: Option<RouteDecisionMeasurement>,
-    pub policy: ProgressGuardPolicy,
-    pub carries_tools: bool,
-    pub tool_use_tier: Option<String>,
-    pub tool_safe_tiers: std::collections::BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct GuardedRouteResult {
-    pub snapshot: super::types::TrajectorySnapshot,
+pub(crate) struct RecordedRouteResult {
+    pub snapshot: TrajectorySnapshot,
     pub intent: RouteIntent,
-    pub guard_activated: bool,
-    pub tool_floor_applied: bool,
     pub route_sequence: u64,
     pub causal_completeness: HistoryCompleteness,
 }
 
-pub(super) struct GuardedRouteBatch {
+pub(super) struct RecordedRouteBatch {
     pub(super) route_event: TrajectoryEvent,
-    pub(super) guard_event: Option<TrajectoryEvent>,
-    pub(super) result: GuardedRouteResult,
+    pub(super) result: RecordedRouteResult,
 }
 
 enum CorrelateAttempt {
@@ -279,20 +267,6 @@ struct AuditReadProbe {
 impl TrajectoryStore {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
-    }
-
-    pub async fn begin_request(&self, owner_user_id: &str, input: BeginRequest) -> Result<()> {
-        validate_owner(owner_user_id)?;
-        validate_begin(owner_user_id, &input)?;
-        let request_id = input
-            .event
-            .request_id
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("request start event must identify its request"))?;
-        let txn = self.db.begin().await?;
-        begin_request_in_tx(&txn, owner_user_id, &request_id, input).await?;
-        txn.commit().await?;
-        Ok(())
     }
 
     pub(crate) async fn correlate_and_begin(
@@ -515,9 +489,9 @@ impl TrajectoryStore {
                 return Err(error);
             }
         }
-        let guarded_route = match &input.guarded_route {
+        let recorded_route = match &input.recorded_route {
             Some(route) => Some(
-                append_guarded_route_in_tx(
+                append_recorded_route_in_tx(
                     &txn,
                     owner_user_id,
                     &prior_events,
@@ -536,111 +510,9 @@ impl TrajectoryStore {
                 source,
                 completeness,
                 prior_events,
-                guarded_route,
+                recorded_route,
             },
         )))
-    }
-
-    pub async fn append_route_intent(
-        &self,
-        owner_user_id: &str,
-        event: TrajectoryEvent,
-    ) -> Result<()> {
-        self.append_request_event(
-            owner_user_id,
-            event,
-            TrajectoryEventKind::RouteIntentRecorded,
-            "route intent",
-        )
-        .await
-    }
-
-    pub async fn append_guard_activation(
-        &self,
-        owner_user_id: &str,
-        event: TrajectoryEvent,
-    ) -> Result<()> {
-        self.append_request_event(
-            owner_user_id,
-            event,
-            TrajectoryEventKind::GuardActivated,
-            "guard activation",
-        )
-        .await
-    }
-
-    async fn append_request_event(
-        &self,
-        owner_user_id: &str,
-        event: TrajectoryEvent,
-        expected_kind: TrajectoryEventKind,
-        label: &str,
-    ) -> Result<()> {
-        validate_owner(owner_user_id)?;
-        validate_event(&event)?;
-        if event.kind != expected_kind || event.owner_user_id != owner_user_id {
-            anyhow::bail!("{label} event must belong to its owner")
-        }
-        for attempt in 0..MAX_LEDGER_MUTATION_ATTEMPTS {
-            match self.append_request_event_once(owner_user_id, &event).await {
-                Ok(()) => return Ok(()),
-                Err(error) if mutation_error_is_retryable(&error) => {
-                    if self.persisted_event_matches(&event).await? {
-                        return Ok(());
-                    }
-                    tokio::time::sleep(contention_backoff(attempt)).await;
-                }
-                Err(error) => return Err(error),
-            }
-        }
-        anyhow::bail!(
-            "trajectory {label} contention exhausted after {MAX_LEDGER_MUTATION_ATTEMPTS} attempts"
-        )
-    }
-
-    async fn append_request_event_once(
-        &self,
-        owner_user_id: &str,
-        event: &TrajectoryEvent,
-    ) -> Result<()> {
-        let txn = self.db.begin().await?;
-        if event_matches_existing(&txn, event).await? {
-            txn.commit().await?;
-            return Ok(());
-        }
-        let episode = owned_episode(&txn, owner_user_id, &event.episode_id).await?;
-        let events = events_for_episode_in_tx(&txn, owner_user_id, &episode.episode_id).await?;
-        validate_episode_head(&episode, &events)?;
-        if episode.closed_at.is_some() {
-            anyhow::bail!("trajectory episode is closed and cannot accept new events")
-        }
-        validate_sequence(&episode, event)?;
-        validate_event_request(&txn, owner_user_id, event).await?;
-        validate_candidate_history(&events, event)?;
-        append_event(&txn, event).await?;
-        update_episode_head(&txn, episode, event, None).await?;
-        txn.commit().await?;
-        Ok(())
-    }
-
-    pub async fn settle_request(&self, owner_user_id: &str, settlement: Settlement) -> Result<()> {
-        validate_owner(owner_user_id)?;
-        validate_settlement(owner_user_id, &settlement)?;
-        for attempt in 0..MAX_LEDGER_MUTATION_ATTEMPTS {
-            match self.settle_request_once(owner_user_id, &settlement).await {
-                Ok(()) => return Ok(()),
-                Err(error) if mutation_error_is_retryable(&error) => {
-                    if self.persisted_event_matches(&settlement.event).await? {
-                        return self.settle_request_once(owner_user_id, &settlement).await;
-                    }
-                    tokio::time::sleep(contention_backoff(attempt)).await;
-                }
-                Err(error) => return Err(error),
-            }
-        }
-        anyhow::bail!(
-            "trajectory settlement contention exhausted after {MAX_LEDGER_MUTATION_ATTEMPTS} attempts"
-        )
     }
 
     /// Build and append a settlement against the transaction's current episode
@@ -771,126 +643,6 @@ impl TrajectoryStore {
         Ok(settlement)
     }
 
-    async fn settle_request_once(
-        &self,
-        owner_user_id: &str,
-        settlement: &Settlement,
-    ) -> Result<()> {
-        let txn = self.db.begin().await?;
-        let request_id = settlement.event.request_id.as_deref().unwrap_or_default();
-        let request = request_entity::Entity::find()
-            .filter(legacy_scope("trajectory_requests"))
-            .filter(request_entity::Column::OwnerUserId.eq(owner_user_id))
-            .filter(request_entity::Column::RequestId.eq(request_id))
-            .one(&txn)
-            .await?
-            .ok_or_else(|| {
-                anyhow::anyhow!("unknown owner-scoped trajectory request '{request_id}'")
-            })?;
-        if request.settlement_event_id.is_some() {
-            if request.settlement_event_id.as_deref() == Some(settlement.event.event_id.as_str())
-                && event_matches_existing(&txn, &settlement.event).await?
-                && request.status == request_status_name(settlement.status.clone())
-                && settlement_outbox_matches(
-                    &txn,
-                    owner_user_id,
-                    request.settlement_outbox_id.as_deref(),
-                    settlement.outbox.as_ref(),
-                )
-                .await?
-            {
-                txn.commit().await?;
-                return Ok(());
-            }
-            anyhow::bail!("trajectory request '{request_id}' already has a different settlement")
-        }
-        if request.episode_id != settlement.event.episode_id {
-            anyhow::bail!("settlement event belongs to a different episode")
-        }
-        let episode = owned_episode(&txn, owner_user_id, &settlement.event.episode_id).await?;
-        let events = events_for_episode_in_tx(&txn, owner_user_id, &episode.episode_id).await?;
-        validate_episode_head(&episode, &events)?;
-        if episode.closed_at.is_some() {
-            anyhow::bail!("trajectory episode is closed and cannot accept new events")
-        }
-        validate_sequence(&episode, &settlement.event)?;
-        validate_candidate_history(&events, &settlement.event)?;
-        append_event(&txn, &settlement.event).await?;
-
-        let request_key = request.request_id.clone();
-        let mut active = request.into_active_model();
-        active.settlement_event_id = Set(Some(settlement.event.event_id.clone()));
-        active.settlement_outbox_id = Set(settlement
-            .outbox
-            .as_ref()
-            .map(|outbox| outbox.outbox_id.clone()));
-        active.status = Set(request_status_name(settlement.status.clone()).into());
-        let changed = request_entity::Entity::update_many()
-            .set(active)
-            .filter(legacy_scope("trajectory_requests"))
-            .filter(request_entity::Column::RequestId.eq(request_key))
-            .exec(&txn)
-            .await?;
-        anyhow::ensure!(
-            changed.rows_affected == 1,
-            "trajectory request changed during settlement"
-        );
-        update_episode_head(&txn, episode, &settlement.event, None).await?;
-        if let Some(outbox) = &settlement.outbox {
-            insert_outbox(&txn, owner_user_id, outbox.clone()).await?;
-        }
-        txn.commit().await?;
-        Ok(())
-    }
-
-    async fn persisted_event_matches(&self, event: &TrajectoryEvent) -> Result<bool> {
-        let row = event_entity::Entity::find()
-            .filter(legacy_scope("trajectory_events"))
-            .filter(event_entity::Column::OwnerUserId.eq(&event.owner_user_id))
-            .filter(event_entity::Column::EventId.eq(&event.event_id))
-            .one(&self.db)
-            .await?;
-        let Some(row) = row else {
-            return Ok(false);
-        };
-        let stored = stored_event(row)?;
-        if stored == *event {
-            return Ok(true);
-        }
-        anyhow::bail!(
-            "trajectory event '{}' already exists with different content",
-            event.event_id
-        )
-    }
-
-    pub async fn events_for_episode(
-        &self,
-        owner_user_id: &str,
-        episode_id: &str,
-    ) -> Result<Vec<TrajectoryEvent>> {
-        validate_owner(owner_user_id)?;
-        let rows = event_entity::Entity::find()
-            .filter(legacy_scope("trajectory_events"))
-            .filter(event_entity::Column::OwnerUserId.eq(owner_user_id))
-            .filter(event_entity::Column::EpisodeId.eq(episode_id))
-            .order_by_asc(event_entity::Column::Sequence)
-            .all(&self.db)
-            .await?;
-        let mut events = Vec::with_capacity(rows.len());
-        for (index, row) in rows.into_iter().enumerate() {
-            let event = stored_event(row)?;
-            let expected = u64::try_from(index)
-                .context("trajectory event count exceeds sequence range")?
-                .checked_add(1)
-                .ok_or_else(|| anyhow::anyhow!("trajectory event sequence overflow"))?;
-            if event.sequence != expected {
-                anyhow::bail!("trajectory event history has a sequence gap at {expected}")
-            }
-            events.push(event);
-        }
-        Ok(events)
-    }
-
     pub async fn request(
         &self,
         owner_user_id: &str,
@@ -1016,23 +768,7 @@ impl TrajectoryStore {
         Ok(())
     }
 
-    pub async fn pending_outbox(&self, owner_user_id: &str) -> Result<Vec<PendingOutbox>> {
-        validate_owner(owner_user_id)?;
-        outbox_entity::Entity::find()
-            .filter(legacy_scope("trajectory_outbox"))
-            .filter(outbox_entity::Column::OwnerUserId.eq(owner_user_id))
-            .filter(outbox_entity::Column::DeliveredAt.is_null())
-            .order_by_asc(outbox_entity::Column::Attempts)
-            .order_by_asc(outbox_entity::Column::CreatedAt)
-            .order_by_asc(outbox_entity::Column::OutboxId)
-            .all(&self.db)
-            .await?
-            .into_iter()
-            .map(stored_outbox)
-            .collect()
-    }
-
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     pub(crate) async fn pending_outbox_batch(&self, limit: usize) -> Result<Vec<OutboxBatchItem>> {
         if limit == 0 || limit > MAX_OUTBOX_BATCH_SIZE {
             anyhow::bail!(
@@ -1051,7 +787,7 @@ impl TrajectoryStore {
         Ok(rows.into_iter().map(stored_outbox_batch_item).collect())
     }
 
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     pub(crate) async fn pending_outbox_count(&self) -> Result<u64> {
         outbox_entity::Entity::find()
             .filter(legacy_scope("trajectory_outbox"))
@@ -1061,7 +797,7 @@ impl TrajectoryStore {
             .map_err(Into::into)
     }
 
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     pub(crate) async fn record_outbox_attempt(
         &self,
         owner_user_id: &str,
@@ -1100,6 +836,7 @@ impl TrajectoryStore {
         Ok(())
     }
 
+    #[cfg(any(test, feature = "eval-publication"))]
     pub async fn mark_outbox_delivered(
         &self,
         owner_user_id: &str,
@@ -1147,23 +884,6 @@ impl TrajectoryStore {
             .one(&self.db)
             .await?
             .map(|episode| episode.owner_user_id))
-    }
-
-    pub async fn episode(
-        &self,
-        owner_user_id: &str,
-        episode_id: &str,
-    ) -> Result<Option<StoredEpisode>> {
-        validate_owner(owner_user_id)?;
-        validate_opaque(episode_id, "episode_id")?;
-        episode_entity::Entity::find()
-            .filter(legacy_scope("trajectory_episodes"))
-            .filter(episode_entity::Column::OwnerUserId.eq(owner_user_id))
-            .filter(episode_entity::Column::EpisodeId.eq(episode_id))
-            .one(&self.db)
-            .await?
-            .map(stored_episode)
-            .transpose()
     }
 
     pub async fn audit_episode(
@@ -1482,7 +1202,7 @@ fn audit_stable_episode(
         }
         events.push(event);
     }
-    let snapshot = match reduce(&events, &std::collections::BTreeSet::new()) {
+    let snapshot = match reduce(&events) {
         Ok(snapshot) => snapshot,
         Err(_) => {
             let fallback = (
@@ -2102,7 +1822,7 @@ async fn exact_retry_result(
 }
 
 /// The caller validates the owner-scoped episode/head and stored native parent.
-/// Only the immutable prefix before `start` determines the retried guard.
+/// Only the immutable prefix before `start` determines the recorded snapshot.
 pub(super) fn exact_retry_from_history(
     owner_user_id: &str,
     existing: &request_entity::Model,
@@ -2180,10 +1900,10 @@ pub(super) fn exact_retry_from_history(
         .cloned()
         .take_while(|event| event.sequence < start_sequence)
         .collect::<Vec<_>>();
-    let guarded_route = match &input.guarded_route {
+    let recorded_route = match &input.recorded_route {
         Some(route) => {
-            reduce(events, &route.policy.protected_tiers)?;
-            let expected = build_guarded_route_batch(&prior_events, start, completeness, route)?;
+            reduce(events)?;
+            let expected = build_recorded_route_batch(&prior_events, start, completeness, route)?;
             let persisted_route = events
                 .iter()
                 .find(|event| event.event_id == route.route_event_id)
@@ -2194,54 +1914,18 @@ pub(super) fn exact_retry_from_history(
                     existing.request_id
                 )
             }
-            match (
-                &expected.guard_event,
-                events
-                    .iter()
-                    .find(|event| event.event_id == route.guard_event_id),
-            ) {
-                (Some(expected), Some(persisted)) if expected == persisted => {}
-                (None, None) => {}
-                _ => anyhow::bail!(
-                    "trajectory request '{}' already exists with a different guard activation",
-                    existing.request_id
-                ),
-            }
-            let route_event_count = events
-                .iter()
-                .filter(|event| {
-                    event.request_id.as_deref() == Some(existing.request_id.as_str())
-                        && event.kind == TrajectoryEventKind::RouteIntentRecorded
-                })
-                .count();
-            let guard_event_count = events
-                .iter()
-                .filter(|event| {
-                    event.request_id.as_deref() == Some(existing.request_id.as_str())
-                        && event.kind == TrajectoryEventKind::GuardActivated
-                })
-                .count();
-            if route_event_count != 1
-                || guard_event_count != usize::from(expected.guard_event.is_some())
-            {
-                anyhow::bail!(
-                    "trajectory request '{}' has an unexpected persisted routing batch",
-                    existing.request_id
-                )
-            }
             Some(expected.result)
         }
         None => {
-            for event in events.iter().filter(|event| {
+            if events.iter().any(|event| {
                 event.request_id.as_deref() == Some(existing.request_id.as_str())
                     && event.kind == TrajectoryEventKind::RouteIntentRecorded
+                    && event.evidence.digests.contains_key("route.health_snapshot")
             }) {
-                if validate_persisted_route_intent(event)?.is_some() {
-                    anyhow::bail!(
-                        "trajectory request '{}' already exists with guarded routing content",
-                        existing.request_id
-                    )
-                }
+                anyhow::bail!(
+                    "trajectory request '{}' already exists with recorded routing content",
+                    existing.request_id
+                )
             }
             None
         }
@@ -2251,200 +1935,80 @@ pub(super) fn exact_retry_from_history(
         source,
         completeness,
         prior_events,
-        guarded_route,
+        recorded_route,
     })
 }
 
-async fn append_guarded_route_in_tx(
+async fn append_recorded_route_in_tx(
     txn: &DatabaseTransaction,
     owner_user_id: &str,
     prior_events: &[TrajectoryEvent],
     start: &TrajectoryEvent,
     completeness: HistoryCompleteness,
-    input: &GuardedRouteInput,
-) -> Result<GuardedRouteResult> {
-    let batch = build_guarded_route_batch(prior_events, start, completeness, input)?;
-    let mut candidate_history = Vec::with_capacity(
-        prior_events
-            .len()
-            .checked_add(3)
-            .ok_or_else(|| anyhow::anyhow!("guarded route history capacity overflow"))?,
-    );
-    candidate_history.extend_from_slice(prior_events);
+    input: &RecordedRouteInput,
+) -> Result<RecordedRouteResult> {
+    let batch = build_recorded_route_batch(prior_events, start, completeness, input)?;
+    let mut candidate_history = prior_events.to_vec();
     candidate_history.push(start.clone());
     candidate_history.push(batch.route_event.clone());
-    if let Some(guard_event) = &batch.guard_event {
-        candidate_history.push(guard_event.clone());
-    }
-    reduce(&candidate_history, &input.policy.protected_tiers)?;
+    reduce(&candidate_history)?;
     let episode = owned_episode(txn, owner_user_id, &start.episode_id).await?;
     validate_sequence(&episode, &batch.route_event)?;
     validate_event(&batch.route_event)?;
     append_event(txn, &batch.route_event).await?;
     update_episode_head(txn, episode, &batch.route_event, None).await?;
-    if let Some(guard_event) = &batch.guard_event {
-        let episode = owned_episode(txn, owner_user_id, &start.episode_id).await?;
-        validate_sequence(&episode, guard_event)?;
-        validate_event(guard_event)?;
-        append_event(txn, guard_event).await?;
-        update_episode_head(txn, episode, guard_event, None).await?;
-    }
     Ok(batch.result)
 }
 
-pub(super) fn build_guarded_route_batch(
+pub(super) fn build_recorded_route_batch(
     prior_events: &[TrajectoryEvent],
     start: &TrajectoryEvent,
     completeness: HistoryCompleteness,
-    input: &GuardedRouteInput,
-) -> Result<GuardedRouteBatch> {
-    let prior_snapshot = if prior_events.is_empty() {
-        None
-    } else {
-        Some(reduce(prior_events, &input.policy.protected_tiers)?)
-    };
-    let mut through_start = Vec::with_capacity(
-        prior_events
-            .len()
-            .checked_add(1)
-            .ok_or_else(|| anyhow::anyhow!("guard snapshot history capacity overflow"))?,
-    );
-    through_start.extend_from_slice(prior_events);
+    input: &RecordedRouteInput,
+) -> Result<RecordedRouteBatch> {
+    let mut through_start = prior_events.to_vec();
     through_start.push(start.clone());
-    let pre_intent_snapshot = reduce(&through_start, &input.policy.protected_tiers)?;
-    let mut evaluation = evaluate(
-        &input.policy,
-        ProgressGuardInput {
-            prior_snapshot: prior_snapshot.as_ref(),
-            pre_intent_snapshot: &pre_intent_snapshot,
-            correlation_completeness: completeness,
-            current_projection: &input.projection,
-            candidate_tier: input.candidate_tier.as_deref(),
-            policy_digest: &input.policy_digest,
-        },
-    )?;
-    evaluation.intent.experiment = input.experiment.clone();
-    let before_tool_floor = evaluation.intent.selected_tier.clone();
-    let tool_floor_applied = input.carries_tools
-        && before_tool_floor.as_ref().is_some_and(|tier| {
-            !input.tool_safe_tiers.contains(tier)
-                && input
-                    .tool_use_tier
-                    .as_deref()
-                    .is_some_and(|floor| floor != tier)
-        });
-    let tool_floor_explanation = if tool_floor_applied {
-        let floor = input
-            .tool_use_tier
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("tool floor disappeared during guard evaluation"))?;
-        if !input.policy.protected_tiers.contains(floor) {
-            anyhow::bail!("tool safety floor must remain a protected progress-guard tier")
-        }
-        evaluation.intent.selected_tier = Some(floor.clone());
-        "tool-carrying request requires the configured protected tool floor"
-    } else if !input.carries_tools {
-        "request carries no tools"
-    } else if before_tool_floor
-        .as_ref()
-        .is_some_and(|tier| input.tool_safe_tiers.contains(tier))
-    {
-        "selected tier is already tool-safe"
-    } else {
-        "no distinct tool safety floor is configured"
-    };
-    evaluation.intent.clauses.push(RouteIntentClause {
-        clause_id: "tool_safety.floor".to_string(),
-        disposition: if tool_floor_applied {
-            RouteIntentClauseDisposition::Applied
-        } else {
-            RouteIntentClauseDisposition::Skipped
-        },
-        explanation: tool_floor_explanation.to_string(),
-    });
-
+    let snapshot = reduce(&through_start)?;
     let route_sequence = start
         .sequence
         .checked_add(1)
         .ok_or_else(|| anyhow::anyhow!("route intent sequence overflow"))?;
     let mut categorical = std::collections::BTreeMap::from([
-        ("route.projection".to_owned(), input.projection.key()),
+        ("route.projection".into(), input.route_class.to_string()),
         (
-            "route.workflow_state".to_owned(),
-            input.projection.state_kind.to_string(),
+            "route.route_projection".into(),
+            input.route_class.to_string(),
         ),
-        ("route.policy".to_owned(), input.policy_name.clone()),
-        (
-            "route.route_projection".to_owned(),
-            input.route_projection.clone(),
-        ),
-        ("route.request_key".to_owned(), input.request_key.clone()),
-        ("route.eval_schema".to_owned(), "trajectory.v1".to_owned()),
+        ("route.policy".into(), input.policy_name.clone()),
+        ("route.request_key".into(), input.request_key.clone()),
+        ("route.eval_schema".into(), "trajectory.v1".into()),
     ]);
-    if let Some(baseline_tier) = &input.baseline_tier {
-        categorical.insert("route.baseline_tier".to_owned(), baseline_tier.clone());
-    }
-    if let Some(baseline_effort) = input.baseline_effort {
-        categorical.insert(
-            "route.baseline_effort".to_owned(),
-            baseline_effort.to_string(),
-        );
-    }
-    if let Some(preset) = &input.preset {
-        categorical.insert("route.preset".to_owned(), preset.clone());
-    }
-    if let Some(candidate) = &evaluation.intent.candidate_tier {
-        categorical.insert("route.candidate_tier".to_owned(), candidate.clone());
-    }
-    if let Some(selected) = &evaluation.intent.selected_tier {
-        categorical.insert("route.selected_tier".to_owned(), selected.clone());
-        if let Some(effort) = input.tier_efforts.get(selected) {
-            categorical.insert("route.selected_effort".to_owned(), effort.to_string());
+    for (key, value) in [
+        ("route.baseline_tier", input.baseline_tier.as_ref()),
+        ("route.preset", input.preset.as_ref()),
+        ("route.candidate_tier", input.candidate_tier.as_ref()),
+        ("route.selected_tier", input.selected_tier.as_ref()),
+    ] {
+        if let Some(value) = value {
+            categorical.insert(key.into(), value.clone());
         }
     }
-    if let Some(experiment) = &evaluation.intent.experiment {
-        categorical.insert(
-            "route.experiment_id".to_owned(),
-            experiment.experiment_id.clone(),
-        );
-        categorical.insert(
-            "route.experiment_arm".to_owned(),
-            match experiment.arm {
-                crate::gateway::routing::exploration::AssignmentArm::Control => "control",
-                crate::gateway::routing::exploration::AssignmentArm::Challenger => "challenger",
-            }
-            .to_owned(),
-        );
-        categorical.insert(
-            "route.experiment_assignment_unit".to_owned(),
-            match experiment.assignment_unit {
-                crate::gateway::routing::exploration::AssignmentUnit::Task => "task",
-                crate::gateway::routing::exploration::AssignmentUnit::Episode => "episode",
-            }
-            .to_owned(),
-        );
+    if let Some(effort) = input.baseline_effort {
+        categorical.insert("route.baseline_effort".into(), effort.to_string());
     }
-    for (index, clause) in evaluation.intent.clauses.iter().enumerate() {
-        let prefix = format!("route.clause_{index:02}");
-        categorical.insert(format!("{prefix}.id"), clause.clause_id.clone());
-        categorical.insert(
-            format!("{prefix}.disposition"),
-            match clause.disposition {
-                RouteIntentClauseDisposition::Applied => "applied",
-                RouteIntentClauseDisposition::Skipped => "skipped",
-            }
-            .to_string(),
-        );
+    if let Some(effort) = input
+        .selected_tier
+        .as_ref()
+        .and_then(|tier| input.tier_efforts.get(tier))
+    {
+        categorical.insert("route.selected_effort".into(), effort.to_string());
     }
-    let applied_clause_count = u64::try_from(
-        evaluation
-            .intent
-            .clauses
-            .iter()
-            .filter(|clause| clause.disposition == RouteIntentClauseDisposition::Applied)
-            .count(),
-    )
-    .context("too many applied route clauses")?;
+    let intent = RouteIntent {
+        candidate_tier: input.candidate_tier.clone(),
+        selected_tier: input.selected_tier.clone(),
+        trajectory_snapshot_digest: snapshot.evidence_digest.clone(),
+        policy_digest: input.policy_digest.clone(),
+    };
     let mut route_event = TrajectoryEvent {
         schema_version: TRAJECTORY_SCHEMA_VERSION,
         event_id: input.route_event_id.clone(),
@@ -2454,99 +2018,29 @@ pub(super) fn build_guarded_route_batch(
         sequence: route_sequence,
         kind: TrajectoryEventKind::RouteIntentRecorded,
         evidence: TrajectoryEvidence {
-            routing_evidence: Vec::new(),
-            structural: std::collections::BTreeMap::from([
-                (
-                    "route.applied_clause_count".to_owned(),
-                    applied_clause_count,
-                ),
-                (
-                    "route.selected_is_protected".to_owned(),
-                    u64::from(
-                        evaluation
-                            .intent
-                            .selected_tier
-                            .as_ref()
-                            .is_some_and(|tier| input.policy.protected_tiers.contains(tier)),
-                    ),
-                ),
-            ]),
             categorical,
             digests: std::collections::BTreeMap::from([
                 (
-                    "route.health_snapshot".to_owned(),
-                    evaluation.intent.trajectory_snapshot_digest.clone(),
+                    "route.health_snapshot".into(),
+                    snapshot.evidence_digest.clone(),
                 ),
-                (
-                    "route.policy_lock".to_owned(),
-                    evaluation.intent.policy_digest.clone(),
-                ),
+                ("route.policy_lock".into(), input.policy_digest.clone()),
             ]),
             route_measurement: input.route_measurement.clone(),
+            structural: Default::default(),
+            routing_evidence: Vec::new(),
         },
         captured_at: start.captured_at.clone(),
         content_digest: String::new(),
     };
-    if let Some(experiment) = &evaluation.intent.experiment {
-        route_event.evidence.structural.insert(
-            "route.experiment_challenger_propensity_ppm".to_owned(),
-            u64::from(experiment.challenger_propensity_ppm),
-        );
-        route_event.evidence.digests.insert(
-            "route.experiment_assignment_id".to_owned(),
-            experiment.assignment_id_digest.clone(),
-        );
-    }
     route_event.content_digest = route_event.semantic_digest()?;
-
-    let guard_event = if evaluation.activated {
-        let mut event = TrajectoryEvent {
-            schema_version: TRAJECTORY_SCHEMA_VERSION,
-            event_id: input.guard_event_id.clone(),
-            owner_user_id: start.owner_user_id.clone(),
-            episode_id: start.episode_id.clone(),
-            request_id: start.request_id.clone(),
-            sequence: route_sequence
-                .checked_add(1)
-                .ok_or_else(|| anyhow::anyhow!("guard activation sequence overflow"))?,
-            kind: TrajectoryEventKind::GuardActivated,
-            evidence: TrajectoryEvidence {
-                routing_evidence: Vec::new(),
-                structural: std::collections::BTreeMap::from([(
-                    "guard.hold_for_requests".to_owned(),
-                    input.policy.hold_for_requests,
-                )]),
-                categorical: std::collections::BTreeMap::new(),
-                digests: std::collections::BTreeMap::from([
-                    (
-                        "guard.health_snapshot".to_owned(),
-                        evaluation.intent.trajectory_snapshot_digest.clone(),
-                    ),
-                    (
-                        "guard.policy_lock".to_owned(),
-                        evaluation.intent.policy_digest.clone(),
-                    ),
-                ]),
-                route_measurement: None,
-            },
-            captured_at: start.captured_at.clone(),
-            content_digest: String::new(),
-        };
-        event.content_digest = event.semantic_digest()?;
-        Some(event)
-    } else {
-        None
-    };
-    Ok(GuardedRouteBatch {
+    Ok(RecordedRouteBatch {
         route_event,
-        guard_event,
-        result: GuardedRouteResult {
-            snapshot: pre_intent_snapshot,
-            intent: evaluation.intent,
-            guard_activated: evaluation.activated,
-            tool_floor_applied,
+        result: RecordedRouteResult {
+            snapshot,
+            intent,
             route_sequence,
-            causal_completeness: evaluation.causal_completeness,
+            causal_completeness: completeness,
         },
     })
 }
@@ -2795,37 +2289,6 @@ async fn append_event(txn: &DatabaseTransaction, event: &TrajectoryEvent) -> Res
     Ok(())
 }
 
-async fn event_matches_existing(
-    txn: &DatabaseTransaction,
-    event: &TrajectoryEvent,
-) -> Result<bool> {
-    let existing = event_entity::Entity::find()
-        .filter(legacy_scope("trajectory_events"))
-        .filter(event_entity::Column::OwnerUserId.eq(&event.owner_user_id))
-        .filter(event_entity::Column::EventId.eq(&event.event_id))
-        .one(txn)
-        .await?;
-    if let Some(existing) = existing {
-        let existing = stored_event(existing)?;
-        if existing == *event {
-            return Ok(true);
-        }
-        anyhow::bail!(
-            "trajectory event '{}' already exists with different content",
-            event.event_id
-        )
-    }
-    if event_entity::Entity::find_by_id(&event.event_id)
-        .filter(legacy_scope("trajectory_events"))
-        .one(txn)
-        .await?
-        .is_some()
-    {
-        anyhow::bail!("trajectory event id is already owned by another user")
-    }
-    Ok(false)
-}
-
 /// Holds a new request start at the episode head when the wall clock disagrees
 /// with the episode's own ordering.
 ///
@@ -2866,7 +2329,7 @@ fn validate_candidate_history(
     );
     candidate_history.extend_from_slice(events);
     candidate_history.push(candidate.clone());
-    reduce(&candidate_history, &std::collections::BTreeSet::new())?;
+    reduce(&candidate_history)?;
     Ok(())
 }
 
@@ -2883,27 +2346,6 @@ fn validate_sequence(episode: &episode_entity::Model, event: &TrajectoryEvent) -
             "trajectory event sequence must be {expected} for episode '{}'",
             event.episode_id
         )
-    }
-    Ok(())
-}
-
-async fn validate_event_request(
-    txn: &DatabaseTransaction,
-    owner_user_id: &str,
-    event: &TrajectoryEvent,
-) -> Result<()> {
-    let Some(request_id) = &event.request_id else {
-        return Ok(());
-    };
-    let request = request_entity::Entity::find()
-        .filter(legacy_scope("trajectory_requests"))
-        .filter(request_entity::Column::OwnerUserId.eq(owner_user_id))
-        .filter(request_entity::Column::RequestId.eq(request_id))
-        .one(txn)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("unknown owner-scoped trajectory request '{request_id}'"))?;
-    if request.episode_id != event.episode_id {
-        anyhow::bail!("trajectory event request belongs to a different episode")
     }
     Ok(())
 }
@@ -3220,11 +2662,8 @@ pub(super) fn stored_episode(row: episode_entity::Model) -> Result<StoredEpisode
 
 fn first_reducer_failure(events: &[TrajectoryEvent]) -> Option<(Option<String>, Option<u64>)> {
     for end in 1..=events.len() {
-        match reduce_prefix(&events[..end], &std::collections::BTreeSet::new()) {
-            Ok(PrefixReduction::Complete(_) | PrefixReduction::AwaitingGuardActivation) => {
-                continue;
-            }
-            Err(_) => {}
+        if reduce(&events[..end]).is_ok() {
+            continue;
         }
         let event = events.get(end.saturating_sub(1));
         return Some((
@@ -3254,7 +2693,7 @@ pub(super) fn stored_outbox(row: outbox_entity::Model) -> Result<PendingOutbox> 
     })
 }
 
-#[cfg(feature = "core")]
+#[cfg(feature = "eval-publication")]
 fn stored_outbox_batch_item(row: outbox_entity::Model) -> OutboxBatchItem {
     let payload = serde_json::from_str::<super::types::OutboxPayload>(&row.payload_json)
         .ok()
@@ -3292,7 +2731,6 @@ pub(super) fn event_kind_name(kind: TrajectoryEventKind) -> &'static str {
         TrajectoryEventKind::RequestStarted => "request_started",
         TrajectoryEventKind::RouteIntentRecorded => "route_intent_recorded",
         TrajectoryEventKind::RequestSettled => "request_settled",
-        TrajectoryEventKind::GuardActivated => "guard_activated",
         TrajectoryEventKind::EpisodeClosed => "episode_closed",
     }
 }
@@ -3342,9 +2780,8 @@ mod tests {
     use sea_orm::{ConnectionTrait, DatabaseBackend, DbErr, QueryTrait, RuntimeErr, Statement};
 
     use super::*;
-    use crate::gateway::routing::workflow::ir::RouteProjection;
-    use crate::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
-    #[cfg(feature = "core")]
+
+    #[cfg(feature = "eval-publication")]
     use crate::trajectory::replay::replay_episode;
     use crate::trajectory::types::*;
 
@@ -3352,14 +2789,14 @@ mod tests {
         "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
     #[tokio::test]
-    async fn guarded_root_rolls_back_every_partial_batch_failure() -> anyhow::Result<()> {
-        for failure in ["route_validation", "guard_insert"] {
+    async fn recorded_root_rolls_back_every_partial_batch_failure() -> anyhow::Result<()> {
+        for failure in ["route_validation", "route_insert"] {
             let store = store().await?;
-            let mut route = guarded_route_input("route-1", "guard-1");
+            let mut route = recorded_route_input("route-1");
             if failure == "route_validation" {
                 route.policy_digest = "invalid".into();
             } else {
-                route.guard_event_id = "start-1".into();
+                route.route_event_id = "start-1".into();
             }
             let result = store
                 .correlate_and_begin(
@@ -3461,15 +2898,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn guarded_exact_retry_is_one_immutable_batch() -> anyhow::Result<()> {
+    async fn recorded_exact_retry_is_one_immutable_batch() -> anyhow::Result<()> {
         let store = store().await?;
-        let route = guarded_route_input("route-1", "guard-1");
+        let route = recorded_route_input("route-1");
         let input = correlate_input("request-1", "episode-1", "start-1", route.clone());
         let first = store.correlate_and_begin("owner-a", input).await?;
         let first_route = first
-            .guarded_route
-            .ok_or_else(|| anyhow::anyhow!("missing first guarded route"))?;
-        assert!(first_route.guard_activated);
+            .recorded_route
+            .ok_or_else(|| anyhow::anyhow!("missing first recorded route"))?;
+        assert_eq!(first_route.intent.selected_tier.as_deref(), Some("economy"));
 
         let retry = store
             .correlate_and_begin(
@@ -3477,13 +2914,13 @@ mod tests {
                 correlate_input("request-1", "episode-1", "start-1", route.clone()),
             )
             .await?;
-        assert_eq!(retry.guarded_route, Some(first_route));
+        assert_eq!(retry.recorded_route, Some(first_route));
         assert_eq!(
             store
                 .events_for_episode("owner-a", "episode-1")
                 .await?
                 .len(),
-            3
+            2
         );
 
         let mut changed_canonical_window =
@@ -3513,7 +2950,7 @@ mod tests {
                 .events_for_episode("owner-a", "episode-1")
                 .await?
                 .len(),
-            3
+            2
         );
 
         let barrier = Arc::new(tokio::sync::Barrier::new(8));
@@ -3541,13 +2978,13 @@ mod tests {
                 .events_for_episode("owner-a", "episode-1")
                 .await?
                 .len(),
-            3
+            2
         );
         Ok(())
     }
 
     #[tokio::test]
-    async fn concurrent_first_guarded_commit_converges_without_mixed_batches() -> anyhow::Result<()>
+    async fn concurrent_first_recorded_commit_converges_without_mixed_batches() -> anyhow::Result<()>
     {
         let (store, _directory) = file_store().await?;
         let barrier = Arc::new(tokio::sync::Barrier::new(8));
@@ -3556,7 +2993,7 @@ mod tests {
                 let store = store.clone();
                 let barrier = barrier.clone();
                 tokio::spawn(async move {
-                    let route = guarded_route_input("route-1", "guard-1");
+                    let route = recorded_route_input("route-1");
                     barrier.wait().await;
                     store
                         .correlate_and_begin(
@@ -3571,8 +3008,8 @@ mod tests {
         for task in tasks {
             let result = task.await??;
             let route = result
-                .guarded_route
-                .ok_or_else(|| anyhow::anyhow!("concurrent commit lost guarded route"))?;
+                .recorded_route
+                .ok_or_else(|| anyhow::anyhow!("concurrent commit lost recorded route"))?;
             if let Some(expected) = &selected {
                 assert_eq!(expected, &route);
             } else {
@@ -3584,7 +3021,7 @@ mod tests {
                 .events_for_episode("owner-a", "episode-1")
                 .await?
                 .len(),
-            3
+            2
         );
         assert!(store.request("owner-a", "request-1").await?.is_some());
 
@@ -3599,7 +3036,7 @@ mod tests {
             let store = conflict_store.clone();
             let barrier = conflict_barrier.clone();
             tokio::spawn(async move {
-                let mut route = guarded_route_input("route-1", "guard-1");
+                let mut route = recorded_route_input("route-1");
                 route.policy_digest = digest.into();
                 barrier.wait().await;
                 store
@@ -3628,13 +3065,14 @@ mod tests {
                 .events_for_episode("owner-a", "episode-1")
                 .await?
                 .len(),
-            3
+            2
         );
         Ok(())
     }
 
     #[tokio::test]
-    async fn guarded_route_persists_exact_named_policy_evaluation_identity() -> anyhow::Result<()> {
+    async fn recorded_route_persists_exact_named_policy_evaluation_identity() -> anyhow::Result<()>
+    {
         let store = store().await?;
         let result = store
             .correlate_and_begin(
@@ -3643,13 +3081,13 @@ mod tests {
                     "request-identity",
                     "episode-identity",
                     "start-identity",
-                    guarded_route_input("route-identity", "guard-identity"),
+                    recorded_route_input("route-identity"),
                 ),
             )
             .await?;
         let route_sequence = result
-            .guarded_route
-            .ok_or_else(|| anyhow::anyhow!("guarded route missing"))?
+            .recorded_route
+            .ok_or_else(|| anyhow::anyhow!("recorded route missing"))?
             .route_sequence;
         let events = store
             .events_for_episode("owner-a", "episode-identity")
@@ -3664,7 +3102,7 @@ mod tests {
         );
         assert_eq!(
             route.evidence.categorical.get("route.request_key"),
-            Some(&"agent_trace/v2|edit|normal".to_string())
+            Some(&"code:generation|implement|normal".to_string())
         );
         assert_eq!(
             route.evidence.categorical.get("route.baseline_tier"),
@@ -3675,14 +3113,18 @@ mod tests {
             Some(&"auto:cost".to_string())
         );
         assert_eq!(
-            route.evidence.structural.get("route.selected_is_protected"),
-            Some(&1)
+            route
+                .evidence
+                .categorical
+                .get("route.selected_tier")
+                .map(String::as_str),
+            Some("economy")
         );
         Ok(())
     }
 
     #[tokio::test]
-    async fn guarded_existing_episode_failure_preserves_original_head() -> anyhow::Result<()> {
+    async fn recorded_existing_episode_failure_preserves_original_head() -> anyhow::Result<()> {
         let store = store().await?;
         store
             .begin_request("owner-a", begin("episode-1", "request-0"))
@@ -3695,7 +3137,7 @@ mod tests {
             .await?;
         let before = store.events_for_episode("owner-a", "episode-1").await?;
 
-        let mut route = guarded_route_input("route-1", "guard-1");
+        let mut route = recorded_route_input("route-1");
         route.policy_digest = "invalid".into();
         let mut input = correlate_input("request-1", "unused-new-episode", "start-1", route);
         input.ancestor_prefix_digests = vec![keyed_digest("key-1", "2")];
@@ -3723,7 +3165,7 @@ mod tests {
         )
         .await?;
 
-        let route = guarded_route_input("route-1", "guard-1");
+        let route = recorded_route_input("route-1");
         let mut input = correlate_input("request-1", "unused-new-episode", "start-1", route);
         input.ancestor_prefix_digests = vec![keyed_digest("key-1", "2")];
         input.starts_with_prior_turns = true;
@@ -3744,7 +3186,7 @@ mod tests {
                 .last_captured_at,
             "2026-08-01T00:00:00.010Z"
         );
-        reduce(&events, &BTreeSet::new())?;
+        reduce(&events)?;
         Ok(())
     }
 
@@ -3761,7 +3203,7 @@ mod tests {
         )
         .await?;
 
-        let route = guarded_route_input("route-1", "guard-1");
+        let route = recorded_route_input("route-1");
         let mut input = correlate_input("request-1", "unused-new-episode", "start-1", route);
         input.ancestor_prefix_digests = vec![keyed_digest("key-1", "2")];
         input.starts_with_prior_turns = true;
@@ -3778,105 +3220,11 @@ mod tests {
     }
 
     #[test]
-    fn persisted_hold_covers_exactly_n_subsequent_requests() -> anyhow::Result<()> {
-        let policy = guarded_route_input("route-1", "guard-1");
-        let mut events = Vec::new();
-
-        let first = guarded_start("request-1", 1)?;
-        let first_batch =
-            build_guarded_route_batch(&events, &first, HistoryCompleteness::Complete, &policy)?;
-        assert!(first_batch.guard_event.is_some());
-        events.push(first);
-        events.push(first_batch.route_event);
-        if let Some(guard) = first_batch.guard_event {
-            events.push(guard);
-        }
-        assert_eq!(
-            reduce(&events, &policy.policy.protected_tiers)?.active_hold_remaining,
-            2
-        );
-
-        for (request, expected_remaining) in [("request-2", 1), ("request-3", 0)] {
-            let sequence = u64::try_from(events.len())?
-                .checked_add(1)
-                .ok_or_else(|| anyhow::anyhow!("test sequence overflow"))?;
-            let start = guarded_start(request, sequence)?;
-            let mut input = policy.clone();
-            input.route_event_id = format!("route-{request}");
-            input.guard_event_id = format!("guard-{request}");
-            let batch =
-                build_guarded_route_batch(&events, &start, HistoryCompleteness::Complete, &input)?;
-            assert!(batch.guard_event.is_none(), "active hold must not reset");
-            events.push(start);
-            events.push(batch.route_event);
-            assert_eq!(
-                reduce(&events, &policy.policy.protected_tiers)?.active_hold_remaining,
-                expected_remaining
-            );
-        }
-
-        let sequence = u64::try_from(events.len())?
-            .checked_add(1)
-            .ok_or_else(|| anyhow::anyhow!("test sequence overflow"))?;
-        let fourth = guarded_start("request-4", sequence)?;
-        let mut fourth_input = policy.clone();
-        fourth_input.route_event_id = "route-request-4".into();
-        fourth_input.guard_event_id = "guard-request-4".into();
-        let fourth_batch = build_guarded_route_batch(
-            &events,
-            &fourth,
-            HistoryCompleteness::Complete,
-            &fourth_input,
-        )?;
-        assert!(fourth_batch.guard_event.is_some());
-        Ok(())
-    }
-
-    #[test]
-    fn tool_floor_runs_after_progress_guard_and_remains_protected() -> anyhow::Result<()> {
-        let start = guarded_start("request-1", 1)?;
-        let mut input = guarded_route_input("route-1", "guard-1");
-        input.policy.protected_tiers.insert("tool-protected".into());
-        input.carries_tools = true;
-        input.tool_use_tier = Some("tool-protected".into());
-        input.tool_safe_tiers = BTreeSet::from(["tool-protected".into()]);
-
-        let batch = build_guarded_route_batch(&[], &start, HistoryCompleteness::Complete, &input)?;
-
-        assert!(batch.result.guard_activated);
-        assert!(batch.result.tool_floor_applied);
-        assert_eq!(
-            batch.result.intent.selected_tier.as_deref(),
-            Some("tool-protected")
-        );
-        assert!(batch.result.intent.clauses.iter().any(|clause| {
-            clause.clause_id == "progress_guard.max_episode_requests"
-                && clause.disposition == RouteIntentClauseDisposition::Applied
-        }));
-        assert!(batch.result.intent.clauses.iter().any(|clause| {
-            clause.clause_id == "tool_safety.floor"
-                && clause.disposition == RouteIntentClauseDisposition::Applied
-        }));
-        Ok(())
-    }
-
-    #[test]
-    fn replay_rejects_resigned_all_skipped_route_with_wrong_health_digest() -> anyhow::Result<()> {
-        let start = guarded_start("request-1", 1)?;
-        let mut input = guarded_route_input("route-1", "guard-1");
-        input.policy.max_episode_requests = None;
+    fn replay_rejects_resigned_route_with_wrong_health_digest() -> anyhow::Result<()> {
+        let start = recorded_start("request-1", 1)?;
+        let input = recorded_route_input("route-1");
         let mut batch =
-            build_guarded_route_batch(&[], &start, HistoryCompleteness::Complete, &input)?;
-        assert!(batch.guard_event.is_none());
-        assert!(
-            batch
-                .result
-                .intent
-                .clauses
-                .iter()
-                .all(|clause| { clause.disposition == RouteIntentClauseDisposition::Skipped })
-        );
-
+            build_recorded_route_batch(&[], &start, HistoryCompleteness::Complete, &input)?;
         batch.route_event.evidence.digests.insert(
             "route.health_snapshot".into(),
             format!("sha256:{}", "f".repeat(64)),
@@ -3884,60 +3232,26 @@ mod tests {
         batch.route_event.content_digest = batch.route_event.semantic_digest()?;
 
         assert!(
-            reduce(&[start, batch.route_event], &input.policy.protected_tiers).is_err(),
+            reduce(&[start, batch.route_event]).is_err(),
             "a re-signed typed route must remain bound to its factual event prefix"
         );
         Ok(())
     }
 
-    #[test]
-    fn replay_rejects_resigned_trigger_and_guard_with_same_wrong_health_digest()
-    -> anyhow::Result<()> {
-        let start = guarded_start("request-1", 1)?;
-        let input = guarded_route_input("route-1", "guard-1");
-        let mut batch =
-            build_guarded_route_batch(&[], &start, HistoryCompleteness::Complete, &input)?;
-        let wrong_digest = format!("sha256:{}", "f".repeat(64));
-        batch
-            .route_event
-            .evidence
-            .digests
-            .insert("route.health_snapshot".into(), wrong_digest.clone());
-        batch.route_event.content_digest = batch.route_event.semantic_digest()?;
-        let mut guard = batch
-            .guard_event
-            .ok_or_else(|| anyhow::anyhow!("test policy must trigger a guard"))?;
-        guard
-            .evidence
-            .digests
-            .insert("guard.health_snapshot".into(), wrong_digest);
-        guard.content_digest = guard.semantic_digest()?;
-
-        assert!(
-            reduce(
-                &[start, batch.route_event, guard],
-                &input.policy.protected_tiers,
-            )
-            .is_err(),
-            "matching route/guard lies must not substitute for the factual prefix digest"
-        );
-        Ok(())
-    }
-
     #[tokio::test]
-    async fn live_and_offline_replay_share_exact_guarded_prefix_digest() -> anyhow::Result<()> {
+    async fn live_and_offline_replay_share_exact_recorded_prefix_digest() -> anyhow::Result<()> {
         let store = store().await?;
-        let input = guarded_route_input("route-1", "guard-1");
+        let input = recorded_route_input("route-1");
         let committed = store
             .correlate_and_begin(
                 "owner-a",
                 correlate_input("request-1", "episode-1", "start-1", input.clone()),
             )
             .await?
-            .guarded_route
-            .ok_or_else(|| anyhow::anyhow!("missing guarded route result"))?;
+            .recorded_route
+            .ok_or_else(|| anyhow::anyhow!("missing recorded route result"))?;
         let events = store.events_for_episode("owner-a", "episode-1").await?;
-        let factual_prefix = reduce(&events[..1], &input.policy.protected_tiers)?;
+        let factual_prefix = reduce(&events[..1])?;
         let persisted_digest = events[1]
             .evidence
             .digests
@@ -3950,16 +3264,10 @@ mod tests {
             committed.intent.trajectory_snapshot_digest,
             factual_prefix.evidence_digest
         );
-        #[cfg(feature = "core")]
+        #[cfg(feature = "eval-publication")]
         assert_eq!(
-            replay_episode(
-                &store,
-                "owner-a",
-                "episode-1",
-                &input.policy.protected_tiers
-            )
-            .await?,
-            reduce(&events, &input.policy.protected_tiers)?
+            replay_episode(&store, "owner-a", "episode-1").await?,
+            reduce(&events)?
         );
         Ok(())
     }
@@ -4053,12 +3361,10 @@ mod tests {
         unmatched.event.content_digest = unmatched.event.semantic_digest()?;
         store.begin_request("owner-a", unmatched).await?;
 
-        let protected_tiers = BTreeSet::new();
         let incomplete = reduce(
             &store
                 .events_for_episode("owner-a", "episode-incomplete")
                 .await?,
-            &protected_tiers,
         )?;
         assert_eq!(
             incomplete.health.completeness,
@@ -4068,7 +3374,6 @@ mod tests {
             &store
                 .events_for_episode("owner-a", "episode-unmatched")
                 .await?,
-            &protected_tiers,
         )?;
         assert_eq!(unmatched.health.completeness, HistoryCompleteness::Unknown);
         Ok(())
@@ -4391,7 +3696,7 @@ mod tests {
             canonical_input_bytes: 1,
             protocol: "responses".into(),
             captured_at: "2026-08-01T00:00:00Z".into(),
-            guarded_route: None,
+            recorded_route: None,
         };
 
         let error = store
@@ -4496,138 +3801,50 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn store_rejects_invalid_guard_evidence_without_persisting() -> anyhow::Result<()> {
-        for (label, hold) in [
-            ("missing", None),
-            ("zero", Some(0)),
-            ("oversized", Some(u64::from(u32::MAX) + 1)),
-        ] {
-            let store = store().await?;
-            store
-                .begin_request("owner-a", begin("episode-1", "request-1"))
-                .await?;
+    async fn store_rejects_route_phase_violations_without_persisting() -> anyhow::Result<()> {
+        let store = store().await?;
+        store
+            .begin_request("owner-a", begin("episode-1", "request-1"))
+            .await?;
+        store
+            .append_route_intent(
+                "owner-a",
+                route_event("episode-1", "request-1", 2, "route-first"),
+            )
+            .await?;
+        assert!(
             store
                 .append_route_intent(
                     "owner-a",
-                    route_event("episode-1", "request-1", 2, "event-route-1"),
-                )
-                .await?;
-
-            assert!(
-                store
-                    .append_guard_activation(
-                        "owner-a",
-                        guard_event("episode-1", "request-1", 3, label, hold),
-                    )
-                    .await
-                    .is_err(),
-                "{label} guard was persisted"
-            );
-            assert_eq!(
-                store
-                    .events_for_episode("owner-a", "episode-1")
-                    .await?
-                    .len(),
-                2,
-                "{label} guard changed history"
-            );
-        }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn store_rejects_guard_and_route_phase_violations_without_persisting()
-    -> anyhow::Result<()> {
-        let pre_intent = store().await?;
-        pre_intent
-            .begin_request("owner-a", begin("episode-1", "request-1"))
-            .await?;
-        assert!(
-            pre_intent
-                .append_guard_activation(
-                    "owner-a",
-                    guard_event("episode-1", "request-1", 2, "pre", Some(1)),
+                    route_event("episode-1", "request-1", 3, "route-duplicate")
                 )
                 .await
                 .is_err()
         );
         assert_eq!(
-            pre_intent
+            store
                 .events_for_episode("owner-a", "episode-1")
                 .await?
                 .len(),
-            1
+            2
         );
-
-        let duplicate = store().await?;
-        duplicate
-            .begin_request("owner-a", begin("episode-1", "request-1"))
-            .await?;
-        duplicate
-            .append_route_intent(
-                "owner-a",
-                route_event("episode-1", "request-1", 2, "event-route-1"),
-            )
-            .await?;
-        duplicate
-            .append_guard_activation(
-                "owner-a",
-                guard_event("episode-1", "request-1", 3, "first", Some(1)),
-            )
-            .await?;
-        assert!(
-            duplicate
-                .append_guard_activation(
-                    "owner-a",
-                    guard_event("episode-1", "request-1", 4, "duplicate", Some(1)),
-                )
-                .await
-                .is_err()
-        );
-        assert_eq!(
-            duplicate
-                .events_for_episode("owner-a", "episode-1")
-                .await?
-                .len(),
-            3
-        );
-
-        let post_settlement = store().await?;
-        post_settlement
-            .begin_request("owner-a", begin("episode-1", "request-1"))
-            .await?;
-        post_settlement
-            .append_route_intent(
-                "owner-a",
-                route_event("episode-1", "request-1", 2, "event-route-1"),
-            )
-            .await?;
-        post_settlement
+        store
             .settle_request(
                 "owner-a",
-                settlement_at("episode-1", "request-1", 3, "event-settle-1"),
+                settlement_at("episode-1", "request-1", 3, "settle"),
             )
             .await?;
         assert!(
-            post_settlement
-                .append_guard_activation(
-                    "owner-a",
-                    guard_event("episode-1", "request-1", 4, "post", Some(1)),
-                )
-                .await
-                .is_err()
-        );
-        assert!(
-            post_settlement
+            store
                 .append_route_intent(
                     "owner-a",
-                    route_event("episode-1", "request-1", 4, "event-route-post"),
+                    route_event("episode-1", "request-1", 4, "route-post")
                 )
                 .await
                 .is_err()
         );
         assert_eq!(
-            post_settlement
+            store
                 .events_for_episode("owner-a", "episode-1")
                 .await?
                 .len(),
@@ -4660,34 +3877,6 @@ mod tests {
             1
         );
 
-        let guard_store = store().await?;
-        guard_store
-            .begin_request("owner-a", begin("episode-1", "request-1"))
-            .await?;
-        guard_store
-            .append_route_intent(
-                "owner-a",
-                route_event("episode-1", "request-1", 2, "event-route-1"),
-            )
-            .await?;
-        let guard = with_captured_at(
-            guard_event("episode-1", "request-1", 3, "guard", Some(1)),
-            "2026-07-31T23:59:59Z",
-        )?;
-        assert!(
-            guard_store
-                .append_guard_activation("owner-a", guard)
-                .await
-                .is_err()
-        );
-        assert_eq!(
-            guard_store
-                .events_for_episode("owner-a", "episode-1")
-                .await?
-                .len(),
-            2
-        );
-
         let settle_store = store().await?;
         settle_store
             .begin_request("owner-a", begin("episode-1", "request-1"))
@@ -4717,7 +3906,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn route_guard_and_settlement_exact_retries_remain_idempotent() -> anyhow::Result<()> {
+    async fn route_and_settlement_exact_retries_remain_idempotent() -> anyhow::Result<()> {
         let store = store().await?;
         store
             .begin_request("owner-a", begin("episode-1", "request-1"))
@@ -4725,12 +3914,7 @@ mod tests {
         let route = route_event("episode-1", "request-1", 2, "event-route-1");
         store.append_route_intent("owner-a", route.clone()).await?;
         store.append_route_intent("owner-a", route).await?;
-        let guard = guard_event("episode-1", "request-1", 3, "guard", Some(1));
-        store
-            .append_guard_activation("owner-a", guard.clone())
-            .await?;
-        store.append_guard_activation("owner-a", guard).await?;
-        let settlement = settlement_at("episode-1", "request-1", 4, "event-settle-1");
+        let settlement = settlement_at("episode-1", "request-1", 3, "event-settle-1");
         store.settle_request("owner-a", settlement.clone()).await?;
         store.settle_request("owner-a", settlement).await?;
 
@@ -4739,7 +3923,7 @@ mod tests {
                 .events_for_episode("owner-a", "episode-1")
                 .await?
                 .len(),
-            4
+            3
         );
         Ok(())
     }
@@ -4781,30 +3965,9 @@ mod tests {
                 tokio::spawn(async move {
                     barrier.wait().await;
                     store
-                        .append_guard_activation(
-                            "owner-a",
-                            guard_event("episode-1", "request-1", 3, "1", Some(1)),
-                        )
-                        .await
-                })
-            })
-            .collect::<Vec<_>>();
-        barrier.wait().await;
-        for task in tasks {
-            task.await??;
-        }
-
-        let barrier = Arc::new(tokio::sync::Barrier::new(17));
-        let tasks = (0..16)
-            .map(|_| {
-                let store = Arc::clone(&store);
-                let barrier = Arc::clone(&barrier);
-                tokio::spawn(async move {
-                    barrier.wait().await;
-                    store
                         .settle_request(
                             "owner-a",
-                            settlement_at("episode-1", "request-1", 4, "event-settle-1"),
+                            settlement_at("episode-1", "request-1", 3, "event-settle-1"),
                         )
                         .await
                 })
@@ -4820,7 +3983,7 @@ mod tests {
                 .events_for_episode("owner-a", "episode-1")
                 .await?
                 .len(),
-            4
+            3
         );
         Ok(())
     }
@@ -5301,110 +4464,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn guarded_audit_attributes_intrinsic_route_corruption_before_guard_corruption()
-    -> anyhow::Result<()> {
-        async fn guarded_episode(
-            store: &TrajectoryStore,
-            label: &str,
-        ) -> anyhow::Result<Vec<TrajectoryEvent>> {
-            let result = store
-                .correlate_and_begin(
-                    "owner-a",
-                    correlate_input(
-                        &format!("request-{label}"),
-                        &format!("episode-{label}"),
-                        &format!("start-{label}"),
-                        guarded_route_input(&format!("route-{label}"), &format!("guard-{label}")),
-                    ),
-                )
-                .await?;
-            let events = store
-                .events_for_episode("owner-a", &result.episode_id)
-                .await?;
-            assert_eq!(events.len(), 3, "fixture must include route and guard");
-            Ok(events)
-        }
-
-        async fn replace_event(
-            store: &TrajectoryStore,
-            event: &TrajectoryEvent,
-        ) -> anyhow::Result<()> {
-            event_entity::Entity::update_many()
-                .col_expr(
-                    event_entity::Column::EventJson,
-                    Expr::value(serde_json::to_string(event)?),
-                )
-                .col_expr(
-                    event_entity::Column::ContentDigest,
-                    Expr::value(event.content_digest.clone()),
-                )
-                .filter(event_entity::Column::OwnerUserId.eq("owner-a"))
-                .filter(event_entity::Column::EventId.eq(&event.event_id))
-                .exec(&store.db)
-                .await?;
-            Ok(())
-        }
-
-        async fn assert_first_corrupt(
-            store: &TrajectoryStore,
-            episode_id: &str,
-            expected_event_id: &str,
-            expected_sequence: u64,
-        ) -> anyhow::Result<()> {
-            match store.audit_episode("owner-a", episode_id).await? {
-                EpisodeAudit::Corrupt {
-                    event_id,
-                    sequence,
-                    reason,
-                    ..
-                } => {
-                    assert_eq!(event_id.as_deref(), Some(expected_event_id));
-                    assert_eq!(sequence, Some(expected_sequence));
-                    assert_eq!(reason, "reducer_rejected_prefix");
-                }
-                EpisodeAudit::Valid { .. } => anyhow::bail!("corrupt fixture audited as valid"),
-            }
-            Ok(())
-        }
-
-        let store = store().await?;
-
-        let mut projection = guarded_episode(&store, "invalid-projection").await?;
-        projection[1].evidence.categorical.insert(
-            "route.projection".into(),
-            "not-a-canonical-projection".into(),
-        );
-        projection[1].content_digest = projection[1].semantic_digest()?;
-        replace_event(&store, &projection[1]).await?;
-        assert_first_corrupt(
-            &store,
-            "episode-invalid-projection",
-            "route-invalid-projection",
-            2,
-        )
-        .await?;
-
-        let mut health = guarded_episode(&store, "invalid-health").await?;
-        health[1].evidence.digests.insert(
-            "route.health_snapshot".into(),
-            format!("sha256:{}", "1".repeat(64)),
-        );
-        health[1].content_digest = health[1].semantic_digest()?;
-        replace_event(&store, &health[1]).await?;
-        assert_first_corrupt(&store, "episode-invalid-health", "route-invalid-health", 2).await?;
-
-        let mut guard = guarded_episode(&store, "invalid-guard").await?;
-        guard[2]
-            .evidence
-            .structural
-            .insert("guard.hold_for_requests".into(), 0);
-        guard[2].content_digest = guard[2].semantic_digest()?;
-        replace_event(&store, &guard[2]).await?;
-        assert_first_corrupt(&store, "episode-invalid-guard", "guard-invalid-guard", 3).await?;
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn file_sqlite_audit_retries_a_concurrent_append_without_false_corruption()
     -> anyhow::Result<()> {
         let (store, _directory) = file_store().await?;
@@ -5767,34 +4826,12 @@ mod tests {
         route.evidence.categorical = BTreeMap::from([
             (
                 "route.projection".to_owned(),
-                "agent_trace/v2|opening|normal".to_owned(),
+                "code:generation|orchestrate|normal".to_owned(),
             ),
             ("route.selected_tier".to_owned(), "tier-a".to_owned()),
-            ("route.workflow_state".to_owned(), "opening".to_owned()),
         ]);
         route.content_digest = route.semantic_digest().unwrap_or_default();
         route
-    }
-
-    fn guard_event(
-        episode_id: &str,
-        request_id: &str,
-        sequence: u64,
-        suffix: &str,
-        hold: Option<u64>,
-    ) -> TrajectoryEvent {
-        let mut guard = event(
-            &format!("event-guard-{suffix}"),
-            episode_id,
-            Some(request_id),
-            sequence,
-            TrajectoryEventKind::GuardActivated,
-        );
-        guard.evidence.structural = hold
-            .map(|hold| BTreeMap::from([("guard.hold_for_requests".to_owned(), hold)]))
-            .unwrap_or_default();
-        guard.content_digest = guard.semantic_digest().unwrap_or_default();
-        guard
     }
 
     fn with_captured_at(
@@ -5835,41 +4872,23 @@ mod tests {
         event
     }
 
-    pub(super) fn guarded_route_input(
-        route_event_id: &str,
-        guard_event_id: &str,
-    ) -> GuardedRouteInput {
-        GuardedRouteInput {
+    pub(super) fn recorded_route_input(route_event_id: &str) -> RecordedRouteInput {
+        RecordedRouteInput {
             route_event_id: route_event_id.into(),
-            guard_event_id: guard_event_id.into(),
             policy_name: "auto:cost".into(),
-            route_projection: "code:generation|implement|normal".into(),
-            request_key: "agent_trace/v2|edit|normal".into(),
+            route_class: bitrouter_ai::policy::RouteClass::parse_key(
+                "code:generation|implement|normal",
+            )
+            .unwrap_or_else(|| unreachable!()),
+            request_key: "code:generation|implement|normal".into(),
             baseline_tier: Some("reference".into()),
             baseline_effort: None,
             tier_efforts: Default::default(),
             preset: Some("auto:cost".into()),
-            projection: RouteProjection::parse_key("agent_trace/v2|edit|normal")
-                .unwrap_or_else(|| unreachable!()),
             candidate_tier: Some("economy".into()),
+            selected_tier: Some("economy".into()),
             policy_digest: POLICY_DIGEST.into(),
-            experiment: None,
             route_measurement: None,
-            policy: ProgressGuardPolicy {
-                escalation_tier: "strong".into(),
-                protected_tiers: BTreeSet::from(["strong".into()]),
-                max_consecutive_unprotected: None,
-                max_same_projection_unprotected: None,
-                max_recovery_count: None,
-                max_episode_requests: Some(1),
-                max_episode_elapsed_ms: None,
-                max_episode_cost_micro_usd: None,
-                hold_for_requests: 2,
-                incomplete_history: IncompleteHistoryAction::Observe,
-            },
-            carries_tools: false,
-            tool_use_tier: Some("strong".into()),
-            tool_safe_tiers: BTreeSet::from(["strong".into()]),
         }
     }
 
@@ -5877,7 +4896,7 @@ mod tests {
         request_id: &str,
         episode_id: &str,
         event_id: &str,
-        guarded_route: GuardedRouteInput,
+        recorded_route: RecordedRouteInput,
     ) -> CorrelateAndBegin {
         CorrelateAndBegin {
             request_id: request_id.into(),
@@ -5893,11 +4912,11 @@ mod tests {
             canonical_input_bytes: 10,
             protocol: "chat_completions".into(),
             captured_at: "2026-08-01T00:00:00Z".into(),
-            guarded_route: Some(guarded_route),
+            recorded_route: Some(recorded_route),
         }
     }
 
-    fn guarded_start(request_id: &str, sequence: u64) -> anyhow::Result<TrajectoryEvent> {
+    fn recorded_start(request_id: &str, sequence: u64) -> anyhow::Result<TrajectoryEvent> {
         let mut start = event(
             &format!("start-{request_id}"),
             "episode-1",

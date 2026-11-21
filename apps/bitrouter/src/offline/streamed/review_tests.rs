@@ -546,8 +546,9 @@ async fn proof_fits(
     workspace: &Workspace,
     bytes: usize,
 ) -> Result<bool> {
-    let error = crate::tenancy::audit::recovery::v2::inspect_restore_in(
+    let error = crate::tenancy::restore::inspect_restore_in(
         db,
+        crate::db::store_format::GATEWAY_SQLITE,
         installation,
         missing_key,
         crate::offline::ValidationBudget { rows: 32, bytes },

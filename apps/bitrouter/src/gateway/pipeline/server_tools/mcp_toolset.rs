@@ -291,10 +291,7 @@ mod tests {
             } else {
                 self.call.clone()
             };
-            Ok(McpResponse {
-                request_id: request.request_id.clone(),
-                result,
-            })
+            Ok(McpResponse { result })
         }
         async fn execute_streaming(
             &self,

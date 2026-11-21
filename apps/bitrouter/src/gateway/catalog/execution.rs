@@ -316,9 +316,8 @@ pub(crate) fn select(
                 let default = effort
                     .get("default")
                     .and_then(|v| serde_json::from_value(v.clone()).ok());
-                model_config.reasoning_effort = (!levels.is_empty()).then_some(
-                    crate::gateway::model::capabilities::ReasoningEffortConfig { levels, default },
-                );
+                model_config.reasoning_effort = (!levels.is_empty())
+                    .then_some(crate::config::model::ReasoningEffortConfig { levels, default });
             }
             projected.models = vec![model_config];
             return Some((
@@ -344,7 +343,7 @@ pub(crate) fn select(
 
 /// The default automatic model pool is the current curated/available subset.
 /// Explicit routes use the whole admitted provider inventory instead.
-#[cfg(any(feature = "core", test))]
+#[cfg(test)]
 pub(crate) fn recommended(config: &crate::config::Config, id: &str) -> bool {
     config.registry_models.as_ref().is_none_or(|models| {
         models.iter().any(|m| {

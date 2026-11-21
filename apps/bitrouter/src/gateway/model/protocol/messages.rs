@@ -1057,10 +1057,6 @@ fn ingress_admission(
 }
 
 impl InboundAdapter for MessagesAdapter {
-    fn protocol(&self) -> ApiProtocol {
-        ApiProtocol::Messages
-    }
-
     fn parse_request(&self, body: serde_json::Value) -> Result<Prompt> {
         let req: MessagesRequest = serde_json::from_value(body.clone())
             .map_err(|e| describe_deser_error("MessagesRequest", &e, &body))?;
@@ -1268,31 +1264,6 @@ impl InboundAdapter for MessagesAdapter {
 }
 
 impl OutboundAdapter for MessagesAdapter {
-    fn validate_managed_prompt(&self, prompt: &Prompt) -> std::result::Result<(), &'static str> {
-        super::managed::validate_prompt(&ApiProtocol::Messages, prompt)?;
-        for content in prompt.messages.iter().flat_map(|message| &message.content) {
-            if let Content::Reasoning {
-                text,
-                provider_metadata,
-                ..
-            } = content
-                && render_reasoning_block(text, provider_metadata).is_none()
-            {
-                return Err("reasoning_history_would_be_dropped");
-            }
-        }
-        Ok(())
-    }
-
-    fn validate_managed_body(
-        &self,
-        expected: &serde_json::Value,
-        actual: &serde_json::Value,
-        _target: &ModelTarget,
-    ) -> std::result::Result<(), &'static str> {
-        super::managed::validate_body(&ApiProtocol::Messages, expected, actual)
-    }
-
     fn protocol(&self) -> ApiProtocol {
         ApiProtocol::Messages
     }

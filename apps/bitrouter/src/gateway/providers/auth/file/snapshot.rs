@@ -156,15 +156,6 @@ impl CredentialStore {
         &self.path
     }
 
-    /// Borrow `(provider_id, label)`'s credential. Returns `None` for an
-    /// unknown `(provider, label)` AND for OAuth credentials past their
-    /// `expires_at` — callers either refresh or re-run the login flow.
-    /// API-key credentials have no expiry and are always returned.
-    pub fn get(&self, provider_id: &str, label: &str) -> Option<&Credential> {
-        let c = self.creds.get(provider_id)?.get(label)?;
-        c.is_valid().then_some(c)
-    }
-
     /// Borrow `(provider_id, label)`'s credential regardless of expiry —
     /// useful when the caller wants to attempt a refresh using a stored
     /// `refresh_token`.
@@ -377,7 +368,7 @@ mod tests {
         let path = dir.join("oauth-tokens.json");
         {
             let mut store = CredentialStore::load(&path)?;
-            assert!(store.get("anthropic", DEFAULT_ACCOUNT).is_none());
+            assert!(store.get_any("anthropic", DEFAULT_ACCOUNT).is_none());
             store.set(
                 "anthropic",
                 DEFAULT_ACCOUNT,
@@ -390,7 +381,7 @@ mod tests {
         }
         let reloaded = CredentialStore::load(&path)?;
         let got = reloaded
-            .get("anthropic", DEFAULT_ACCOUNT)
+            .get_any("anthropic", DEFAULT_ACCOUNT)
             .ok_or("missing credential")?;
         let oauth = got.as_oauth().ok_or("missing credential")?;
         assert_eq!(oauth.access_token, "sk-ant-oat-test");
@@ -412,9 +403,9 @@ mod tests {
         }
         let reloaded = CredentialStore::load(&path)?;
         let got = reloaded
-            .get("anthropic", "work")
+            .get_any("anthropic", "work")
             .ok_or("missing credential")?;
-        assert_eq!(got.as_api_key(), Some("sk-ant-api03-secret"));
+        assert!(matches!(got, Credential::ApiKey { value } if value == "sk-ant-api03-secret"));
         Ok(())
     }
 
@@ -433,11 +424,9 @@ mod tests {
         assert!(matches!(got, Credential::ClaudeCodeCli));
         assert_eq!(got.kind_label(), "Claude Code session");
         assert!(got.as_oauth().is_none());
-        assert!(got.as_api_key().is_none());
         // The marker itself is always "valid"; whether a live session exists is
         // decided at request time by the applier.
-        assert!(got.is_valid());
-        assert!(reloaded.get("anthropic", DEFAULT_ACCOUNT).is_some());
+        assert!(reloaded.get_any("anthropic", DEFAULT_ACCOUNT).is_some());
         // Serialized as the adjacently-tagged unit variant, no `data` payload.
         let raw = std::fs::read_to_string(&path)?;
         assert!(raw.contains("claude_code_cli"), "got: {raw}");
@@ -465,13 +454,13 @@ mod tests {
         let mut labels = store.labels("anthropic");
         labels.sort();
         assert_eq!(labels, vec!["pro-max", "work-key"]);
-        assert!(store.get("anthropic", "pro-max").is_some());
-        assert!(store.get("anthropic", "work-key").is_some());
+        assert!(store.get_any("anthropic", "pro-max").is_some());
+        assert!(store.get_any("anthropic", "work-key").is_some());
         Ok(())
     }
 
     #[test]
-    fn expired_oauth_returns_none_from_get_but_some_from_get_any() -> TestResult {
+    fn expired_oauth_remains_available_for_refresh() -> TestResult {
         let dir = tmp_dir()?;
         let mut store = CredentialStore::load(dir.join("oauth-tokens.json"))?;
         store.set(
@@ -483,8 +472,12 @@ mod tests {
                 refresh_token: Some("r".into()),
             }),
         )?;
-        assert!(store.get("anthropic", DEFAULT_ACCOUNT).is_none());
-        assert!(store.get_any("anthropic", DEFAULT_ACCOUNT).is_some());
+        let token = store
+            .get_any("anthropic", DEFAULT_ACCOUNT)
+            .and_then(Credential::as_oauth)
+            .ok_or("missing expired OAuth credential")?;
+        assert!(!token.is_valid());
+        assert_eq!(token.refresh_token.as_deref(), Some("r"));
         Ok(())
     }
 
@@ -493,7 +486,7 @@ mod tests {
         let dir = tmp_dir()?;
         let mut store = CredentialStore::load(dir.join("oauth-tokens.json"))?;
         store.set("anthropic", "k", Credential::api_key("static"))?;
-        assert!(store.get("anthropic", "k").is_some());
+        assert!(store.get_any("anthropic", "k").is_some());
         Ok(())
     }
 
@@ -508,7 +501,7 @@ mod tests {
         fs::write(&path, legacy_json)?;
         let store = CredentialStore::load(&path)?;
         let got = store
-            .get("github-copilot", DEFAULT_ACCOUNT)
+            .get_any("github-copilot", DEFAULT_ACCOUNT)
             .ok_or("missing credential")?;
         let oauth = got.as_oauth().ok_or("missing credential")?;
         assert_eq!(oauth.access_token, "ghu_legacy_test");
@@ -530,8 +523,12 @@ mod tests {
         // On-disk file should now be the new labeled format. Re-load and
         // confirm both entries are addressable via the new API.
         let reloaded = CredentialStore::load(&path)?;
-        assert!(reloaded.get("github-copilot", DEFAULT_ACCOUNT).is_some());
-        assert!(reloaded.get("anthropic", DEFAULT_ACCOUNT).is_some());
+        assert!(
+            reloaded
+                .get_any("github-copilot", DEFAULT_ACCOUNT)
+                .is_some()
+        );
+        assert!(reloaded.get_any("anthropic", DEFAULT_ACCOUNT).is_some());
         // The raw bytes should now carry the new "type"/"data" tagging,
         // not legacy flat OAuthToken structs.
         let bytes = fs::read_to_string(&path)?;

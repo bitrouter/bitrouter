@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use crate::gateway::caller::CallerContext;
-use crate::gateway::http::{AppState, build_router};
+use crate::gateway::http::{AppState, tests::build_router};
 use crate::gateway::pipeline::builder::PipelineBuilder;
 use crate::gateway::pipeline::context::PipelineContext;
 use crate::gateway::pipeline::executor::HttpExecutor;
@@ -21,7 +21,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::pricing::{ContextTier, ModelPricing, PricingSource, PricingTable};
 use super::recorder::MeteringRecorder;
-use super::store::{MeteringStore, TimeWindow};
+use super::store::MeteringStore;
 use super::tariff::endpoint_profile;
 
 struct PendingHandler(Option<tokio::sync::mpsc::UnboundedSender<()>>);
@@ -141,7 +141,7 @@ async fn native_gateway_freezes_final_route_and_persists_completed_usage() -> an
         let db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&db).await?;
         let store = MeteringStore::new(db.clone());
-        let recorder = MeteringRecorder::new(store.clone(), Arc::new(native_prices(&base)));
+        let recorder = MeteringRecorder::new(store.clone());
         let routes = Arc::new(StaticRoutingTable::new());
         routes.insert("test", vec![target()]);
         let mut builder = PipelineBuilder::new();
@@ -149,8 +149,15 @@ async fn native_gateway_freezes_final_route_and_persists_completed_usage() -> an
             .routing_table(routes)
             .executor(Arc::new(HttpExecutor::with_defaults()?))
             .served_operations(OperationScope::Both)
+            .router_preparation_hook_for(
+                crate::gateway::observability::requests::GatewayRequestTracker::new(db.clone()),
+                OperationScope::Both,
+            )
             // Register capture first: even a later mutator must finish before capture.
-            .route_hook_for(recorder.tariff_capture(false), OperationScope::Both)
+            .route_hook_for(
+                super::tariff::CaptureTariffs::new(Arc::new(native_prices(&base)), false),
+                OperationScope::Both,
+            )
             .route_hook_for(OverrideEndpoint(base), OperationScope::Both)
             .settlement_recorder_for(recorder, OperationScope::Both);
         let pipeline = Arc::new(builder.build()?);
@@ -183,17 +190,14 @@ async fn native_gateway_freezes_final_route_and_persists_completed_usage() -> an
                 .await
                 .is_some_and(|requests| requests.len() == 1)
         );
-        let rows = store.export_usage(TimeWindow::ThisMonth).await?;
+        let rows = super::tests::stored_rows(&store).await?;
         assert_eq!(rows.len(), 1);
         let row = rows
             .first()
             .ok_or_else(|| anyhow::anyhow!("missing settled request"))?;
-        assert_eq!(row.final_charge_micro_usd, expected_cost);
-        assert_eq!(row.cache_read_tokens, cached);
-        let evidence = row
-            .charge_evidence
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("missing evidence"))?;
+        assert_eq!(super::tests::evidence(row)?.charge_micro_usd, expected_cost);
+        assert_eq!(row.cache_read_tokens as u64, cached);
+        let evidence = super::tests::evidence(row)?;
         let tariff = evidence
             .tariff_snapshot
             .as_ref()
@@ -208,82 +212,13 @@ async fn native_gateway_freezes_final_route_and_persists_completed_usage() -> an
             Some(0.1)
         );
         assert_eq!(tariff.pricing_version, evidence.pricing_version);
-        assert!(!serde_json::to_string(evidence)?.contains("fixture-key"));
+        assert!(!serde_json::to_string(&evidence)?.contains("fixture-key"));
         if cached != 0 {
             assert_eq!(
                 evidence.unknown_reason.as_deref(),
                 Some("decisions_cache_billing_unverified")
             );
-            assert!(row.raw_usage.is_some());
-        }
-        if cached != 0 {
-            let original = tariff.clone();
-            let mut exported = rows.clone();
-            let override_price = super::store::UsagePriceOverride {
-                provider_id: "fixture".into(),
-                model_id: "native-test".into(),
-                input_micro_usd_per_token: 0.1,
-                output_micro_usd_per_token: 0.0,
-                cache_read_micro_usd_per_token: Some(0.0),
-                cache_write_micro_usd_per_token: Some(0.0),
-            };
-            super::store::MeteringUsageRecord::apply_price_overrides(
-                &mut exported,
-                &[override_price],
-            );
-            let corrected = exported
-                .first()
-                .ok_or_else(|| anyhow::anyhow!("missing export"))?;
-            assert!(corrected.final_charge_micro_usd.is_none());
-            assert_eq!(
-                corrected
-                    .charge_evidence
-                    .as_ref()
-                    .and_then(|e| e.tariff_snapshot.as_ref()),
-                Some(&original)
-            );
-            // A typed authoritative correction proves only this request's amount.
-            // Exercise the real persisted row while retaining its admission tariff.
-            use sea_orm::ConnectionTrait;
-            let request_id = row
-                .request_id
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("missing request identity"))?;
-            db.execute(sea_orm::Statement::from_sql_and_values(
-                sea_orm::DatabaseBackend::Sqlite,
-                "UPDATE requests SET reconciliation_status = 'pending' WHERE request_id = ?",
-                [request_id.clone().into()],
-            ))
-            .await?;
-            let receipt = crate::cloud::settlement::SettlementReceipt {
-                request_id: request_id.clone(),
-                state: crate::cloud::settlement::SettlementState::Computed,
-                provider_id: Some("fixture".into()),
-                model_id: Some("native-test".into()),
-                usage: crate::cloud::settlement::SettlementUsage {
-                    uncached_input_tokens: 60,
-                    cache_read_tokens: 40,
-                    cache_write_tokens: 0,
-                    output_tokens: 0,
-                    reasoning_tokens: 0,
-                },
-                final_charge_micro_usd: Some(17),
-            };
-            assert_eq!(
-                store.apply_authoritative_receipt_charge(&receipt).await?,
-                super::db::ReconciliationStatus::Computed
-            );
-            let reconciled = store.export_usage(TimeWindow::ThisMonth).await?;
-            let record = reconciled
-                .first()
-                .ok_or_else(|| anyhow::anyhow!("missing corrected row"))?;
-            assert_eq!(record.final_charge_micro_usd, Some(17));
-            let evidence = record
-                .charge_evidence
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("missing corrected evidence"))?;
-            assert_eq!(evidence.pricing_source, PricingSource::AuthoritativeReceipt);
-            assert_eq!(evidence.tariff_snapshot.as_ref(), Some(&original));
+            assert!(row.raw_usage_json.is_some());
         }
     }
     Ok(())
@@ -376,7 +311,7 @@ fn frozen_tariffs_keep_rates_and_endpoint_billing_conditions() -> anyhow::Result
 
 #[test]
 fn published_global_tariffs_cannot_rebind_to_configured_regional_endpoints() -> anyhow::Result<()> {
-    use crate::gateway::catalog::types::PricingEndpointProfile;
+    use crate::config::PricingEndpointProfile;
     let mut target = target();
     for (base, regional_profile) in [
         (
@@ -455,17 +390,19 @@ async fn known_price_admission_rejects_native_cache_uncertainty_before_http() ->
     let base = format!("{}/v1", upstream.uri());
     let db = crate::db::connect("sqlite::memory:").await?;
     crate::db::run_migrations(&db).await?;
-    let recorder = MeteringRecorder::new(MeteringStore::new(db), Arc::new(native_prices(&base)));
     let routes = Arc::new(StaticRoutingTable::new());
     let mut native = target();
-    native.api_base = base;
+    native.api_base = base.clone();
     routes.insert("test", vec![native]);
     let mut builder = PipelineBuilder::new();
     builder
         .routing_table(routes)
         .executor(Arc::new(HttpExecutor::with_defaults()?))
         .served_operations(OperationScope::Both)
-        .route_hook_for(recorder.tariff_capture(true), OperationScope::Both);
+        .route_hook_for(
+            super::tariff::CaptureTariffs::new(Arc::new(native_prices(&base)), true),
+            OperationScope::Both,
+        );
     let pipeline = Arc::new(builder.build()?);
     let request = crate::gateway::model::protocol::decisions::DecisionsCodec::parse_request(
         json!({
@@ -596,9 +533,9 @@ async fn native_gateway_enforces_shared_auth_acl_expiry_spend_and_rate() -> anyh
         policy.id = "native-policy".into();
         let store = MeteringStore::new(db.clone());
         let base = format!("{}/v1", upstream.uri());
-        let recorder = MeteringRecorder::new(store.clone(), Arc::new(native_prices(&base)));
+        let recorder = MeteringRecorder::new(store.clone());
         let mut native = target();
-        native.api_base = base;
+        native.api_base = base.clone();
         let table = Arc::new(StaticRoutingTable::new());
         table.insert("test", vec![native]);
         let mut builder = PipelineBuilder::new();
@@ -616,7 +553,10 @@ async fn native_gateway_enforces_shared_auth_acl_expiry_spend_and_rate() -> anyh
                 ),
                 OperationScope::Both,
             )
-            .route_hook_for(recorder.tariff_capture(false), OperationScope::Both)
+            .route_hook_for(
+                super::tariff::CaptureTariffs::new(Arc::new(native_prices(&base)), false),
+                OperationScope::Both,
+            )
             .settlement_recorder_for(recorder, OperationScope::Both);
         let pipeline = Arc::new(builder.build()?);
         let router = build_router(AppState {
@@ -654,11 +594,11 @@ async fn native_gateway_enforces_shared_auth_acl_expiry_spend_and_rate() -> anyh
                 .is_some_and(|requests| requests.len() == expected_calls)
         );
         if expected_calls != 0 {
-            let rows = store.export_usage(TimeWindow::ThisMonth).await?;
-            assert!(
-                rows.iter()
-                    .any(|row| row.final_charge_micro_usd == Some(10))
-            );
+            let rows = super::tests::stored_rows(&store).await?;
+            assert!(rows.iter().any(|row| {
+                super::tests::evidence(row)
+                    .is_ok_and(|evidence| evidence.charge_micro_usd == Some(10))
+            }));
         }
     }
     Ok(())
@@ -698,11 +638,11 @@ async fn observed_native_disconnect_and_shutdown_preserve_sqlite_settlement() ->
     });
     let db = crate::db::connect("sqlite::memory:").await?;
     crate::db::run_migrations(&db).await?;
-    let store = MeteringStore::new(db);
-    let recorder = MeteringRecorder::new(store.clone(), Arc::new(native_prices(&base)));
-    let capture = recorder.tariff_capture(false);
+    let store = MeteringStore::new(db.clone());
+    let recorder = MeteringRecorder::new(store.clone());
+    let capture = super::tariff::CaptureTariffs::new(Arc::new(native_prices(&base)), false);
     let mut native = target();
-    native.api_base = base;
+    native.api_base = base.clone();
     let routes = Arc::new(StaticRoutingTable::new());
     routes.insert("test", vec![native]);
     let executor = Arc::new(HttpExecutor::with_defaults()?);
@@ -712,6 +652,10 @@ async fn observed_native_disconnect_and_shutdown_preserve_sqlite_settlement() ->
             lm.routing_table(routes)
                 .executor(executor)
                 .served_operations(OperationScope::Both)
+                .router_preparation_hook_for(
+                    crate::gateway::observability::requests::GatewayRequestTracker::new(db),
+                    OperationScope::Both,
+                )
                 .route_hook_for(capture, OperationScope::Both)
                 .settlement_recorder_for(recorder, OperationScope::Both);
         })
@@ -758,16 +702,16 @@ async fn observed_native_disconnect_and_shutdown_preserve_sqlite_settlement() ->
         .send(())
         .map_err(|_| anyhow::anyhow!("gateway shutdown channel closed"))?;
     assert!(!gateway.is_finished());
-    assert!(store.export_usage(TimeWindow::ThisMonth).await?.is_empty());
+    assert!(super::tests::stored_rows(&store).await?.is_empty());
     release.notify_one();
     tokio::time::timeout(Duration::from_secs(10), gateway).await???;
-    let rows = store.export_usage(TimeWindow::ThisMonth).await?;
+    let rows = super::tests::stored_rows(&store).await?;
     assert_eq!(rows.len(), 1);
     let row = rows
         .first()
         .ok_or_else(|| anyhow::anyhow!("no settled request"))?;
-    assert_eq!(row.request_id.as_deref(), Some("native-disconnected"));
-    assert_eq!(row.final_charge_micro_usd, Some(10));
+    assert_eq!(row.request_id, "native-disconnected");
+    assert_eq!(super::tests::evidence(row)?.charge_micro_usd, Some(10));
     assert_eq!(row.prompt_tokens, 100);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     upstream_stop

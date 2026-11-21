@@ -70,7 +70,7 @@ async fn judge_settlement_uses_shared_budget_and_fences_failed_terminal_write() 
         .await?
         .context("attempt missing")?;
     assert!(settled.settled_at.is_some());
-    db.execute_unprepared("CREATE TRIGGER reject_judge_terminal BEFORE UPDATE ON checkpoint_evolution BEGIN SELECT RAISE(ABORT, 'fixture storage failure'); END").await?;
+    db.execute_unprepared("CREATE TRIGGER reject_judge_terminal BEFORE UPDATE ON gateway_request_records BEGIN SELECT RAISE(ABORT, 'fixture storage failure'); END").await?;
     assert!(
         costs
             .finish(&observed, None, Some(ExecutionOutcome::Completed))

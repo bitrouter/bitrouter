@@ -1,5 +1,4 @@
 use super::*;
-use crate::gateway::routing::ContextTreatment;
 use serde_json::{Value, json};
 
 fn source() -> Value {
@@ -35,7 +34,7 @@ fn source_digest_matches_recursively_sorted_utf8_json_vector() -> Result<()> {
 
     assert_eq!(source_digest(&document)?, EXPECTED);
     assert_eq!(compile(&document)?.digest(), EXPECTED);
-    assert_eq!(crate::policy_lock::semantic_digest(&document)?, EXPECTED);
+    assert_eq!(crate::policy_source::semantic_digest(&document)?, EXPECTED);
     Ok(())
 }
 
@@ -65,8 +64,7 @@ fn classification_requires_supported_classifier_valid_class_and_existing_target(
     let mut value = source();
     value["policies"]["auto"]["routes"] = json!({"code:debugging|verify|normal":"strong"});
     assert!(parse(&value).is_err());
-    value["policies"]["auto"]["classifier_digest"] =
-        json!(compiled_predictor_contract().config_digest);
+    value["policies"]["auto"]["classifier_digest"] = json!(contract_digest());
     let compiled = compile(&parse(&value)?)?;
     assert_eq!(
         compiled.selections()["auto"]
@@ -83,7 +81,7 @@ fn classification_requires_supported_classifier_valid_class_and_existing_target(
 }
 
 #[test]
-fn unsupported_contracts_and_experimental_fields_fail_closed() {
+fn unsupported_contracts_and_experimental_fields_fail_closed() -> Result<()> {
     for version in [
         "1.0.0-beta.1",
         "registry/1.0.0-beta.1",
@@ -100,9 +98,11 @@ fn unsupported_contracts_and_experimental_fields_fail_closed() {
         value[field] = json!(4);
         assert!(parse(&value).is_err());
     }
-    for field in ["progress_guard", "optimization", "adequacy", "predictor"] {
+    for field in serde_json::from_str::<Vec<String>>(include_str!(
+        "../../tests/fixtures/model-policy-unknown-fields.json"
+    ))? {
         let mut value = source();
-        value["policies"]["auto"][field] = json!({});
+        value["policies"]["auto"][&field] = json!({});
         assert!(parse(&value).is_err());
     }
     for context in ["preserve", "evidence", "summary"] {
@@ -110,6 +110,7 @@ fn unsupported_contracts_and_experimental_fields_fail_closed() {
         value["policies"]["auto"]["tiers"]["economy"]["context"] = json!(context);
         assert!(parse(&value).is_err());
     }
+    Ok(())
 }
 
 #[test]
@@ -307,8 +308,7 @@ fn typed_route_domain_and_tier_references_are_enforced() -> Result<()> {
     }
     assert_eq!(routes.len(), 156);
     value["policies"]["auto"]["routes"] = routes.into();
-    value["policies"]["auto"]["classifier_digest"] =
-        json!(compiled_predictor_contract().config_digest);
+    value["policies"]["auto"]["classifier_digest"] = json!(contract_digest());
     for raw in [
         serde_json::to_string(&value)?,
         serde_saphyr::to_string(&value)?,
@@ -356,11 +356,10 @@ async fn selection_uses_literal_names_and_missing_suffix_never_falls_back() -> R
         inherit_defaults: false,
         ..Default::default()
     };
-    let runtime = crate::policy_lock::PolicyRuntime::from_document(
+    let runtime = crate::policy_source::PolicyRuntime::from_document(
         &config,
         Some(parse(&value)?),
         Default::default(),
-        None,
     )?;
     for (selected, expected) in [("auto", "fixture:small"), ("auto:cost", "fixture:large")] {
         let input = crate::gateway::http::parse_input(
@@ -396,11 +395,10 @@ async fn default_tool_and_server_tool_bypass_preserve_admitted_content() -> Resu
         inherit_defaults: false,
         ..Default::default()
     };
-    let runtime = crate::policy_lock::PolicyRuntime::from_document(
+    let runtime = crate::policy_source::PolicyRuntime::from_document(
         &config,
         Some(parse(&source())?),
         Default::default(),
-        None,
     )?;
     for (tool, expected_model) in [
         (None, "fixture:small"),
@@ -439,145 +437,10 @@ async fn default_tool_and_server_tool_bypass_preserve_admitted_content() -> Resu
         runtime.prepare_selection("auto", &mut ctx).await?;
         runtime.select_policy("auto", &mut ctx).await?;
         assert_eq!(ctx.model(), expected_model);
-        assert_eq!(
-            ctx.extension::<ContextTreatment>().as_deref(),
-            Some(&ContextTreatment::Preserve)
-        );
         let actual = ctx.require_generation_prompt()?;
         assert_eq!(actual.messages, original.messages);
         assert_eq!(actual.system, original.system);
         assert_eq!(actual.tools, original.tools);
     }
-    Ok(())
-}
-
-struct FixedWithReducedView {
-    plans: tokio::sync::Mutex<Vec<crate::gateway::pipeline::native::NativePlan>>,
-    reject: bool,
-    rebuild_calls: std::sync::atomic::AtomicUsize,
-}
-
-#[async_trait::async_trait]
-impl crate::gateway::pipeline::native::NativeExecutionControl for FixedWithReducedView {
-    fn model_selection(&self) -> crate::gateway::pipeline::native::NativeModelSelection {
-        crate::gateway::pipeline::native::NativeModelSelection::Fixed
-    }
-
-    async fn prepare_routing(
-        &self,
-        prompt: &bitrouter_ai::types::Prompt,
-    ) -> crate::gateway::error::Result<Option<crate::gateway::routing::preparation::Prepared>> {
-        use crate::gateway::routing::{ContextCapability, plan::View, preparation::Prepared};
-        let mut prepared = Prepared::from_prompt(prompt, None, "fixed-model-context").await;
-        let mut reduced = prompt.clone();
-        reduced.messages.clear();
-        prepared
-            .capabilities
-            .insert(ContextCapability::OmitEvidence);
-        prepared.views.push(View {
-            id: "reduced".into(),
-            prompt: reduced,
-            requires: [ContextCapability::OmitEvidence].into(),
-        });
-        Ok(Some(prepared))
-    }
-
-    async fn commit_routing(
-        &self,
-        plan: &crate::gateway::routing::plan::Plan,
-    ) -> crate::gateway::error::Result<()> {
-        assert_eq!(plan.selection.strategy, ContextTreatment::Preserve);
-        assert_eq!(plan.selection.selected_context, "full");
-        Ok(())
-    }
-
-    async fn plan(
-        &self,
-        plan: crate::gateway::pipeline::native::NativePlan,
-    ) -> crate::gateway::error::Result<crate::gateway::pipeline::native::NativePlanAdmission> {
-        let route_indices = (0..plan.routes.len()).map(|index| index as u32).collect();
-        self.plans.lock().await.push(plan);
-        if self.reject {
-            return Err(crate::gateway::error::BitrouterError::bad_request(
-                "context capacity rejected",
-            ));
-        }
-        Ok(crate::gateway::pipeline::native::NativePlanAdmission { route_indices })
-    }
-
-    async fn rebuild_context(
-        &self,
-        _: &crate::gateway::pipeline::native::NativePlan,
-    ) -> crate::gateway::error::Result<Option<Vec<bitrouter_ai::types::Message>>> {
-        self.rebuild_calls
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Ok(Some(Vec::new()))
-    }
-
-    async fn before_attempt(&self, _: &str, _: u32) -> crate::gateway::error::Result<()> {
-        Ok(())
-    }
-
-    async fn after_attempt(&self, _: crate::managed_contract::evidence::NativeAttemptReport) {}
-}
-
-#[tokio::test]
-async fn fixed_native_execution_preserves_context_even_when_reduced_views_are_authorized()
--> Result<()> {
-    fixed_native_case(false).await?;
-    fixed_native_case(true).await
-}
-
-async fn fixed_native_case(reject: bool) -> Result<()> {
-    use crate::gateway::{
-        caller::CallerContext,
-        pipeline::{builder::PipelineBuilder, executor::MockExecutor, types::PipelineRequest},
-    };
-    use std::sync::Arc;
-    let config: crate::config::Config = serde_json::from_value(json!({"inherit_defaults":false,
-        "providers":{"fixture":{"api_base":"https://example.invalid/v1","models":[{"id":"base"},{"id":"small"},{"id":"large"}]}},
-        "routers":{"auto":{"selection":{"kind":"policy","policy":"auto","base_model":"fixture:base"}}}
-    }))?;
-    let runtime = crate::policy_lock::PolicyRuntime::from_document(
-        &config,
-        Some(parse(&source())?),
-        Default::default(),
-        None,
-    )?;
-    let mut builder = PipelineBuilder::new();
-    builder
-        .routing_table(Arc::new(
-            crate::config::routing_table::ConfigRoutingTable::from_config(config),
-        ))
-        .model_selector(runtime)
-        .executor(Arc::new(MockExecutor::always_text("full context")));
-    let input = crate::gateway::http::parse_input(
-        &bitrouter_ai::types::ApiProtocol::ChatCompletions,
-        json!({"model":"bitrouter/auto","messages":[{"role":"user","content":"retain the complete source history"}]}),
-    )?;
-    let prompt = input.generation_prompt().context("prompt")?.clone();
-    let messages = prompt.messages.clone();
-    let control = Arc::new(FixedWithReducedView {
-        plans: Default::default(),
-        reject,
-        rebuild_calls: Default::default(),
-    });
-    let result = Arc::new(builder.build()?)
-        .execute_native_controlled(
-            PipelineRequest::new("bitrouter/auto", CallerContext::local(), prompt),
-            control.clone(),
-        )
-        .await;
-    assert_eq!(result.is_err(), reject);
-    assert_eq!(
-        control
-            .rebuild_calls
-            .load(std::sync::atomic::Ordering::Relaxed),
-        0
-    );
-    let plans = control.plans.lock().await;
-    assert_eq!(plans.len(), 1);
-    assert_eq!(plans[0].prompt.messages, messages);
-    assert_eq!(plans[0].effective_model, "fixture:base");
     Ok(())
 }

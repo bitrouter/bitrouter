@@ -148,7 +148,6 @@ async fn literal_selection_is_qualified_by_tenant_and_selected_route_only() -> R
         reference("other", ResourceKind::Credential, "slot")?
     );
     assert!(matches!(a.match_candidate(&tc), Err(ErrorCode::Forbidden)));
-    assert!(a.reload().await.is_err());
     Ok(())
 }
 
@@ -273,8 +272,6 @@ async fn generation_defaults_and_unknown_capabilities_preserve_routing_semantics
     let resolution = decisions.resolve_model("mixed").await?;
     assert!(resolution.overrides.params.is_empty());
     assert!(resolution.overrides.system_prompt.is_none());
-    let overrides = decisions.preset_overrides("mixed").await?;
-    assert!(overrides.params.is_empty() && overrides.system_prompt.is_none());
     let target = first(&decisions, "mixed", ApiProtocol::Decisions).await?;
     assert_eq!(target.api_protocol, ApiProtocol::Decisions);
     assert!(matches!(

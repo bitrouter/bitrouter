@@ -1,17 +1,12 @@
 //! Declarations for trusted request-check extensions compiled into the host.
 
-use std::collections::BTreeMap;
-
-use serde::{Deserialize, Deserializer, Serialize, de};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::gateway::error::BitrouterError;
 use crate::gateway::error::Result;
 use crate::gateway::extensions::request_check::validate_revision;
 
 /// A request-check implementation explicitly linked by a custom host.
-///
-/// The existing `native.revision` configuration shape remains supported. Former
-/// HTTP declarations are rejected with a migration diagnostic, never ignored.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(untagged, deny_unknown_fields)]
 pub enum CheckerConfig {
@@ -25,30 +20,13 @@ pub enum CheckerConfig {
 impl<'de> Deserialize<'de> for CheckerConfig {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
         #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
         struct Fields {
-            native: Option<NativeCheckerConfig>,
-            #[serde(flatten)]
-            unsupported: BTreeMap<String, de::IgnoredAny>,
+            native: NativeCheckerConfig,
         }
 
-        let fields = Fields::deserialize(deserializer)?;
-        if fields.unsupported.keys().any(|key| {
-            matches!(
-                key.as_str(),
-                "endpoint" | "credential_env" | "contract_version"
-            )
-        }) {
-            return Err(de::Error::custom(
-                "HTTP request-check extensions are no longer supported; compile the extension into a custom host, register it through ExtensionApi, and replace the HTTP fields with native.revision; do not remove the router's check binding",
-            ));
-        }
-        if let Some(key) = fields.unsupported.keys().next() {
-            return Err(de::Error::unknown_field(key, &["native"]));
-        }
-        fields
-            .native
-            .map(|native| Self::Native { native })
-            .ok_or_else(|| de::Error::missing_field("native"))
+        let Fields { native } = Fields::deserialize(deserializer)?;
+        Ok(Self::Native { native })
     }
 }
 

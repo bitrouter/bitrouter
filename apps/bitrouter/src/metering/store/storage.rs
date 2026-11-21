@@ -20,14 +20,6 @@ impl MeteringStore {
             .transpose()
     }
 
-    pub(super) fn stored_bytes(&self, row: &requests::ActiveModel) -> Result<usize> {
-        if self.write_budget()?.is_some() {
-            model_bytes(row)
-        } else {
-            Ok(0)
-        }
-    }
-
     pub(super) fn reserve_write(
         &self,
         row: &requests::ActiveModel,
@@ -39,30 +31,12 @@ impl MeteringStore {
         let bytes = model_bytes(row)?
             .checked_add(previous_bytes)
             .ok_or_else(|| storage_error(ErrorCode::CapacityExceeded))?;
-        // Metering and reconciliation do not own a transferred completion or
-        // deny/revoke reservation, so they use ordinary storage admission.
+        // Metering writes use ordinary storage admission; completion and
+        // deny/revoke reservations are owned by their respective operations.
         budget
             .reserve(bytes, false)
             .map(Some)
             .map_err(storage_error)
-    }
-
-    pub(super) async fn update_row(
-        &self,
-        row: requests::ActiveModel,
-        previous_bytes: usize,
-        context: &'static str,
-    ) -> Result<()> {
-        let mut charge = self.reserve_write(&row, previous_bytes)?;
-        if let Some(charge) = &mut charge {
-            charge.start();
-        }
-        // Keep the existing ORM update/affected-row semantics. Cancellation or
-        // error drops the started charge, retaining accounting and fencing.
-        row.update(&self.db)
-            .await
-            .map_err(|_| BitrouterError::internal(context))?;
-        complete(charge)
     }
 }
 

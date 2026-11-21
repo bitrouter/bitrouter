@@ -10,9 +10,6 @@
 //! deployment-specific; if the OSS deployment needs a hard spend cap, it
 //! goes through `apps/bitrouter/src/policy/` reading `MeteringStore`.
 
-use std::collections::HashSet;
-use std::sync::Arc;
-
 use async_trait::async_trait;
 
 use crate::gateway::error::Result;
@@ -23,15 +20,12 @@ use serde::Serialize;
 
 use crate::auth::events::ApiPrincipalEstablished;
 use crate::metering::db::{MeteringSessionIdentity, ReconciliationStatus, RequestMetric};
-use crate::metering::pricing::PricingTable;
 use crate::metering::store::MeteringStore;
 use crate::session_identity::SessionIdentityObserved;
 
 /// Always-run settlement recorder writing through [`MeteringStore`].
 pub struct MeteringRecorder {
     store: MeteringStore,
-    pricing: Arc<PricingTable>,
-    reconciliation_providers: HashSet<String>,
 }
 
 /// Content-free, typed proof that metering successfully persisted its
@@ -62,25 +56,10 @@ impl PipelineEvent for MeteringSettlementEvent {
 }
 
 impl MeteringRecorder {
-    /// Build a recorder over the shared `MeteringStore` and a
-    /// `(provider, service_id) → ModelPricing` table.
-    pub fn new(store: MeteringStore, pricing: Arc<PricingTable>) -> Self {
-        Self {
-            store,
-            pricing,
-            reconciliation_providers: HashSet::new(),
-        }
-    }
-
-    /// Require request-scoped authoritative reconciliation for this provider.
-    pub fn with_reconciliation_provider(mut self, provider_id: impl Into<String>) -> Self {
-        self.reconciliation_providers.insert(provider_id.into());
-        self
-    }
-
-    /// The same capture can be installed by custom hosts composing this recorder.
-    pub fn tariff_capture(&self, require_known: bool) -> crate::metering::tariff::CaptureTariffs {
-        crate::metering::tariff::CaptureTariffs::new(self.pricing.clone(), require_known)
+    /// Build a recorder over the shared store. Pricing comes from the
+    /// immutable tariff captured before the provider request.
+    pub fn new(store: MeteringStore) -> Self {
+        Self { store }
     }
 
     fn normalize_zero_usage_rejection(ctx: &mut SettlementContext) {
@@ -130,7 +109,7 @@ fn route_scope(ctx: &SettlementContext) -> String {
 #[async_trait]
 impl SettlementRecorder for MeteringRecorder {
     async fn record(&self, ctx: &mut SettlementContext) -> Result<()> {
-        if ctx.has_event::<crate::gateway::metering::replay::CanonicalRequestReplayRejected>()
+        if crate::gateway::metering::replay::unadmitted(ctx)
             || ctx.has_event::<crate::gateway::metering::replay::JudgeAttemptReplayRejected>()
         {
             return Ok(());
@@ -250,11 +229,7 @@ impl SettlementRecorder for MeteringRecorder {
             raw_usage: ctx.raw_usage.clone(),
             charge_status: charge_evidence.status,
             charge_evidence,
-            reconciliation_status: if self.reconciliation_providers.contains(&ctx.provider_id) {
-                ReconciliationStatus::Pending
-            } else {
-                ReconciliationStatus::NotApplicable
-            },
+            reconciliation_status: ReconciliationStatus::NotApplicable,
             estimated_charge_micro_usd,
             latency_ms: ctx.request_duration_ms,
             generation_time_ms: ctx.upstream_duration_ms.unwrap_or(0),

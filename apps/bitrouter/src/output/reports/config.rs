@@ -22,7 +22,7 @@ pub struct UnsetVar {
     pub unset_env: String,
 }
 
-/// Result of `bro config validate`. `valid: false` carries `errors` and
+/// Result of `bitrouter config validate`. `valid: false` carries `errors` and
 /// exits non-zero (CI-safe); `valid: true` carries the catalog counts, any
 /// unset-var `warnings`, and any `ignored_config`.
 ///

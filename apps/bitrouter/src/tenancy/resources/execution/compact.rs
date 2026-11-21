@@ -42,7 +42,6 @@ fn reference(value: &mut ResourceRef) -> Result<()> {
 
 pub(super) fn identifiers(value: &mut RetainedExecutionRevision) -> Result<()> {
     let RetainedExecutionRevision {
-        bro_capture: _,
         installation,
         tenant,
         revision,
@@ -78,18 +77,13 @@ pub(super) fn route_data(value: &mut RouteData) -> Result<()> {
     let RouteData {
         reference: root,
         admission,
-        assessment,
-        block_pricing: _,
-        block: _, // Contains no opaque tenancy identifier.
 
         dependencies,
         selector: _,
         overrides: _,
         policy,
         chains: _,
-        native: _, // Only selector strings and indices; no additional opaque IDs.
         candidates,
-        choice: _, // Already normalized before the hidden child was shared.
     } = value;
     reference(root)?;
     if let Some(attachments) = admission {
@@ -97,9 +91,6 @@ pub(super) fn route_data(value: &mut RouteData) -> Result<()> {
             reference(&mut attachment.credential)?;
             reference(&mut attachment.profile)?;
         }
-    }
-    if let Some(assessment) = assessment {
-        reference(assessment)?;
     }
     for dependency in dependencies {
         reference(dependency)?;

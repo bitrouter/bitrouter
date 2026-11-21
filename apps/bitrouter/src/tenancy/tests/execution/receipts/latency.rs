@@ -140,7 +140,12 @@ pub(in crate::tenancy::tests::execution) fn exporter(
     config.metrics.export_interval_ms = interval;
     config.traces.batch.flush_ms = 3_600_000;
     let exporter = Arc::new(
-        OtelExporter::new(config, None).map_err(|_| anyhow::anyhow!("exporter initialization"))?,
+        OtelExporter::new(
+            config,
+            #[cfg(feature = "otel-http")]
+            None,
+        )
+        .map_err(|_| anyhow::anyhow!("exporter initialization"))?,
     );
     let sink = exporter.receipt_observer(&observer)?;
     Ok((exporter, sink))

@@ -2,7 +2,7 @@
 
 pub(super) mod http;
 pub(crate) mod identity;
-#[cfg(feature = "core")]
+#[cfg(feature = "eval-publication")]
 pub(crate) mod observation;
 mod wire;
 
@@ -40,7 +40,7 @@ pub(super) struct State {
     pub producers_open: AtomicBool,
     failed: AtomicBool,
     live: Arc<AtomicBool>,
-    #[cfg(all(test, feature = "core"))]
+    #[cfg(all(test, feature = "eval-publication"))]
     pub producer_waiting: tokio::sync::Notify,
     #[cfg(test)]
     pub handoff: std::sync::Mutex<Option<Arc<Handoff>>>,
@@ -52,7 +52,7 @@ impl State {
             producers_open: AtomicBool::new(true),
             failed: AtomicBool::new(false),
             live,
-            #[cfg(all(test, feature = "core"))]
+            #[cfg(all(test, feature = "eval-publication"))]
             producer_waiting: tokio::sync::Notify::new(),
             #[cfg(test)]
             handoff: std::sync::Mutex::new(None),
@@ -198,7 +198,7 @@ pub(super) struct Reply {
     pub body: Vec<u8>,
     pub lease: OwnedSemaphorePermit,
 }
-#[cfg(feature = "core")]
+#[cfg(feature = "eval-publication")]
 pub(super) struct Settlement {
     pub execution: Arc<super::execution::TenantExecution>,
     pub subject: Arc<EvalSubject>,

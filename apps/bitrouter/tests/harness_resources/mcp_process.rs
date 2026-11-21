@@ -4,15 +4,14 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use bitrouter::config::mcp::{McpServerConfig, McpTransport};
-use bitrouter::gateway::mcp::client::BoundedMcpClient;
-use rmcp::model::{CallToolRequestParams, ProtocolVersion};
+use crate::config::mcp::{McpServerConfig, McpTransport};
+use crate::gateway::mcp::client::BoundedMcpClient;
+use rmcp::model::ProtocolVersion;
 use tokio_util::sync::CancellationToken;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
-#[path = "../support/prebuilt_example.rs"]
-mod prebuilt_example;
+use crate::tests::prebuilt_example;
 
 fn fixture_binary() -> Result<&'static Path, String> {
     static BINARY: OnceLock<Result<PathBuf, String>> = OnceLock::new();
@@ -113,26 +112,11 @@ async fn shared_stdio_shutdown_confirms_child_and_descendant_exit() -> TestResul
     let workspace = tempfile::TempDir::new()?;
     let mut client = BoundedMcpClient::connect(
         workspace.path(),
-        &[server(&["descendant", "notify"])?],
+        &[server(&["descendant"])?],
         ProtocolVersion::LATEST,
     )
     .await?;
     assert_eq!(client.tools()[0].name, "stdio__echo");
-    let (name, peer) = client.tool_peer("stdio__echo")?;
-    let result = peer
-        .call_tool(CallToolRequestParams::new(name.to_owned()))
-        .await?;
-    assert!(
-        serde_json::to_string(&result)?
-            .contains(&workspace.path().canonicalize()?.display().to_string())
-    );
-    tokio::time::timeout(Duration::from_secs(3), async {
-        while client.validate_catalog().is_ok() {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await?;
-    assert!(client.tool_peer("stdio__echo").is_err());
     client.shutdown().await?;
     assert_processes_stopped(workspace.path())?;
     client.shutdown().await?;

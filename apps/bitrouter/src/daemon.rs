@@ -1,6 +1,6 @@
 //! Daemon control over a local IPC channel.
 //!
-//! A running `bro serve` listens on a control endpoint alongside the
+//! A running `bitrouter serve` listens on a control endpoint alongside the
 //! HTTP API. The CLI's `stop` / `restart` / `reload` / `status` / `route`
 //! subcommands are thin clients that connect, send one newline-delimited JSON
 //! [`DaemonCommand`], and read one [`DaemonResponse`].
@@ -17,19 +17,14 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-#[cfg(not(feature = "harness"))]
 use tokio::io::AsyncReadExt;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 
 use crate::gateway::assembly::App;
 use crate::gateway::caller::CallerContext;
-#[cfg(feature = "harness")]
-use crate::gateway::pipeline::routing::RoutingPrefs;
 
 use chrono::{DateTime, Utc};
 
-#[cfg(feature = "harness")]
-use crate::harness::acp::runtime::AcpRuntime;
 use crate::metering::{MeteringStore, TimeWindow};
 use crate::reload::{ReloadAdmissionError, ReloadReservation};
 use bitrouter_ai::control::reload::{ReloadReport, ReloadState};
@@ -42,16 +37,7 @@ use {
     bitrouter_ai::control::administration::ProvidersReport,
 };
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct HandoffActivity {
-    pub operations: usize,
-    pub supervised_runs: Option<usize>,
-    pub route_leases: usize,
-    pub acp_recordings: Option<u64>,
-    pub drain_in_progress: bool,
-}
-
-/// Instance-fenced local evolution control, distinct from handoff and ACP versions.
+/// Instance-fenced local evolution control, scoped to the running daemon.
 pub const EVOLUTION_CONTROL_VERSION: u16 = 1;
 
 /// Anything the daemon's `Reload` command (and SIGHUP) should re-read. The
@@ -112,11 +98,12 @@ pub trait DaemonReloader: Send + Sync {
     }
 }
 
-/// A reloader that does nothing — useful for tests / minimal embeddings of the
-/// daemon control surface that don't have anything to reload.
+/// Test reloader for socket cases that do not change routing configuration.
+#[cfg(test)]
 pub struct NoopReloader;
 
 #[async_trait::async_trait]
+#[cfg(test)]
 impl DaemonReloader for NoopReloader {
     async fn reload(&self) -> anyhow::Result<()> {
         Ok(())
@@ -125,12 +112,10 @@ impl DaemonReloader for NoopReloader {
 
 /// Local session data retained only for compatibility in builds without harness.
 /// Its wire shape is unchanged, but debug output cannot expose grants or prompts.
-#[cfg(not(feature = "harness"))]
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct OpaqueSessionPayload(serde_json::Value);
 
-#[cfg(not(feature = "harness"))]
 impl std::fmt::Debug for OpaqueSessionPayload {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("OpaqueSessionPayload([redacted])")
@@ -139,7 +124,6 @@ impl std::fmt::Debug for OpaqueSessionPayload {
 
 // Applies to every local control request without harness, including its newline.
 // Harness builds retain their existing large prompt/history transport behavior.
-#[cfg(not(feature = "harness"))]
 const MAX_GATEWAY_CONTROL_REQUEST_BYTES: usize = 4 * 1024 * 1024;
 
 /// A command sent from the CLI to a running daemon.
@@ -148,17 +132,9 @@ const MAX_GATEWAY_CONTROL_REQUEST_BYTES: usize = 4 * 1024 * 1024;
 pub enum DaemonCommand {
     /// Stop the daemon — it finishes the response, then exits.
     Stop,
-    /// Discover the daemon's handoff contract without changing its state.
-    HandoffHello,
-    /// Close admission if all daemon-owned work is idle.
-    HandoffPrepare,
-    /// Reopen admission when pre-stop checks fail.
-    HandoffAbort { token: String },
-    /// Stop only the daemon that issued this short-lived token.
-    HandoffStop { token: String },
     /// Hot-reload the config / routing table. The CLI piggybacks a
     /// snapshot of API-key-style env vars from its own process so a
-    /// `export OPENAI_API_KEY=…; bro reload` propagates the new
+    /// `export OPENAI_API_KEY=…; bitrouter reload` propagates the new
     /// value into the running daemon without requiring a restart.
     /// `env` is `#[serde(default)]` for wire-compat with the
     /// historical unit variant — older clients sending `{"cmd":"reload"}`
@@ -173,14 +149,12 @@ pub enum DaemonCommand {
     ReloadState,
     /// Report daemon status.
     Status,
-    /// Read live owner-local agent instances without opening any connection.
-    ConnectedAgents { after: Option<String>, limit: usize },
     /// List every model the live routing table can route, each with the
     /// providers that can serve it.
     ///
     /// Distinct from [`Self::Status`], which reports only the *count* and the
     /// distinct provider set: this is the catalog itself, and it is what lets
-    /// `bro models` and the MCP `list_models` tool answer with the
+    /// `bitrouter models` and the MCP `list_models` tool answer with the
     /// daemon's real view — subscription-backed providers and post-`reload`
     /// state included — instead of a static config projection.
     Models,
@@ -202,10 +176,7 @@ pub enum DaemonCommand {
     Inspect { inspection: DaemonInspection },
     /// Local, owner-scoped checkpoint evolution control.
     Evolution {
-        #[cfg(feature = "core")]
-        operation: crate::core::evolution::operator::EvolutionOperation,
         // Decode only to reject the unavailable operation on reduced builds.
-        #[cfg(not(feature = "core"))]
         operation: serde_json::Value,
     },
     /// Negotiate instance-fenced evolution control without changing any state.
@@ -214,16 +185,7 @@ pub enum DaemonCommand {
     EvolutionFenced {
         version: u16,
         server_instance_id: String,
-        #[cfg(feature = "core")]
-        operation: crate::core::evolution::operator::EvolutionOperation,
-        #[cfg(not(feature = "core"))]
         operation: serde_json::Value,
-    },
-    /// Acknowledge request inventory for a recorder before capture starts.
-    AcpRecordingRegister {
-        connection_id: String,
-        api_principal: String,
-        controller_instance_id: String,
     },
     /// Remove every route lease in one principal/controller namespace.
     AcpControllerCleanup {
@@ -274,10 +236,7 @@ pub enum DaemonCommand {
     /// only on the owner-scoped local transport; the remote control server has
     /// no corresponding operation.
     Sessions {
-        #[cfg(feature = "harness")]
-        request: crate::client::sessions::wire::SessionRequest,
         // Decode only to reject the unavailable operation on reduced builds.
-        #[cfg(not(feature = "harness"))]
         request: OpaqueSessionPayload,
     },
 }
@@ -317,27 +276,8 @@ pub struct RouteHop {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "resp", rename_all = "snake_case")]
 pub enum DaemonResponse {
-    ConnectedAgents {
-        report: Box<crate::connected_agents::Report>,
-    },
     /// The command succeeded with no payload.
     Ok,
-    HandoffHello {
-        version: String,
-        protocol: u32,
-        instance_id: String,
-        build_id: String,
-        cli_owned: bool,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        artifact: Option<bitrouter_ai::artifact::ArtifactIdentity>,
-    },
-    HandoffReady {
-        token: String,
-    },
-    HandoffBusy {
-        reason: String,
-    },
-    /// Status payload.
     Status {
         /// The daemon's process id.
         pid: u32,
@@ -347,16 +287,6 @@ pub enum DaemonResponse {
         /// Compiled artifact evidence; absent for legacy daemons.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         artifact: Option<bitrouter_ai::artifact::ArtifactIdentity>,
-        /// Handoff protocol; missing means idle cannot be proven.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        handoff_protocol: Option<u32>,
-        /// Fingerprint of the daemon's handoff and migration implementation.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        handoff_build_id: Option<String>,
-        /// Current activity. Missing on a legacy daemon.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        handoff_activity: Option<HandoffActivity>,
-        /// Whether the detached `bro start` launcher owns this process.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cli_owned: Option<bool>,
         /// The HTTP listen address.
@@ -430,18 +360,11 @@ pub enum DaemonResponse {
         report: DaemonInspectionReport,
     },
     Evolution {
-        #[cfg(feature = "core")]
-        report: Box<crate::core::evolution::operator::EvolutionReport>,
-        #[cfg(not(feature = "core"))]
         report: Box<serde_json::Value>,
     },
     EvolutionHello {
         version: u16,
         server_instance_id: String,
-    },
-    /// This daemon shares the recorder's database and records gateway requests.
-    AcpRecordingRegistered {
-        registration: crate::gateway::observability::inventory::CoverageRegistration,
     },
     /// Daemon-confirmed route state for one native ACP session.
     AcpRouteState {
@@ -465,9 +388,6 @@ pub enum DaemonResponse {
     },
     /// Versioned daemon-owned ACP session response.
     Sessions {
-        #[cfg(feature = "harness")]
-        response: crate::client::sessions::wire::SessionResponse,
-        #[cfg(not(feature = "harness"))]
         response: OpaqueSessionPayload,
     },
     /// The command failed.
@@ -635,7 +555,7 @@ pub fn is_not_reachable(err: &anyhow::Error) -> bool {
 /// The daemon's self-reported readiness snapshot, returned by
 /// [`probe_status`]. A successful probe means the control socket is bound
 /// and the app is assembled (the model count is populated), which is exactly
-/// the signal `bro status` reports.
+/// the signal `bitrouter status` reports.
 #[derive(Debug, Clone)]
 pub struct ReadyInfo {
     /// The daemon's process id.
@@ -701,119 +621,9 @@ pub async fn probe_status(socket: &Path) -> Result<Option<ReadyInfo>> {
 
 // ===== server side =====
 
-/// Run the control listener until a `Stop` command is received (then it
-/// returns) — run this alongside `App::serve` under a `tokio::select!`.
-///
-/// `listen` is the HTTP address (reported in `Status`); the endpoint is bound
-/// at `socket_path` (a Unix socket file, or a named pipe derived from the path
-/// on Windows) and torn down on return.
-pub async fn run_control_socket(
-    socket_path: PathBuf,
-    app: Arc<App>,
-    listen: String,
-    reloader: Arc<dyn DaemonReloader>,
-    observe: Arc<dyn ObserveStatusProvider>,
-    metering: MeteringStore,
-) -> Result<()> {
-    run_control_socket_with_acp_runtime(
-        socket_path,
-        app,
-        listen,
-        reloader,
-        observe,
-        AcpControlPlane {
-            #[cfg(feature = "harness")]
-            runtime: Arc::new(AcpRuntime::new()),
-            metering,
-            inventory: None,
-            #[cfg(feature = "core")]
-            evolution: None,
-        },
-    )
-    .await
-}
-
-/// Run the control listener with the same ACP route runtime used by the model
-/// request pipeline.
-/// Authenticated ACP control state the control socket shares with the model
-/// request pipeline.
-///
-/// One value rather than two parameters: `dispatch` already carries seven, and
-/// an eighth trips `clippy::too_many_arguments`, which the house rules forbid
-/// silencing.
-#[derive(Clone)]
-pub struct AcpControlPlane {
-    /// In-memory route leases, keyed by principal and controller.
-    #[cfg(feature = "harness")]
-    pub runtime: Arc<AcpRuntime>,
-    /// Settled-request store behind session-attributed spend.
-    pub metering: MeteringStore,
-    /// The inventory installed in this daemon's model request pipeline.
-    pub inventory: Option<crate::gateway::observability::inventory::GatewayInventory>,
-    /// Live route validation and checkpoint worker status, when installed.
-    #[cfg(feature = "core")]
-    pub evolution: Option<crate::core::evolution::runtime::EvolutionRuntime>,
-}
-
-pub async fn run_control_socket_with_acp_runtime(
-    socket_path: PathBuf,
-    app: Arc<App>,
-    listen: String,
-    reloader: Arc<dyn DaemonReloader>,
-    observe: Arc<dyn ObserveStatusProvider>,
-    acp: AcpControlPlane,
-) -> Result<()> {
-    run_control_socket_with_acp_runtime_and_administration(
-        socket_path,
-        app,
-        listen,
-        reloader,
-        observe,
-        acp,
-        None,
-    )
-    .await
-}
-
-/// Run the local control socket with optional live administration ports.
-///
-/// Existing embeddings retain the historical control-socket surface through
-/// [`run_control_socket_with_acp_runtime`].  The app assembly injects these
-/// ports only after it has constructed the running routing and policy state.
-pub async fn run_control_socket_with_acp_runtime_and_administration(
-    socket_path: PathBuf,
-    app: Arc<App>,
-    listen: String,
-    reloader: Arc<dyn DaemonReloader>,
-    observe: Arc<dyn ObserveStatusProvider>,
-    acp: AcpControlPlane,
-    administration: Option<Administration>,
-) -> Result<()> {
-    let listener = bind_control_socket(&socket_path).await?;
-    run_bound_control_socket(
-        listener,
-        app,
-        listen,
-        reloader,
-        observe,
-        acp,
-        LocalControlOptions {
-            administration,
-            #[cfg(feature = "harness")]
-            native: None,
-            gate: crate::daemon_handoff::HandoffGate::default(),
-            cli_owned: false,
-        },
-    )
-    .await
-}
-
 /// Optional owner-scoped services shared with the HTTP listener.
 pub struct LocalControlOptions {
-    #[cfg(feature = "harness")]
-    pub native: Option<crate::connected_agents::NativeOwners>,
     pub administration: Option<Administration>,
-    pub gate: crate::daemon_handoff::HandoffGate,
     pub cli_owned: bool,
 }
 
@@ -834,29 +644,13 @@ pub(crate) async fn run_bound_control_socket(
     listen: String,
     reloader: Arc<dyn DaemonReloader>,
     observe: Arc<dyn ObserveStatusProvider>,
-    acp: AcpControlPlane,
+    metering: MeteringStore,
     options: LocalControlOptions,
 ) -> Result<()> {
-    #[cfg(feature = "harness")]
-    let supervisor = match &options.administration {
-        Some(administration) => Some(
-            crate::harness::supervisor::Supervisor::open(
-                administration.source.clone(),
-                administration.routing.clone(),
-            )
-            .await?,
-        ),
-        None => None,
-    };
     let services = LocalControlServices {
-        #[cfg(feature = "harness")]
-        native: options.native,
         administration: options.administration,
-        #[cfg(feature = "harness")]
-        supervisor,
-        gate: options.gate,
         cli_owned: options.cli_owned,
-        handoff_instance_id: reloader
+        server_instance_id: reloader
             .reload_state()
             .map(|state| state.server_instance_id)
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
@@ -868,63 +662,19 @@ pub(crate) async fn run_bound_control_socket(
         &listen,
         &reloader,
         &observe,
-        &acp,
+        &metering,
         &services,
     )
     .await;
-    #[cfg(feature = "harness")]
-    if let Some(supervisor) = &services.supervisor {
-        supervisor.shutdown().await;
-    }
     listener.cleanup().await;
     result
 }
 
 #[derive(Clone)]
 struct LocalControlServices {
-    #[cfg(feature = "harness")]
-    native: Option<crate::connected_agents::NativeOwners>,
     administration: Option<Administration>,
-    #[cfg(feature = "harness")]
-    supervisor: Option<crate::harness::supervisor::Supervisor>,
-    gate: crate::daemon_handoff::HandoffGate,
     cli_owned: bool,
-    handoff_instance_id: String,
-}
-
-impl LocalControlServices {
-    async fn supervised_run_count(&self) -> Option<usize> {
-        #[cfg(feature = "harness")]
-        return match &self.supervisor {
-            Some(supervisor) => Some(supervisor.active_run_count().await),
-            None => None,
-        };
-        #[cfg(not(feature = "harness"))]
-        Some(0)
-    }
-}
-
-impl AcpControlPlane {
-    fn active_lease_count(&self) -> usize {
-        #[cfg(feature = "harness")]
-        return self.runtime.active_lease_count();
-        #[cfg(not(feature = "harness"))]
-        0
-    }
-}
-
-async fn active_recording_count(acp: &AcpControlPlane) -> Result<Option<u64>> {
-    use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
-
-    let Some(inventory) = &acp.inventory else {
-        return Ok(None);
-    };
-    let count = crate::storage::capture::connections::Entity::find()
-        .filter(crate::storage::legacy::scope("acp_capture_connections"))
-        .filter(crate::storage::capture::connections::Column::State.eq("recording"))
-        .count(&inventory.db)
-        .await?;
-    Ok(Some(count))
+    server_instance_id: String,
 }
 
 async fn accept_loop(
@@ -933,7 +683,7 @@ async fn accept_loop(
     listen: &str,
     reloader: &Arc<dyn DaemonReloader>,
     observe: &Arc<dyn ObserveStatusProvider>,
-    acp: &AcpControlPlane,
+    metering: &MeteringStore,
     services: &LocalControlServices,
 ) -> Result<()> {
     let (stop_tx, mut stop_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -945,7 +695,7 @@ async fn accept_loop(
                 let listen = listen.to_string();
                 let reloader = reloader.clone();
                 let observe = observe.clone();
-                let acp = acp.clone();
+                let metering = metering.clone();
                 let services = services.clone();
                 let stop_tx = stop_tx.clone();
                 tokio::spawn(async move {
@@ -955,7 +705,7 @@ async fn accept_loop(
                         &listen,
                         &reloader,
                         &observe,
-                        &acp,
+                        &metering,
                         &services,
                     )
                     .await
@@ -989,18 +739,13 @@ async fn handle_connection<S>(
     listen: &str,
     reloader: &Arc<dyn DaemonReloader>,
     observe: &Arc<dyn ObserveStatusProvider>,
-    acp: &AcpControlPlane,
+    metering: &MeteringStore,
     services: &LocalControlServices,
 ) -> Result<bool>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let mut reader = BufReader::new(stream);
-    #[cfg(feature = "harness")]
-    let mut line = String::new();
-    #[cfg(feature = "harness")]
-    let read = reader.read_line(&mut line).await?;
-    #[cfg(not(feature = "harness"))]
     let (read, line) = {
         let mut bytes = Vec::new();
         let read = (&mut reader)
@@ -1036,39 +781,9 @@ where
         }
     };
 
-    let is_stop = matches!(
-        command,
-        DaemonCommand::Stop | DaemonCommand::HandoffStop { .. }
-    );
-    let admission = if matches!(
-        command,
-        DaemonCommand::Stop
-            | DaemonCommand::Status
-            | DaemonCommand::HandoffHello
-            | DaemonCommand::EvolutionHello
-            | DaemonCommand::HandoffPrepare
-            | DaemonCommand::HandoffAbort { .. }
-            | DaemonCommand::HandoffStop { .. }
-    ) {
-        None
-    } else {
-        match services.gate.admit() {
-            Some(admission) => Some(admission),
-            None => {
-                write_response(
-                    reader.get_mut(),
-                    &DaemonResponse::Error {
-                        message: "daemon handoff in progress; retry".to_string(),
-                    },
-                )
-                .await?;
-                return Ok(false);
-            }
-        }
-    };
-    let response = dispatch(command, app, listen, reloader, observe, acp, services).await;
-    // The private control socket authenticates the local owner. Handoff tokens
-    // are checked by dispatch before this gate; no SQL completion is implied.
+    let is_stop = matches!(command, DaemonCommand::Stop);
+    let response = dispatch(command, app, listen, reloader, observe, metering, services).await;
+    // Fence new owned dispatch before acknowledging shutdown.
     let response = if is_stop && matches!(response, DaemonResponse::Ok) {
         match app.stop_owned_dispatch() {
             Ok(()) => response,
@@ -1080,7 +795,6 @@ where
         response
     };
     write_response(reader.get_mut(), &response).await?;
-    drop(admission);
     Ok(is_stop && matches!(response, DaemonResponse::Ok))
 }
 
@@ -1090,7 +804,7 @@ async fn dispatch(
     listen: &str,
     reloader: &Arc<dyn DaemonReloader>,
     observe: &Arc<dyn ObserveStatusProvider>,
-    acp: &AcpControlPlane,
+    metering: &MeteringStore,
     services: &LocalControlServices,
 ) -> DaemonResponse {
     if let DaemonCommand::EvolutionFenced {
@@ -1106,165 +820,26 @@ async fn dispatch(
                 ),
             };
         }
-        if server_instance_id != &services.handoff_instance_id {
+        if server_instance_id != &services.server_instance_id {
             return DaemonResponse::Error { message:"evolution server instance changed; inspect the new owner before submitting an operation".into() };
         }
     }
     match command {
         DaemonCommand::EvolutionHello => DaemonResponse::EvolutionHello {
             version: EVOLUTION_CONTROL_VERSION,
-            server_instance_id: services.handoff_instance_id.clone(),
+            server_instance_id: services.server_instance_id.clone(),
         },
-        #[cfg(feature = "harness")]
-        DaemonCommand::ConnectedAgents { after, limit } => match crate::connected_agents::snapshot(
-            &services.handoff_instance_id,
-            services.supervisor.as_ref(),
-            services.native.as_ref(),
-            after.as_deref(),
-            limit,
-        )
-        .await
-        {
-            Ok(report) => DaemonResponse::ConnectedAgents {
-                report: Box::new(report),
-            },
-            Err(error) => DaemonResponse::Error {
-                message: error.to_string(),
-            },
-        },
-        #[cfg(not(feature = "harness"))]
-        DaemonCommand::ConnectedAgents { .. } => DaemonResponse::Error {
-            message: "connected agent inspection requires the harness feature".into(),
-        },
-        #[cfg(not(feature = "harness"))]
         DaemonCommand::AcpControllerCleanup { .. }
         | DaemonCommand::AcpRouteList { .. }
         | DaemonCommand::AcpRouteSet { .. }
         | DaemonCommand::AcpRouteReset { .. }
         | DaemonCommand::Sessions { .. } => DaemonResponse::Error {
-            message: "ACP route leases and supervised sessions require the harness feature"
-                .to_string(),
+            message: "Manage ACP route leases and supervised sessions with BRO.".to_string(),
         },
         DaemonCommand::Stop => DaemonResponse::Ok,
-        DaemonCommand::HandoffHello => DaemonResponse::HandoffHello {
-            version: crate::VERSION.to_string(),
-            protocol: crate::upgrade::HANDOFF_PROTOCOL,
-            instance_id: services.handoff_instance_id.clone(),
-            build_id: crate::HANDOFF_BUILD_ID.to_string(),
-            cli_owned: services.cli_owned,
-            artifact: Some(crate::artifact::current()),
-        },
-        DaemonCommand::HandoffPrepare => {
-            if !services.cli_owned {
-                return DaemonResponse::HandoffBusy {
-                    reason: "this daemon is managed by an external process".to_string(),
-                };
-            }
-            let token = match services.gate.prepare() {
-                Ok(token) => token,
-                Err(reason) => {
-                    return DaemonResponse::HandoffBusy {
-                        reason: reason.to_string(),
-                    };
-                }
-            };
-            let active_runs = match services.supervised_run_count().await {
-                Some(count) => count,
-                None => {
-                    services.gate.abort(&token);
-                    return DaemonResponse::HandoffBusy {
-                        reason: "supervisor activity is unknown".to_string(),
-                    };
-                }
-            };
-            let leases = acp.active_lease_count();
-            let active_recordings = match active_recording_count(acp).await {
-                Ok(Some(count)) => count,
-                Ok(None) => {
-                    services.gate.abort(&token);
-                    return DaemonResponse::HandoffBusy {
-                        reason: "external ACP controller activity is unknown".to_string(),
-                    };
-                }
-                Err(error) => {
-                    services.gate.abort(&token);
-                    return DaemonResponse::HandoffBusy {
-                        reason: format!(
-                            "external ACP controller activity could not be read: {error}"
-                        ),
-                    };
-                }
-            };
-            if active_runs != 0 || leases != 0 || active_recordings != 0 {
-                services.gate.abort(&token);
-                DaemonResponse::HandoffBusy {
-                    reason: format!(
-                        "{active_runs} active supervised runs, {leases} ACP route leases, {active_recordings} active ACP recordings"
-                    ),
-                }
-            } else {
-                DaemonResponse::HandoffReady { token }
-            }
-        }
-        DaemonCommand::HandoffAbort { token } => {
-            if services.gate.abort(&token) {
-                DaemonResponse::Ok
-            } else {
-                DaemonResponse::Error {
-                    message: "handoff token is invalid".to_string(),
-                }
-            }
-        }
-        DaemonCommand::HandoffStop { token } => {
-            if services.gate.valid(&token) {
-                DaemonResponse::Ok
-            } else {
-                DaemonResponse::Error {
-                    message: "handoff token is invalid or expired".to_string(),
-                }
-            }
-        }
-        #[cfg(not(feature = "core"))]
         DaemonCommand::Evolution { .. } | DaemonCommand::EvolutionFenced { .. } => {
             DaemonResponse::Error {
-                message: "checkpoint evolution requires the core feature".into(),
-            }
-        }
-        #[cfg(feature = "core")]
-        DaemonCommand::Evolution { operation }
-        | DaemonCommand::EvolutionFenced { operation, .. } => {
-            let Some(runtime) = &acp.evolution else {
-                return DaemonResponse::Error {
-                    message: "checkpoint evolution is unavailable on this daemon".into(),
-                };
-            };
-            match runtime.operate("local", operation).await {
-                Ok(report) => DaemonResponse::Evolution {
-                    report: Box::new(report),
-                },
-                Err(error) => DaemonResponse::Error {
-                    message: error.to_string(),
-                },
-            }
-        }
-        DaemonCommand::AcpRecordingRegister {
-            connection_id,
-            api_principal,
-            controller_instance_id,
-        } => {
-            let Some(inventory) = &acp.inventory else {
-                return DaemonResponse::Error {
-                    message: "gateway request inventory is unavailable on this daemon".into(),
-                };
-            };
-            match inventory
-                .register_capture(&connection_id, &api_principal, &controller_instance_id)
-                .await
-            {
-                Ok(registration) => DaemonResponse::AcpRecordingRegistered { registration },
-                Err(error) => DaemonResponse::Error {
-                    message: error.to_string(),
-                },
+                message: "the gateway does not run checkpoint evolution".into(),
             }
         }
         DaemonCommand::Reload { env } => match reloader.reload_with_env(env).await {
@@ -1298,21 +873,10 @@ async fn dispatch(
                 .collect();
             let router_state = router_state(&services.administration).await;
             let config_state = reloader.configuration_state().await;
-            let (operations, drain_in_progress) = services.gate.observed_activity();
-            let handoff_activity = HandoffActivity {
-                operations,
-                supervised_runs: services.supervised_run_count().await,
-                route_leases: acp.active_lease_count(),
-                acp_recordings: active_recording_count(acp).await.ok().flatten(),
-                drain_in_progress,
-            };
             DaemonResponse::Status {
                 pid: std::process::id(),
                 daemon_version: Some(crate::VERSION.to_string()),
                 artifact: Some(crate::artifact::current()),
-                handoff_protocol: Some(crate::upgrade::HANDOFF_PROTOCOL),
-                handoff_build_id: Some(crate::HANDOFF_BUILD_ID.to_string()),
-                handoff_activity: Some(handoff_activity),
                 cli_owned: Some(services.cli_owned),
                 listen: listen.to_string(),
                 models: routable.len(),
@@ -1363,8 +927,7 @@ async fn dispatch(
                 start: DateTime::<Utc>::UNIX_EPOCH,
                 end: Utc::now(),
             };
-            match acp
-                .metering
+            match metering
                 .spend_summary_for_acp_session(
                     &api_principal,
                     &controller_instance_id,
@@ -1381,116 +944,6 @@ async fn dispatch(
                 Err(error) => DaemonResponse::Error {
                     message: format!("session spend is unavailable: {error}"),
                 },
-            }
-        }
-        #[cfg(feature = "harness")]
-        DaemonCommand::AcpControllerCleanup {
-            api_principal,
-            controller_instance_id,
-        } => {
-            acp.runtime
-                .remove_controller(&api_principal, &controller_instance_id);
-            DaemonResponse::Ok
-        }
-        #[cfg(feature = "harness")]
-        DaemonCommand::AcpRouteList {
-            api_principal,
-            controller_instance_id,
-            session_id,
-        } => {
-            if api_principal.trim().is_empty()
-                || controller_instance_id.trim().is_empty()
-                || session_id.trim().is_empty()
-            {
-                DaemonResponse::Error {
-                    message: "API principal, controller id, and session id must not be empty"
-                        .to_string(),
-                }
-            } else {
-                let current = acp
-                    .runtime
-                    .current_route(&api_principal, &controller_instance_id, &session_id)
-                    .map(|lease| lease.route().to_string());
-                DaemonResponse::AcpRouteState {
-                    available: route_suggestions(app),
-                    scope: if current.is_some() {
-                        "session"
-                    } else {
-                        "default"
-                    }
-                    .to_string(),
-                    current,
-                }
-            }
-        }
-        #[cfg(feature = "harness")]
-        DaemonCommand::AcpRouteSet {
-            api_principal,
-            controller_instance_id,
-            session_id,
-            route,
-        } => {
-            let Some(pipeline) = app.language_model() else {
-                return DaemonResponse::Error {
-                    message: "no language_model pipeline configured".to_string(),
-                };
-            };
-            if api_principal.trim().is_empty()
-                || controller_instance_id.trim().is_empty()
-                || session_id.trim().is_empty()
-                || route.trim().is_empty()
-            {
-                return DaemonResponse::Error {
-                    message:
-                        "API principal, controller id, session id, and route must not be empty"
-                            .to_string(),
-                };
-            }
-            if let Err(error) = pipeline
-                .routing_table()
-                .route_chain(&route, &RoutingPrefs::default(), &CallerContext::local())
-                .await
-            {
-                return DaemonResponse::Error {
-                    message: format!("route is not available: {error}"),
-                };
-            }
-            match acp.runtime.set_route(
-                &api_principal,
-                &controller_instance_id,
-                &session_id,
-                &route,
-            ) {
-                Ok(lease) => DaemonResponse::AcpRouteState {
-                    available: route_suggestions(app),
-                    current: Some(lease.route().to_string()),
-                    scope: "session".to_string(),
-                },
-                Err(message) => DaemonResponse::Error { message },
-            }
-        }
-        #[cfg(feature = "harness")]
-        DaemonCommand::AcpRouteReset {
-            api_principal,
-            controller_instance_id,
-            session_id,
-        } => {
-            if api_principal.trim().is_empty()
-                || controller_instance_id.trim().is_empty()
-                || session_id.trim().is_empty()
-            {
-                DaemonResponse::Error {
-                    message: "API principal, controller id, and session id must not be empty"
-                        .to_string(),
-                }
-            } else {
-                acp.runtime
-                    .reset_route(&api_principal, &controller_instance_id, &session_id);
-                DaemonResponse::AcpRouteState {
-                    available: route_suggestions(app),
-                    current: None,
-                    scope: "default".to_string(),
-                }
             }
         }
         DaemonCommand::Route { model } => {
@@ -1568,20 +1021,6 @@ async fn dispatch(
         },
         DaemonCommand::Inspect { inspection } => {
             inspection_response(inspection, &services.administration).await
-        }
-        #[cfg(feature = "harness")]
-        DaemonCommand::Sessions { request } => {
-            let Some(supervisor) = &services.supervisor else {
-                return DaemonResponse::Error {
-                    message: "supervised sessions are unavailable on this daemon".to_string(),
-                };
-            };
-            match supervisor.dispatch(request).await {
-                Ok(response) => DaemonResponse::Sessions { response },
-                Err(error) => DaemonResponse::Error {
-                    message: format!("supervised session request failed: {error:#}"),
-                },
-            }
         }
     }
 }
@@ -1662,20 +1101,6 @@ async fn inspection_response(
     }
 }
 
-#[cfg(feature = "harness")]
-fn route_suggestions(app: &Arc<App>) -> Vec<String> {
-    app.language_model()
-        .map(|pipeline| {
-            pipeline
-                .routing_table()
-                .list_models()
-                .into_iter()
-                .map(|model| model.id)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 async fn write_response<S>(stream: &mut S, response: &DaemonResponse) -> Result<()>
 where
     S: AsyncWrite + Unpin,
@@ -1689,10 +1114,8 @@ where
 
 // ===== client side =====
 
-/// Connect to a running daemon's control endpoint and hand back the raw
-/// stream. Used by [`send_command`] and by integration tests that need to
-/// push bytes the normal client wouldn't (e.g. malformed input). Fails
-/// clearly if no daemon is listening.
+/// Raw test connection for malformed input and transport assertions.
+#[cfg(test)]
 pub async fn connect_control(socket_path: &Path) -> Result<impl AsyncRead + AsyncWrite + Unpin> {
     transport::connect(socket_path).await
 }
@@ -2072,13 +1495,6 @@ pub fn process_is_alive(pid: u32) -> bool {
 
 // ===== PID file =====
 
-/// Write the current process id to `path`.
-pub async fn write_pid_file(path: &Path) -> Result<()> {
-    tokio::fs::write(path, std::process::id().to_string())
-        .await
-        .with_context(|| format!("writing pid file {}", path.display()))
-}
-
 /// Read a process id from a PID file, if it exists and is well-formed.
 pub async fn read_pid_file(path: &Path) -> Option<u32> {
     let raw = tokio::fs::read_to_string(path).await.ok()?;
@@ -2120,7 +1536,7 @@ pub enum DaemonStartOutcome {
     },
 }
 
-/// Spawn `bro serve` as a detached background process writing to
+/// Spawn `bitrouter serve` as a detached background process writing to
 /// `log_path` (append). Returns the child handle and the log's pre-spawn byte
 /// length so the caller can quote only this run's output on early death.
 ///
@@ -2131,7 +1547,6 @@ pub enum DaemonStartOutcome {
 fn spawn_detached_serve(
     source: &crate::paths::ConfigSource,
     log_path: &Path,
-    scope: crate::assemble::AssemblyScope,
 ) -> Result<(std::process::Child, u64)> {
     let exe = std::env::current_exe().context("locating current bitrouter binary")?;
     // Capture the log's pre-spawn size so we can quote *this run's* output back
@@ -2148,12 +1563,7 @@ fn spawn_detached_serve(
         .context("duplicating log handle for stderr")?;
 
     let mut cmd = std::process::Command::new(&exe);
-    cmd.arg(match scope {
-        crate::assemble::AssemblyScope::Gateway => "serve",
-        #[cfg(all(feature = "core", feature = "harness"))]
-        crate::assemble::AssemblyScope::BroHarness => "harness-host",
-    })
-    .arg("--managed-child");
+    cmd.arg("serve").arg("--managed-child");
     // For a `File` source pass `--config <abs path>` so the child loads the same
     // file even though it'll chdir to the home. For `Default` (zero-config) skip
     // the flag — the child re-runs `resolve_config` and lands on the same state.
@@ -2219,7 +1629,7 @@ pub fn eprint_failure_log(log_path: &Path, content: &str) {
     eprintln!();
 }
 
-/// Launch a detached `bro serve` and poll the control socket until it
+/// Launch a detached `bitrouter serve` and poll the control socket until it
 /// answers `Status`, the process dies, or `timeout` elapses. The daemon keeps
 /// running regardless of the outcome — this only reports what the launcher
 /// observed. `socket` is the control-socket path to poll; pass `None` when it
@@ -2232,41 +1642,6 @@ pub async fn start_and_wait(
     log_path: &Path,
     socket: Option<&Path>,
     timeout: std::time::Duration,
-) -> Result<DaemonStartOutcome> {
-    start_scoped_and_wait(
-        source,
-        log_path,
-        socket,
-        timeout,
-        crate::assemble::AssemblyScope::Gateway,
-    )
-    .await
-}
-
-/// Launch the local BRO process for an actual harness, without changing a running host.
-#[cfg(all(feature = "core", feature = "harness"))]
-pub(crate) async fn start_harness_and_wait(
-    source: &crate::paths::ConfigSource,
-    log_path: &Path,
-    socket: Option<&Path>,
-    timeout: std::time::Duration,
-) -> Result<DaemonStartOutcome> {
-    start_scoped_and_wait(
-        source,
-        log_path,
-        socket,
-        timeout,
-        crate::assemble::AssemblyScope::BroHarness,
-    )
-    .await
-}
-
-async fn start_scoped_and_wait(
-    source: &crate::paths::ConfigSource,
-    log_path: &Path,
-    socket: Option<&Path>,
-    timeout: std::time::Duration,
-    scope: crate::assemble::AssemblyScope,
 ) -> Result<DaemonStartOutcome> {
     // Running source-owned state remains authoritative after saved YAML edits.
     // Cold starts still validate mode before creating any files or processes.
@@ -2324,7 +1699,7 @@ async fn start_scoped_and_wait(
         if let Some(info) = probe_status(socket).await? {
             anyhow::ensure!(
                 existing_pid == Some(info.pid),
-                "control endpoint {} is already ready (pid {}), but cannot verify it belongs to the selected configuration; inspect bro status --socket. No daemon was started or changed",
+                "control endpoint {} is already ready (pid {}), but cannot verify it belongs to the selected configuration; inspect bitrouter status --socket. No daemon was started or changed",
                 socket.display(),
                 info.pid
             );
@@ -2336,13 +1711,13 @@ async fn start_scoped_and_wait(
                 .filter(|pid| process_is_alive(*pid))
         {
             anyhow::bail!(
-                "process {pid} is still starting at {}; readiness and selected configuration ownership are unverified; inspect bro status before retrying",
+                "process {pid} is still starting at {}; readiness and selected configuration ownership are unverified; inspect bitrouter status before retrying",
                 socket.display()
             );
         }
     }
     let (child, log_size_before) = if existing_pid.is_none() {
-        let (mut child, offset) = spawn_detached_serve(source, log_path, scope)?;
+        let (mut child, offset) = spawn_detached_serve(source, log_path)?;
         pending.insert(identity, child.id());
         // Persist the pending process before any await. Cancellation/timeout
         // releases the lock but leaves enough evidence to avoid spawning twice.
@@ -2461,7 +1836,7 @@ pub async fn ensure_started(
             Ok(report)
         }
         DaemonStartOutcome::NotReadyInTime { pid } => anyhow::bail!(
-            "daemon (pid {pid}) did not become ready within {}s; it may still be starting; inspect bro status and {}. No replacement was started",
+            "daemon (pid {pid}) did not become ready within {}s; it may still be starting; inspect bitrouter status and {}. No replacement was started",
             DAEMON_READY_TIMEOUT.as_secs(),
             log.display()
         ),
@@ -2477,7 +1852,6 @@ pub async fn ensure_started(
 
 #[cfg(test)]
 mod tests {
-    #[cfg(not(feature = "harness"))]
     #[test]
     fn opaque_session_envelopes_preserve_wire_data_and_redact_debug() -> anyhow::Result<()> {
         let request = serde_json::json!({
@@ -2688,9 +2062,6 @@ mod tests {
             pid: 42,
             daemon_version: Some(crate::VERSION.to_string()),
             artifact: Some(crate::artifact::current()),
-            handoff_protocol: Some(crate::upgrade::HANDOFF_PROTOCOL),
-            handoff_build_id: Some(crate::HANDOFF_BUILD_ID.to_string()),
-            handoff_activity: None,
             cli_owned: Some(true),
             listen: "0.0.0.0:4356".to_string(),
             models: 3,

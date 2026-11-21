@@ -1,4 +1,4 @@
-//! Bounded P1-A05 candidates: public authority changes across stock replicas.
+//! Public authority changes across independently running stock replicas.
 //!
 //! The only direct SQL mutation is an explicitly labelled, reversible storage
 //! fault in the UUID-owned database. No backend, role or shared service is stopped.
@@ -782,8 +782,8 @@ impl AuthorityFault {
     async fn restore(&self, fixture: &Fixture) -> Result<()> {
         // Advance only the storage revision, leaving the original configuration
         // and key generations intact. This fences an uncertain install that
-        // reaches PostgreSQL AFTER restoration: its original-revision CAS can
-        // no longer write. A repeated restore must match our exact restored row.
+        // reaches PostgreSQL AFTER restoration: its original-revision CAS
+        // fails without writing. A repeated restore must match our exact restored row.
         // https://www.postgresql.org/docs/current/transaction-iso.html#XACT-READ-COMMITTED
         let restored = tokio::time::timeout(Duration::from_secs(3), fixture.db.execute(Statement::from_sql_and_values(
             DatabaseBackend::Postgres,

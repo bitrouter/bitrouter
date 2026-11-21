@@ -5,9 +5,14 @@ members = ["cargo:."]
 [dist]
 # The preferred dist version to use in CI (Cargo.toml SemVer syntax)
 cargo-dist-version = "0.31.0"
+# The release workflow validates packaged identities and guards installer replacements.
+allow-dirty = ["ci"]
+# Build each product using only its own Cargo features.
+precise-builds = true
 # CI backends to support
 ci = "github"
-# The installers to generate for each app
+# The release workflow applies packaging/guard-installers.mjs to the global
+# build manifest before uploading shell and PowerShell installers.
 installers = ["shell", "powershell", "npm", "homebrew"]
 # A GitHub repo to push Homebrew formulas to
 tap = "bitrouter/homebrew-tap"
@@ -23,8 +28,8 @@ publish-prereleases = true
 install-updater = false
 # Whether dist should create a Github Release or use an existing draft
 create-release = false
-# Keep the full-product installers above; package gateway and gateway-shared
-# archives alongside them. Neither archive profile gains an installer receipt.
+# cargo-dist owns the bitrouter and bitrouter-bro installers and receipts.
+# Reduced service variants are manual archives with matching-profile upgrades.
 # https://axodotdev.github.io/cargo-dist/book/ci/customizing.html#custom-jobs
 local-artifacts-jobs = ["./gateway-artifacts"]
 
@@ -33,10 +38,3 @@ local-artifacts-jobs = ["./gateway-artifacts"]
 # https://axodotdev.github.io/cargo-dist/book/reference/config.html#github-custom-runners
 [dist.github-custom-runners]
 aarch64-apple-darwin = "macos-15"
-
-# The CLI renamed `bitrouter` → `bro`. Installers additionally create a
-# `bitrouter` symlink so an existing muscle-memory invocation keeps working;
-# the binary prints a deprecation note when reached through it. The alias is
-# installer-only (it is not in the archives) and is removed in 1.0.0.
-[dist.bin-aliases]
-bro = ["bitrouter"]

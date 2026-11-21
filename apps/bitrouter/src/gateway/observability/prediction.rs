@@ -65,10 +65,7 @@ impl ObservedActionClass {
         }
     }
 
-    pub fn is_known(self) -> bool {
-        self != Self::Unknown
-    }
-
+    #[cfg(feature = "multi-instance")]
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "reason_or_plan" => Some(Self::ReasonOrPlan),
@@ -2051,6 +2048,7 @@ mod tests {
             .into(),
             request_duration_ms: 1,
             upstream_duration_ms: Some(1),
+            #[cfg(feature = "server-tools")]
             server_tool_calls: Vec::new(),
         };
         observer
@@ -2190,13 +2188,12 @@ mod tests {
             decision_id: decision_id.into(),
             policy: "auto:cost".into(),
             policy_digest: DIGEST.into(),
-            route_projection: "agent_trace/v2|edit|normal".into(),
-            request_key: "agent_trace/v2|edit|normal".into(),
+            route_projection: "code:generation|implement|normal".into(),
+            request_key: "code:generation|implement|normal".into(),
             selected_tier: "economy".into(),
             selected_effort: None,
             baseline_tier: Some("strong".into()),
             baseline_effort: None,
-            experiment: None,
             route_measurement: None,
             preset: Some("auto:cost".into()),
             holdout: false,
@@ -2206,14 +2203,12 @@ mod tests {
             continuation_adjustment: None,
             predicted_role: Some("implement".into()),
             predicted_task_family: Some("code:review".into()),
-            predicted_action: Some("mutate".into()),
             prediction_confidence_ppm: Some(800_000),
             task_family_confidence_ppm: Some(800_000),
-            task_family_reason_codes: Vec::new(),
             predictor_contract_digest: Some(
                 "sha256:7483fb5fa02c0141f568b82287234895c666fef426789e32783bdd3a00cea3ec".into(),
             ),
-            prediction_confidence_kind: Some("heuristic_margin".into()),
+            prediction_confidence_kind: Some("provider_probability".into()),
             observation: None,
             observed_at: "2026-08-08T00:00:00Z".into(),
         }

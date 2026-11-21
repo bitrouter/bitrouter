@@ -16,13 +16,12 @@ const MODEL: &str = "provider:literal-route";
 mod cache;
 mod defaults;
 mod eval_loop;
-#[cfg(feature = "core")]
+#[cfg(feature = "eval-publication")]
 mod evaluation;
 mod http_continuation;
 mod ingress;
 mod lifecycle_http;
 mod model_policy;
-pub(in crate::tenancy) mod native;
 mod oauth_cases;
 mod receipts;
 mod rejections;

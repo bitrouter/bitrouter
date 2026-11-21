@@ -15,21 +15,20 @@
 //! compile only `otel-grpc` (`--no-default-features --features otel-grpc`).
 //! HTTP adds the standard signal path to a plain root endpoint; explicit paths
 //! and query URLs are forwarded unchanged. gRPC forwards the endpoint unchanged.
-//! The `otel` module only compiles when `__otel-core` is on, and `lib.rs` guarantees at least one
-//! transport accompanies it, so exactly one `imp` below is ever active.
+//! This module only compiles when an OTLP transport is enabled, so exactly one
+//! `imp` below is ever active.
 //!
 //! Both builders forward [`OtelConfig::endpoint`] and [`OtelConfig::headers`].
 //! HTTP carries the headers as HTTP headers; gRPC carries them as request
 //! metadata (the wire equivalent).
 
+#[cfg(feature = "otel-http")]
 use crate::telemetry::bearer::TelemetryBearer;
 use crate::telemetry::config::OtelConfig;
 
 #[cfg(all(feature = "otel-grpc", not(feature = "otel-http")))]
 mod imp {
-    use std::sync::Arc;
-
-    use super::{OtelConfig, TelemetryBearer};
+    use super::OtelConfig;
 
     use opentelemetry_otlp::{MetricExporter, SpanExporter, WithExportConfig, WithTonicConfig};
     use tonic::metadata::MetadataMap;
@@ -53,12 +52,6 @@ mod imp {
 
     pub(crate) fn span_exporter(
         config: &OtelConfig,
-        // The gRPC transport does NOT support the live bearer: the cloud /
-        // default telemetry path is OTLP/HTTP, so the refresh-aware client lives
-        // only in the HTTP `imp`. A `Some(_)` source is intentionally ignored
-        // here (static headers via `effective_headers()` only); gRPC stays on
-        // the snapshot-bearer behaviour it had before.
-        _bearer: Option<Arc<dyn TelemetryBearer>>,
     ) -> Result<SpanExporter, Box<dyn std::error::Error>> {
         Ok(SpanExporter::builder()
             .with_tonic()

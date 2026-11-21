@@ -2173,10 +2173,6 @@ fn ingress_admission(
 }
 
 impl InboundAdapter for ResponsesAdapter {
-    fn protocol(&self) -> ApiProtocol {
-        ApiProtocol::Responses
-    }
-
     fn parse_request(&self, body: serde_json::Value) -> Result<Prompt> {
         // The envelope deserializes strictly; `input` stays `Value` and is
         // checked by ingress admission before parse_input can omit a shape.
@@ -2379,10 +2375,10 @@ impl InboundAdapter for ResponsesAdapter {
     }
 }
 
-fn render_responses_request(prompt: &Prompt, replay_reasoning: bool) -> Result<serde_json::Value> {
+fn render_responses_request(prompt: &Prompt) -> Result<serde_json::Value> {
     let mut input = Vec::new();
     for m in &prompt.messages {
-        input.extend(render_message_items(m, replay_reasoning));
+        input.extend(render_message_items(m));
     }
     let mut req = serde_json::Map::new();
     req.insert("model".into(), prompt.model.clone().into());
@@ -2455,67 +2451,12 @@ impl OutboundAdapter for ResponsesAdapter {
         ApiProtocol::Responses
     }
 
-    fn validate_managed_prompt(&self, prompt: &Prompt) -> std::result::Result<(), &'static str> {
-        super::managed::validate_prompt(&ApiProtocol::Responses, prompt)
-    }
-
-    fn validate_managed_body(
-        &self,
-        expected: &serde_json::Value,
-        actual: &serde_json::Value,
-        _target: &ModelTarget,
-    ) -> std::result::Result<(), &'static str> {
-        super::managed::validate_body(&ApiProtocol::Responses, expected, actual)
-    }
-
     fn render_request(&self, prompt: &Prompt) -> Result<serde_json::Value> {
         crate::gateway::model::protocol::require_request_admission(
             prompt,
             &ApiProtocol::Responses,
         )?;
-        render_responses_request(prompt, false)
-    }
-
-    fn render_managed_request_for_target(
-        &self,
-        prompt: &Prompt,
-        _target: &ModelTarget,
-    ) -> Result<(
-        serde_json::Value,
-        crate::gateway::conversion_report::ConversionReport,
-    )> {
-        self.validate_managed_prompt(prompt)
-            .map_err(ModelError::invalid_request)?;
-        // Normalize only a temporary projection after host proof validation.
-        // Existing durable origin commitments include their original shape.
-        let mut normalized = prompt.clone();
-        for content in normalized
-            .messages
-            .iter_mut()
-            .flat_map(|message| &mut message.content)
-        {
-            if let Content::Reasoning {
-                native,
-                provider_metadata,
-                ..
-            } = content
-                && native.is_none()
-            {
-                *native = provider_namespace(provider_metadata, "openai")
-                    .and_then(|fields| fields.get("reasoningItem"))
-                    .cloned()
-                    .map(NativeReasoning::Responses);
-            }
-        }
-        let mut report = self.admission(&normalized);
-        // Every reasoning item above passed the strict managed validator;
-        // the host supplies its origin/target proof and validates final auth.
-        report.issues.retain(|issue| {
-            issue.reason
-                != crate::gateway::conversion_report::ConversionReason::NativeReasoningAuthorityUnproven
-        });
-        report.require_admitted()?;
-        Ok((render_responses_request(&normalized, true)?, report))
+        render_responses_request(prompt)
     }
 
     fn parse_response(&self, body: serde_json::Value) -> Result<GenerateResult> {
@@ -2989,11 +2930,6 @@ fn render_responses_tool_choice(tc: &ToolChoice) -> serde_json::Value {
 
 #[async_trait]
 impl Transport for ResponsesTransport {
-    fn input_token_count_endpoint(&self, target: &ModelTarget) -> Option<String> {
-        // https://developers.openai.com/api/docs/guides/token-counting
-        Some(format!("{}/input_tokens", self.endpoint_url(target, false)))
-    }
-
     fn protocol(&self) -> ApiProtocol {
         ApiProtocol::Responses
     }
@@ -3029,7 +2965,7 @@ impl Transport for ResponsesTransport {
 }
 
 /// Render one canonical message into zero or more Responses `input` items.
-fn render_message_items(m: &Message, replay_reasoning: bool) -> Vec<serde_json::Value> {
+fn render_message_items(m: &Message) -> Vec<serde_json::Value> {
     let mut items = Vec::new();
     let mut text_parts = Vec::new();
     for c in &m.content {
@@ -3051,12 +2987,6 @@ fn render_message_items(m: &Message, replay_reasoning: bool) -> Vec<serde_json::
                     "input_text"
                 };
                 text_parts.push(serde_json::json!({ "type": kind, "text": text }));
-            }
-            Content::Reasoning {
-                native: Some(NativeReasoning::Responses(item)),
-                ..
-            } if replay_reasoning => {
-                items.push(item.clone());
             }
             Content::Reasoning { .. } => {}
             Content::ToolCall {

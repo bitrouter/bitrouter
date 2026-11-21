@@ -1,108 +1,63 @@
-# A test that hangs takes the whole job with it. That is worse than it sounds:
-# GitHub only uploads a job's logs when the job ends cleanly, so a hung run
-# produces a ~49 minute failure with no logs, no failing test name, and nothing
-# to read — which is exactly the shape `test (ubuntu-latest)` has been failing
-# in on this repo while macOS and Windows pass the identical tree.
-#
 # Report anything over a minute as SLOW, and kill it after five unless an
 # explicit campaign override below provides a larger bounded allowance.
-# Capacity parents are compiled into the shared archive but explicitly ignored
-# by ordinary runs; CI selects their exact names in serial capacity lanes.
 [profile.default]
 slow-timeout = { period = "60s", terminate-after = 5 }
 
 # CI archives the already-built examples as well as the Cargo test executables.
 # https://nexte.st/docs/ci-features/archiving/#adding-extra-files-to-an-archive
-[profile.ci]
-archive.include = [
-    { path = "debug/examples", relative-to = "target", depth = 1, on-missing = "error" },
-]
-
 [profile.ci.junit]
 path = "junit.xml"
 
-# These cases serialize and validate full 32-agent checkpoint histories. Avoid
-# competing large fixtures on small CI hosts; each case still overlaps four
-# model futures and keeps the ordinary timeout and all product limits.
+[profile.ci-service]
+archive.include = [
+    { path = "debug/bitrouter", relative-to = "target", on-missing = "error" },
+    { path = "debug/examples", relative-to = "target", depth = 1, on-missing = "error" },
+]
+
+[profile.ci-service-process]
+archive.include = [
+    { path = "debug/bitrouter", relative-to = "target", on-missing = "error" },
+]
+
+[profile.ci-bro]
+archive.include = [
+    { path = "debug/bro", relative-to = "target", on-missing = "error" },
+    { path = "debug/examples/bro_acp_fixture", relative-to = "target", on-missing = "error" },
+]
+
+# Serialize managed tree and checkpoint workloads while preserving the
+# concurrency and product limits exercised within each test.
 # https://nexte.st/docs/configuration/test-groups/
 [test-groups]
 core-tree-pressure = { max-threads = 1 }
 shared-gateway-process = { max-threads = 1 }
 
-# These two real-provider campaigns fill the unchanged 8 MiB Choice receipt
-# budget over dozens of native turns. Full growing snapshots are deliberately
-# retained and checked on every turn; debug serialization needs a bounded
-# aggregate allowance beyond each unchanged operation deadline.
-[[profile.default.overrides]]
-filter = 'test(tenancy::tests::execution::native::session::choice::headroom::)'
-test-group = 'core-tree-pressure'
-slow-timeout = { period = "60s", terminate-after = 35 }
-
-# Complete history checks each retain the ordinary five-minute deadline. Reserve
-# the runner while hashing/revalidating their real histories and archive cycles.
+# Complete history checks revalidate bulk receipt evidence across three
+# archive cycles and real snapshot/restore children in an unoptimized build.
+# Reserve the runner and bound the whole campaign without changing SQL deadlines.
 [[profile.default.overrides]]
 filter = 'test(=tenancy::tests::capacity_history::archive_cycles_preserve_unknowns_and_current_read_authority)'
 threads-required = "num-test-threads"
+slow-timeout = { period = "60s", terminate-after = 10 }
 
 # Each shared process campaign owns a PostgreSQL workload and multiple servers.
 # Keep separate campaigns from competing for host resources, including the
-# delayed-database C16 cases. Concurrency inside each campaign is unchanged.
+# delayed-database cases. Concurrency inside each campaign is unchanged.
 [[profile.default.overrides]]
 filter = 'test(gateway::shared::runtime::process_tests::)'
 test-group = 'shared-gateway-process'
 
 [[profile.default.overrides]]
-filter = 'test(capacity::tree_limits::maximum_tree_)'
+filter = 'binary(=managed_native) & (test(=full_tree_runs_four_models_and_delivers_each_conclusion_once) | test(=the_tree_shares_one_model_attempt_budget_across_all_workers))'
 test-group = 'core-tree-pressure'
 
-# Native long-loop and ACP replay cases serialize growing Core checkpoints too.
-# Share the existing pressure group so they do not compete with full-tree and
-# cold-recovery workloads. Keep their ordinary timeout and product limits.
 [[profile.default.overrides]]
-filter = 'test(native_checkpoint_capacity_failure_reports_the_resource_cause) | test(native_long_tool_loop_completes_beyond_old_checkpoint_capacity) | test(unicode_stream_reconciles_once_and_replays_beyond_hot_history) | test(stalled_replay_disconnects_observer_without_cancelling_native_history)'
-test-group = 'core-tree-pressure'
-
-# A native cold recovery replays several multi-megabyte checkpoints before
-# admitting another Turn. Its debug serialization exceeded five minutes on
-# the two-core Linux runner when overlapping the full-tree cases. Serialize
-# those workloads and give only this end-to-end recovery case ten minutes.
-[[profile.default.overrides]]
-filter = 'test(native_large_checkpoint_keeps_next_turn_admissible_after_cold_recovery)'
+filter = 'binary(=managed_native) & test(=large_cold_checkpoint_keeps_multiturn_context_and_sixteen_step_tool_loop)'
 test-group = 'core-tree-pressure'
 slow-timeout = { period = "60s", terminate-after = 10 }
-
-# Explicitly ignored acceptance launches hundreds of sequential native sessions
-# through external ACP workers. Its publication and rollback workload exceeds
-# the ordinary suite deadline; each prompt and evaluation is separately bounded.
-[[profile.default.overrides]]
-filter = 'test(acp_cli::evolution_acceptance::publication::)'
-slow-timeout = { period = "60s", terminate-after = 10 }
-
-# The opt-in terminal campaign retains the product's 10% initial allocation and
-# real worker tool execution. Its per-operation and total workload are bounded.
-[[profile.default.overrides]]
-filter = 'test(tui_coding_publication_and_rollback)'
-slow-timeout = { period = "60s", terminate-after = 41 }
-
-# This opt-in campaign creates every one of the frozen 100,000 operation rows
-# through the HTTP SDK. Only the aggregate test allowance is larger; individual
-# management, SQL, offline and cleanup deadlines keep their product bounds.
-[[profile.default.overrides]]
-filter = 'test(offline::recovery::tests::saturation::)'
-slow-timeout = { period = "60s", terminate-after = 35 }
 
 # Dedicated history qualifications use the existing optimized ci-capacity build.
 # These are test execution envelopes, not product history or operation deadlines.
 [[profile.default.overrides]]
 filter = 'test(=tenancy::tests::capacity_history::large_history_qualification)'
 slow-timeout = { period = "60s", terminate-after = 120 }
-
-# Separate opt-in offline proofs retain actual large inputs. Ordinary adapter
-# tests keep their existing deadline; these allowances apply only to these names.
-[[profile.default.overrides]]
-filter = 'test(=tenancy::audit::recovery::v2::tests::credentials::million_row_source_checks_every_fresh_hash_and_late_historical_match)'
-slow-timeout = { period = "60s", terminate-after = 60 }
-
-[[profile.default.overrides]]
-filter = 'test(=tenancy::audit::recovery::v2::tests::cli_scale::real_cli_dense_and_sparse_snapshot_verify_audit_restore)'
-slow-timeout = { period = "60s", terminate-after = 20 }

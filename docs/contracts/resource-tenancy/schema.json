@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Proposed resource tenancy wire contracts (M0, not live endpoints)",
+  "title": "Proposed resource tenancy wire contracts (not live endpoints)",
   "$defs": {
     "Id": {
       "type": "string",

@@ -37,14 +37,6 @@ impl<'a> OperationBudget<'a> {
             bytes: bytes.min(MAX_BYTES),
         }
     }
-    #[cfg(all(test, feature = "core", feature = "harness"))]
-    pub(crate) fn usage(&self) -> Result<(usize, usize), Error> {
-        self.check()?;
-        self.used
-            .lock()
-            .map(|value| *value)
-            .map_err(|_| Error::Unavailable)
-    }
     pub(crate) fn check(&self) -> Result<(), Error> {
         (self.check)().map_err(Error::Rejected)
     }

@@ -1,4 +1,4 @@
-//! P1-A01/A02 process candidates. All authority writes cross stock CLI/HTTP.
+//! Cross-replica admission through the stock CLI and authenticated HTTP.
 //!
 //! Registered below `bootstrap` to reuse its private, UUID-owned empty database
 //! and child cleanup. No in-process admission, schema initialization or SQL

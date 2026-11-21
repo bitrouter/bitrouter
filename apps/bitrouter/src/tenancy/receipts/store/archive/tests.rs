@@ -242,58 +242,6 @@ async fn unknown_and_changed_receipts_never_relocate() -> Result<()> {
     Ok(())
 }
 
-#[cfg(all(feature = "core", feature = "harness"))]
-#[tokio::test]
-async fn native_and_recovery_use_archived_sidecar_and_the_callers_budget() -> Result<()> {
-    use crate::storage::operation_budget::{Error, OperationBudget};
-    let db = open().await?;
-    let original = captured("execution")?;
-    commit(&db, &original).await?;
-    relocate(&db, &original).await?;
-    let r = &original.receipt;
-    let check = || Ok(());
-    let tx = db.begin().await?;
-    let budget = OperationBudget::new(&check);
-    let native = super::super::native_namespace_candidate_in(
-        &tx,
-        &r.installation_id,
-        &r.tenant_id,
-        &r.execution_id,
-        &budget,
-    )
-    .await?
-    .context("native archive")?;
-    super::super::same_completion(&native, &original)?;
-    let budget = OperationBudget::with_limits(&check, 4096, 1024);
-    let error = super::super::native_namespace_candidate_in(
-        &tx,
-        &r.installation_id,
-        &r.tenant_id,
-        &r.execution_id,
-        &budget,
-    )
-    .await
-    .err()
-    .context("capacity rejection")?;
-    ensure!(matches!(
-        error.downcast_ref::<Error>(),
-        Some(Error::Capacity)
-    ));
-    let recovery = super::super::recovery_lookup(
-        &tx,
-        &r.installation_id,
-        &r.tenant_id,
-        &r.execution_id,
-        &crate::tenancy::session::recovery::Budget::default(),
-    )
-    .await?
-    .context("recovery archive")?;
-    super::super::same_completion(&recovery, &original)?;
-    tx.rollback().await?;
-    db.close().await?;
-    Ok(())
-}
-
 #[cfg(unix)]
 mod reuse;
 mod transfer;
@@ -352,18 +300,6 @@ async fn known_auxiliary_stays_inline_and_unknown_auxiliary_never_archives() -> 
         super::super::same_completion(&saved, &original)?;
         ensure!(saved.auxiliary_unclean() && !saved.auxiliary_unknown());
         ensure!(!commit(&db, &original).await?);
-        #[cfg(all(feature = "core", feature = "harness"))]
-        ensure!(
-            super::super::recovery_lookup(
-                &db,
-                &r.installation_id,
-                &r.tenant_id,
-                &r.execution_id,
-                &crate::tenancy::session::recovery::Budget::default()
-            )
-            .await
-            .is_err()
-        );
     }
     db.close().await?;
     Ok(())

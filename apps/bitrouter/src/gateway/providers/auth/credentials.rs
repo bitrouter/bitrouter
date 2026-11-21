@@ -63,7 +63,7 @@ impl OAuthToken {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum Credential {
-    /// A static API key — what `bro providers login <provider>` stores
+    /// A static API key — what `bitrouter providers login <provider>` stores
     /// when the user picks "paste an API key" instead of a browser OAuth flow.
     /// Treated as never-expiring.
     ApiKey {
@@ -76,7 +76,7 @@ pub enum Credential {
     /// Code CLI's own store (`~/.claude`) at request time, and write any
     /// refresh back there". No token is copied into this store, so bitrouter
     /// and Claude Code share one credential and can't refresh-rotate each other
-    /// out (RFC 6749 §6). Set by `bro providers login claude-code`;
+    /// out (RFC 6749 §6). Set by `bitrouter providers login claude-code`;
     /// consumed by the Claude Code `AuthApplier`. Serialized as the
     /// unit-variant `{"type": "claude_code_cli"}`.
     ClaudeCodeCli,
@@ -103,18 +103,6 @@ impl std::fmt::Debug for Credential {
 }
 
 impl Credential {
-    /// Whether this credential is currently usable. API keys are always
-    /// considered valid; OAuth credentials defer to [`OAuthToken::is_valid`].
-    pub fn is_valid(&self) -> bool {
-        match self {
-            Credential::ApiKey { .. } => true,
-            Credential::Oauth(t) => t.is_valid(),
-            // Liveness is resolved at request time from the Claude Code store;
-            // the marker is never itself "expired".
-            Credential::ClaudeCodeCli => true,
-        }
-    }
-
     /// Build an OAuth credential from an [`OAuthToken`].
     pub fn from_oauth_token(token: OAuthToken) -> Self {
         Credential::Oauth(token)
@@ -132,14 +120,6 @@ impl Credential {
         match self {
             Credential::Oauth(t) => Some(t),
             Credential::ApiKey { .. } | Credential::ClaudeCodeCli => None,
-        }
-    }
-
-    /// Borrow the API-key value, if this is the API-key variant.
-    pub fn as_api_key(&self) -> Option<&str> {
-        match self {
-            Credential::ApiKey { value } => Some(value.as_str()),
-            Credential::Oauth(_) | Credential::ClaudeCodeCli => None,
         }
     }
 

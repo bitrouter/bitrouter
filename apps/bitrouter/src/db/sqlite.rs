@@ -73,6 +73,9 @@ pub(super) async fn connect(
         let path = crate::tenancy::ownership::resolve_path(sqlite.get_filename(), has_mode("rwc"))?;
         sqlite = sqlite.filename(path);
     }
+    if !memory && !readonly {
+        check_file_format(&sqlite).await?;
+    }
     // Preserve SeaORM's single-connection SQLite default.
     options.max_connections(1);
     let lease = lease.map(Arc::new);
@@ -90,4 +93,50 @@ pub(super) async fn connect(
         .connect_with(sqlite)
         .await?;
     Ok((DatabaseConnection::from(pool), readonly))
+}
+
+/// Inspect an existing file before opening writable connections. SQLite can
+/// create a WAL during connection setup, before the first catalog query. A
+/// stopped file can be inspected without any journal files. A live or dirty
+/// WAL may contain current state unavailable in the main file.
+async fn check_file_format(sqlite: &SqliteConnectOptions) -> Result<()> {
+    let path = sqlite.get_filename();
+    if !path.try_exists()? {
+        return Ok(());
+    }
+
+    let immutable = !has_wal(path)?;
+    let inspected = inspect_read_only(sqlite, immutable).await;
+    // If another writer started during the immutable probe, use SQLite's
+    // journal-aware read-only view before deciding whether the role is valid.
+    let inspected = if immutable && has_wal(path)? {
+        inspect_read_only(sqlite, false).await
+    } else {
+        inspected
+    };
+    inspected.context("selecting current database format before opening it for writes")
+}
+
+async fn inspect_read_only(sqlite: &SqliteConnectOptions, immutable: bool) -> Result<()> {
+    let pool = sea_orm::sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            sqlite
+                .clone()
+                .read_only(true)
+                .create_if_missing(false)
+                .immutable(immutable),
+        )
+        .await?;
+    let db = DatabaseConnection::from(pool);
+    let inspected = super::store_format::inspect(&db).await;
+    db.close().await?;
+    inspected?;
+    Ok(())
+}
+
+fn has_wal(path: &std::path::Path) -> std::io::Result<bool> {
+    let mut journal = path.as_os_str().to_os_string();
+    journal.push("-wal");
+    std::path::Path::new(&journal).try_exists()
 }

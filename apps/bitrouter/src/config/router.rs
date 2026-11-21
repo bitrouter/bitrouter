@@ -176,14 +176,14 @@ pub enum RouterConfigSource {
 #[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RouterInventorySelection {
-    /// Fixed model selection. `None` is possible only for invalid legacy input.
+    /// Fixed model selection. Missing models fail validation.
     Model {
         /// Exact configured model selector, if present.
         model: Option<String>,
         /// Provider routing preferences applied to the selection.
         routing: RoutingConfig,
     },
-    /// Policy selection. A missing base model is preserved for legacy validation.
+    /// Policy selection. Missing base models fail validation.
     Policy {
         /// App-owned policy name.
         policy: String,

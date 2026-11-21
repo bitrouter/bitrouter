@@ -2,12 +2,14 @@
 
 use crate::output::{CliReport, human::Human};
 use bitrouter_ai::gateway::operator::BootstrapReceipt;
+#[cfg(feature = "multi-instance")]
 use bitrouter_ai::gateway::{execution::GatewayExecution, operator};
 
 /// Only secret-free operator results may reach CLI output. JSON retains the
 /// original service shape; unresolved lookup is a successful observation.
 #[derive(serde::Serialize)]
 #[serde(untagged)]
+#[cfg(feature = "multi-instance")]
 pub enum OperatorReport {
     Receipt(Box<operator::Receipt>),
     Operation(operator::OperationLookup),
@@ -19,6 +21,7 @@ pub enum OperatorReport {
     Execution(Box<GatewayExecution>),
 }
 
+#[cfg(feature = "multi-instance")]
 impl CliReport for OperatorReport {
     fn render(&self, human: &mut Human<'_>) -> std::io::Result<()> {
         match self {
@@ -45,6 +48,7 @@ impl CliReport for OperatorReport {
     }
 }
 
+#[cfg(feature = "multi-instance")]
 fn render_receipt(receipt: &operator::Receipt, human: &mut Human<'_>) -> std::io::Result<()> {
     human.field("namespace", &receipt.namespace)?;
     human.field("operator", &receipt.operator_id)?;
@@ -53,6 +57,7 @@ fn render_receipt(receipt: &operator::Receipt, human: &mut Human<'_>) -> std::io
     metadata(&receipt.outcome, human)
 }
 
+#[cfg(feature = "multi-instance")]
 fn metadata(value: &impl serde::Serialize, human: &mut Human<'_>) -> std::io::Result<()> {
     human.embedded_json(&serde_json::to_value(value).map_err(std::io::Error::other)?)
 }

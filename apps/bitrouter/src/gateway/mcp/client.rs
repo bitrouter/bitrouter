@@ -22,69 +22,13 @@ use rmcp::model::{
     ProtocolVersion, ServerResult,
 };
 use rmcp::service::{
-    ClientCacheConfig, ClientLifecycleMode, ClientServiceExt, NotificationContext, Peer,
+    ClientCacheConfig, ClientLifecycleMode, ClientServiceExt, NotificationContext,
     PeerRequestOptions, RoleClient, RunningService,
 };
 use rmcp::{ClientHandler, ServiceExt};
 use serde::Serialize;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
-
-// Native discovery carries the actual sealed authority through filesystem and
-// MCP startup waits. Legacy discovery keeps its existing local-host contract.
-#[derive(Clone, Default)]
-pub(crate) struct Discovery {
-    #[cfg(all(feature = "core", feature = "harness"))]
-    native: Option<Arc<crate::tenancy::execution::session::Authority>>,
-    cancel: CancellationToken,
-}
-
-/// Configured connections and the subset authorized to expose tools.
-pub(crate) struct ConnectionCatalog<'a> {
-    pub servers: &'a [McpServerConfig],
-    pub tool_servers: &'a BTreeSet<String>,
-}
-
-impl Discovery {
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(crate) fn native(
-        authority: Arc<crate::tenancy::execution::session::Authority>,
-        cancel: CancellationToken,
-    ) -> Self {
-        Self {
-            native: Some(authority),
-            cancel,
-        }
-    }
-
-    pub(crate) fn with<T>(&self, work: impl FnOnce() -> T) -> Result<T, String> {
-        if self.cancel.is_cancelled() {
-            return Err("native discovery cancelled".into());
-        }
-        #[cfg(all(feature = "core", feature = "harness"))]
-        if let Some(authority) = &self.native {
-            return authority
-                .with_authority(|| {
-                    if self.cancel.is_cancelled() || authority.service().host_stop().is_cancelled()
-                    {
-                        return Err("native discovery cancelled".into());
-                    }
-                    Ok(work())
-                })
-                .map_err(|_| "native discovery authority is unavailable".to_owned())?;
-        }
-        Ok(work())
-    }
-
-    async fn request<F: std::future::Future>(&self, work: F) -> Result<F::Output, String> {
-        tokio::pin!(work);
-        std::future::poll_fn(|cx| match self.with(|| work.as_mut().poll(cx)) {
-            Ok(poll) => poll.map(Ok),
-            Err(error) => std::task::Poll::Ready(Err(error)),
-        })
-        .await
-    }
-}
 
 const MAX_SERVERS: usize = 32;
 const MAX_TOOLS: usize = 256;
@@ -111,12 +55,6 @@ impl CatalogTool {
             .len()
             .saturating_add(TOOL_ANNOTATION_BYTES))
     }
-}
-
-/// Instructions advertised by a server, before consumer-specific materialization.
-pub struct ServerInstructions {
-    pub server: String,
-    pub text: String,
 }
 
 /// Discovery failure, including whether all owned processes were confirmed closed.
@@ -162,44 +100,23 @@ struct Connection {
     execution_catalog: bool,
 }
 
-struct ConfiguredSource {
-    workspace: std::path::PathBuf,
-    configuration_digest: String,
-}
-
-struct Binding {
-    server: String,
-    upstream_name: String,
-}
-
 /// A bounded client principal owned by one application consumer, never a pool.
 /// Discovery and failed initialization share the same confirmed cleanup path.
 #[derive(Default)]
 pub struct BoundedMcpClient {
-    #[cfg(all(test, feature = "core", feature = "harness"))]
-    pub(crate) discovery_gate: Option<Arc<crate::tenancy::hosts::HostGate>>,
     connections: BTreeMap<String, Connection>,
     closing: tokio::sync::Mutex<Vec<futures::future::BoxFuture<'static, Result<(), String>>>>,
     close_error: Option<String>,
-    bindings: BTreeMap<String, Binding>,
-    configured_sources: BTreeMap<String, ConfiguredSource>,
-    connection_failures: BTreeMap<String, String>,
+    tool_names: BTreeSet<String>,
     catalog_bytes: usize,
     cleanup: Vec<process::ProcessOwner>,
     http: Vec<http_owner::Owner>,
     tools: Vec<CatalogTool>,
-    instructions: Vec<ServerInstructions>,
 }
-
-mod skills;
 
 impl BoundedMcpClient {
     pub fn tools(&self) -> &[CatalogTool] {
         &self.tools
-    }
-
-    pub fn instructions(&self) -> &[ServerInstructions] {
-        &self.instructions
     }
 
     pub fn validate_catalog(&self) -> Result<(), String> {
@@ -208,7 +125,7 @@ impl BoundedMcpClient {
                 && (connection.catalog_generation != connection.generation.load(Ordering::SeqCst)
                     || connection.service.peer().is_transport_closed())
         }) {
-            return Err(reject("MCP catalog is no longer current"));
+            return Err(reject("MCP catalog is stale"));
         }
         Ok(())
     }
@@ -235,50 +152,22 @@ impl BoundedMcpClient {
         cancel: &CancellationToken,
         max_duration: Duration,
     ) -> Result<Self, ConnectError> {
-        let tools = servers.iter().map(|server| server.name.clone()).collect();
-        Self::connect_scoped(workspace, servers, &tools, version, cancel, max_duration).await
-    }
-
-    pub(crate) async fn connect_scoped(
-        workspace: &Path,
-        servers: &[McpServerConfig],
-        tool_servers: &BTreeSet<String>,
-        version: ProtocolVersion,
-        cancel: &CancellationToken,
-        max_duration: Duration,
-    ) -> Result<Self, ConnectError> {
         let mut clients = Self::default();
         clients
-            .connect_in_place(
-                workspace,
-                ConnectionCatalog {
-                    servers,
-                    tool_servers,
-                },
-                version,
-                cancel,
-                max_duration,
-                &Discovery::default(),
-            )
+            .connect_in_place(workspace, servers, version, cancel, max_duration)
             .await?;
         Ok(clients)
     }
 
-    // The native host retains this client outside its caught discovery future.
-    // A failed/consumed cleanup path must not destroy its only child/reaper owner.
-    pub(crate) async fn connect_in_place(
+    // Retain cleanup owners until failed discovery has joined every transport.
+    async fn connect_in_place(
         &mut self,
         workspace: &Path,
-        catalog: ConnectionCatalog<'_>,
+        servers: &[McpServerConfig],
         version: ProtocolVersion,
         cancel: &CancellationToken,
         max_duration: Duration,
-        discovery: &Discovery,
     ) -> Result<(), ConnectError> {
-        let ConnectionCatalog {
-            servers,
-            tool_servers,
-        } = catalog;
         if !self.connections.is_empty() || !self.cleanup.is_empty() {
             return Err(reject("MCP discovery owner was already used").into());
         }
@@ -293,47 +182,19 @@ impl BoundedMcpClient {
                 return Err(reject("duplicate MCP server name").into());
             }
         }
-        #[cfg(all(test, feature = "core", feature = "harness"))]
-        if let Some(authority) = &discovery.native {
-            let gate = authority
-                .service()
-                .take_host_gate(crate::tenancy::hosts::HostBoundary::BeforeTransport)
-                .map_err(|_| reject("native discovery test gate unavailable"))?;
-            if let Some(gate) = gate {
-                gate.reached().await;
-            }
-        }
-        let workspace = discovery
-            .with(|| workspace.canonicalize())?
+        let workspace = workspace
+            .canonicalize()
             .map_err(|_| reject("MCP workspace is unavailable"))?;
-        if !discovery.with(|| workspace.is_dir())? {
+        if !workspace.is_dir() {
             return Err(reject("MCP workspace must be a directory").into());
         }
         let result = tokio::select! {
             biased;
             _ = cancel.cancelled() => Err("MCP discovery cancelled".into()),
             _ = tokio::time::sleep(max_duration) => Err("MCP discovery exceeded the remaining Turn time".into()),
-            result = self.connect_all(&workspace, servers, tool_servers, version, cancel, discovery) => result,
+            result = self.connect_all(&workspace, servers, version, cancel) => result,
         };
         if let Err(error) = result {
-            #[cfg(all(test, feature = "core", feature = "harness"))]
-            if let Some(authority) = &discovery.native {
-                let gate = authority
-                    .service()
-                    .take_host_gate(crate::tenancy::hosts::HostBoundary::Cleanup)
-                    .map_err(|_| ConnectError {
-                        message: "MCP cleanup test gate unavailable".into(),
-                        cleanup_unknown: true,
-                    })?;
-                if let Some(gate) = gate {
-                    for owner in &self.cleanup {
-                        owner.hold_cleanup(gate.clone()).map_err(|_| ConnectError {
-                            message: "MCP cleanup test gate poisoned".into(),
-                            cleanup_unknown: true,
-                        })?;
-                    }
-                }
-            }
             return Err(match self.shutdown().await {
                 Ok(()) => ConnectError {
                     message: error,
@@ -352,25 +213,10 @@ impl BoundedMcpClient {
         &mut self,
         workspace: &Path,
         servers: &[McpServerConfig],
-        tool_servers: &BTreeSet<String>,
         version: ProtocolVersion,
         cancel: &CancellationToken,
-        discovery: &Discovery,
     ) -> Result<(), String> {
         for server in servers {
-            let configuration_digest = crate::storage::checkpoint::sha256(
-                &serde_json::to_vec(&crate::skills::library::canonical(
-                    serde_json::to_value(server).map_err(|error| error.to_string())?,
-                ))
-                .map_err(|error| error.to_string())?,
-            );
-            self.configured_sources.insert(
-                server.name.clone(),
-                ConfiguredSource {
-                    workspace: workspace.to_path_buf(),
-                    configuration_digest,
-                },
-            );
             let generation = Arc::new(AtomicU64::new(0));
             let handler = Client {
                 version: version.clone(),
@@ -381,20 +227,10 @@ impl BoundedMcpClient {
             let connected = tokio::select! {
                 biased;
                 _ = cancel.cancelled() => return Err("MCP connection cancelled".into()),
-                result = tokio::time::timeout(CONNECT_TIMEOUT, self.connect_transport(workspace, &server.transport, handler, probe.clone(), discovery)) =>
+                result = tokio::time::timeout(CONNECT_TIMEOUT, self.connect_transport(workspace, &server.transport, handler, probe)) =>
                     result.map_err(|_| reject(format!("MCP {} connection timed out", server.name))).and_then(|result| result),
             };
-            let service = match connected {
-                Ok(service) => service,
-                Err(error) if !tool_servers.contains(&server.name) => {
-                    probe.stop().await.map_err(|cleanup| {
-                        format!("{error}; MCP source cleanup could not be confirmed: {cleanup}")
-                    })?;
-                    self.connection_failures.insert(server.name.clone(), error);
-                    continue;
-                }
-                Err(error) => return Err(error),
-            };
+            let service = connected?;
             // Retain ownership before any further await, including cache setup,
             // so cancellation can explicitly close both HTTP and stdio services.
             self.connections.insert(
@@ -406,12 +242,6 @@ impl BoundedMcpClient {
                     execution_catalog: false,
                 },
             );
-            // The owned native discovery test faults after a real child and
-            // connected transport exist, before the resource factory returns.
-            #[cfg(all(test, feature = "core", feature = "harness"))]
-            if let Some(gate) = self.discovery_gate.take() {
-                gate.reached().await;
-            }
             let connection = self
                 .connections
                 .get_mut(&server.name)
@@ -422,27 +252,20 @@ impl BoundedMcpClient {
                 .set_response_cache_config(ClientCacheConfig::disabled())
                 .await;
             connection.execution_catalog = connection.service.peer_info().is_some_and(|info| {
-                info.instructions.is_some()
-                    || (tool_servers.contains(&server.name) && info.capabilities.tools.is_some())
+                info.instructions.is_some() || info.capabilities.tools.is_some()
             });
             if let Some(info) = connection.service.peer_info()
                 && let Some(text) = &info.instructions
+                && text.len() > MAX_INSTRUCTIONS_BYTES
             {
-                if text.len() > MAX_INSTRUCTIONS_BYTES {
-                    return Err(reject("MCP server instructions exceed 64 KiB"));
-                }
-                self.instructions.push(ServerInstructions {
-                    server: server.name.clone(),
-                    text: text.clone(),
-                });
+                return Err(reject("MCP server instructions exceed 64 KiB"));
             }
-            if tool_servers.contains(&server.name)
-                && connection
-                    .service
-                    .peer_info()
-                    .is_some_and(|info| info.capabilities.tools.is_some())
+            if connection
+                .service
+                .peer_info()
+                .is_some_and(|info| info.capabilities.tools.is_some())
             {
-                tokio::time::timeout(CONNECT_TIMEOUT, self.discover(server, discovery))
+                tokio::time::timeout(CONNECT_TIMEOUT, self.discover(server))
                     .await
                     .map_err(|_| reject("MCP tool discovery exceeded its total deadline"))??;
             }
@@ -451,11 +274,7 @@ impl BoundedMcpClient {
         self.validate_catalog()
     }
 
-    async fn discover(
-        &mut self,
-        server: &McpServerConfig,
-        discovery: &Discovery,
-    ) -> Result<(), String> {
+    async fn discover(&mut self, server: &McpServerConfig) -> Result<(), String> {
         let connection = self
             .connections
             .get_mut(&server.name)
@@ -468,14 +287,16 @@ impl BoundedMcpClient {
         let mut cursor = None;
         let mut seen_cursors = BTreeSet::new();
         for _ in 0..MAX_TOOLS {
-            let result = discovery
-                .request(connection.service.peer().send_request_with_option(
+            let result = connection
+                .service
+                .peer()
+                .send_request_with_option(
                     ClientRequest::ListToolsRequest(ListToolsRequest::with_param(
                         PaginatedRequestParams::default().with_cursor(cursor),
                     )),
                     PeerRequestOptions::with_timeout(CONNECT_TIMEOUT),
-                ))
-                .await?
+                )
+                .await
                 .map_err(|e| reject(format!("MCP {} tools/list: {e}", server.name)))?
                 .await_response()
                 .await
@@ -489,7 +310,7 @@ impl BoundedMcpClient {
                 }
                 let name = format!("{prefix}{}", tool.name);
                 validate_id(&name)?;
-                if self.bindings.contains_key(&name) {
+                if self.tool_names.contains(&name) {
                     return Err(reject(format!("MCP tool name collision: {name}")));
                 }
                 let parameters = Value::Object((*tool.input_schema).clone());
@@ -509,13 +330,7 @@ impl BoundedMcpClient {
                 if self.catalog_bytes > MAX_CATALOG_BYTES {
                     return Err(reject("MCP tool catalog exceeds 1 MiB"));
                 }
-                self.bindings.insert(
-                    name,
-                    Binding {
-                        server: server.name.clone(),
-                        upstream_name: tool.name.into_owned(),
-                    },
-                );
+                self.tool_names.insert(name);
                 self.tools.push(declaration);
             }
             match page.next_cursor {
@@ -543,38 +358,6 @@ impl BoundedMcpClient {
         Err(reject("MCP tools/list exceeded its page limit"))
     }
 
-    /// Resolve a tool only while its advertised catalog and transport are current.
-    /// The consumer is responsible for authorizing dispatch through this peer.
-    pub fn tool_peer(&self, name: &str) -> Result<(&str, &Peer<RoleClient>), String> {
-        let binding = self
-            .bindings
-            .get(name)
-            .ok_or_else(|| reject("MCP tool was not advertised"))?;
-        let connection = self
-            .connections
-            .get(&binding.server)
-            .ok_or_else(|| reject("MCP connection unavailable"))?;
-        if connection.catalog_generation != connection.generation.load(Ordering::SeqCst)
-            || connection.service.peer().is_transport_closed()
-        {
-            return Err(reject(
-                "MCP tool catalog/connection changed; reconnect and publish a new manifest",
-            ));
-        }
-        Ok((&binding.upstream_name, connection.service.peer()))
-    }
-
-    #[cfg(all(test, unix, feature = "core", feature = "harness"))]
-    pub(crate) async fn retained_processes_for_test(&self) -> Vec<u32> {
-        let mut ids = Vec::new();
-        for owner in &self.cleanup {
-            if let Some(id) = owner.retained_pid().await {
-                ids.push(id);
-            }
-        }
-        ids
-    }
-
     pub async fn shutdown(&mut self) -> Result<(), String> {
         tokio::time::timeout(Duration::from_secs(5), self.close())
             .await
@@ -582,10 +365,9 @@ impl BoundedMcpClient {
     }
 
     async fn close(&mut self) -> Result<(), String> {
-        self.bindings.clear();
+        self.tool_names.clear();
         self.catalog_bytes = 0;
         self.tools.clear();
-        self.instructions.clear();
         // rmcp close/cancel take the task JoinHandle into their future. Keeping
         // that SAME future here preserves the join proof across our deadline;
         // calling close again on a consumed RunningService could report Closed.
@@ -639,7 +421,6 @@ impl BoundedMcpClient {
         transport: &McpTransport,
         handler: Client,
         cleanup: process::ProcessOwner,
-        discovery: &Discovery,
     ) -> Result<RunningService<RoleClient, Client>, String> {
         let lifecycle =
             (handler.version >= ProtocolVersion::V_2026_07_28).then(|| ClientLifecycleMode::Auto {
@@ -658,29 +439,17 @@ impl BoundedMcpClient {
                     parsed.insert(name, value);
                 }
                 let config = rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig::with_uri(url.clone()).custom_headers(parsed);
-                let transport = discovery.with(|| {
-                    http_owner::Owner::new(
-                        rmcp::transport::StreamableHttpClientTransport::from_config(config),
-                    )
-                })?;
+                let transport = http_owner::Owner::new(
+                    rmcp::transport::StreamableHttpClientTransport::from_config(config),
+                );
                 // Register the actual worker owner before polling handshake. A
                 // cancelled/failed handshake drops only its facade, never this owner.
                 self.http.push(transport.clone());
-                #[cfg(all(test, unix, feature = "core", feature = "harness"))]
-                if let Some(gate) = &self.discovery_gate {
-                    gate.http
-                        .set(HttpProbe(transport.observe()))
-                        .map_err(|_| reject("HTTP test owner observer already set"))?;
+                match lifecycle {
+                    Some(mode) => handler.serve_with_lifecycle(transport, mode).await,
+                    None => handler.serve(transport).await,
                 }
-                discovery
-                    .request(async {
-                        match lifecycle {
-                            Some(mode) => handler.serve_with_lifecycle(transport, mode).await,
-                            None => handler.serve(transport).await,
-                        }
-                    })
-                    .await?
-                    .map_err(|_| reject("MCP HTTP handshake failed"))
+                .map_err(|_| reject("MCP HTTP handshake failed"))
             }
             McpTransport::Stdio { command, args, env } => {
                 let mut child = tokio::process::Command::new(command);
@@ -689,18 +458,13 @@ impl BoundedMcpClient {
                     .envs(env)
                     .current_dir(workspace)
                     .kill_on_drop(true);
-                let transport = discovery
-                    .with(|| process::StdioTransport::spawn(child, cleanup))?
+                let transport = process::StdioTransport::spawn(child, cleanup)
                     .map_err(|_| reject("MCP stdio process could not start"))?;
-                discovery
-                    .request(async {
-                        match lifecycle {
-                            Some(mode) => handler.serve_with_lifecycle(transport, mode).await,
-                            None => handler.serve(transport).await,
-                        }
-                    })
-                    .await?
-                    .map_err(|_| reject("MCP stdio handshake failed"))
+                match lifecycle {
+                    Some(mode) => handler.serve_with_lifecycle(transport, mode).await,
+                    None => handler.serve(transport).await,
+                }
+                .map_err(|_| reject("MCP stdio handshake failed"))
             }
         }
     }
@@ -722,18 +486,4 @@ fn validate_id(name: &str) -> Result<(), String> {
         );
     }
     Ok(())
-}
-
-#[cfg(all(test, unix, feature = "core", feature = "harness"))]
-pub(crate) struct HttpProbe(http_owner::Probe);
-
-#[cfg(all(test, unix, feature = "core", feature = "harness"))]
-impl HttpProbe {
-    #[cfg(unix)]
-    pub(crate) async fn closing(&self) -> Result<(), String> {
-        self.0.closing().await
-    }
-    pub(crate) fn joined(&self) -> Result<bool, String> {
-        self.0.joined()
-    }
 }

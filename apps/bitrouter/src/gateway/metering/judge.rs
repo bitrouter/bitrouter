@@ -21,13 +21,13 @@ use serde::{Deserialize, Serialize};
 
 use super::replay::JudgeAttemptReplayRejected;
 use crate::metering::recorder::MeteringSettlementEvent;
-use crate::storage::evolution::EvolutionStore;
 use crate::storage::execution::{ExecutionHop, ExecutionOutcome};
+use crate::storage::gateway_records::GatewayRecords;
 use crate::storage::session_identity::SessionIdentity;
 
 pub(crate) const KIND: &str = "judge_attempt";
 pub(crate) const LOOKUP_KIND: &str = "judge_request_owner";
-pub(crate) const VERSION: &str = "checkpoint-judge-attempt-cost-v1";
+pub(crate) const VERSION: &str = "gateway-judge-attempt-cost-v1";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct JudgeAttempt {
@@ -67,7 +67,7 @@ struct AttemptSettlement {
 
 impl PipelineEvent for JudgeAttemptObserved {
     fn event_name(&self) -> &'static str {
-        "evolution.judge_attempt_observed"
+        "gateway.judge_attempt_observed"
     }
 }
 
@@ -94,16 +94,16 @@ impl JudgeCosts {
         }
     }
 
-    pub(crate) fn lookup(&self) -> Result<EvolutionStore> {
+    pub(crate) fn lookup(&self) -> Result<GatewayRecords> {
         // One indexed request namespace lets the pipeline recognize a durable
         // reservation without adding ACP headers or caller-controlled purpose.
         // Report access still validates every reservation's job and owner.
-        EvolutionStore::new(self.db.clone(), "internal:checkpoint-judge-costs")
+        GatewayRecords::new(self.db.clone(), "internal:gateway-judge-costs")
             .map(|store| store.with_storage_budget(self.storage_budget.clone()))
     }
 
-    pub(crate) fn store(&self, owner: &str) -> Result<EvolutionStore> {
-        EvolutionStore::new(self.db.clone(), owner)
+    pub(crate) fn store(&self, owner: &str) -> Result<GatewayRecords> {
+        GatewayRecords::new(self.db.clone(), owner)
             .map(|store| store.with_storage_budget(self.storage_budget.clone()))
     }
 
@@ -319,9 +319,8 @@ mod native_admission_tests {
     use crate::gateway::pipeline::operations::HookStage;
     use crate::gateway::pipeline::routing::StaticRoutingTable;
     use crate::gateway::pipeline::types::PipelineRequest;
-    use crate::metering::pricing::PricingTable;
     use crate::metering::recorder::MeteringRecorder;
-    use crate::metering::store::{MeteringStore, TimeWindow};
+    use crate::metering::store::MeteringStore;
     use anyhow::Context;
     use bitrouter_ai::types::OperationScope;
 
@@ -350,7 +349,7 @@ mod native_admission_tests {
             .require_hook::<JudgeCosts>(HookStage::PreResolution, OperationScope::Both)
             .pre_resolution_hook_for(costs.clone(), OperationScope::Both)
             .settlement_recorder_for(
-                MeteringRecorder::new(metering.clone(), Arc::new(PricingTable::new())),
+                MeteringRecorder::new(metering.clone()),
                 OperationScope::Both,
             );
         let pipeline = builder.build()?;
@@ -370,12 +369,7 @@ mod native_admission_tests {
                 .to_string()
                 .contains("reserved judge request metadata is missing")
         );
-        assert_eq!(
-            metering
-                .get_request_count("local", TimeWindow::ThisMonth)
-                .await?,
-            0
-        );
+        assert_eq!(metering.get_rate("local").await?.requests_per_minute, 0.0);
         let (_, saved) = costs
             .lookup()?
             .get::<RequestOwner>(LOOKUP_KIND, request_id)

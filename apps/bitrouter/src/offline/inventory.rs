@@ -3,23 +3,28 @@
 //! BLOB casts preserve text bytes: <https://www.sqlite.org/lang_expr.html#castexpr>
 use super::{
     files::Fingerprint,
-    format::{
-        Column, Inventory, LedgerEntry, MAX_BYTES, MAX_CELL, MAX_FILE, MAX_ROW, MAX_ROWS, Table,
-    },
+    format::{Column, LedgerEntry, MAX_CELL, MAX_ROW},
 };
 use anyhow::{Context, Result, ensure};
 use futures::TryStreamExt;
-use sea_orm::sqlx::{Connection, Row, SqliteConnection};
+use sea_orm::sqlx::{Row, SqliteConnection};
+#[cfg(all(test, unix))]
+use {
+    super::format::{Inventory, MAX_BYTES, MAX_FILE, MAX_ROWS, Table},
+    sea_orm::sqlx::Connection,
+};
 
 pub(super) struct Budget {
-    legacy: bool,
+    #[cfg(all(test, unix))]
+    bounded_reference: bool,
     rows: u64,
     bytes: u64,
 }
+#[cfg(all(test, unix))]
 impl Default for Budget {
     fn default() -> Self {
         Self {
-            legacy: true,
+            bounded_reference: true,
             rows: 0,
             bytes: 0,
         }
@@ -28,7 +33,8 @@ impl Default for Budget {
 impl Budget {
     pub(super) fn totals() -> Self {
         Self {
-            legacy: false,
+            #[cfg(all(test, unix))]
+            bounded_reference: false,
             rows: 0,
             bytes: 0,
         }
@@ -42,8 +48,9 @@ impl Budget {
             .bytes
             .checked_add(bytes)
             .ok_or_else(|| anyhow::anyhow!("byte count overflow"))?;
+        #[cfg(all(test, unix))]
         ensure!(
-            !self.legacy || (self.rows <= MAX_ROWS && self.bytes <= MAX_BYTES),
+            !self.bounded_reference || (self.rows <= MAX_ROWS && self.bytes <= MAX_BYTES),
             "offline inventory exceeds profile"
         );
         Ok(())
@@ -60,6 +67,7 @@ pub(super) fn quoted(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
 }
 
+#[cfg(all(test, unix))]
 pub(super) async fn inspect(db: &mut SqliteConnection, key: &[u8; 32]) -> Result<Inventory> {
     let mut tx = db.begin().await?;
     let result = inspect_in(&mut tx, key).await;
@@ -67,6 +75,7 @@ pub(super) async fn inspect(db: &mut SqliteConnection, key: &[u8; 32]) -> Result
     tx.rollback().await?;
     result
 }
+#[cfg(all(test, unix))]
 pub(super) async fn inspect_in(db: &mut SqliteConnection, key: &[u8; 32]) -> Result<Inventory> {
     let pages: i64 = sea_orm::sqlx::query_scalar("PRAGMA page_count")
         .fetch_one(&mut *db)
@@ -279,6 +288,7 @@ pub(super) async fn validate_checks_in(db: &mut SqliteConnection, name: &str) ->
     Ok(())
 }
 
+#[cfg(all(test, unix))]
 async fn table(
     db: &mut SqliteConnection,
     name: &str,

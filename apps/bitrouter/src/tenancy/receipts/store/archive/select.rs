@@ -5,43 +5,6 @@ use crate::tenancy::receipts::store::obligations::{self, Key};
 
 const PAGE_ROWS: usize = 32;
 
-fn pending(scope: String, kind: &str) -> Statement {
-    sqlite(
-        "SELECT 1 FROM checkpoint_evolution INDEXED BY idx_checkpoint_evolution_scope_kind WHERE scope_id=? AND kind=? LIMIT 1",
-        [scope.into(), kind.into()],
-    )
-}
-
-/// Pending mirrors/units outlive receipt publication until their own ACKs.
-/// Their existing index does not address a paid execution directly. Presence
-/// conservatively holds this tenant's receipts; absence is a bounded exact seek,
-/// independent of historical job count. No JSON bodies are loaded or scanned.
-pub(super) async fn held(
-    tx: &DatabaseTransaction,
-    candidate: &Candidate,
-    charge: &Charge<'_>,
-) -> Result<bool> {
-    let r = &candidate.receipt;
-    charge(2, 2048)?;
-    for (scope, kind) in [
-        (
-            crate::storage::partition::learning_pending(&r.installation_id, &r.tenant_id)?,
-            "owned_judge_pending",
-        ),
-        (
-            crate::storage::partition::native_experiment_pending(&r.installation_id, &r.tenant_id)?,
-            "native_experiment_unit_pending_v1",
-        ),
-    ] {
-        if tx.query_one(pending(scope, kind)).await?.is_some() {
-            charge(0, 0)?;
-            return Ok(true);
-        }
-    }
-    charge(0, 0)?;
-    Ok(false)
-}
-
 fn keys(installation: &InstallationId, after: Option<&Key>) -> Statement {
     let mut query = String::from(
         "SELECT CASE WHEN typeof(r.tenant_id)='text' AND length(CAST(r.tenant_id AS BLOB)) BETWEEN 1 AND 128 THEN r.tenant_id ELSE NULL END AS tenant_id, CASE WHEN typeof(r.execution_id)='text' AND length(CAST(r.execution_id AS BLOB)) BETWEEN 1 AND 128 THEN r.execution_id ELSE NULL END AS execution_id FROM tenancy_execution_receipts AS r INDEXED BY idx_tenancy_receipts_storage WHERE r.installation_id=? AND r.storage_kind=0",
@@ -111,7 +74,7 @@ pub(super) async fn next(
         };
         let candidate = std::sync::Arc::into_inner(candidate)
             .context("receipt shared during archive selection")?;
-        let eligible = known(&candidate).is_ok() && !held(tx, &candidate, charge).await?;
+        let eligible = known(&candidate).is_ok();
         charge(0, 0)?;
         return Ok(Selection {
             candidate: eligible.then_some(candidate),
@@ -174,13 +137,6 @@ mod tests {
             (
                 keys(&installation, Some(&cursor)),
                 "idx_tenancy_receipts_storage",
-            ),
-            (
-                pending(
-                    crate::storage::partition::learning_pending(&installation, &cursor.tenant)?,
-                    "owned_judge_pending",
-                ),
-                "idx_checkpoint_evolution_scope_kind",
             ),
         ] {
             let explain = Statement::from_sql_and_values(
@@ -307,55 +263,67 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn persisted_paid_and_native_work_hold_selection_and_recheck_before_write() -> Result<()>
-    {
+    async fn oauth_obligation_holds_selection_and_is_rechecked_before_archive() -> Result<()> {
         let db = open().await?;
         let installation = "installation".try_into()?;
         let tenant = "tenant".try_into()?;
-        for (partition, kind) in [
-            (
-                crate::storage::partition::learning_pending(&installation, &tenant)?,
-                "owned_judge_pending",
-            ),
-            (
-                crate::storage::partition::native_experiment_pending(&installation, &tenant)?,
-                "native_experiment_unit_pending_v1",
-            ),
-        ] {
-            let tx = db.begin().await?;
-            let original = candidate("installation", "tenant", "terminal", "creator")?;
-            store::insert(&tx, &original).await?;
-            let selected = next(&tx, &installation, None, FREE).await?;
-            let prepared = Prepared::new(&selected.candidate.context("terminal candidate")?, FREE)?;
-            // A pending participant appears after preparation. Existence alone
-            // holds the receipt; this path must not decode arbitrary job bodies.
-            tx.execute(sqlite("INSERT INTO checkpoint_evolution (record_id,scope_id,kind,session_key,revision,body,installation_id,tenant_id,creator_principal_id) VALUES ('pending',?,?,NULL,0,'opaque work','installation','tenant','creator')", [partition.into(), kind.into()])).await?;
-            let held = next(&tx, &installation, None, FREE).await?;
-            ensure!(held.candidate.is_none() && held.done && held.after == Some(key("terminal")?));
-            ensure!(!super::super::archive_one(&tx, &prepared, FREE).await?);
-            let marker = tx.query_one(sqlite("SELECT storage_kind FROM tenancy_execution_receipts WHERE execution_id='terminal'", [])).await?.context("inline marker")?;
-            ensure!(marker.try_get::<i64>("", "storage_kind")? == 0);
-            // A separate tenant remains eligible despite the pending owner.
-            store::insert(
-                &tx,
-                &candidate("installation", "z-other", "other", "creator")?,
-            )
+        let tx = db.begin().await?;
+        let original = candidate("installation", "tenant", "terminal", "creator")?;
+        store::insert(&tx, &original).await?;
+        let selected = next(&tx, &installation, None, FREE).await?;
+        let prepared = Prepared::new(&selected.candidate.context("terminal candidate")?, FREE)?;
+        // A current OAuth owner appears after compression was prepared. The
+        // transactional archive recheck must observe its unresolved obligation.
+        let (_crypto, slot) = crate::tenancy::oauth::storage::pending::tests::fixture(
+            &installation,
+            &tenant,
+            &"terminal".try_into()?,
+            "selector",
+            "2026-10-01T00:00:00Z",
+        )?;
+        crate::tenancy::oauth::storage::insert(&tx, &slot).await?;
+        ensure!(
+            obligations::reconcile(&tx, &installation, &key("terminal")?, FREE)
+                .await?
+                .delta()
+                == 1
+        );
+        let held = next(&tx, &installation, None, FREE).await?;
+        ensure!(held.candidate.is_none() && held.done && held.after == Some(key("terminal")?));
+        ensure!(!super::super::archive_one(&tx, &prepared, FREE).await?);
+        let marker = tx
+            .query_one(sqlite(
+                "SELECT storage_kind FROM tenancy_execution_receipts WHERE execution_id='terminal'",
+                [],
+            ))
+            .await?
+            .context("inline marker")?;
+        ensure!(marker.try_get::<i64>("", "storage_kind")? == 0);
+        store::insert(
+            &tx,
+            &candidate("installation", "z-other", "other", "creator")?,
+        )
+        .await?;
+        let other = next(&tx, &installation, held.after.as_ref(), FREE).await?;
+        ensure!(
+            other
+                .candidate
+                .context("other tenant candidate")?
+                .receipt
+                .tenant_id
+                .as_str()
+                == "z-other"
+        );
+        tx.execute_unprepared("DELETE FROM tenancy_oauth_slots")
             .await?;
-            let other = next(&tx, &installation, held.after.as_ref(), FREE).await?;
-            ensure!(
-                other
-                    .candidate
-                    .context("other tenant candidate")?
-                    .receipt
-                    .tenant_id
-                    .as_str()
-                    == "z-other"
-            );
-            tx.execute_unprepared("DELETE FROM checkpoint_evolution WHERE record_id='pending'")
-                .await?;
-            ensure!(super::super::archive_one(&tx, &prepared, FREE).await?);
-            tx.rollback().await?;
-        }
+        ensure!(
+            obligations::reconcile(&tx, &installation, &key("terminal")?, FREE)
+                .await?
+                .delta()
+                == -1
+        );
+        ensure!(super::super::archive_one(&tx, &prepared, FREE).await?);
+        tx.rollback().await?;
         db.close().await?;
         Ok(())
     }

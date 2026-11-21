@@ -5,12 +5,10 @@
 //! persistence before rotating again. Persistent backends define their own
 //! process scope and durability. No default path or account discovery lives here.
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 
 use super::credentials::{Credential, OAuthToken};
 use super::{AuthOperation, normalize_auth_extension_error};
@@ -44,6 +42,7 @@ pub enum StoreError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Durability {
     /// State survives only for the lifetime of the in-memory store.
+    #[cfg(test)]
     Memory,
     /// Backend committed the replacement to its persistent storage.
     Persistent,
@@ -103,77 +102,8 @@ pub trait CredentialStore: Send + Sync {
     ) -> std::result::Result<Box<dyn CredentialTransaction>, StoreError>;
 }
 
-#[derive(Default)]
-struct MemoryAccount {
-    credential: Option<Credential>,
-    pending: Option<Credential>,
-}
-
-/// Explicit in-memory storage with no ambient credential loading.
-#[derive(Default)]
-pub struct MemoryCredentialStore {
-    accounts: Mutex<HashMap<CredentialKey, Arc<AsyncMutex<MemoryAccount>>>>,
-}
-
-impl MemoryCredentialStore {
-    /// Construct storage from caller-supplied account credentials.
-    pub fn new(credentials: impl IntoIterator<Item = (CredentialKey, Credential)>) -> Self {
-        Self {
-            accounts: Mutex::new(
-                credentials
-                    .into_iter()
-                    .map(|(key, credential)| {
-                        (
-                            key,
-                            Arc::new(AsyncMutex::new(MemoryAccount {
-                                credential: Some(credential),
-                                pending: None,
-                            })),
-                        )
-                    })
-                    .collect(),
-            ),
-        }
-    }
-}
-
-struct MemoryTransaction(OwnedMutexGuard<MemoryAccount>);
-
-#[async_trait]
-impl CredentialTransaction for MemoryTransaction {
-    fn credential(&self) -> Option<&Credential> {
-        self.0.credential.as_ref()
-    }
-    fn pending(&self) -> Option<&Credential> {
-        self.0.pending.as_ref()
-    }
-    fn stage(&mut self, credential: Credential) {
-        self.0.pending = Some(credential);
-    }
-    async fn commit(&mut self) -> std::result::Result<Durability, StoreError> {
-        if let Some(credential) = self.0.pending.take() {
-            self.0.credential = Some(credential);
-        }
-        Ok(Durability::Memory)
-    }
-}
-
-#[async_trait]
-impl CredentialStore for MemoryCredentialStore {
-    async fn begin(
-        &self,
-        key: &CredentialKey,
-    ) -> std::result::Result<Box<dyn CredentialTransaction>, StoreError> {
-        let account = self
-            .accounts
-            .lock()
-            .map_err(|_| StoreError::Unavailable)?
-            .entry(key.clone())
-            .or_default()
-            .clone();
-        Ok(Box::new(MemoryTransaction(account.lock_owned().await)))
-    }
-}
+#[cfg(test)]
+pub(crate) mod memory_fixture;
 
 /// A provider's bounded token exchange for the already-selected account.
 #[async_trait]
@@ -223,11 +153,6 @@ impl OAuthSession {
             inline: true,
             ..Self::new(store, refresher, refresh_window)
         }
-    }
-
-    /// Resolve a selected OAuth credential, refreshing only near expiry.
-    pub async fn resolve(&self, key: &CredentialKey) -> Result<OAuthToken> {
-        self.run(key, None, None).await
     }
 
     /// Resolve storage first, using the caller's permitted non-refreshable fallback

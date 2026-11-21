@@ -1,32 +1,29 @@
 //! Application validation and namespace policy for MCP skills.
-//! Public wire records live in [`crate::skills::wire`].
-//! Content format parsing lives in [`crate::skills::format`].
+//! MCP wire records live in `crate::skills::wire`.
+//! Skill-name validation uses the shared `bitrouter-skills` format.
 //!
 //! The gateway prefixes skill URIs with the member label without changing
 //! frontmatter or content digests. Direct routes retain upstream URI schemes.
 //! See [SEP-2640](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2640)
 //! and the [Agent Skills specification](https://agentskills.io/specification).
 
-use crate::skills::wire::DYNAMIC_RESOURCES;
-use crate::skills::wire::GetSkillResult;
-use crate::skills::wire::ListSkillsResult;
-use crate::skills::wire::MAX_SKILL_RESOURCES;
-use crate::skills::wire::MAX_SKILL_TOTAL_BYTES;
-use crate::skills::wire::SKILL_SCHEME;
-use crate::skills::wire::SkillEntry;
-use crate::skills::wire::SkillResources;
-use crate::skills::wire::SkillsCacheScope;
-use crate::skills::wire::SkillsResultType;
+#[cfg(any(feature = "mcp", test))]
+use crate::skills::wire::{
+    DYNAMIC_RESOURCES, MAX_SKILL_RESOURCES, MAX_SKILL_TOTAL_BYTES, SKILL_SCHEME, SkillEntry,
+    SkillResources,
+};
 #[cfg(test)]
 use crate::skills::wire::{
-    GetSkillParams, RESOURCES_DIRECTORY_READ_METHOD, SKILLS_EXTENSION_ID, SKILLS_GET_METHOD,
-    SKILLS_LIST_METHOD, SkillResource,
+    RESOURCES_DIRECTORY_READ_METHOD, SKILLS_EXTENSION_ID, SKILLS_GET_METHOD, SKILLS_LIST_METHOD,
+    SkillResource,
 };
 
+#[cfg(any(feature = "mcp", test))]
 pub trait SkillEntryExt: Sized {
     fn validate_metadata(&self) -> Result<(), String>;
 }
 
+#[cfg(any(feature = "mcp", test))]
 impl SkillEntryExt for SkillEntry {
     /// Validate metadata without fetching files or asserting trust in content.
     /// Direct routes retain legal URI schemes that aggregation cannot rewrite.
@@ -75,38 +72,6 @@ impl SkillEntryExt for SkillEntry {
     }
 }
 
-pub trait ListSkillsResultExt: Sized {
-    fn complete(skills: Vec<SkillEntry>, ttl_ms: u64, cache_scope: SkillsCacheScope) -> Self;
-}
-
-impl ListSkillsResultExt for ListSkillsResult {
-    /// Build a conformant, synchronously complete listing.
-    fn complete(skills: Vec<SkillEntry>, ttl_ms: u64, cache_scope: SkillsCacheScope) -> Self {
-        Self {
-            result_type: SkillsResultType::Complete,
-            skills,
-            ttl_ms,
-            cache_scope,
-        }
-    }
-}
-
-pub trait GetSkillResultExt: Sized {
-    fn complete(skill: SkillEntry, ttl_ms: u64, cache_scope: SkillsCacheScope) -> Self;
-}
-
-impl GetSkillResultExt for GetSkillResult {
-    /// Build a conformant, synchronously complete skill lookup.
-    fn complete(skill: SkillEntry, ttl_ms: u64, cache_scope: SkillsCacheScope) -> Self {
-        Self {
-            result_type: SkillsResultType::Complete,
-            skill,
-            ttl_ms,
-            cache_scope,
-        }
-    }
-}
-
 /// Whether a configured server name is safe as one URI authority segment.
 pub(crate) fn is_valid_gateway_label(label: &str) -> bool {
     !label.is_empty()
@@ -118,6 +83,7 @@ pub(crate) fn is_valid_gateway_label(label: &str) -> bool {
 /// Prefix an upstream skill URI with `label`, moving it into the gateway's
 /// namespace. Returns `None` for an unsafe label or a URI that is not
 /// `skill://`-schemed; those entries are not aggregated (see the module docs).
+#[cfg(any(feature = "mcp", test))]
 pub fn namespace_uri(label: &str, uri: &str) -> Option<String> {
     if !is_valid_gateway_label(label) {
         return None;
@@ -138,6 +104,7 @@ pub fn namespace_uri(label: &str, uri: &str) -> Option<String> {
 /// two call sites forgot, and the gateway forwarded a scheme-less path to an
 /// upstream. Returning something callers can use directly removes the trap
 /// rather than documenting it.
+#[cfg(any(feature = "mcp", test))]
 pub fn strip_label(label: &str, uri: &str) -> Option<String> {
     if !is_valid_gateway_label(label) {
         return None;
@@ -150,26 +117,18 @@ pub fn strip_label(label: &str, uri: &str) -> Option<String> {
 }
 
 /// Shared Agent Skills name grammar: Unicode characters, not UTF-8 bytes.
-pub fn valid_agent_skill_name(name: &str) -> bool {
-    (1..=64).contains(&name.chars().count())
-        && name.chars().all(|c| {
-            c == '-'
-                || (c.is_alphanumeric()
-                    && !c.is_uppercase()
-                    && c.to_lowercase().eq(std::iter::once(c)))
-        })
-        && !name.starts_with('-')
-        && !name.ends_with('-')
-        && !name.contains("--")
-}
+#[cfg(any(feature = "mcp", test))]
+use bitrouter_skills::valid_agent_skill_name;
 
 /// Validate absolute URI/IRI syntax without interpreting its scheme or
 /// resolving an authority. Syntax alone does not identify or activate a skill.
+#[cfg(any(feature = "mcp", test))]
 pub fn validate_skill_resource_uri(uri: &str) -> Result<(), String> {
     skill_resource_path(uri).map(|_| ())
 }
 
 /// Read the original URI/IRI path independently of query and fragment identity.
+#[cfg(any(feature = "mcp", test))]
 pub fn skill_resource_path(uri: &str) -> Result<&str, String> {
     fluent_uri::Iri::parse(uri)
         .map(|parsed| parsed.path().as_str())
@@ -179,6 +138,7 @@ pub fn skill_resource_path(uri: &str) -> Result<&str, String> {
 /// Return the original directory URI, preserving its spelling and scheme.
 /// The explicit file and parent-name constraints apply equally to rootless,
 /// authority-based and absolute paths. No URL normalization is performed.
+#[cfg(any(feature = "mcp", test))]
 pub fn skill_uri_root<'a>(uri: &'a str, name: &str) -> Result<&'a str, String> {
     let parsed = fluent_uri::Iri::parse(uri).map_err(|_| "invalid MCP skill URI")?;
     let file_uri = uri.split(['?', '#']).next().ok_or("skill URI is missing")?;
@@ -208,6 +168,7 @@ pub fn skill_uri_root<'a>(uri: &'a str, name: &str) -> Result<&'a str, String> {
 }
 
 /// Decode one URI segment without resolving an authority or changing origin.
+#[cfg(any(feature = "mcp", test))]
 pub fn decode_skill_uri_segment(segment: &str) -> Result<String, String> {
     let input = segment.as_bytes();
     let mut decoded = Vec::with_capacity(input.len());
@@ -229,6 +190,7 @@ pub fn decode_skill_uri_segment(segment: &str) -> Result<String, String> {
     String::from_utf8(decoded).map_err(|_| "skill URI segment requires UTF-8".into())
 }
 
+#[cfg(any(feature = "mcp", test))]
 fn has_dot_segment(uri: &str) -> bool {
     skill_resource_path(uri).map_or(true, |path| {
         path.split('/').any(|segment| {
@@ -243,6 +205,7 @@ fn has_dot_segment(uri: &str) -> bool {
 /// Return the entry's skill-directory URI when the entry satisfies the
 /// transport-level Agent Skills invariants a gateway can verify without
 /// fetching content.
+#[cfg(any(feature = "mcp", test))]
 fn validated_skill_root(entry: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
     let uri = entry.get("uri")?.as_str()?;
     if !uri.starts_with(SKILL_SCHEME) || has_dot_segment(uri) {
@@ -257,6 +220,7 @@ fn validated_skill_root(entry: &serde_json::Map<String, serde_json::Value>) -> O
     skill_uri_root(uri, name).ok().map(str::to_owned)
 }
 
+#[cfg(any(feature = "mcp", test))]
 fn resource_belongs_to(root: &str, uri: &str) -> bool {
     if !uri.starts_with(SKILL_SCHEME) || has_dot_segment(uri) {
         return false;
@@ -265,6 +229,7 @@ fn resource_belongs_to(root: &str, uri: &str) -> bool {
         .is_some_and(|suffix| suffix.starts_with('/') && suffix.len() > 1)
 }
 
+#[cfg(any(feature = "mcp", test))]
 fn valid_sha256_digest(digest: &str) -> bool {
     digest.strip_prefix("sha256:").is_some_and(|hex| {
         hex.len() == 64
@@ -286,6 +251,7 @@ fn valid_sha256_digest(digest: &str) -> bool {
 /// through byte-identical, and unknown fields — including ones added by
 /// future revisions of the Agent Skills spec — are preserved, which is why
 /// this operates on `serde_json::Value` rather than a typed entry.
+#[cfg(any(feature = "mcp", test))]
 pub fn namespace_entry(label: &str, entry: &serde_json::Value) -> Option<serde_json::Value> {
     let mut entry = entry.clone();
     let object = entry.as_object_mut()?;
@@ -365,49 +331,6 @@ mod tests {
 
     const DIGEST: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-    /// The SEP's own `skills/list` example must round-trip byte-identically.
-    #[test]
-    fn sep_example_round_trips() {
-        let wire = serde_json::json!({
-            "resultType": "complete",
-            "skills": [
-                {
-                    "uri": "skill://git-workflow/SKILL.md",
-                    "frontmatter": {
-                        "name": "git-workflow",
-                        "description": "Follow this team's Git conventions"
-                    },
-                    "resources": [
-                        {
-                            "uri": "skill://git-workflow/SKILL.md",
-                            "digest": "sha256:a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2",
-                            "size": 2314
-                        }
-                    ]
-                },
-                {
-                    "uri": "skill://acme/billing/refunds/SKILL.md",
-                    "frontmatter": {
-                        "name": "refunds",
-                        "description": "Process customer refund requests",
-                        "license": "Apache-2.0"
-                    },
-                    "resources": [
-                        {
-                            "uri": "skill://acme/billing/refunds/SKILL.md",
-                            "digest": "sha256:b2c3d4e5b2c3d4e5b2c3d4e5b2c3d4e5b2c3d4e5b2c3d4e5b2c3d4e5b2c3d4e5",
-                            "size": 3871
-                        }
-                    ]
-                }
-            ],
-            "ttlMs": 300000,
-            "cacheScope": "public"
-        });
-        let parsed: ListSkillsResult = serde_json::from_value(wire.clone()).expect("parses");
-        assert_eq!(serde_json::to_value(&parsed).expect("serializes"), wire);
-    }
-
     /// Frontmatter is verbatim: a field this crate has never heard of must
     /// survive a round trip, because the Agent Skills spec evolves
     /// independently of the transport binding.
@@ -465,13 +388,12 @@ mod tests {
         assert_eq!(wire["resources"], serde_json::json!("dynamic"));
         let back: SkillEntry = serde_json::from_value(wire).expect("de");
         assert_eq!(back.resources, SkillResources::Dynamic);
-        assert_eq!(back.resources.entries(), None);
 
         let enumerated = entry("skill://x/SKILL.md", "x");
         let wire = serde_json::to_value(&enumerated).expect("ser");
         assert_eq!(wire["resources"][0]["size"], serde_json::json!(12));
         let back: SkillEntry = serde_json::from_value(wire).expect("de");
-        assert_eq!(back.resources.entries().map(<[_]>::len), Some(1));
+        assert!(matches!(back.resources, SkillResources::Enumerated(files) if files.len() == 1));
     }
 
     /// "An entry with no `resources` at all, or with any value other than an
@@ -514,25 +436,6 @@ mod tests {
         assert_eq!(MAX_SKILL_RESOURCES, 512);
         assert_eq!(MAX_SKILL_TOTAL_BYTES, 16_777_216);
         assert_eq!(DYNAMIC_RESOURCES, "dynamic");
-    }
-
-    #[test]
-    fn get_params_and_result_use_the_sep_field_names() {
-        let params: GetSkillParams =
-            serde_json::from_value(serde_json::json!({"uri": "skill://pdf/SKILL.md"}))
-                .expect("parses");
-        assert_eq!(params.uri, "skill://pdf/SKILL.md");
-
-        let result = GetSkillResult::complete(
-            entry("skill://pdf/SKILL.md", "pdf"),
-            0,
-            SkillsCacheScope::Public,
-        );
-        let wire = serde_json::to_value(&result).expect("ser");
-        assert_eq!(wire["resultType"], "complete");
-        assert_eq!(wire["skill"]["uri"], "skill://pdf/SKILL.md");
-        assert_eq!(wire["ttlMs"], 0);
-        assert_eq!(wire["cacheScope"], "public");
     }
 
     /// The method names the relay allowlist and the origin server's dispatch

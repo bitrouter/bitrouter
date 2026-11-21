@@ -2094,7 +2094,7 @@
       "tenant_id": "tenant-a",
       "revision_id": "revision-a",
       "schema_version": 1,
-      "compiler_version": "m0-proposed",
+      "compiler_version": "fixture-compiler",
       "content_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "document": {
         "routes": [

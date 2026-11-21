@@ -114,10 +114,7 @@ async fn actual_receipt_and_same_actor_archive_estimates_cover_sampled_file_grow
                 .await?.context("completed receipt")?;
             ensure!(candidate.receipt.outcome == Outcome::Completed);
             let actual = candidate.bytes().checked_add(candidate.auxiliary_bytes()).context("candidate bytes")?;
-            let expected = if cfg!(all(feature = "core", feature = "harness")) {
-                actual.max(u64::try_from(crate::storage::operation_budget::MAX_BYTES)?)
-            } else { actual };
-            ensure!(encoded == expected);
+            ensure!(encoded == actual);
             let usage = evidence(&h, &id).await?;
             let document: ExecutionUsageEvidence = serde_json::from_slice(&usage)?;
             ensure!(document.frames.len() == if stream { 17 } else { 1 });
@@ -184,9 +181,7 @@ async fn actual_receipt_and_same_actor_archive_estimates_cover_sampled_file_grow
         removed?;
     }
     ensure!(receipts.len() == 2 && receipts[1].0 > receipts[0].0);
-    if !cfg!(all(feature = "core", feature = "harness")) {
-        ensure!(receipts[1].1 > receipts[0].1);
-    }
+    ensure!(receipts[1].1 > receipts[0].1);
     ensure!(archives.len() == 2 && archives[1] > archives[0]);
     Ok(())
 }

@@ -4,6 +4,7 @@
 //! admits and retains a complete bitrouter-registry Document, then projects
 //! understood metadata here. Executable interface semantics remain independent.
 
+use crate::config::PricingEndpointProfile;
 use std::collections::{BTreeMap, HashMap};
 
 use serde::Deserialize;
@@ -244,11 +245,6 @@ impl RegistryProvider {
         self.access() != RegistryAccess::Private
     }
 
-    /// Whether this provider requires a user/deployment-supplied base URL.
-    pub fn requires_base_url(&self) -> bool {
-        self.required_config.contains(&RequiredConfig::BaseUrl)
-    }
-
     /// The env var holding this provider's credential, or `None` when it does
     /// not use one. `oauth` / `native` providers authenticate via a local
     /// interactive login (a request-time `AuthApplier`), so they have no env
@@ -301,7 +297,7 @@ pub struct RegistryModel {
     pub capabilities: Vec<Capability>,
     /// Positively verified qualitative effort levels for this exact route.
     #[serde(default)]
-    pub reasoning_effort: Option<crate::gateway::model::capabilities::ReasoningEffortConfig>,
+    pub reasoning_effort: Option<crate::config::model::ReasoningEffortConfig>,
     /// Provider/model request-shape compatibility settings.
     #[serde(default)]
     pub compatibility: ModelCompatibility,
@@ -325,32 +321,6 @@ pub struct RegistryPricing {
     /// Higher context-length pricing brackets (step function on input size).
     #[serde(default)]
     pub context_tiers: Vec<RegistryContextTier>,
-}
-
-/// Published processing-profile provenance; application pricing validates the
-/// effective endpoint rather than inferring premiums from this declaration.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, Deserialize, schemars::JsonSchema,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum PricingEndpointProfile {
-    /// OpenAI global processing.
-    OpenaiGlobal,
-    /// OpenAI US regional processing.
-    OpenaiUs,
-    /// OpenAI European regional processing.
-    OpenaiEurope,
-}
-
-impl PricingEndpointProfile {
-    /// Stable source/config vocabulary for frozen applicability evidence.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::OpenaiGlobal => "openai_global",
-            Self::OpenaiUs => "openai_us",
-            Self::OpenaiEurope => "openai_europe",
-        }
-    }
 }
 
 /// Input-token rates (USD per 1M tokens == µUSD per token).

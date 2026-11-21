@@ -1,57 +1,26 @@
 # ACP launch, routing and cleanup
 
-The command reference lives in [CLI](../CLI.md#bro-run--headless-agent).
-This guide describes implementation ownership shared by headless execution and
-ACP forwarding. Hidden compatibility command names are not separate runtimes.
+`bro acp serve` serves native BRO sessions over stdio. Specify a bundled adapter
+with `bro acp serve AGENT` to supervise that adapter and bridge the manager's
+ACP connection. A local operator can supply an explicit stdio command with
+`bro acp serve --agent NAME --direct --config agents.yaml`.
+For a one-shot prompt, use `bro acp --workspace PATH prompt --agent AGENT PROMPT`.
 
-## Entry points
+## Routing and authority
 
-`bro run` consumes the shared ACP client for a headless prompt.
-`bro acp serve <agent>` forwards a configured external harness's ACP connection;
-bare `bro acp serve` projects the daemon-owned native runtime. The latter does
-not spawn itself through the external controller. Native vendor launchers retain
-the vendor's own interaction and authentication flow. See the
-[runtime guide](agent-runtime.md) for identity and authority ownership.
+A gateway-bound adapter uses the endpoint and client credential selected by
+BRO. Provider credentials and model routing belong to the gateway. A direct
+adapter uses its own process configuration and credentials. Native sessions
+use the local BRO worker and checkpoint journal. See [runtime ownership](agent-runtime.md)
+and the [agent catalog](catalogs.md).
 
-Local harness launchers select a code-owned BRO assembly scope when starting a
-new child. The child uses loopback inference/control listeners and its OS-local
-native endpoints. Stock `serve`, `start`, shared serving and custom extension
-hosts keep the gateway scope; no YAML or HTTP field selects the BRO scope. A
-running source-owned process is reused without changing its product authority.
-Local experiments require a BRO owner and do not become tenant-service features.
+## Cleanup
 
-## Routing
+BRO validates the selected adapter and required routing data before launch.
+ACP managers handle permission requests forwarded from external adapters.
+The one-shot prompt declines permission requests. Adapter transport and
+process cleanup belong to the local BRO invocation. The workspace, session
+state and approval records stay with the local owner.
 
-External ACP routing is enabled by default; an explicit direct invocation opts
-out. Model selection, explicit endpoint overrides, provider authentication and
-process launch are different decisions. A native invocation instead uses the
-local daemon and its native model selection. Never silently substitute a local
-target when an explicitly selected endpoint or instance is unavailable.
-
-Agent and runtime catalog entries describe reviewed process invocations and
-routing injection. Apply only recognized rendering kinds; do not evaluate a
-catalog as an arbitrary expression or construct shell commands from model
-content. Temporary per-launch files and environment are owned by that launch,
-not written into an unrelated vendor's permanent configuration. Source and
-routing validation follow the [catalog guide](catalogs.md).
-
-## Preflight and cleanup
-
-Validate the selected harness, routing mode, daemon/auth requirements and
-configuration before creating a session or launching a child. Failures are
-reported through the command's supported structured error output or ACP error
-path. A failed preflight cannot be presented as a successfully created session.
-An explicit `--no-start` selection fails when its required daemon is absent;
-activation and process creation do not precede that check.
-
-One shared client/controller stack owns transport initialization, permissions,
-cancellation and cleanup. A started process stays owned until confirmed cleanup;
-losing an output stream or reaching a timeout does not prove that it stopped.
-The harness's own ACP session ID is retained. Controller instance and launch
-correlation are distinct from that session identity; an invented alias cannot
-replace it in history, route operations or accounting.
-
-Public native ACP and HTTP message formats are maintained in the
-[service API](../specs/service-api/README.md). The CLI guide documents current
-NDJSON output and hidden command compatibility. Startup observations and test
-campaigns belong with their change, rather than in a second launch spec.
+See [local BRO commands](../CLI.md#local-bro-threads-and-agents) and
+[ACP authentication](acp-authentication.md).

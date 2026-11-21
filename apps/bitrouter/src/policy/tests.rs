@@ -3,14 +3,15 @@
 use std::sync::Arc;
 
 use crate::gateway::caller::CallerContext;
-use crate::gateway::extensions::legacy::PluginId;
+use crate::gateway::extensions::plugin::PluginId;
 use crate::gateway::pipeline::context::PipelineContext;
 use crate::gateway::pipeline::hooks::{HookDecision, PreRequestHook};
 use crate::gateway::pipeline::types::PipelineRequest;
-use crate::metering::{
-    ChargeEvidence, ChargeStatus, EffectivePricingRates, MeteringStore, PricingSource,
-    RequestMetric,
+use crate::metering::db::RequestMetric;
+use crate::metering::pricing::{
+    ChargeEvidence, ChargeStatus, EffectivePricingRates, PricingSource,
 };
+use crate::metering::store::MeteringStore;
 use crate::policy::hook::PolicyHook;
 use crate::policy::policy::Policy;
 use crate::policy::store::PolicyStore;
@@ -201,17 +202,19 @@ async fn store_loads_from_yaml_dir() {
     .await
     .unwrap();
     let store = PolicyStore::load_dir(&dir).await.unwrap();
-    assert_eq!(store.len(), 1);
-    store.with_policy("team", |p| {
-        let p = p.expect("team policy loaded");
-        assert_eq!(p.max_spend_micro_usd, Some(5000));
-        assert_eq!(p.allowed_models.as_ref().unwrap().len(), 2);
-    });
+    assert_eq!(
+        store.effective_for(&["team"]).max_spend_micro_usd,
+        Some(5000)
+    );
+    let policy = store.effective_for(&["team"]);
+    assert!(policy.check_model("gpt-5").is_ok());
+    assert!(policy.check_model("claude").is_ok());
+    assert!(policy.check_model("other").is_err());
     let _ = tokio::fs::remove_dir_all(&dir).await;
 }
 
 #[tokio::test]
-async fn reload_re_reads_the_policy_dir() {
+async fn reload_re_reads_the_policy_dir() -> anyhow::Result<()> {
     let dir = std::env::temp_dir().join(format!("brpolicy-reload-{}", uuid_like()));
     tokio::fs::create_dir_all(&dir).await.unwrap();
     tokio::fs::write(
@@ -221,7 +224,10 @@ async fn reload_re_reads_the_policy_dir() {
     .await
     .unwrap();
     let store = PolicyStore::load_dir(&dir).await.unwrap();
-    assert_eq!(store.len(), 1);
+    assert_eq!(
+        store.effective_for(&["team-a"]).max_spend_micro_usd,
+        Some(5000)
+    );
 
     // Add a second policy file and drop the first.
     tokio::fs::remove_file(dir.join("a.yaml")).await.unwrap();
@@ -232,16 +238,18 @@ async fn reload_re_reads_the_policy_dir() {
     .await
     .unwrap();
 
-    store.reload().await.unwrap();
-    assert_eq!(store.len(), 1, "old policy gone, new one in");
-    store.with_policy("team-a", |p| {
-        assert!(p.is_none(), "deleted policy must not survive reload");
-    });
-    store.with_policy("team-b", |p| {
-        let p = p.expect("team-b loaded");
-        assert_eq!(p.max_spend_micro_usd, Some(9000));
-    });
+    let prepared = store
+        .prepare_reload()
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("missing configured policy source"))?;
+    store.commit_prepared(prepared)?;
+    assert_eq!(store.effective_for(&["team-a"]).max_spend_micro_usd, None);
+    assert_eq!(
+        store.effective_for(&["team-b"]).max_spend_micro_usd,
+        Some(9000)
+    );
     let _ = tokio::fs::remove_dir_all(&dir).await;
+    Ok(())
 }
 
 fn uuid_like() -> u64 {
@@ -523,7 +531,11 @@ async fn revalidation_preserves_selector_binding_and_reads_live_policy() -> anyh
         "id: router-access\ndenied_models: [bitrouter/coding]\n",
     )
     .await?;
-    store.reload().await?;
+    let prepared = store
+        .prepare_reload()
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("missing configured policy source"))?;
+    store.commit_prepared(prepared)?;
     assert!(matches!(
         hook.revalidate_context(&context).await?,
         HookDecision::Deny(_)

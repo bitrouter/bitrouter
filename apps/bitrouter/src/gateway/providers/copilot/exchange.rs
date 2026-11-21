@@ -91,22 +91,7 @@ struct TokenResponse {
     expires_at: u64,
 }
 
-/// Perform the GitHub → Copilot token exchange against the production
-/// endpoint at [`TOKEN_EXCHANGE_URL`].
-///
-/// `github_token` is the `ghu_…` access token issued by the OAuth device-code
-/// flow against `github.com/login/device/code`. The returned [`CopilotToken`]
-/// is what `api.githubcopilot.com` accepts as a Bearer.
-pub async fn exchange_for_copilot_token(
-    client: &reqwest::Client,
-    github_token: &str,
-) -> Result<CopilotToken, ExchangeError> {
-    exchange_for_copilot_token_at(client, TOKEN_EXCHANGE_URL, github_token).await
-}
-
-/// Variant of [`exchange_for_copilot_token`] that lets the caller override
-/// the URL — used by integration tests with `wiremock` to assert the
-/// request shape without hitting `api.github.com`.
+/// Exchange a selected GitHub credential at the configured token endpoint.
 pub async fn exchange_for_copilot_token_at(
     client: &reqwest::Client,
     url: &str,

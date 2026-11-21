@@ -105,7 +105,7 @@ impl CliReport for DaemonActionReport {
                     h.field("running configuration", format!("{:?}", state.running))?;
                     if state.running != bitrouter_ai::control::reload::RunningConfigState::InSync {
                         h.note(
-                            "Inspect bro status; no automatic reload or restart was performed.",
+                            "Inspect bitrouter status; no automatic reload or restart was performed.",
                         )?;
                     }
                 }
@@ -116,12 +116,12 @@ impl CliReport for DaemonActionReport {
     }
 }
 
-/// The human view of `bro status`. Exit code stays 0 whether running or
+/// The human view of `bitrouter status`. Exit code stays 0 whether running or
 /// stopped — "stopped" is an answer, not a failure.
 ///
 /// The report type itself is
 /// [`bitrouter_ai::control::status::StatusReport`]: the `status`
-/// tool returns the same type, so `bro status --json` and the tool's
+/// tool returns the same type, so `bitrouter status --json` and the tool's
 /// structured content are the same bytes. Rendering stays here — a local trait
 /// on a foreign type is legal, and it keeps [`Human`] out of the crate.
 impl CliReport for StatusReport {
@@ -767,7 +767,7 @@ mod tests {
     }
 
     /// The human line has to *say* when the policy table moved the request —
-    /// printing only the requested model is how `bro route` used to name
+    /// printing only the requested model is how `bitrouter route` used to name
     /// a model the daemon would never pick.
     #[test]
     fn route_human_names_the_effective_model_when_policy_moved_it() {
@@ -794,13 +794,13 @@ mod tests {
         assert!(h.contains("policy → big"), "{h}");
     }
 
-    /// The whole point of the shared type: what `bro route --json` prints
+    /// The whole point of the shared type: what `bitrouter route --json` prints
     /// is what the `route_preview` tool returns, so the tool's structured
     /// content deserializes straight back into the report the CLI emitted —
     /// including the enum wire values, which a rename would silently break.
     ///
     /// The wire values are pinned literally too: `resolved_via` is
-    /// `live` / `config` / `zero_config`, the same words `bro models`
+    /// `live` / `config` / `zero_config`, the same words `bitrouter models`
     /// uses for the same fact, so an agent never sees `live` from one report
     /// and `live daemon` from the other.
     #[test]

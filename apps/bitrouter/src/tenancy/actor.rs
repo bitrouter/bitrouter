@@ -5,19 +5,12 @@ mod authority_read;
 mod command;
 mod obligations;
 
-#[cfg(all(feature = "core", feature = "harness"))]
-mod capture;
 mod continuation;
 mod custody;
 mod eval;
-#[cfg(all(feature = "core", feature = "harness"))]
-mod learning;
-mod learning_startup;
 mod oauth;
 pub(in crate::tenancy) mod provider_technical;
 mod receipts;
-#[cfg(all(feature = "core", feature = "harness"))]
-mod session;
 
 #[cfg(test)]
 mod tests;
@@ -51,12 +44,6 @@ pub(super) struct Message {
 }
 
 pub(super) enum Job {
-    #[cfg(all(feature = "core", feature = "harness"))]
-    Learning(Box<super::learning::queue::Job>),
-    #[cfg(all(feature = "core", feature = "harness"))]
-    Capture(Box<super::capture::queue::Job>),
-    #[cfg(all(feature = "core", feature = "harness"))]
-    Native(Box<super::session::Job>),
     OAuth(Box<super::oauth::exchange::Job>),
     Command(Box<Message>),
     Credential(CredentialRead),
@@ -79,7 +66,7 @@ pub(super) enum Job {
     ReceiptRead(super::receipts::read::Read),
     Continuation(Box<super::continuation::http::Job>),
     Eval(Box<super::eval::Job>),
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     Settlement(Box<super::eval::Settlement>),
 }
 
@@ -150,7 +137,6 @@ impl Drop for Liveness {
 
 /// Acknowledged bootstrap result, captured before actor maintenance starts.
 pub(super) struct Initialized {
-    pub crypto: Option<super::continuation::PinnedCrypto>,
     #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
     pub capacity: Option<crate::telemetry::receipt_latency::capacity::Snapshot>,
 }

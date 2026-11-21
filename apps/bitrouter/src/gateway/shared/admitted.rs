@@ -66,7 +66,7 @@ impl SharedAdmission {
         name: &str,
         guarded: bool,
         decision: Option<&crate::gateway::observability::decision::PendingEvalDecision>,
-        snapshot: &crate::policy_lock::PolicyRoutingSnapshot,
+        snapshot: &crate::policy_source::PolicyRoutingSnapshot,
     ) -> Result<()> {
         self.custody
             .capture

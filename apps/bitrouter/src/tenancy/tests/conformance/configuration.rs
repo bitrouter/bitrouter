@@ -215,7 +215,7 @@ async fn restricted_scope_cannot_activate_empty_snapshot() -> Result<()> {
 #[tokio::test]
 async fn restricted_scope_cannot_activate_changed_tenant_limits() -> Result<()> {
     for learning in [false, true] {
-        if learning && !cfg!(feature = "core") {
+        if learning {
             continue;
         }
         let (fixture, route, slot) = provision(false).await?;

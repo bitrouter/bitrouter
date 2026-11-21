@@ -7,15 +7,11 @@ use std::{net::IpAddr, time::Duration};
 /// Explicit permission to download catalog data.
 #[derive(Debug, Clone, Copy)]
 pub enum NetworkPolicy {
-    /// No request is issued.
-    Offline,
     /// A bounded complete GET; production uses fifteen seconds.
     Allowed { request_timeout: Duration },
 }
 #[derive(Debug, thiserror::Error)]
 pub enum FetchError {
-    #[error("catalog refresh disabled by network policy")]
-    Offline,
     #[error("invalid registry document URL; use HTTPS or an explicit literal loopback mirror")]
     InvalidSource,
     #[error("registry download failed; retaining the last admitted document")]
@@ -33,9 +29,7 @@ pub async fn fetch_registry(
     source: &str,
     policy: NetworkPolicy,
 ) -> Result<RegistryData, FetchError> {
-    let NetworkPolicy::Allowed { request_timeout } = policy else {
-        return Err(FetchError::Offline);
-    };
+    let NetworkPolicy::Allowed { request_timeout } = policy;
     let url = reqwest::Url::parse(source).map_err(|_| FetchError::InvalidSource)?;
     let loopback = url
         .host_str()

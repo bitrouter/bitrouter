@@ -1,0 +1,510 @@
+//! Owner-scoped gateway request admissions and metering settlements.
+//! Compare-and-set writes preserve the first admission and its exact settlement.
+
+use crate::storage::write::Write;
+use anyhow::{Context, Result, ensure};
+use sea_orm::sea_query::Expr;
+use sea_orm::{
+    ColumnTrait, ConnectionTrait, DatabaseConnection, DatabaseTransaction, EntityTrait,
+    QueryFilter, QuerySelect, QueryTrait, Set,
+};
+use serde::{Serialize, de::DeserializeOwned};
+use std::sync::{Arc, OnceLock};
+
+use sha2::{Digest, Sha256};
+
+pub fn digest(value: &impl Serialize) -> Result<String> {
+    Ok(hex::encode(Sha256::digest(serde_json::to_vec(value)?)))
+}
+
+pub mod records {
+    use sea_orm::entity::prelude::*;
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+    #[sea_orm(table_name = "gateway_request_records")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub record_id: String,
+        pub scope_id: String,
+        pub kind: String,
+        pub session_key: Option<String>,
+        pub revision: i64,
+        pub body: String,
+    }
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+#[derive(Clone)]
+pub struct GatewayRecords {
+    pub(crate) db: DatabaseConnection,
+    pub scope_id: String,
+    #[cfg(test)]
+    owner: String,
+    pub(crate) storage_budget: Option<Arc<OnceLock<crate::tenancy::storage::Budget>>>,
+}
+
+impl GatewayRecords {
+    pub fn new(db: DatabaseConnection, owner: &str) -> Result<Self> {
+        ensure!(!owner.is_empty(), "gateway request owner is required");
+        Ok(Self {
+            db,
+            scope_id: digest(&("gateway-request-record-v1", owner))?,
+            #[cfg(test)]
+            owner: owner.into(),
+            storage_budget: None,
+        })
+    }
+
+    pub(crate) fn with_storage_budget(
+        mut self,
+        budget: Option<Arc<OnceLock<crate::tenancy::storage::Budget>>>,
+    ) -> Self {
+        self.storage_budget = budget;
+        self
+    }
+
+    pub(crate) async fn begin_write(
+        &self,
+        maintenance: bool,
+    ) -> Result<(Write, DatabaseTransaction)> {
+        Write::begin(&self.db, &self.storage_budget, maintenance).await
+    }
+
+    #[cfg(test)]
+    pub fn ensure_owner(&self, owner: &str) -> Result<()> {
+        ensure!(owner == self.owner, "gateway request owner scope mismatch");
+        Ok(())
+    }
+
+    pub fn id(&self, kind: &str, key: &str) -> Result<String> {
+        digest(&(&self.scope_id, kind, key))
+    }
+
+    pub async fn get<T: DeserializeOwned>(
+        &self,
+        kind: &str,
+        key: &str,
+    ) -> Result<Option<(i64, T)>> {
+        // Public preflight reads have no Write owner yet. Fence actual SQL
+        // failure here; missing records and decode/business errors stay ordinary.
+        self.get_in(&self.db, kind, key)
+            .await
+            .map_err(|error| crate::storage::write::read_error(&self.storage_budget, error))
+    }
+
+    pub(crate) async fn get_in<T: DeserializeOwned>(
+        &self,
+        db: &impl ConnectionTrait,
+        kind: &str,
+        key: &str,
+    ) -> Result<Option<(i64, T)>> {
+        let row = records::Entity::find_by_id(self.id(kind, key)?)
+            .filter(service_scope())
+            .one(db)
+            .await?;
+        self.decode_record(kind, row)
+    }
+
+    fn decode_record<T: DeserializeOwned>(
+        &self,
+        kind: &str,
+        row: Option<records::Model>,
+    ) -> Result<Option<(i64, T)>> {
+        row.map(|row| {
+            ensure!(
+                row.scope_id == self.scope_id && row.kind == kind,
+                "gateway request record scope mismatch"
+            );
+            Ok((row.revision, serde_json::from_str(&row.body)?))
+        })
+        .transpose()
+    }
+
+    #[cfg(test)]
+    pub async fn list<T: DeserializeOwned>(&self, kind: &str) -> Result<Vec<(String, i64, T)>> {
+        records::Entity::find()
+            .filter(service_scope())
+            .filter(records::Column::ScopeId.eq(&self.scope_id))
+            .filter(records::Column::Kind.eq(kind))
+            .all(&self.db)
+            .await
+            .map_err(|error| crate::storage::write::read_error(&self.storage_budget, error.into()))?
+            .into_iter()
+            .map(|row| {
+                Ok((
+                    row.record_id,
+                    row.revision,
+                    serde_json::from_str(&row.body)?,
+                ))
+            })
+            .collect()
+    }
+
+    /// Returns the persisted first writer. The caller must validate immutable
+    /// request identity before treating an existing admission as a retry.
+    #[cfg(test)]
+    pub async fn initialize<T: Serialize + DeserializeOwned>(
+        &self,
+        kind: &str,
+        key: &str,
+        session_key: Option<String>,
+        body: &T,
+    ) -> Result<(i64, T)> {
+        if self.storage_budget.is_some() {
+            let (mut write, tx) = self.begin_write(false).await?;
+            let result = self
+                .initialize_charged(&mut write, &tx, kind, key, session_key, body)
+                .await;
+            return write.finish(tx, result).await;
+        }
+        self.initialize_in(&self.db, kind, key, session_key, body)
+            .await
+    }
+
+    pub(crate) async fn initialize_charged<T: Serialize + DeserializeOwned>(
+        &self,
+        write: &mut Write,
+        tx: &DatabaseTransaction,
+        kind: &str,
+        key: &str,
+        session_key: Option<String>,
+        body: &T,
+    ) -> Result<(i64, T)> {
+        write.account(&(&self.scope_id, kind, key, &session_key, body))?;
+        self.initialize_in(tx, kind, key, session_key, body).await
+    }
+
+    pub(crate) async fn save_charged<T: Serialize>(
+        &self,
+        write: &mut Write,
+        tx: &DatabaseTransaction,
+        row: records::Model,
+        body: &T,
+    ) -> Result<i64> {
+        write.replacement(&row, body)?;
+        self.save(tx, row, body).await
+    }
+
+    pub(crate) async fn initialize_in<T: Serialize + DeserializeOwned>(
+        &self,
+        db: &impl ConnectionTrait,
+        kind: &str,
+        key: &str,
+        session_key: Option<String>,
+        body: &T,
+    ) -> Result<(i64, T)> {
+        let statement = records::Entity::insert(records::ActiveModel {
+            record_id: Set(self.id(kind, key)?),
+            scope_id: Set(self.scope_id.clone()),
+            kind: Set(kind.into()),
+            session_key: Set(session_key),
+            revision: Set(0),
+            body: Set(serde_json::to_string(body)?),
+        });
+        insert(db, statement.into_query()).await?;
+        // A prior consistent read may predate the winning insert. Read the
+        // current locked row instead of that MySQL repeatable-read snapshot.
+        // https://dev.mysql.com/doc/refman/8.4/en/innodb-locking-reads.html
+        let row = records::Entity::find_by_id(self.id(kind, key)?)
+            .filter(service_scope())
+            .lock_exclusive()
+            .one(db)
+            .await?
+            .context("gateway request record missing after initialization")?;
+        ensure!(
+            row.scope_id == self.scope_id && row.kind == kind,
+            "gateway request record scope mismatch"
+        );
+        Ok((row.revision, serde_json::from_str(&row.body)?))
+    }
+
+    /// Locks the record on every supported backend. No network/model work may
+    /// execute in this closure. A stale caller cannot overwrite a newer epoch.
+    #[cfg(test)]
+    pub async fn update<T, R>(
+        &self,
+        kind: &str,
+        key: &str,
+        expected: i64,
+        change: impl FnOnce(&mut T) -> Result<R>,
+    ) -> Result<(i64, R)>
+    where
+        T: Serialize + DeserializeOwned,
+    {
+        self.update_with_maintenance(kind, key, expected, false, change)
+            .await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn update_with_maintenance<T, R>(
+        &self,
+        kind: &str,
+        key: &str,
+        expected: i64,
+        maintenance: bool,
+        change: impl FnOnce(&mut T) -> Result<R>,
+    ) -> Result<(i64, R)>
+    where
+        T: Serialize + DeserializeOwned,
+    {
+        let (mut write, tx) = self.begin_write(maintenance).await?;
+        let result = async {
+            let (row, mut body): (_, T) = self.lock_charged(&mut write, &tx, kind, key).await?;
+            ensure!(
+                row.revision == expected,
+                "gateway request generation changed; refresh before retrying"
+            );
+            let result = change(&mut body)?;
+            let revision = self.save_charged(&mut write, &tx, row, &body).await?;
+            Ok((revision, result))
+        }
+        .await;
+        write.finish(tx, result).await
+    }
+
+    /// Charge the bounded locked record before decoding or changing its settlement.
+    pub(crate) async fn lock_charged<T: DeserializeOwned>(
+        &self,
+        write: &mut Write,
+        tx: &DatabaseTransaction,
+        kind: &str,
+        key: &str,
+    ) -> Result<(records::Model, T)> {
+        if write.enabled() {
+            let row = records::Entity::find_by_id(self.id(kind, key)?)
+                .filter(service_scope())
+                .lock_exclusive()
+                .one(tx)
+                .await?
+                .context("gateway request record not found")?;
+            let previous = (
+                &row.record_id,
+                &row.scope_id,
+                &row.kind,
+                &row.session_key,
+                row.revision,
+                &row.body,
+            );
+            write.account(&(&previous, &previous))?;
+        }
+        self.lock(tx, kind, key).await
+    }
+
+    pub(crate) async fn lock<T: DeserializeOwned>(
+        &self,
+        tx: &DatabaseTransaction,
+        kind: &str,
+        key: &str,
+    ) -> Result<(records::Model, T)> {
+        let id = self.id(kind, key)?;
+        records::Entity::update_many()
+            .filter(service_scope())
+            .col_expr(
+                records::Column::Revision,
+                Expr::col(records::Column::Revision).into(),
+            )
+            .filter(records::Column::RecordId.eq(&id))
+            .exec(tx)
+            .await?;
+        // Retain the no-op write above for SQLite. MySQL must also read the
+        // current revision after locking, even if this transaction read earlier.
+        // https://dev.mysql.com/doc/refman/8.4/en/innodb-locking-reads.html
+        let row = records::Entity::find_by_id(&id)
+            .filter(service_scope())
+            .lock_exclusive()
+            .one(tx)
+            .await?
+            .context("gateway request record not found")?;
+        ensure!(
+            row.scope_id == self.scope_id && row.kind == kind,
+            "gateway request record scope mismatch"
+        );
+        let body = serde_json::from_str(&row.body)?;
+        Ok((row, body))
+    }
+
+    pub(crate) async fn save<T: Serialize>(
+        &self,
+        tx: &DatabaseTransaction,
+        row: records::Model,
+        body: &T,
+    ) -> Result<i64> {
+        ensure!(
+            row.scope_id == self.scope_id,
+            "gateway request record scope mismatch"
+        );
+        let revision = row
+            .revision
+            .checked_add(1)
+            .context("gateway request generation overflow")?;
+        let updated = records::Entity::update_many()
+            .filter(service_scope())
+            .filter(records::Column::RecordId.eq(&row.record_id))
+            .filter(records::Column::ScopeId.eq(&self.scope_id))
+            .filter(records::Column::Revision.eq(row.revision))
+            .col_expr(records::Column::Revision, Expr::value(revision))
+            .col_expr(
+                records::Column::Body,
+                Expr::value(serde_json::to_string(body)?),
+            )
+            .exec(tx)
+            .await?;
+        ensure!(
+            updated.rows_affected == 1,
+            "gateway request record changed before save"
+        );
+        Ok(revision)
+    }
+}
+
+use sea_orm::sea_query::{Alias, Condition};
+
+fn service_scope() -> Condition {
+    let mut condition = Condition::all();
+    for column in ["installation_id", "tenant_id", "creator_principal_id"] {
+        condition = condition
+            .add(Expr::col((Alias::new("gateway_request_records"), Alias::new(column))).is_null());
+    }
+    condition
+}
+
+/// Conflict-safe insert without a MySQL self-update of a foreign occupied key.
+/// Callers reload only service-owned rows and validate the request identity.
+/// https://dev.mysql.com/doc/refman/8.4/en/innodb-error-handling.html
+/// https://www.postgresql.org/docs/current/sql-insert.html#SQL-ON-CONFLICT
+/// https://sqlite.org/lang_upsert.html
+async fn insert(
+    db: &impl sea_orm::ConnectionTrait,
+    mut statement: sea_orm::sea_query::InsertStatement,
+) -> Result<(), sea_orm::DbErr> {
+    use sea_orm::{DatabaseBackend, SqlErr};
+    let backend = db.get_database_backend();
+    if backend != DatabaseBackend::MySql {
+        statement.on_conflict(
+            sea_orm::sea_query::OnConflict::new()
+                .do_nothing()
+                .to_owned(),
+        );
+    }
+    match db.execute(backend.build(&statement)).await {
+        Ok(_) => Ok(()),
+        Err(error)
+            if backend == DatabaseBackend::MySql
+                && matches!(error.sql_err(), Some(SqlErr::UniqueConstraintViolation(_))) =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(test)]
+mod tests;
+
+#[cfg(all(test, feature = "db-mysql"))]
+mod mysql_tests {
+    use super::*;
+    use sea_orm::{IsolationLevel, TransactionTrait};
+    use serde_json::{Value, json};
+
+    async fn test_database() -> Result<DatabaseConnection> {
+        let url = std::env::var("BITROUTER_TEST_DATABASE_URL")
+            .context("set BITROUTER_TEST_DATABASE_URL to a dedicated MySQL test database")?;
+        let parsed = url::Url::parse(&url)?;
+        ensure!(
+            parsed.scheme() == "mysql" && !parsed.path().trim_matches('/').is_empty(),
+            "this regression requires an explicitly named MySQL test database"
+        );
+        let db = crate::db::connect(&url).await?;
+        crate::db::run_migrations(&db).await?;
+        Ok(db)
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a dedicated MySQL BITROUTER_TEST_DATABASE_URL"]
+    async fn initialization_reads_the_winner_after_an_older_snapshot() -> Result<()> {
+        let db = test_database().await?;
+        let result = async {
+            let owner = format!("mysql-initialize-{}", uuid::Uuid::new_v4());
+            let store = GatewayRecords::new(db.clone(), &owner)?;
+            let reader = db
+                .begin_with_config(Some(IsolationLevel::RepeatableRead), None)
+                .await?;
+            ensure!(
+                store
+                    .get_in::<Value>(&reader, "snapshot", "record")
+                    .await?
+                    .is_none()
+            );
+            let winner = json!({"value": "first writer"});
+            store
+                .initialize("snapshot", "record", None, &winner)
+                .await?;
+            let observed = store
+                .initialize_in(
+                    &reader,
+                    "snapshot",
+                    "record",
+                    None,
+                    &json!({"value": "retry"}),
+                )
+                .await?;
+            ensure!(
+                observed == (0, winner),
+                "initialization read an obsolete snapshot"
+            );
+            reader.rollback().await?;
+            Ok::<(), anyhow::Error>(())
+        }
+        .await;
+        let closed = db.close().await;
+        result?;
+        closed?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a dedicated MySQL BITROUTER_TEST_DATABASE_URL"]
+    async fn locked_record_reads_the_current_revision_after_an_older_snapshot() -> Result<()> {
+        let db = test_database().await?;
+        let result = async {
+            let owner = format!("mysql-lock-{}", uuid::Uuid::new_v4());
+            let store = GatewayRecords::new(db.clone(), &owner)?;
+            store
+                .initialize("snapshot", "record", None, &json!({"revision": 0}))
+                .await?;
+            let reader = db
+                .begin_with_config(Some(IsolationLevel::RepeatableRead), None)
+                .await?;
+            ensure!(
+                store.get_in::<Value>(&reader, "snapshot", "record").await?
+                    == Some((0, json!({"revision": 0})))
+            );
+            store
+                .update("snapshot", "record", 0, |body: &mut Value| {
+                    *body = json!({"revision": 1});
+                    Ok(())
+                })
+                .await?;
+            let (row, mut body) = store.lock::<Value>(&reader, "snapshot", "record").await?;
+            ensure!(
+                row.revision == 1 && body == json!({"revision": 1}),
+                "locked record read an obsolete revision"
+            );
+            body["reader"] = true.into();
+            ensure!(store.save(&reader, row, &body).await? == 2);
+            reader.commit().await?;
+            ensure!(
+                store.get::<Value>("snapshot", "record").await? == Some((2, body)),
+                "saving the locked record lost the concurrent writer's state"
+            );
+            Ok::<(), anyhow::Error>(())
+        }
+        .await;
+        let closed = db.close().await;
+        result?;
+        closed?;
+        Ok(())
+    }
+}

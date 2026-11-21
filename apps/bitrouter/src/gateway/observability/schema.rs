@@ -15,6 +15,7 @@ use serde::Serialize;
 /// release bump, turning a guard that should be silent into routine noise. The
 /// crate version reaches the wire through the instrumentation scope instead
 /// (see [`SpanSchema::scope_version`]).
+#[cfg(test)]
 const SCHEMA_VERSION: &str = "3";
 
 /// Attribute-key prefixes this schema owns outright. See [`ExtensionRegion`].
@@ -115,6 +116,7 @@ pub struct SpanDef {
 }
 
 /// Metric instrument kind.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Instrument {
@@ -127,6 +129,7 @@ pub enum Instrument {
 }
 
 /// One metric instrument and the dimensions it is recorded with.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct MetricDef {
     /// Instrument name, verbatim.
@@ -162,6 +165,7 @@ pub struct MetricDef {
 /// [`is_reserved_attribute_key`]). A validated list would have to grow for
 /// every deployment-specific attribute, which is exactly the coupling
 /// `SpanAttributes` exists to avoid.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct ExtensionRegion {
     /// The pipeline event that carries extension attributes.
@@ -181,6 +185,7 @@ pub struct ExtensionRegion {
 
 /// A rule that a re-implementation can break without any error surfacing —
 /// the class this whole declaration exists for.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct Invariant {
     /// Stable slug, so a review comment can name one.
@@ -192,6 +197,7 @@ pub struct Invariant {
 }
 
 /// The whole declaration.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct SpanSchema {
     /// Version of the declaration, bumped when a consumer would have to react.
@@ -201,9 +207,7 @@ pub struct SpanSchema {
     pub scope_name: &'static str,
     /// Instrumentation scope version. A placeholder rather than a literal so
     /// this artifact does not churn on every release; the emitted value is
-    /// the rendering crate's own version — `bitrouter-telemetry`'s for the
-    /// OTLP exporter. The workspace releases in lockstep, so this reads the
-    /// same as `bitrouter-sdk`'s; do not depend on that.
+    /// the rendering crate's own version — `bitrouter`'s for the OTLP exporter.
     pub scope_version: &'static str,
     /// OTel resource attributes stamped once per exporter, not per span.
     pub resource_attributes: &'static [AttrDef],
@@ -221,6 +225,7 @@ pub struct SpanSchema {
 }
 
 /// The declaration itself.
+#[cfg(test)]
 pub const SCHEMA: SpanSchema = SpanSchema {
     schema_version: SCHEMA_VERSION,
     scope_name: "io.bitrouter.observe",
@@ -233,6 +238,7 @@ pub const SCHEMA: SpanSchema = SpanSchema {
     invariants: INVARIANTS,
 };
 
+#[cfg(test)]
 const RESOURCE_ATTRIBUTES: &[AttrDef] = &[
     AttrDef {
         key: "service.name",
@@ -256,8 +262,6 @@ const SPANS: &[SpanDef] = &[
     HOP_CHAT_SPAN,
     HOP_DECISIONS_SPAN,
     SETTLE_SPAN,
-    INVOKE_AGENT_SPAN,
-    EXECUTE_TOOL_SPAN,
 ];
 
 /// HTTP ingress. Emitted by the host's inbound layer, not by the exporter, so
@@ -782,100 +786,6 @@ const SETTLE_SPAN: SpanDef = SpanDef {
     events: &[],
 };
 
-/// One completed agent turn on the ACP path.
-const INVOKE_AGENT_SPAN: SpanDef = SpanDef {
-    name: "invoke_agent {gen_ai.agent.name}",
-    kind: SpanKind::Internal,
-    parent: "A trace root. ACP session updates carry no causal parent ids.",
-    note: "Emitted once per completed prompt turn, back-dated by the turn latency so its \
-           duration is real.",
-    attributes: &[
-        AttrDef {
-            key: "gen_ai.operation.name",
-            ty: AttrType::String,
-            requirement: Requirement::Required,
-            note: "Always `invoke_agent` on this span.",
-        },
-        AttrDef {
-            key: "gen_ai.agent.name",
-            ty: AttrType::String,
-            requirement: Requirement::Required,
-            note: "Configured agent id.",
-        },
-        AttrDef {
-            key: "gen_ai.conversation.id",
-            ty: AttrType::String,
-            requirement: Requirement::Required,
-            note: "The session's stable record id. Also the join key to the HTTP plane: when the \
-                   agent routes its model calls through BitRouter, one backend sees both the \
-                   agent turns and the `chat` generations they caused.",
-        },
-        AttrDef {
-            key: "bitrouter.stop_reason",
-            ty: AttrType::String,
-            requirement: Requirement::Required,
-            note: "Turn stop reason, rendered as a string.",
-        },
-        AttrDef {
-            key: "bitrouter.context.used",
-            ty: AttrType::Int,
-            requirement: Requirement::Conditional,
-            note: "Context-window occupancy, when the upstream reported usage. See the \
-                   `occupancy-is-not-usage` invariant.",
-        },
-        AttrDef {
-            key: "bitrouter.context.size",
-            ty: AttrType::Int,
-            requirement: Requirement::Conditional,
-            note: "Context-window size, when the upstream reported it.",
-        },
-    ],
-    events: &[],
-};
-
-/// One terminally-reported tool call on the ACP path.
-const EXECUTE_TOOL_SPAN: SpanDef = SpanDef {
-    name: "execute_tool {gen_ai.tool.name}",
-    kind: SpanKind::Internal,
-    parent: "A trace root — a *sibling* of the turn span, not a child. ACP session updates carry \
-             no causal parent ids, so correlation runs through `gen_ai.conversation.id`.",
-    note: "Emitted when a tool call reports a terminal status. A tool that never finishes emits \
-           no span.",
-    attributes: &[
-        AttrDef {
-            key: "gen_ai.operation.name",
-            ty: AttrType::String,
-            requirement: Requirement::Required,
-            note: "Always `execute_tool` on this span.",
-        },
-        AttrDef {
-            key: "gen_ai.tool.name",
-            ty: AttrType::String,
-            requirement: Requirement::Required,
-            note: "Tool title when the update carried one, else the tool call id.",
-        },
-        AttrDef {
-            key: "gen_ai.conversation.id",
-            ty: AttrType::String,
-            requirement: Requirement::Required,
-            note: "Correlates the tool call with its turn.",
-        },
-        AttrDef {
-            key: "gen_ai.agent.name",
-            ty: AttrType::String,
-            requirement: Requirement::Required,
-            note: "Configured agent id.",
-        },
-        AttrDef {
-            key: "error.type",
-            ty: AttrType::String,
-            requirement: Requirement::Conditional,
-            note: "`tool_failed` when the tool reported failure.",
-        },
-    ],
-    events: &[],
-};
-
 const EXCEPTION_EVENT: EventDef = EventDef {
     name: "exception",
     note: "OTel exception semconv. Carries the human-readable message that deliberately stays \
@@ -908,13 +818,14 @@ const TOOL_CALL_STARTED_EVENT: EventDef = EventDef {
 };
 
 /// Dimensions carried by every request-scoped metric point.
+#[cfg(test)]
 const BASE_METRIC_DIMENSIONS: &[AttrDef] = &[
     AttrDef {
         key: "api_key_id",
         ty: AttrType::String,
         requirement: Requirement::Required,
         note: "Calling key's id, replaced by an overflow sentinel once the configured cardinality \
-               cap is reached. Unprefixed for historical reasons — frozen, not exemplary.",
+               cap is reached. This counter uses the documented unprefixed metric name.",
     },
     AttrDef {
         key: "user_id",
@@ -948,6 +859,7 @@ const BASE_METRIC_DIMENSIONS: &[AttrDef] = &[
     },
 ];
 
+#[cfg(test)]
 const METRICS: &[MetricDef] = &[
     MetricDef {
         name: "bitrouter.receipt.capacity.bytes",
@@ -1088,6 +1000,7 @@ const METRICS: &[MetricDef] = &[
     },
 ];
 
+#[cfg(test)]
 const TOKEN_USAGE_DIMENSIONS: &[AttrDef] = &[
     AttrDef {
         key: "api_key_id",
@@ -1133,6 +1046,7 @@ const TOKEN_USAGE_DIMENSIONS: &[AttrDef] = &[
     },
 ];
 
+#[cfg(test)]
 const EXTENSION_REGION: ExtensionRegion = ExtensionRegion {
     carrier: "observe.span_attributes",
     target_span: "chat {gen_ai.request.model} or decisions {gen_ai.request.model}",
@@ -1147,6 +1061,7 @@ const EXTENSION_REGION: ExtensionRegion = ExtensionRegion {
                  target.",
 };
 
+#[cfg(test)]
 const INVARIANTS: &[Invariant] = &[
     Invariant {
         id: "single-generation",
@@ -1156,14 +1071,6 @@ const INVARIANTS: &[Invariant] = &[
         failure: "A gen_ai-aware backend renders any span carrying `gen_ai.*` as its own \
                   generation. Stamping a hop makes it count two generations per request and \
                   double the reported cost. Nothing errors; the bill is just wrong.",
-    },
-    Invariant {
-        id: "occupancy-is-not-usage",
-        rule: "ACP agent spans never carry `gen_ai.usage.*`. Context-window occupancy rides \
-               `bitrouter.context.used` / `bitrouter.context.size` instead.",
-        failure: "The substrate reports occupancy, not per-turn deltas. Writing occupancy into \
-                  the token attributes corrupts every token dashboard built on them, and the \
-                  numbers look plausible.",
     },
     Invariant {
         id: "gateway-observable-ids",
@@ -1225,7 +1132,7 @@ pub fn is_reserved_attribute_key(key: &str) -> bool {
 /// every gate while `span-schema.json` kept promising `int` to anyone
 /// implementing against it.
 ///
-#[cfg(test)]
+#[cfg(all(test, any(feature = "otel-http", feature = "otel-grpc")))]
 pub fn value_type_matches(declared: AttrType, observed: &str) -> bool {
     matches!(
         (declared, observed),
@@ -1298,21 +1205,13 @@ mod tests {
 
     #[test]
     fn the_committed_artifact_matches_the_declaration() -> Result<(), Box<dyn std::error::Error>> {
-        // The diff-in-CI half of the guard. It rides the ordinary test job
-        // rather than a bespoke one: `cargo nextest run --all-features` is
-        // already what CI and CLAUDE.md run, and a schema artifact nobody
-        // regenerates is worse than no artifact at all. It runs under the
-        // crate's DEFAULT features — this module is behind no gate, and a
-        // staleness guard that only fires under `--all-features` would let the
-        // artifact rot in every other build.
+        // Unit tests include the declaration even without an OTLP transport,
+        // so the ordinary test job checks artifact freshness in every feature
+        // configuration.
         //
-        // Not under `dist/`, and the reason has changed. It used to be that
-        // rendering from `dist-helper` would drag the whole OpenTelemetry
-        // stack into that helper's tree, which `feature-isolation` forbids by
-        // name; with the declaration ungated and dependency-free that
-        // objection is gone. What remains is placement: this artifact IS the
-        // interop surface and ships with the contract crate rather than in
-        // a tree of build outputs.
+        // This gateway-owned artifact lives beside the application manifest.
+        // It describes the gateway's telemetry interop surface; exporter
+        // conformance tests check emitted spans against this declaration.
         let path = artifact_path();
         let rendered = render_json()?;
 
@@ -1399,9 +1298,7 @@ mod tests {
             let is_root_generation = (span.name.starts_with("chat ")
                 || span.name.starts_with("decisions "))
                 && span.kind == SpanKind::Internal;
-            let is_agent_span =
-                span.name.starts_with("invoke_agent ") || span.name.starts_with("execute_tool ");
-            if is_root_generation || is_agent_span {
+            if is_root_generation {
                 continue;
             }
             for attr in span.attributes {

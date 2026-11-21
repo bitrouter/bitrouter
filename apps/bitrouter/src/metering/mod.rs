@@ -22,11 +22,8 @@
 
 pub mod db;
 pub mod entities;
-mod native_cost;
-mod native_settlement;
 pub mod pricing;
 pub mod reader;
-pub mod reconciliation;
 pub mod recorder;
 #[cfg(feature = "multi-instance")]
 pub(crate) mod shared;
@@ -39,17 +36,9 @@ mod tests;
 #[cfg(test)]
 mod decisions_tests;
 
-pub use db::{ReconciliationStatus, RequestMetric};
-pub use pricing::{
-    ChargeEvidence, ChargeStatus, ContextTier, EffectivePricingRates, ModelPricing, PricingSource,
-    PricingTable, calculate_charge_evidence, calculate_charge_micro_usd,
-};
-pub use reconciliation::{ReconciliationSummary, reconcile_requests};
+pub use pricing::{ModelPricing, PricingTable};
 pub use recorder::{MeteringRecorder, MeteringSettlementEvent};
-pub use store::{
-    MeteringStore, MeteringUsageRecord, RateMetrics, ReconciliationRecord, TimeWindow, TokenUsage,
-    UsagePriceOverride,
-};
+pub use store::{MeteringStore, TimeWindow};
 
 /// Render micro-USD for the agent-facing cost surfaces (`status --agent`
 /// spend recap, the MCP tool-result footer, the `spawn` exit summary):

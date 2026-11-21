@@ -17,7 +17,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::native_auth::{is_continuation_scope_header, request_scope_headers};
-use super::provider_admission::output_reservation_covers_model;
 use crate::gateway::error::{BitrouterError, Result};
 use crate::gateway::model::client::{HttpTimeouts, ModelClient, parse_retry_after};
 use crate::gateway::model::protocol::decisions::{DecisionsCodec, DecisionsTransport};
@@ -31,11 +30,12 @@ use crate::gateway::providers::auth::{
     AppliedAuth, AuthAppliers, AuthOperation, ContinuationAuthority, CredentialAuthority,
     normalize_auth_extension_error,
 };
-use bitrouter_ai::decisions::{DecisionRequest, DecisionResult};
+use bitrouter_ai::decisions::DecisionRequest;
+#[cfg(test)]
+use bitrouter_ai::decisions::DecisionResult;
 use bitrouter_ai::types::{ApiProtocol, GenerateResult, Prompt, StreamPart};
 
 mod generate_content;
-pub(crate) mod input_count;
 pub(super) mod receipt;
 mod response_body;
 mod shared;
@@ -44,29 +44,7 @@ pub(crate) mod tenancy;
 
 use stream_bridge::BridgeCapture;
 
-/// Request-local terminal capture for controlled streaming. The HTTP executor
-/// retains full Responses output privately until the collected attempt settles.
-#[derive(Default)]
-pub(super) struct NativeStreamCapture(Mutex<Option<Arc<BridgeCapture>>>);
-
-use super::native_continuation::NativeContinuationPlan;
-use super::native_work::{self, NativeProviderWorkKind};
-use crate::managed_contract::evidence::{ContinuationFailure, NativeContinuationInput};
-
-fn native_continuation_plan(
-    target: &RoutingTarget,
-    prompt: &Prompt,
-    ctx: &PipelineContext,
-) -> Result<Option<NativeContinuationPlan>> {
-    ctx.extension::<super::native_context::NativePrivateContextRuntime>()
-        .map(|runtime| {
-            runtime
-                .continuation_plan(prompt, ctx.caller(), target)
-                .map_err(crate::gateway::pipeline::native_continuation::continuation_error)
-        })
-        .transpose()
-}
-
+/// Record pricing admission and physical dispatch for a native attempt.
 fn record_native_dispatch(
     prompt: &Prompt,
     target: &RoutingTarget,
@@ -76,17 +54,7 @@ fn record_native_dispatch(
     if let Some(attempts) = ctx.get_event::<crate::metering::tariff::RegistryPhysicalAttempts>() {
         attempts.dispatched(target.registry.is_some());
     }
-    if let Some(runtime) = ctx.extension::<super::native_context::NativePrivateContextRuntime>() {
-        let plan = runtime
-            .continuation_plan(prompt, ctx.caller(), target)
-            .map_err(crate::gateway::pipeline::native_continuation::continuation_error)?;
-        runtime.dispatched(
-            &plan
-                .execution_prompt(prompt)
-                .map_err(crate::gateway::pipeline::native_continuation::continuation_error)?,
-        );
-        runtime.continuation_dispatched(&plan);
-    }
+
     Ok(())
 }
 
@@ -141,57 +109,6 @@ pub trait Executor: Send + Sync {
             super::types::generate_content::Input::unavailable(&target.api_protocol)
         })?;
         self.execute_stream(target, prompt, ctx).await
-    }
-
-    /// Complete a collected managed stream using protocol-native terminal
-    /// evidence. This callback is local: it must perform no I/O or retry.
-    /// The default preserves the canonical parts emitted by custom executors.
-    fn finish_native_stream(
-        &self,
-        _target: &RoutingTarget,
-        _prompt: &Prompt,
-        _ctx: &PipelineContext,
-        collected: GenerateResult,
-    ) -> Result<GenerateResult> {
-        Ok(collected)
-    }
-    /// Pure local assessment, distinct from actual generation dispatch evidence.
-    fn native_continuation(
-        &self,
-        _target: &RoutingTarget,
-        _prompt: &Prompt,
-        _ctx: &PipelineContext,
-    ) -> NativeContinuationInput {
-        NativeContinuationInput::Unknown
-    }
-    /// Pure local assessment before counting or admission. Implementations must
-    /// not perform provider/auth I/O, consume a response or modify the request.
-    fn native_protocol_validation(
-        &self,
-        _target: &RoutingTarget,
-        _prompt: &Prompt,
-        _ctx: &PipelineContext,
-    ) -> crate::managed_contract::evidence::NativeProtocolValidation {
-        Default::default()
-    }
-
-    /// Count the exact managed input when explicitly configured. Unsupported
-    /// executors fail that candidate rather than claim a known capacity fit.
-    async fn count_input_tokens(
-        &self,
-        _target: &RoutingTarget,
-        _prompt: &Prompt,
-        _ctx: &PipelineContext,
-    ) -> Result<crate::managed_contract::evidence::NativeInputCount> {
-        Err(BitrouterError::bad_request(
-            "input token counting is unsupported",
-        ))
-    }
-
-    /// Whether this executor/target is known to preserve output-token limits.
-    /// Unknown implementations retain `None`, never an asserted guarantee.
-    fn output_token_limit_support(&self, _target: &RoutingTarget) -> Option<bool> {
-        None
     }
 
     /// Execute a non-streaming request against `target`.
@@ -265,6 +182,7 @@ pub trait Executor: Send + Sync {
 }
 
 /// One canned upstream response for `MockExecutor`.
+#[cfg(test)]
 pub enum MockResponse {
     /// A successful non-streaming result.
     Generate(GenerateResult),
@@ -278,10 +196,12 @@ pub enum MockResponse {
 
 /// A scriptable executor for tests. Each call pops the next scripted response
 /// (keyed by provider name when scripted per-provider, else from a flat queue).
+#[cfg(test)]
 pub struct MockExecutor {
     queue: Mutex<Vec<MockResponse>>,
 }
 
+#[cfg(test)]
 impl MockExecutor {
     /// Build an executor that will serve `responses` in order.
     pub fn new(responses: Vec<MockResponse>) -> Self {
@@ -322,6 +242,7 @@ impl MockExecutor {
 }
 
 #[async_trait]
+#[cfg(test)]
 impl Executor for MockExecutor {
     async fn execute(
         &self,
@@ -337,6 +258,7 @@ impl Executor for MockExecutor {
                 result: result.into(),
                 request_duration_ms: 1,
                 upstream_duration_ms: Some(1),
+                #[cfg(feature = "server-tools")]
                 server_tool_calls: Vec::new(),
             }),
             MockResponse::Stream(_) | MockResponse::Decisions(_) => Err(BitrouterError::internal(
@@ -391,6 +313,7 @@ impl Executor for MockExecutor {
                 result: result.into(),
                 request_duration_ms: 1,
                 upstream_duration_ms: Some(1),
+                #[cfg(feature = "server-tools")]
                 server_tool_calls: Vec::new(),
             }),
             MockResponse::Error(error) => Err(error),
@@ -635,62 +558,6 @@ fn apply_provider_continuation(
         });
     }
 
-    if let Some(plan) = native_continuation_plan(target, ctx.require_generation_prompt()?, ctx)? {
-        if ctx.extension::<ProviderContinuation>().is_some()
-            || ctx.extension::<SuppressProviderContinuation>().is_some()
-        {
-            return Err(
-                crate::gateway::pipeline::native_continuation::continuation_error(
-                    ContinuationFailure::BindingChanged,
-                ),
-            );
-        }
-        match plan {
-            NativeContinuationPlan::Resume(binding) => {
-                if target.api_protocol != ApiProtocol::Responses
-                    || body
-                        .get("previous_response_id")
-                        .and_then(serde_json::Value::as_str)
-                        != Some(binding.response_id())
-                    || body
-                        .get("reasoning")
-                        .and_then(|reasoning| reasoning.get("effort"))
-                        .cloned()
-                        .unwrap_or(serde_json::Value::Null)
-                        != serde_json::to_value(
-                            ctx.require_generation_prompt()?.params.reasoning_effort,
-                        )
-                        .map_err(|_| {
-                            crate::gateway::pipeline::native_continuation::continuation_error(
-                                ContinuationFailure::BindingChanged,
-                            )
-                        })?
-                {
-                    return Err(
-                        crate::gateway::pipeline::native_continuation::continuation_error(
-                            ContinuationFailure::BindingChanged,
-                        ),
-                    );
-                }
-                return Ok(Some(ProviderContinuationSubstitution {
-                    native: binding.response_id().to_owned(),
-                    public_or_redacted: "[redacted provider continuation]".into(),
-                }));
-            }
-            NativeContinuationPlan::FullHistory(_) => {
-                if body
-                    .get("previous_response_id")
-                    .is_some_and(|value| !value.is_null())
-                {
-                    return Err(
-                        crate::gateway::pipeline::native_continuation::continuation_error(
-                            ContinuationFailure::BindingChanged,
-                        ),
-                    );
-                }
-            }
-        }
-    }
     if ctx.extension::<SuppressProviderContinuation>().is_some() {
         if target.api_protocol != ApiProtocol::Responses {
             return Err(BitrouterError::internal(
@@ -749,11 +616,6 @@ fn validate_continuation_authority(
         return runtime.authenticated(target, ctx, actual);
     }
 
-    if let Some(runtime) = ctx.extension::<super::native_context::NativePrivateContextRuntime>() {
-        runtime
-            .validate_continuation_authority(ctx, target, actual)
-            .map_err(crate::gateway::pipeline::native_continuation::continuation_error)?;
-    }
     if target.api_protocol == ApiProtocol::Responses
         && ctx.extension::<RequireContinuationAuthority>().is_some()
         && actual.is_none()
@@ -830,7 +692,6 @@ struct RequestBuildInput<'a> {
     client: &'a ModelClient,
     url: &'a str,
     body: &'a serde_json::Value,
-    managed_expected: Option<&'a serde_json::Value>,
     target: &'a RoutingTarget,
     transport: &'a Arc<dyn crate::gateway::model::protocol::Transport>,
     ctx: &'a PipelineContext,
@@ -975,6 +836,7 @@ impl HttpExecutor {
     /// Replace the global/per-provider timeout clients in-place. Existing
     /// in-flight requests keep the cloned client they already selected; new
     /// requests use the freshly built set.
+    #[cfg(test)]
     pub fn reload_provider_timeouts(
         &self,
         default_timeouts: HttpTimeouts,
@@ -1034,6 +896,7 @@ impl HttpExecutor {
     }
 
     /// Build an executor with default timeouts and the built-in dispatch.
+    #[cfg(test)]
     pub fn with_defaults() -> Result<Self> {
         Self::new(HttpTimeouts::default())
     }
@@ -1183,130 +1046,23 @@ impl HttpExecutor {
                 .render(&target.service_id, stream)
                 .map(|body| (body, Default::default()));
         }
-        let plan = native_continuation_plan(target, prompt, ctx)?;
-        let mut upstream = match plan.as_ref() {
-            Some(plan) => plan
-                .execution_prompt(prompt)
-                .map_err(crate::gateway::pipeline::native_continuation::continuation_error)?,
-            None => prompt.clone(),
-        };
+        let mut upstream = prompt.clone();
         upstream.model = target.service_id.clone();
         upstream.stream = stream;
-        let (mut body, report) = if let Some(runtime) =
-            ctx.extension::<super::native_context::NativePrivateContextRuntime>()
-        {
-            runtime
-                .validate_history(ctx)
-                .map_err(crate::gateway::pipeline::native_context::private_context_error)?;
-            runtime
-                .validate_target(prompt, ctx, target)
-                .map_err(crate::gateway::pipeline::native_context::private_context_error)?;
-            adapter.render_managed_request_for_target(&upstream, &target.model_target())?
-        } else {
-            let report = adapter.admission(&upstream);
-            report.require_admitted()?;
-            (
-                adapter.render_request_for_target(&upstream, &target.model_target())?,
-                report,
-            )
-        };
-        if let Some(NativeContinuationPlan::Resume(binding)) = plan {
-            if body
-                .get("previous_response_id")
-                .is_some_and(|value| !value.is_null())
-            {
-                return Err(
-                    crate::gateway::pipeline::native_continuation::continuation_error(
-                        ContinuationFailure::BindingChanged,
-                    ),
-                );
-            }
-            body.as_object_mut()
-                .ok_or_else(|| {
-                    crate::gateway::pipeline::native_continuation::continuation_error(
-                        ContinuationFailure::BindingChanged,
-                    )
-                })?
-                .insert("previous_response_id".into(), binding.response_id().into());
-        }
+        let report = adapter.admission(&upstream);
+        report.require_admitted()?;
+        let body = adapter.render_request_for_target(&upstream, &target.model_target())?;
         if let Some(execution) = tenancy::execution(ctx) {
             execution.validate_native_controls_body(prompt, target, &body)?;
         }
         Ok((body, report))
     }
 
-    fn managed_expected_body(
-        &self,
-        rendered: &serde_json::Value,
-        target: &RoutingTarget,
-        ctx: &PipelineContext,
-    ) -> Result<Option<serde_json::Value>> {
-        if ctx
-            .extension::<crate::gateway::pipeline::native::NativeManagedRequest>()
-            .is_none()
-        {
-            return Ok(None);
-        }
-        self.prepare_managed_baseline(rendered, target, ctx)
-            .map(Some)
-            .map_err(|reason| {
-                BitrouterError::bad_request(format!("managed protocol validation failed: {reason}"))
-            })
-    }
-
-    fn prepare_managed_baseline(
-        &self,
-        rendered: &serde_json::Value,
-        target: &RoutingTarget,
-        ctx: &PipelineContext,
-    ) -> std::result::Result<serde_json::Value, &'static str> {
-        let mut expected = rendered.clone();
-        if !Self::shape_owned_request_body(&mut expected, target, ctx)
-            .map_err(|_| "provider_body_normalization_failed")?
-            && let Some(applier) = self.auth_applier(target)
-        {
-            applier
-                .normalize_managed_body(&mut expected, &target.model_target())
-                .map_err(|_| "provider_body_normalization_failed")?;
-        }
-        if expected
-            .get("previous_response_id")
-            .is_some_and(|value| !value.is_null())
-            && ctx.extension::<ProviderContinuation>().is_none()
-            && ctx.extension::<SuppressProviderContinuation>().is_none()
-            && !matches!(
-                native_continuation_plan(
-                    target,
-                    ctx.generation_prompt()
-                        .ok_or("managed_generation_required")?,
-                    ctx
-                ),
-                Ok(Some(NativeContinuationPlan::Resume(_)))
-            )
-        {
-            return Err("provider_continuation_unbound");
-        }
-        apply_provider_continuation(&mut expected, target, ctx)
-            .map_err(|_| "provider_continuation_incompatible")?;
-        let (adapter, _) = self
-            .dispatch
-            .lookup(&target.api_protocol)
-            .ok_or("outbound_adapter_unavailable")?;
-        adapter.validate_managed_body(&expected, &expected, &target.model_target())?;
-        Ok(expected)
-    }
-
     async fn build_authenticated_request(
         &self,
         input: &RequestBuildInput<'_>,
     ) -> Result<tenancy::AuthenticatedRequest> {
-        native_work::observe(
-            input.ctx,
-            NativeProviderWorkKind::Authentication,
-            self.build_authenticated_request_inner(input),
-            |_| None,
-        )
-        .await
+        self.build_authenticated_request_inner(input).await
     }
 
     async fn build_authenticated_request_inner(
@@ -1358,8 +1114,6 @@ impl HttpExecutor {
         }
         let credential_authority =
             credential_authority.map(|authority| authority.with_request_scope(&scope));
-        let credential_authority =
-            tenancy::native::bind_headers(credential_authority, &request, input.target, input.ctx);
         let credential_authority = tenancy::http_continuation::bind_headers(
             credential_authority,
             &request,
@@ -1371,99 +1125,6 @@ impl HttpExecutor {
             &request,
             &input.target.model_target(),
         )?;
-        if input
-            .ctx
-            .extension::<crate::gateway::pipeline::native::NativeManagedRequest>()
-            .is_some()
-        {
-            let expected_url = reqwest::Url::parse(input.url)
-                .map_err(|_| BitrouterError::bad_request("managed endpoint unavailable"))?;
-            if request.url() != &expected_url {
-                return Err(BitrouterError::bad_request(
-                    "managed authentication changed endpoint",
-                ));
-            }
-            if let Some(runtime) = input
-                .ctx
-                .extension::<super::native_context::NativePrivateContextRuntime>()
-            {
-                runtime
-                    .validate_authority(input.ctx, input.target, credential_authority.as_ref())
-                    .map_err(crate::gateway::pipeline::native_context::private_context_error)?;
-            }
-            let expected = input.managed_expected.ok_or_else(|| {
-                BitrouterError::bad_request("managed request baseline unavailable")
-            })?;
-            let (adapter, _) = self
-                .dispatch
-                .lookup(&input.target.api_protocol)
-                .ok_or_else(|| Self::no_dispatch_error(input.target))?;
-            let bytes = request
-                .body()
-                .and_then(reqwest::Body::as_bytes)
-                .ok_or_else(|| BitrouterError::bad_request("managed request body unavailable"))?;
-            let actual = serde_json::from_slice(bytes)
-                .map_err(|_| BitrouterError::bad_request("managed request body is not JSON"))?;
-            adapter
-                .validate_managed_body(expected, &actual, &input.target.model_target())
-                .map_err(|reason| {
-                    BitrouterError::bad_request(format!(
-                        "managed protocol validation failed: {reason}"
-                    ))
-                })?;
-        }
-        if let Some(reservation) = input
-            .ctx
-            .extension::<crate::gateway::pipeline::native::NativeOutputReservation>(
-        ) {
-            let (adapter, _) = self
-                .dispatch
-                .lookup(&input.target.api_protocol)
-                .ok_or_else(|| {
-                    BitrouterError::bad_request(
-                        "managed output reservation cannot be verified for this protocol",
-                    )
-                })?;
-            let bytes = request
-                .body()
-                .and_then(reqwest::Body::as_bytes)
-                .ok_or_else(|| {
-                    BitrouterError::bad_request(
-                        "managed output reservation requires a verifiable request body",
-                    )
-                })?;
-            let body = serde_json::from_slice(bytes)
-                .map_err(|_| BitrouterError::bad_request("managed request body is not JSON"))?;
-            let wire_limit = adapter.output_token_limit(&body)?;
-            // Subscription transports may explicitly reject request-level caps.
-            // Only absence, declared non-support and a sufficient model ceiling
-            // permit this alternative; an altered cap is still a shaping error.
-            let model_bound = wire_limit.is_none()
-                && self.output_token_limit_support(input.target) == Some(false)
-                && output_reservation_covers_model(
-                    &input.target.model_constraints.token_limits,
-                    reservation.0,
-                );
-            if wire_limit != Some(reservation.0) && !model_bound {
-                return Err(BitrouterError::bad_request(
-                    "provider shaping changed the managed output reservation",
-                ));
-            }
-        }
-        if input
-            .target
-            .model_constraints
-            .input_token_counting
-            .is_some()
-            && let Some(counted) = input
-                .ctx
-                .extension::<crate::gateway::pipeline::native::NativeCountedRequests>()
-            && !counted.matches(&input_count::request_digest(&request, input.target)?)?
-        {
-            return Err(BitrouterError::bad_request(
-                "managed request changed after provider input token counting",
-            ));
-        }
         input
             .ctx
             .record_credential_authority(credential_authority.clone());
@@ -1511,22 +1172,17 @@ impl HttpExecutor {
         let Some(applier) = self.auth_applier(target) else {
             return Ok(false);
         };
-        native_work::observe(
-            ctx,
-            NativeProviderWorkKind::AuthenticationRefresh,
-            async {
-                applier
-                    .refresh_after_unauthorized(&target.model_target(), rejected_authorization)
-                    .await
-                    .map_err(|error| {
-                        BitrouterError::from(normalize_auth_extension_error(
-                            error,
-                            AuthOperation::Refresh,
-                        ))
-                    })
-            },
-            |_| None,
-        )
+        async {
+            applier
+                .refresh_after_unauthorized(&target.model_target(), rejected_authorization)
+                .await
+                .map_err(|error| {
+                    BitrouterError::from(normalize_auth_extension_error(
+                        error,
+                        AuthOperation::Refresh,
+                    ))
+                })
+        }
         .await
     }
 
@@ -1571,11 +1227,6 @@ impl HttpExecutor {
             target,
             shared::has_admission(ctx) || tenancy::has_execution(ctx),
         );
-        #[cfg(all(feature = "core", feature = "harness"))]
-        let choice_gate = tenancy::execution(ctx)
-            .map(|execution| execution.choice_gate())
-            .transpose()?
-            .flatten();
         let cancellation = tenancy::cancellation(ctx)?;
         let url = transport.endpoint_url(&target.model_target(), false);
         let trace_headers = ctx.take_outbound_trace_headers();
@@ -1593,8 +1244,6 @@ impl HttpExecutor {
             let request = self
                 .build_authenticated_request(&RequestBuildInput {
                     client: &client,
-
-                    managed_expected: None,
                     url: &url,
                     body: &body,
                     target,
@@ -1627,12 +1276,6 @@ impl HttpExecutor {
                     None,
                 )
             };
-            #[cfg(all(feature = "core", feature = "harness"))]
-            let _tenant_attempt = match &choice_gate {
-                Some(gate) => gate.arm(&body, &target.service_id, arm).await?,
-                None => arm()?,
-            };
-            #[cfg(not(all(feature = "core", feature = "harness")))]
             let _tenant_attempt = arm()?;
             if let Some(guard) = routing_guard {
                 guard.sent()?;
@@ -1708,7 +1351,6 @@ impl HttpExecutor {
         prompt: &Prompt,
         ctx: &PipelineContext,
     ) -> Result<ExecutionResult> {
-        let initial_gate = native_work::gate_duration(ctx);
         let started = Instant::now();
         let technical = super::provider_technical::begin(ctx, target, started, false);
         let capture = Arc::new(BridgeCapture::default());
@@ -1717,7 +1359,7 @@ impl HttpExecutor {
                 .await?,
         )
         .await?;
-        let result = capture.complete(self, target, prompt, ctx, collected)?;
+        let result = capture.complete(self, target, collected)?;
         let elapsed = started.elapsed().as_millis() as u64;
         technical.completed();
         Ok(ExecutionResult {
@@ -1726,11 +1368,8 @@ impl HttpExecutor {
             account_label: target.account_label.clone(),
             result: result.into(),
             request_duration_ms: elapsed,
-            upstream_duration_ms: Some(native_work::elapsed_work_millis(
-                ctx,
-                started,
-                initial_gate,
-            )),
+            upstream_duration_ms: Some(super::timing::elapsed_millis(started)),
+            #[cfg(feature = "server-tools")]
             server_tool_calls: Vec::new(),
         })
     }
@@ -1884,114 +1523,6 @@ impl Executor for HttpExecutor {
             self.execute_stream(target, prompt, ctx).await
         }
     }
-    fn finish_native_stream(
-        &self,
-        target: &RoutingTarget,
-        prompt: &Prompt,
-        ctx: &PipelineContext,
-        collected: GenerateResult,
-    ) -> Result<GenerateResult> {
-        let capture = ctx.extension::<NativeStreamCapture>().and_then(|runtime| {
-            runtime
-                .0
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .take()
-        });
-        match capture {
-            Some(capture) => capture.complete_observed(self, target, prompt, ctx, collected),
-            None => Ok(collected),
-        }
-    }
-
-    fn native_continuation(
-        &self,
-        target: &RoutingTarget,
-        prompt: &Prompt,
-        ctx: &PipelineContext,
-    ) -> NativeContinuationInput {
-        match ctx.extension::<super::native_context::NativePrivateContextRuntime>() {
-            Some(runtime) => match runtime.continuation_plan(prompt, ctx.caller(), target) {
-                Ok(plan) => plan.observation(),
-                Err(reason) => NativeContinuationInput::Rejected { reason },
-            },
-            None => NativeContinuationInput::Unknown,
-        }
-    }
-    fn native_protocol_validation(
-        &self,
-        target: &RoutingTarget,
-        prompt: &Prompt,
-        ctx: &PipelineContext,
-    ) -> crate::managed_contract::evidence::NativeProtocolValidation {
-        let validate = || -> std::result::Result<(), &'static str> {
-            if let Some(runtime) =
-                ctx.extension::<super::native_context::NativePrivateContextRuntime>()
-            {
-                runtime
-                    .validate_target(prompt, ctx, target)
-                    .map_err(crate::managed_contract::evidence::PrivateContextFailure::reason)?;
-            }
-            let (adapter, _) = self
-                .dispatch
-                .lookup(&target.api_protocol)
-                .ok_or("outbound_adapter_unavailable")?;
-            let plan = ctx
-                .extension::<super::native_context::NativePrivateContextRuntime>()
-                .map(|runtime| runtime.continuation_plan(prompt, ctx.caller(), target))
-                .transpose()
-                .map_err(ContinuationFailure::reason)?;
-            let effective = match plan.as_ref() {
-                Some(plan) => plan
-                    .execution_prompt(prompt)
-                    .map_err(ContinuationFailure::reason)?,
-                None => prompt.clone(),
-            };
-            adapter.validate_managed_prompt(&effective)?;
-            Self::check_response_format(prompt, adapter, target)
-                .map_err(|_| "response_format_unsupported")?;
-            let body = self
-                .render_execution_request(
-                    adapter.as_ref(),
-                    target,
-                    prompt,
-                    ctx,
-                    target.provider_name == "openai-codex",
-                )
-                .map_err(|_| "protocol_render_failed")?;
-            self.prepare_managed_baseline(&body, target, ctx)?;
-            Ok(())
-        };
-        match validate() {
-            Ok(()) => crate::managed_contract::evidence::NativeProtocolValidation::Compatible,
-            Err(reason) => crate::managed_contract::evidence::NativeProtocolValidation::Rejected {
-                reason: reason.into(),
-            },
-        }
-    }
-
-    async fn count_input_tokens(
-        &self,
-        target: &RoutingTarget,
-        prompt: &Prompt,
-        ctx: &PipelineContext,
-    ) -> Result<crate::managed_contract::evidence::NativeInputCount> {
-        self.count_managed_input(target, prompt, ctx).await
-    }
-
-    fn output_token_limit_support(&self, target: &RoutingTarget) -> Option<bool> {
-        if !self
-            .dispatch
-            .lookup(&target.api_protocol)
-            .is_some_and(|(adapter, _)| adapter.supports_output_token_limit_validation())
-        {
-            return Some(false);
-        }
-        match self.auth_applier(target) {
-            Some(applier) => applier.output_token_limit_support(&target.model_target()),
-            None => Some(true),
-        }
-    }
 
     fn preflight_managed(
         &self,
@@ -2049,22 +1580,14 @@ impl Executor for HttpExecutor {
 
         let (client, _) = self.client_for(
             target,
-            ctx.extension::<super::native::NativeManagedRequest>()
-                .is_some()
-                || shared::has_admission(ctx)
-                || tenancy::has_execution(ctx),
+            shared::has_admission(ctx) || tenancy::has_execution(ctx),
         );
 
-        let initial_gate = native_work::gate_duration(ctx);
         let started = Instant::now();
         let technical = super::provider_technical::begin(ctx, target, started, false);
         let mut attempted_auth_refresh = false;
-        let requested_effort =
-            serde_json::to_value(prompt.params.reasoning_effort).map_err(|_| {
-                crate::gateway::pipeline::native_continuation::continuation_error(
-                    ContinuationFailure::BindingChanged,
-                )
-            })?;
+        let requested_effort = serde_json::to_value(prompt.params.reasoning_effort)
+            .map_err(|_| BitrouterError::bad_request("invalid continuation reasoning effort"))?;
         let (
             text,
             successful_authority,
@@ -2082,16 +1605,11 @@ impl Executor for HttpExecutor {
                 ctx,
                 target.provider_name == "openai-codex",
             )?;
-            let managed_expected = self.managed_expected_body(&body, target, ctx)?;
+
             if self.needs_body_shaping(target, ctx)? {
-                native_work::observe(
-                    ctx,
-                    NativeProviderWorkKind::AuthenticationPreparation,
-                    self.shape_request_body(&mut body, target, ctx),
-                    |_| None,
-                )
-                .await
-                .map_err(|error| error_scrubber.scrub_error(error))?;
+                self.shape_request_body(&mut body, target, ctx)
+                    .await
+                    .map_err(|error| error_scrubber.scrub_error(error))?;
             }
             let continuation_substitution = apply_provider_continuation(&mut body, target, ctx)?;
             if let Some(continuation) = continuation_substitution {
@@ -2104,7 +1622,6 @@ impl Executor for HttpExecutor {
 
                 url: &url,
                 body: &body,
-                managed_expected: managed_expected.as_ref(),
                 target,
                 transport,
                 ctx,
@@ -2139,36 +1656,31 @@ impl Executor for HttpExecutor {
                 .cloned();
             let mut native_attempt = None;
             let mut private_adapter = false;
-            let response = native_work::observe(
-                ctx,
-                NativeProviderWorkKind::HttpDispatch,
-                async {
-                    let routing_guard = if tenancy::legacy_routing(ctx) {
-                        Some(crate::tenancy::routing::admit(ctx, target)?)
-                    } else {
-                        None
-                    };
-                    record_native_dispatch(prompt, target, ctx)?;
-                    let admission = tenancy::admit_send(
-                        tenant_binding.as_ref(),
-                        &mut tenant_attempt,
-                        &mut request,
-                        target,
-                        ctx,
-                        Some(false),
-                    )?;
-                    if let Some(guard) = routing_guard {
-                        guard.sent()?;
-                    }
-                    let response = admission
-                        .send(&client, request, ctx, &mut error_scrubber)
-                        .await;
-                    private_adapter = admission.adapter.is_some();
-                    native_attempt = admission.attempt_id;
-                    response
-                },
-                |response| Some(response.status().as_u16()),
-            )
+            let response = async {
+                let routing_guard = if tenancy::legacy_routing(ctx) {
+                    Some(crate::tenancy::routing::admit(ctx, target)?)
+                } else {
+                    None
+                };
+                record_native_dispatch(prompt, target, ctx)?;
+                let admission = tenancy::admit_send(
+                    tenant_binding.as_ref(),
+                    &mut tenant_attempt,
+                    &mut request,
+                    target,
+                    ctx,
+                    Some(false),
+                )?;
+                if let Some(guard) = routing_guard {
+                    guard.sent()?;
+                }
+                let response = admission
+                    .send(&client, request, ctx, &mut error_scrubber)
+                    .await;
+                private_adapter = admission.adapter.is_some();
+                native_attempt = admission.attempt_id;
+                response
+            }
             .await?;
 
             let status = response.status();
@@ -2252,7 +1764,7 @@ impl Executor for HttpExecutor {
         let replayable = crate::gateway::model::protocol::responses::output_replayable(&json);
         let result = ModelClient::parse_response(adapter.as_ref(), &target.api_protocol, &text)
             .map_err(|error| error_scrubber.scrub_error(error.into()))?;
-        let mut result =
+        let result =
             crate::gateway::providers::google_chat::bind_result(result, &target.model_target())
                 .map_err(|error| error_scrubber.scrub_error(error.into()))?;
         if (shared_attempt.is_shared() || tenant_attempt.is_some())
@@ -2301,31 +1813,6 @@ impl Executor for HttpExecutor {
             );
         }
         let elapsed = started.elapsed().as_millis() as u64;
-        if let Some(runtime) = ctx.extension::<super::native_context::NativePrivateContextRuntime>()
-        {
-            if target.api_protocol == ApiProtocol::Responses && !replayable {
-                super::native_continuation::mark_required_state(&mut result.content);
-            }
-            if let (Some(binding), Some(attempt), Some(authority)) = (
-                successful_binding.as_ref(),
-                successful_attempt,
-                successful_authority.as_ref(),
-            ) {
-                binding.record_native_source(
-                    attempt,
-                    authority,
-                    prompt,
-                    &result,
-                    tenancy::native::Storage {
-                        stored: stored_response,
-                        replayable,
-                        effort_bound,
-                    },
-                );
-            }
-            runtime.succeeded(prompt, target, successful_authority, &result);
-            runtime.stored_response(stored_response, replayable, effort_bound);
-        }
 
         drop(tenant_attempt);
         technical.completed();
@@ -2335,11 +1822,8 @@ impl Executor for HttpExecutor {
             account_label: target.account_label.clone(),
             result: result.into(),
             request_duration_ms: elapsed,
-            upstream_duration_ms: Some(native_work::elapsed_work_millis(
-                ctx,
-                started,
-                initial_gate,
-            )),
+            upstream_duration_ms: Some(super::timing::elapsed_millis(started)),
+            #[cfg(feature = "server-tools")]
             server_tool_calls: Vec::new(),
         })
     }
@@ -2385,6 +1869,7 @@ impl Executor for HttpExecutor {
             result: result.into(),
             request_duration_ms: elapsed,
             upstream_duration_ms: Some(elapsed),
+            #[cfg(feature = "server-tools")]
             server_tool_calls: Vec::new(),
         })
     }
@@ -2395,229 +1880,7 @@ impl Executor for HttpExecutor {
         prompt: &Prompt,
         ctx: &PipelineContext,
     ) -> Result<StreamPartStream> {
-        let capture = ctx.extension::<NativeStreamCapture>().map(|runtime| {
-            let capture = Arc::new(BridgeCapture::default());
-            *runtime
-                .0
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(capture.clone());
-            capture
-        });
-        self.execute_http_stream(target, prompt, ctx, capture).await
-    }
-}
-
-/// Routes outbound requests to one of several [`Executor`] implementations,
-/// keyed by [`RoutingTarget::api_protocol`].
-///
-/// Use this when some providers use the built-in [`HttpExecutor`] +
-/// [`OutboundDispatch`] (HTTP / JSON / per-protocol auth header) and others
-/// bypass that machinery entirely — typically because they use a vendor SDK
-/// that owns the transport itself (illustrated below with a hypothetical
-/// `aws-sdk-bedrockruntime`-backed executor for AWS Bedrock's native Converse
-/// API). No built-in provider needs this today — BitRouter's `aws-bedrock`
-/// provider reaches Bedrock's OpenAI-compatible `bedrock-mantle` endpoints over
-/// the default `HttpExecutor` instead.
-///
-/// The `default` executor handles every protocol that is **not** explicitly
-/// registered. The three built-in protocols (`chat_completions` / `responses` /
-/// `messages`) should remain on the default `HttpExecutor`; only
-/// route `ApiProtocol::Custom(_)` protocols away from it.
-///
-/// ```no_run
-/// use std::sync::Arc;
-/// use bitrouter_ai::types::ApiProtocol;
-/// use bitrouter::gateway::assembly::App;
-/// use bitrouter::gateway::pipeline::executor::{DispatchExecutor, Executor, HttpExecutor};
-/// use bitrouter::gateway::pipeline::routing::StaticRoutingTable;
-///
-/// # async fn run() -> bitrouter::gateway::error::Result<()> {
-/// # struct BedrockExecutor;
-/// # #[async_trait::async_trait]
-/// # impl Executor for BedrockExecutor {
-/// #     async fn execute(
-/// #         &self,
-/// #         _: &bitrouter::gateway::pipeline::types::RoutingTarget,
-/// #         _: &bitrouter_ai::types::Prompt,
-/// #         _: &bitrouter::gateway::pipeline::context::PipelineContext,
-/// #     ) -> bitrouter::gateway::error::Result<bitrouter::gateway::pipeline::types::ExecutionResult> {
-/// #         unimplemented!()
-/// #     }
-/// #     async fn execute_stream(
-/// #         &self,
-/// #         _: &bitrouter::gateway::pipeline::types::RoutingTarget,
-/// #         _: &bitrouter_ai::types::Prompt,
-/// #         _: &bitrouter::gateway::pipeline::context::PipelineContext,
-/// #     ) -> bitrouter::gateway::error::Result<bitrouter::gateway::pipeline::executor::StreamPartStream> {
-/// #         unimplemented!()
-/// #     }
-/// # }
-/// let http: Arc<dyn Executor> = Arc::new(HttpExecutor::with_defaults()?);
-/// let bedrock: Arc<dyn Executor> = Arc::new(BedrockExecutor);
-/// let executor = DispatchExecutor::new(http)
-///     .with(ApiProtocol::Custom("bedrock-claude".into()), bedrock);
-///
-/// let _app = App::builder()
-///     .language_model(|lm| {
-///         lm.routing_table(Arc::new(StaticRoutingTable::new()))
-///           .executor(Arc::new(executor));
-///     })
-///     .build()?;
-/// # Ok(()) }
-/// ```
-pub struct DispatchExecutor {
-    by_protocol: HashMap<ApiProtocol, Arc<dyn Executor>>,
-    default: Arc<dyn Executor>,
-}
-
-impl DispatchExecutor {
-    /// Build a dispatcher with `default` handling every unregistered protocol.
-    /// Typically pass an [`HttpExecutor`] here.
-    pub fn new(default: Arc<dyn Executor>) -> Self {
-        Self {
-            by_protocol: HashMap::new(),
-            default,
-        }
-    }
-
-    /// Route requests with `target.api_protocol == protocol` to `executor`.
-    /// Subsequent calls with the same `protocol` overwrite the previous entry.
-    /// Returns `self` so calls can be chained at construction.
-    pub fn with(mut self, protocol: ApiProtocol, executor: Arc<dyn Executor>) -> Self {
-        self.register(protocol, executor);
-        self
-    }
-
-    /// Imperative form of [`with`](Self::with).
-    pub fn register(&mut self, protocol: ApiProtocol, executor: Arc<dyn Executor>) {
-        self.by_protocol.insert(protocol, executor);
-    }
-}
-
-#[async_trait]
-impl Executor for DispatchExecutor {
-    fn preflight_generate_content(
-        &self,
-        target: &RoutingTarget,
-        input: &super::types::generate_content::Input,
-        stream: bool,
-        ctx: &PipelineContext,
-    ) -> Result<crate::gateway::conversion_report::ConversionReport> {
-        self.by_protocol
-            .get(&target.api_protocol)
-            .unwrap_or(&self.default)
-            .preflight_generate_content(target, input, stream, ctx)
-    }
-    async fn execute_generate_content(
-        &self,
-        target: &RoutingTarget,
-        input: &super::types::generate_content::Input,
-        ctx: &PipelineContext,
-    ) -> Result<ExecutionResult> {
-        self.by_protocol
-            .get(&target.api_protocol)
-            .unwrap_or(&self.default)
-            .execute_generate_content(target, input, ctx)
-            .await
-    }
-    async fn execute_generate_content_stream(
-        &self,
-        target: &RoutingTarget,
-        input: &super::types::generate_content::Input,
-        ctx: &PipelineContext,
-    ) -> Result<StreamPartStream> {
-        self.by_protocol
-            .get(&target.api_protocol)
-            .unwrap_or(&self.default)
-            .execute_generate_content_stream(target, input, ctx)
-            .await
-    }
-
-    fn finish_native_stream(
-        &self,
-        target: &RoutingTarget,
-        prompt: &Prompt,
-        ctx: &PipelineContext,
-        collected: GenerateResult,
-    ) -> Result<GenerateResult> {
-        self.by_protocol
-            .get(&target.api_protocol)
-            .unwrap_or(&self.default)
-            .finish_native_stream(target, prompt, ctx, collected)
-    }
-
-    fn preflight_managed(
-        &self,
-        target: &RoutingTarget,
-        prompt: &Prompt,
-        stream: bool,
-        ctx: &PipelineContext,
-    ) -> Result<crate::gateway::conversion_report::ConversionReport> {
-        self.by_protocol
-            .get(&target.api_protocol)
-            .unwrap_or(&self.default)
-            .preflight_managed(target, prompt, stream, ctx)
-    }
-
-    fn preflight(
-        &self,
-        target: &RoutingTarget,
-        prompt: &Prompt,
-        stream: bool,
-    ) -> Result<crate::gateway::conversion_report::ConversionReport> {
-        let executor = self
-            .by_protocol
-            .get(&target.api_protocol)
-            .unwrap_or(&self.default);
-        executor.preflight(target, prompt, stream)
-    }
-
-    fn preflight_decisions(&self, target: &RoutingTarget, request: &DecisionRequest) -> Result<()> {
-        self.by_protocol
-            .get(&target.api_protocol)
-            .unwrap_or(&self.default)
-            .preflight_decisions(target, request)
-    }
-
-    async fn execute_decisions(
-        &self,
-        target: &RoutingTarget,
-        request: &DecisionRequest,
-        ctx: &PipelineContext,
-    ) -> Result<ExecutionResult> {
-        self.by_protocol
-            .get(&target.api_protocol)
-            .unwrap_or(&self.default)
-            .execute_decisions(target, request, ctx)
-            .await
-    }
-
-    async fn execute(
-        &self,
-        target: &RoutingTarget,
-        prompt: &Prompt,
-        ctx: &PipelineContext,
-    ) -> Result<ExecutionResult> {
-        let executor = self
-            .by_protocol
-            .get(&target.api_protocol)
-            .cloned()
-            .unwrap_or_else(|| self.default.clone());
-        executor.execute(target, prompt, ctx).await
-    }
-
-    async fn execute_stream(
-        &self,
-        target: &RoutingTarget,
-        prompt: &Prompt,
-        ctx: &PipelineContext,
-    ) -> Result<StreamPartStream> {
-        let executor = self
-            .by_protocol
-            .get(&target.api_protocol)
-            .cloned()
-            .unwrap_or_else(|| self.default.clone());
-        executor.execute_stream(target, prompt, ctx).await
+        self.execute_http_stream(target, prompt, ctx, None).await
     }
 }
 
@@ -3058,7 +2321,6 @@ mod beta_forward_tests {
 
                 url: "https://api.example/v1/chat/completions",
                 body: &body,
-                managed_expected: None,
                 target: &target,
                 transport,
                 ctx: &ctx,
@@ -3072,311 +2334,6 @@ mod beta_forward_tests {
         );
         assert_eq!(request.headers()["x-opencode-session"], "request-session");
         assert_eq!(request.headers()["x-bitrouter-request-id"], "t");
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn counted_request_revalidates_body_credential_headers_and_selected_candidate()
-    -> crate::gateway::error::Result<()> {
-        use crate::gateway::pipeline::native::NativeCountedRequests;
-        use crate::managed_contract::evidence::{InputTokenCounting, NativeInputCount};
-        let mut ctx = ctx_with_headers(http::HeaderMap::new());
-        let mut target = target(ApiProtocol::Responses);
-        target.model_constraints.input_token_counting = Some(InputTokenCounting::Responses);
-        target.api_key = "first-account-secret".into();
-        let executor = HttpExecutor::with_defaults()?;
-        let (_, transport) = executor
-            .dispatch
-            .lookup(&target.api_protocol)
-            .ok_or_else(|| BitrouterError::internal("missing Responses transport"))?;
-        let (client, _) = executor.client_for(&target, false);
-        let body = serde_json::json!({"model":"fixture","input":"required text","tools":[]});
-        let initial = executor
-            .build_authenticated_request(&RequestBuildInput {
-                client: &client,
-
-                url: "https://example.invalid/v1/responses",
-                body: &body,
-                managed_expected: None,
-                target: &target,
-                transport,
-                ctx: &ctx,
-                trace_headers: None,
-            })
-            .await?;
-        let count = NativeInputCount::Counted {
-            input_tokens: 10,
-            request_sha256: input_count::request_digest(&initial, &target)?,
-            source: "fixture".into(),
-        };
-        let counted = Arc::new(NativeCountedRequests::default());
-        counted.select(Some(&count))?;
-        ctx.insert_extension(counted.clone());
-        let build = |body, target, ctx| RequestBuildInput {
-            client: &client,
-
-            url: "https://example.invalid/v1/responses",
-            body,
-            managed_expected: None,
-            target,
-            transport,
-            ctx,
-            trace_headers: None,
-        };
-        executor
-            .build_authenticated_request(&build(&body, &target, &ctx))
-            .await?;
-        let changed =
-            serde_json::json!({"model":"fixture","input":"different required text","tools":[]});
-        assert!(
-            executor
-                .build_authenticated_request(&build(&changed, &target, &ctx))
-                .await
-                .is_err()
-        );
-        let mut account = target.clone();
-        account.api_key = "second-account-secret".into();
-        assert!(
-            executor
-                .build_authenticated_request(&build(&body, &account, &ctx))
-                .await
-                .is_err()
-        );
-        let mut headers = target.clone();
-        headers.headers = vec![OutboundHeaderRule::new(
-            "openai-organization",
-            Some("other-org"),
-            false,
-        )?];
-        assert!(
-            executor
-                .build_authenticated_request(&build(&body, &headers, &ctx))
-                .await
-                .is_err()
-        );
-        // Even an identical target cannot borrow a previous candidate's success.
-        counted.select(Some(&NativeInputCount::Unavailable {
-            reason: "fixture failure".into(),
-        }))?;
-        assert!(
-            executor
-                .build_authenticated_request(&build(&body, &target, &ctx))
-                .await
-                .is_err()
-        );
-        Ok(())
-    }
-
-    struct RewriteOutputLimit;
-
-    #[async_trait]
-    impl crate::gateway::providers::auth::AuthApplier for RewriteOutputLimit {
-        async fn apply(
-            &self,
-            mut request: reqwest::Request,
-            _: &crate::gateway::model::target::ModelTarget,
-        ) -> crate::gateway::model::error::Result<reqwest::Request> {
-            let bytes = request
-                .body()
-                .and_then(reqwest::Body::as_bytes)
-                .ok_or_else(|| {
-                    crate::gateway::model::error::ModelError::invalid_request(
-                        "fixture body missing",
-                    )
-                })?;
-            let mut body: serde_json::Value = serde_json::from_slice(bytes).map_err(|error| {
-                crate::gateway::model::error::ModelError::invalid_request(error.to_string())
-            })?;
-            body["max_tokens"] = 4096.into();
-            *request.body_mut() = Some(
-                serde_json::to_vec(&body)
-                    .map_err(|error| {
-                        crate::gateway::model::error::ModelError::invalid_request(error.to_string())
-                    })?
-                    .into(),
-            );
-            Ok(request)
-        }
-    }
-
-    #[tokio::test]
-    async fn managed_output_limit_is_checked_after_auth_body_mutation()
-    -> crate::gateway::error::Result<()> {
-        let target = target(ApiProtocol::ChatCompletions);
-        let executor = HttpExecutor::with_dispatch_and_auth(
-            Default::default(),
-            OutboundDispatch::builtin(),
-            AuthAppliers::new().with(&target.provider_name, Arc::new(RewriteOutputLimit)),
-        )?;
-        let (_, transport) = executor
-            .dispatch
-            .lookup(&target.api_protocol)
-            .ok_or_else(|| BitrouterError::internal("missing fixture transport"))?;
-        let (client, _) = executor.client_for(&target, false);
-        let body = serde_json::json!({"model":"m","messages":[{"role":"user","content":"hello"}],"max_tokens":128});
-        for managed in [false, true] {
-            let mut ctx = ctx_with_beta(None);
-            if managed {
-                ctx.insert_extension(Arc::new(
-                    crate::gateway::pipeline::native::NativeOutputReservation(128),
-                ));
-            }
-            let result = executor
-                .build_authenticated_request(&RequestBuildInput {
-                    client: &client,
-
-                    url: "https://example.invalid/v1/chat/completions",
-                    body: &body,
-                    managed_expected: None,
-                    target: &target,
-                    transport,
-                    ctx: &ctx,
-                    trace_headers: None,
-                })
-                .await;
-            assert_eq!(result.is_err(), managed);
-            if managed {
-                assert!(result.err().is_some_and(|error| {
-                    error
-                        .to_string()
-                        .contains("changed the managed output reservation")
-                }));
-            }
-        }
-        Ok(())
-    }
-
-    struct RemoveOutputLimit(Option<bool>);
-
-    #[async_trait]
-    impl crate::gateway::providers::auth::AuthApplier for RemoveOutputLimit {
-        fn output_token_limit_support(
-            &self,
-            _: &crate::gateway::model::target::ModelTarget,
-        ) -> Option<bool> {
-            self.0
-        }
-
-        async fn apply(
-            &self,
-            mut request: reqwest::Request,
-            _: &crate::gateway::model::target::ModelTarget,
-        ) -> crate::gateway::model::error::Result<reqwest::Request> {
-            let bytes = request
-                .body()
-                .and_then(reqwest::Body::as_bytes)
-                .ok_or_else(|| {
-                    crate::gateway::model::error::ModelError::invalid_request(
-                        "fixture body missing",
-                    )
-                })?;
-            let mut body: serde_json::Value = serde_json::from_slice(bytes).map_err(|error| {
-                crate::gateway::model::error::ModelError::invalid_request(error.to_string())
-            })?;
-            if let Some(object) = body.as_object_mut() {
-                object.remove("max_output_tokens");
-            }
-            *request.body_mut() = Some(
-                serde_json::to_vec(&body)
-                    .map_err(|error| {
-                        crate::gateway::model::error::ModelError::invalid_request(error.to_string())
-                    })?
-                    .into(),
-            );
-            Ok(request)
-        }
-    }
-
-    #[tokio::test]
-    async fn uncapped_managed_wire_requires_declared_support_and_model_bound()
-    -> crate::gateway::error::Result<()> {
-        for support in [None, Some(true), Some(false)] {
-            for (ceiling, covered) in [
-                (None, false),
-                (Some(0), false),
-                (Some(1), true),
-                (Some(127), true),
-                (Some(128), true),
-                (Some(129), false),
-                (Some(u64::MAX), false),
-            ] {
-                let mut target = target(ApiProtocol::Responses);
-                target.model_constraints.token_limits.max_output_tokens = ceiling;
-                let executor = HttpExecutor::with_dispatch_and_auth(
-                    Default::default(),
-                    OutboundDispatch::builtin(),
-                    AuthAppliers::new()
-                        .with(&target.provider_name, Arc::new(RemoveOutputLimit(support))),
-                )?;
-                let (_, transport) = executor
-                    .dispatch
-                    .lookup(&target.api_protocol)
-                    .ok_or_else(|| BitrouterError::internal("missing fixture transport"))?;
-                let (client, _) = executor.client_for(&target, false);
-                let mut ctx = ctx_with_beta(None);
-                ctx.insert_extension(Arc::new(
-                    crate::gateway::pipeline::native::NativeOutputReservation(128),
-                ));
-                let body = serde_json::json!({"model":"m","input":"hello","max_output_tokens":128});
-                let result = executor
-                    .build_authenticated_request(&RequestBuildInput {
-                        client: &client,
-                        url: "https://example.invalid/v1/responses",
-                        body: &body,
-                        managed_expected: None,
-                        target: &target,
-                        transport,
-                        ctx: &ctx,
-                        trace_headers: None,
-                    })
-                    .await;
-                assert_eq!(
-                    result.is_ok(),
-                    support == Some(false) && covered,
-                    "{support:?}, {ceiling:?}"
-                );
-            }
-        }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn managed_output_limit_survives_each_builtin_wire_renderer()
-    -> crate::gateway::error::Result<()> {
-        let executor = HttpExecutor::with_defaults()?;
-        for protocol in [
-            ApiProtocol::ChatCompletions,
-            ApiProtocol::Responses,
-            ApiProtocol::Messages,
-        ] {
-            let target = target(protocol);
-            let mut ctx = ctx_with_beta(None);
-            ctx.insert_extension(Arc::new(
-                crate::gateway::pipeline::native::NativeOutputReservation(128),
-            ));
-            let mut prompt = ctx.require_generation_prompt()?.clone();
-            prompt.messages = vec![Message::text(Role::User, "hello")];
-            prompt.params.max_tokens = Some(128);
-            let (adapter, transport) = executor
-                .dispatch
-                .lookup(&target.api_protocol)
-                .ok_or_else(|| BitrouterError::internal("missing fixture adapter"))?;
-            let body = adapter.render_request_for_target(&prompt, &target.model_target())?;
-            let (client, _) = executor.client_for(&target, false);
-            executor
-                .build_authenticated_request(&RequestBuildInput {
-                    client: &client,
-
-                    url: "https://example.invalid/fixture",
-                    body: &body,
-                    managed_expected: None,
-                    target: &target,
-                    transport,
-                    ctx: &ctx,
-                    trace_headers: None,
-                })
-                .await?;
-        }
         Ok(())
     }
 
@@ -3447,7 +2404,6 @@ mod beta_forward_tests {
                     client: &client,
                     url: "https://example.invalid/messages",
                     body: &body,
-                    managed_expected: None,
                     target: &target,
                     transport,
                     ctx: &ctx,
@@ -3467,171 +2423,6 @@ mod beta_forward_tests {
                     applied.into_parts().1.is_none(),
                     "fixture deliberately has no continuation authority"
                 );
-            }
-        }
-        Ok(())
-    }
-
-    struct RewriteEndpoint;
-    #[async_trait]
-    impl crate::gateway::providers::auth::AuthApplier for RewriteEndpoint {
-        async fn apply(
-            &self,
-            mut request: reqwest::Request,
-            _: &crate::gateway::model::target::ModelTarget,
-        ) -> crate::gateway::model::error::Result<reqwest::Request> {
-            *request.url_mut() =
-                reqwest::Url::parse("https://other.invalid/messages").map_err(|e| {
-                    crate::gateway::model::error::ModelError::invalid_request(e.to_string())
-                })?;
-            request
-                .headers_mut()
-                .insert("x-api-key", http::HeaderValue::from_static("fixture-key"));
-            Ok(request)
-        }
-        async fn apply_with_authority(
-            &self,
-            request: reqwest::Request,
-            target: &crate::gateway::model::target::ModelTarget,
-        ) -> crate::gateway::model::error::Result<AppliedAuth> {
-            Ok(AppliedAuth::proven(
-                self.apply(request, target).await?,
-                CredentialAuthority::derive("fixture", "principal"),
-            ))
-        }
-    }
-
-    #[tokio::test]
-    async fn managed_auth_cannot_change_endpoint_even_before_proving_request() -> Result<()> {
-        let target = target(ApiProtocol::Messages);
-        let executor = HttpExecutor::with_dispatch_and_auth(
-            Default::default(),
-            OutboundDispatch::builtin(),
-            AuthAppliers::new().with(&target.provider_name, Arc::new(RewriteEndpoint)),
-        )?;
-        let mut ctx = ctx_with_beta(None);
-        ctx.insert_extension(Arc::new(
-            crate::gateway::pipeline::native::NativeManagedRequest,
-        ));
-        let (adapter, transport) = executor
-            .dispatch
-            .lookup(&target.api_protocol)
-            .ok_or_else(|| BitrouterError::internal("fixture dispatch"))?;
-        let body = adapter
-            .render_request_for_target(ctx.require_generation_prompt()?, &target.model_target())?;
-        let (client, _) = executor.client_for(&target, true);
-        let error = executor
-            .build_authenticated_request(&RequestBuildInput {
-                client: &client,
-
-                url: "https://example.invalid/messages",
-                body: &body,
-                managed_expected: Some(&body),
-                target: &target,
-                transport,
-                ctx: &ctx,
-                trace_headers: None,
-            })
-            .await
-            .err()
-            .ok_or_else(|| BitrouterError::internal("changed endpoint accepted"))?;
-        assert!(
-            error
-                .to_string()
-                .contains("managed authentication changed endpoint")
-        );
-        Ok(())
-    }
-
-    struct RewriteManagedField(&'static str, serde_json::Value);
-    #[async_trait]
-    impl crate::gateway::providers::auth::AuthApplier for RewriteManagedField {
-        async fn apply(
-            &self,
-            mut request: reqwest::Request,
-            _: &crate::gateway::model::target::ModelTarget,
-        ) -> crate::gateway::model::error::Result<reqwest::Request> {
-            let bytes = request
-                .body()
-                .and_then(reqwest::Body::as_bytes)
-                .ok_or_else(|| {
-                    crate::gateway::model::error::ModelError::invalid_request(
-                        "fixture body missing",
-                    )
-                })?;
-            let mut body: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| {
-                crate::gateway::model::error::ModelError::invalid_request(e.to_string())
-            })?;
-            body[self.0] = self.1.clone();
-            *request.body_mut() = Some(
-                serde_json::to_vec(&body)
-                    .map_err(|e| {
-                        crate::gateway::model::error::ModelError::invalid_request(e.to_string())
-                    })?
-                    .into(),
-            );
-            Ok(request)
-        }
-    }
-
-    #[tokio::test]
-    async fn managed_protocol_revalidates_every_authenticated_body_without_a_counter() -> Result<()>
-    {
-        let target = target(ApiProtocol::Responses);
-        let body = serde_json::json!({"model":target.service_id,"input":"mandatory input","tools":[],"temperature":0.2});
-        for (field, replacement) in [
-            ("input", serde_json::json!("lost input")),
-            (
-                "tools",
-                serde_json::json!([{"type":"function","name":"unapproved"}]),
-            ),
-            ("model", serde_json::json!("different-model")),
-            ("temperature", serde_json::json!(1)),
-            ("truncation", serde_json::json!("auto")),
-            ("previous_response_id", serde_json::json!("private-handle")),
-        ] {
-            let executor = HttpExecutor::with_dispatch_and_auth(
-                Default::default(),
-                OutboundDispatch::builtin(),
-                AuthAppliers::new().with(
-                    &target.provider_name,
-                    Arc::new(RewriteManagedField(field, replacement)),
-                ),
-            )?;
-            let (_, transport) = executor
-                .dispatch
-                .lookup(&target.api_protocol)
-                .ok_or_else(|| BitrouterError::internal("fixture transport"))?;
-            let (client, _) = executor.client_for(&target, false);
-            for managed in [false, true] {
-                let mut ctx = ctx_with_beta(None);
-                if managed {
-                    ctx.insert_extension(Arc::new(
-                        crate::gateway::pipeline::native::NativeManagedRequest,
-                    ));
-                }
-                let baseline = executor.managed_expected_body(&body, &target, &ctx)?;
-                // Rebuilding after credential refresh uses this same immutable
-                // input and must repeat validation, without an input counter.
-                for _retry in 0..2 {
-                    let result = executor
-                        .build_authenticated_request(&RequestBuildInput {
-                            client: &client,
-
-                            url: "https://example.invalid/responses",
-                            body: &body,
-                            managed_expected: baseline.as_ref(),
-                            target: &target,
-                            transport,
-                            ctx: &ctx,
-                            trace_headers: None,
-                        })
-                        .await;
-                    assert_eq!(result.is_err(), managed, "field={field}");
-                    if let Err(error) = result {
-                        assert!(!error.to_string().contains("private-handle"));
-                    }
-                }
             }
         }
         Ok(())

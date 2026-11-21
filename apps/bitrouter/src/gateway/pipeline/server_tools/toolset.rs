@@ -8,7 +8,7 @@ use async_trait::async_trait;
 
 use crate::gateway::caller::CallerContext;
 use crate::gateway::error::Result;
-use crate::gateway::extensions::legacy::PluginId;
+use crate::gateway::extensions::plugin::PluginId;
 use crate::gateway::pipeline::context::PipelineContext;
 use bitrouter_ai::types::{Tool, ToolResultOutput};
 
@@ -26,11 +26,6 @@ pub struct ToolContext {
 }
 
 impl ToolContext {
-    /// Build a context from explicit parts (consumers, tests).
-    pub fn new(caller: CallerContext, metadata: HashMap<PluginId, serde_json::Value>) -> Self {
-        Self { caller, metadata }
-    }
-
     /// Snapshot the live pipeline context for a server-tool execution.
     pub fn from_pipeline(ctx: &PipelineContext) -> Self {
         Self {
@@ -114,6 +109,18 @@ impl ToolsetRegistry {
     /// The set that owns `name`, if any.
     pub fn resolve(&self, name: &str) -> Option<&Arc<dyn RouterToolset>> {
         self.sets.iter().find(|set| set.owns(name))
+    }
+}
+
+#[cfg(test)]
+mod fixtures {
+    use super::*;
+
+    impl ToolContext {
+        /// Build a server-tool fixture context from explicit caller and metadata.
+        pub fn new(caller: CallerContext, metadata: HashMap<PluginId, serde_json::Value>) -> Self {
+            Self { caller, metadata }
+        }
     }
 }
 

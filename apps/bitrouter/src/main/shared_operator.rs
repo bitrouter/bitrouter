@@ -91,9 +91,9 @@ pub(super) enum Action {
 }
 
 #[cfg(feature = "multi-instance")]
-use anyhow::{Context, Result, ensure};
+use crate::output::{Output, reports::shared::OperatorReport};
 #[cfg(feature = "multi-instance")]
-use bitrouter::output::{Output, reports::shared::OperatorReport};
+use anyhow::{Context, Result, ensure};
 #[cfg(feature = "multi-instance")]
 use bitrouter_ai::gateway::operator::Mutation;
 #[cfg(feature = "multi-instance")]

@@ -6,13 +6,14 @@ use anyhow::{Context, Result, ensure};
 use bitrouter_ai::policy::{Document, RouteClass, Target};
 use sha2::{Digest, Sha256};
 
-use crate::gateway::routing::workflow::predictive::compiled_predictor_contract;
+use crate::gateway::routing::assessment::contract_digest;
 
 const MAX_BYTES: usize = 1024 * 1024;
 
 /// Validated source and its execution indexes. This is never a serialized format.
 #[derive(Debug, Clone)]
 pub(crate) struct CompiledPolicy {
+    #[cfg(any(feature = "multi-instance", test))]
     source: Document,
     source_digest: String,
     selections: BTreeMap<String, CompiledSelection>,
@@ -29,6 +30,7 @@ pub(crate) struct CompiledSelection {
 }
 
 impl CompiledPolicy {
+    #[cfg(any(feature = "multi-instance", test))]
     pub(crate) fn source(&self) -> &Document {
         &self.source
     }
@@ -80,7 +82,7 @@ pub(crate) fn compile(source: &Document) -> Result<CompiledPolicy> {
         !source.policies.is_empty() && source.policies.len() <= 256,
         "policy count must be 1..=256"
     );
-    let predictor = compiled_predictor_contract();
+    let classifier_digest = contract_digest();
     let mut selections = BTreeMap::new();
     for (name, policy) in &source.policies {
         validate_name(name)?;
@@ -104,7 +106,7 @@ pub(crate) fn compile(source: &Document) -> Result<CompiledPolicy> {
             );
         } else {
             ensure!(
-                policy.classifier_digest.as_deref() == Some(predictor.config_digest.as_str()),
+                policy.classifier_digest.as_deref() == Some(classifier_digest.as_str()),
                 "unsupported policy classifier digest"
             );
         }
@@ -163,6 +165,7 @@ pub(crate) fn compile(source: &Document) -> Result<CompiledPolicy> {
         );
     }
     Ok(CompiledPolicy {
+        #[cfg(any(feature = "multi-instance", test))]
         source: source.clone(),
         source_digest: source_digest(source)?,
         selections,

@@ -1,19 +1,14 @@
 //! Local gateway endpoint selection and best-effort startup shared by setup and launch.
 
-#[cfg(feature = "harness")]
-use crate::commands::invocation;
-#[cfg(feature = "harness")]
-use crate::style::Palette;
-
 /// BitRouter's own API-key env var (`brk_…`). When set, it is forwarded to the
 /// harness as the gateway bearer credential.
-#[cfg(any(feature = "harness", test))]
+#[cfg(test)]
 pub(crate) const BITROUTER_API_KEY_ENV: &str = "BITROUTER_API_KEY";
 
 /// Placeholder credential injected when no real key is available. Ignored by
 /// the daemon under `skip_auth: true` (the `bro init` default); the
 /// harness merely needs *some* credential to start.
-#[cfg(any(feature = "harness", test))]
+#[cfg(test)]
 pub(crate) const PLACEHOLDER_API_KEY: &str = "bitrouter-local";
 
 /// Read an environment variable, treating an unset *or empty* value as absent.
@@ -67,7 +62,7 @@ fn rewrite_host(host: &str) -> &str {
 /// someone else's daemon, which we can only warn about. Exact-match only:
 /// `127.0.0.0/8` aliases (e.g. `127.0.0.2`) and IPv4-mapped IPv6 fall through to
 /// the warn path — the fail-safe direction (never a wrong auto-start).
-#[cfg(any(feature = "harness", test))]
+#[cfg(test)]
 pub(crate) fn listen_is_local(listen: &str) -> bool {
     let (host, _port) = split_listen(listen);
     matches!(
@@ -78,7 +73,7 @@ pub(crate) fn listen_is_local(listen: &str) -> bool {
 
 /// Extract the `host[:port]` authority from a base URL for a best-effort
 /// reachability note. Returns `None` when there is no authority to probe.
-#[cfg(any(feature = "harness", test))]
+#[cfg(test)]
 pub(crate) fn listen_from_base_url(url: &str) -> Option<String> {
     let rest = url
         .strip_prefix("http://")
@@ -86,122 +81,6 @@ pub(crate) fn listen_from_base_url(url: &str) -> Option<String> {
         .unwrap_or(url);
     let authority = rest.split('/').next().unwrap_or(rest);
     (!authority.is_empty()).then(|| authority.to_string())
-}
-
-/// Ensure the local BitRouter daemon is up before launching the agent. Probes
-/// the control socket; when nothing is listening (and `--no-start` was not
-/// given) it prints a hint and auto-starts a detached `serve`, waiting for
-/// readiness. Best-effort throughout: on any failure it warns and returns so
-/// the agent still launches (and surfaces its own connection error) — matching
-/// spawn's "never block the launch" stance.
-#[cfg(feature = "harness")]
-pub(crate) async fn ensure_local_daemon(
-    source: &crate::paths::ConfigSource,
-    cfg: &crate::config::Config,
-    no_start: bool,
-) {
-    let socket = crate::daemon::socket_path_for(source, cfg);
-    match crate::daemon::probe_status(&socket).await {
-        // Already running — nothing to do.
-        Ok(Some(_)) => {}
-        // Definitively not reachable — auto-start unless opted out.
-        Ok(None) => {
-            let p = Palette::for_stderr();
-            if no_start {
-                warn_if_daemon_unreachable(&cfg.server.listen);
-                return;
-            }
-            eprintln!(
-                "{cyan}note:{reset} no BitRouter daemon is running — starting one…",
-                cyan = p.cyan,
-                reset = p.reset,
-            );
-            let log_path = source.home().join("bitrouter.log");
-            let outcome = {
-                #[cfg(all(feature = "core", feature = "harness"))]
-                let start = crate::daemon::start_harness_and_wait;
-                #[cfg(not(all(feature = "core", feature = "harness")))]
-                let start = crate::daemon::start_and_wait;
-                start(
-                    source,
-                    &log_path,
-                    Some(&socket),
-                    crate::daemon::DAEMON_READY_TIMEOUT,
-                )
-                .await
-            };
-            match outcome {
-                Ok(crate::daemon::DaemonStartOutcome::Ready(_)) => {
-                    eprintln!(
-                        "{cyan}note:{reset} BitRouter daemon ready",
-                        cyan = p.cyan,
-                        reset = p.reset,
-                    );
-                }
-                Ok(crate::daemon::DaemonStartOutcome::NotReadyInTime { .. }) => {
-                    eprintln!(
-                        "{cyan}note:{reset} daemon started but is not ready yet — \
-                         the agent may need a moment; logs at {}",
-                        log_path.display(),
-                        cyan = p.cyan,
-                        reset = p.reset,
-                    );
-                }
-                Ok(crate::daemon::DaemonStartOutcome::Exited { status, log_tail }) => {
-                    eprintln!(
-                        "{cyan}note:{reset} daemon exited during startup ({status}) — \
-                         launching the agent anyway",
-                        cyan = p.cyan,
-                        reset = p.reset,
-                    );
-                    crate::daemon::eprint_failure_log(&log_path, &log_tail);
-                }
-                Err(e) => {
-                    eprintln!(
-                        "{cyan}note:{reset} could not start the daemon ({e:#}) — \
-                         launching the agent anyway",
-                        cyan = p.cyan,
-                        reset = p.reset,
-                    );
-                }
-            }
-        }
-        // Reachable but the exchange errored — assume it's up; don't double-start.
-        Err(e) => {
-            tracing::debug!(error = %e, "daemon status probe errored; assuming up");
-        }
-    }
-}
-
-/// Best-effort TCP reachability probe against the daemon's listen address.
-/// Prints a one-line warning when nothing is listening; never errors.
-#[cfg(feature = "harness")]
-pub(crate) fn warn_if_daemon_unreachable(listen: &str) {
-    use std::net::{TcpStream, ToSocketAddrs};
-    use std::time::Duration;
-
-    // Map the wildcard bind host to loopback for the *connect* attempt, same
-    // as the base-URL derivation.
-    let (host, port) = split_listen(listen);
-    let probe = format!("{}:{}", rewrite_host(host), port);
-
-    let reachable = probe
-        .to_socket_addrs()
-        .ok()
-        .and_then(|mut addrs| addrs.next())
-        .map(|addr| TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok())
-        .unwrap_or(false);
-
-    if !reachable {
-        let p = Palette::for_stderr();
-        eprintln!(
-            "{cyan}note:{reset} no BitRouter daemon appears to be listening on {probe} — \
-             start one with `{cli} start` (the agent will fail to reach it otherwise).",
-            cyan = p.cyan,
-            reset = p.reset,
-            cli = invocation::name(),
-        );
-    }
 }
 
 #[cfg(test)]

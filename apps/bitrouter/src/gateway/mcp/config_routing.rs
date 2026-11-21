@@ -27,16 +27,6 @@ pub struct McpServerAggregateConfig {
     pub tool_prefix: String,
 }
 
-impl McpServerAggregateConfig {
-    /// Defaults for one server: aggregate on, prefix `{server_name}__`.
-    pub fn default_for(server_name: &str) -> Self {
-        Self {
-            aggregate: true,
-            tool_prefix: format!("{server_name}__"),
-        }
-    }
-}
-
 /// In-memory routing data populated from config at startup.
 #[derive(Debug, Default, Clone)]
 pub struct ConfigMcpRoutingTable {
@@ -50,8 +40,7 @@ impl ConfigMcpRoutingTable {
     /// misconfiguration is loud, not silent.
     ///
     /// `aggregate_config` is the per-server `aggregate` / `tool_prefix`
-    /// settings. Pass [`McpServerAggregateConfig::default_for`] if the binary
-    /// has no per-server overrides.
+    /// settings resolved from the configured server defaults.
     pub fn from_configs<I>(entries: I) -> Result<Self>
     where
         I: IntoIterator<Item = (String, McpServerConfig, McpServerAggregateConfig)>,
@@ -86,12 +75,6 @@ impl ConfigMcpRoutingTable {
             aggregate_members: members,
         })
     }
-
-    /// True if no servers are configured. The binary uses this to decide
-    /// whether to call `app_builder.mcp(...)` at all.
-    pub fn is_empty(&self) -> bool {
-        self.servers.is_empty()
-    }
 }
 
 #[async_trait]
@@ -122,6 +105,13 @@ impl RoutingTable for ConfigMcpRoutingTable {
 mod tests {
     use super::*;
 
+    fn aggregate_config(name: &str) -> McpServerAggregateConfig {
+        McpServerAggregateConfig {
+            aggregate: true,
+            tool_prefix: format!("{name}__"),
+        }
+    }
+
     fn server(name: &str, url: &str) -> (String, McpServerConfig, McpServerAggregateConfig) {
         (
             name.to_string(),
@@ -132,7 +122,7 @@ mod tests {
                     headers: Default::default(),
                 },
             ),
-            McpServerAggregateConfig::default_for(name),
+            aggregate_config(name),
         )
     }
 
@@ -211,11 +201,7 @@ mod tests {
                     tool_prefix: "a__".into(),
                 },
             ),
-            (
-                "b".to_string(),
-                cfg_b,
-                McpServerAggregateConfig::default_for("b"),
-            ),
+            ("b".to_string(), cfg_b, aggregate_config("b")),
         ])
         .unwrap();
         let target = table
@@ -271,7 +257,7 @@ mod tests {
                     headers: Default::default(),
                 },
             ),
-            McpServerAggregateConfig::default_for("bad"),
+            aggregate_config("bad"),
         );
         assert!(ConfigMcpRoutingTable::from_configs([bad]).is_err());
     }

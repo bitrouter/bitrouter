@@ -4,6 +4,65 @@ fn failure(code: ErrorCode) -> anyhow::Error {
     anyhow::anyhow!("{code:?}")
 }
 
+#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+#[test]
+fn metrics_keep_total_live_potentials_while_policy_uses_uncovered() -> Result<()> {
+    let mut accounting = Accounting::default();
+    for uncovered in 0..3 {
+        accounting.reserve(0, uncovered).map_err(failure)?;
+    }
+    ensure!(accounting.observed(3) == Some((3 * RESERVATION, 0, 3, 0)));
+    ensure!(accounting.observed(2).is_none());
+    accounting.totals.uncovered = 0;
+    accounting.totals.unknown = 3;
+    ensure!(accounting.observed(3) == Some((3 * RESERVATION, 0, 3, 3)));
+    accounting
+        .reserve_physical_write(100, true)
+        .map_err(failure)?;
+    ensure!(accounting.physical_write_reserved() == 100);
+    ensure!(accounting.observed(3) == Some((3 * RESERVATION, 0, 3, 3)));
+    accounting.finish_physical_write(100).map_err(failure)?;
+    ensure!(accounting.physical_write_reserved() == 0);
+    ensure!(accounting.observed(3) == Some((3 * RESERVATION, 0, 3, 3)));
+    Ok(())
+}
+
+#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+#[test]
+fn inconsistent_live_reservations_are_not_observed() {
+    let mut accounting = Accounting::default();
+    let valid = Totals {
+        live: 1,
+        uncovered: 1,
+        reserved: RESERVATION,
+        ..Default::default()
+    };
+    accounting.totals = valid;
+    assert_eq!(accounting.observed(1), Some((RESERVATION, 0, 1, 0)));
+    for invalid in [
+        Totals {
+            uncovered: 2,
+            ..valid
+        },
+        Totals {
+            reserved: RESERVATION - 1,
+            ..valid
+        },
+        Totals {
+            reserved: RESERVATION + 1,
+            ..valid
+        },
+        Totals {
+            live: u64::MAX / RESERVATION + 1,
+            reserved: 0,
+            ..valid
+        },
+    ] {
+        accounting.totals = invalid;
+        assert!(accounting.observed(u64::MAX).is_none(), "{invalid:?}");
+    }
+}
+
 #[test]
 fn configured_receipt_gates_reject_independently_without_partial_reservation() -> Result<()> {
     use crate::config::tenancy::capacity::Receipts;
@@ -233,28 +292,6 @@ fn configured_unknown_limits_and_overflow_are_checked_without_partial_reservatio
     state.totals.unknown = u64::MAX;
     state.totals.uncovered = 1;
     ensure!(!state.globally_ready());
-    Ok(())
-}
-
-#[cfg(all(feature = "core", feature = "harness"))]
-#[test]
-fn maintenance_repair_ignores_lowered_ordinary_budgets_but_keeps_physical_custody() -> Result<()> {
-    let mut state = Accounting::default();
-    state
-        .initialize(
-            Inventory {
-                unknown_count: u64::MAX,
-                live_bytes: u64::MAX,
-                ..Default::default()
-            },
-            2 * ROW_OVERHEAD + 9,
-        )
-        .map_err(failure)?;
-    let charge = state.reserve_repair(9, 2, 1).map_err(failure)?;
-    ensure!(charge == state.free && state.totals.uncovered == 1 && state.totals.live == 2);
-    ensure!(state.reserve_physical_write(1, true).is_err());
-    let before = state.totals;
-    ensure!(state.reserve_repair(u64::MAX, 1, 1).is_err() && state.totals == before);
     Ok(())
 }
 

@@ -267,7 +267,7 @@ pub(crate) fn content_fragments(
         .messages
         .iter()
         .flat_map(|message| &message.content)
-        .filter(|content| super::native_context::has_opaque_payload(content))
+        .filter(|content| super::private_payload::has_opaque_payload(content))
         .count() as u64;
     let mut projection = ContentProjection::new(
         excluded_media_fragments,
@@ -280,7 +280,7 @@ pub(crate) fn content_fragments(
     for message in &prompt.messages {
         let role = content_role(message.role);
         for content in &message.content {
-            if super::native_context::is_opaque_reasoning(content) {
+            if super::private_payload::is_opaque_reasoning(content) {
                 continue;
             }
             match content {

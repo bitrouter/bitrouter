@@ -27,7 +27,7 @@ curl http://127.0.0.1:4356/v1/decisions \
 ```
 
 The placeholder selects an explicitly configured native target. There is no new
-CLI command, listen port or default model. The `bro route` preview continues to
+CLI command, listen port or default model. The `bitrouter route` preview continues to
 describe generation routing; confirm the actual native hop in settled requests.
 
 Native input supports text and inline image parts. Image URLs must be inline
@@ -78,7 +78,7 @@ may be priced from its independent tariff. Regional processing requires a
 matching configured endpoint and tariff; a cross-profile endpoint override makes
 cost unavailable. No premium is inferred for custom endpoints.
 
-`bro requests` and usage exports retain frozen protocol/profile/tariff evidence.
+`bitrouter requests` and usage exports retain frozen protocol/profile/tariff evidence.
 Unavailable costs remain unknown. A completed malformed native response fails
 delivery, retains usable usage, settles once and cannot retry. Pre-completion
 transport/status fallback follows the existing policy. Old rows without frozen

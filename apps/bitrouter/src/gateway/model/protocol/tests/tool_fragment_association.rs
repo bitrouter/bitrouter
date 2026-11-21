@@ -2,7 +2,7 @@ use super::super::{
     InboundAdapter, OutboundAdapter, SseEvent, messages::MessagesAdapter,
     responses::ResponsesAdapter,
 };
-use crate::gateway::http::{AppState, build_router};
+use crate::gateway::http::{AppState, tests::build_router};
 use crate::gateway::model::stream::SseFrame;
 use crate::gateway::model::target::AuthScheme;
 use crate::gateway::pipeline::{

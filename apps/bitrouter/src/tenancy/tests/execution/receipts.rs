@@ -28,8 +28,6 @@ use tokio::sync::{Semaphore, mpsc};
 use tokio_util::task::AbortOnDropHandle;
 
 mod attempts;
-#[cfg(unix)]
-pub(super) mod audit;
 mod authority;
 mod barrier;
 #[cfg(all(unix, any(feature = "otel-http", feature = "otel-grpc")))]

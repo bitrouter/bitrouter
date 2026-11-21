@@ -67,8 +67,8 @@ fn changed_identity_contract_and_disappearing_receipts_fail() -> Result<()> {
 
 fn receipt() -> EvidenceItem {
     EvidenceItem {
-        evidence_id: "route-plan:fixture".into(),
-        kind: "routing.plan".into(),
+        evidence_id: "routing-assessment:fixture".into(),
+        kind: "routing.assessment".into(),
         digest: format!("sha256:{}", "a".repeat(64)),
         redacted: true,
         attributes: BTreeMap::from([("judgments".into(), String::new())]),
@@ -126,7 +126,7 @@ fn requirements_retain_policy_authority_independent_of_core() -> Result<()> {
 }
 
 #[test]
-fn retired_guard_requirements_and_captures_are_rejected_from_current_shape() -> Result<()> {
+fn unsupported_guard_requirements_and_captures_are_rejected_from_current_shape() -> Result<()> {
     let original = serde_json::to_value(input()?)?;
     let mut requirement = original.clone();
     requirement["requirements"]["trajectory"] = "guarded_policies".into();
@@ -153,7 +153,7 @@ mod extra_capture_contract {
     use crate::gateway::observability::decision::{
         EvalInvocation, PendingEvalDecision, PendingEvalDecisionStore,
     };
-    use crate::policy_lock::{PolicyRoutingSnapshot, PolicyRuntime};
+    use crate::policy_source::{PolicyRoutingSnapshot, PolicyRuntime};
     use crate::policy_table_router::{PolicyDecision, PolicyTableRouter};
     use bitrouter_ai::types::{GenerationParams, Message, Prompt, ProviderMetadata, Role};
 
@@ -192,8 +192,7 @@ mod extra_capture_contract {
                 Default::default(),
                 Some(definition.default_tier.clone()),
             );
-            let runtime =
-                PolicyRuntime::from_document(&config, Some(document), pending.clone(), None)?;
+            let runtime = PolicyRuntime::from_document(&config, Some(document), pending.clone())?;
             Ok(Self {
                 requirements,
                 snapshot: runtime.routing_snapshot(),
@@ -399,15 +398,8 @@ mod extra_capture_contract {
         let (_, mut pending) = fixture.handoff()?;
         pending.predicted_role = Some(PRIVATE_MARKER.into());
         pending.predicted_task_family = Some(PRIVATE_MARKER.into());
-        pending.predicted_action = Some(PRIVATE_MARKER.into());
         pending.prediction_confidence_ppm = Some(u32::MAX);
         pending.task_family_confidence_ppm = Some(u32::MAX);
-        pending.task_family_reason_codes = vec![
-            "task_code_review".into(),
-            PRIVATE_MARKER.into(),
-            "task_code_debugging".into(),
-            "task_code_review".into(),
-        ];
         pending.continuation_proposed_tier = Some("strong".into());
         pending.continuation_proposed_model = Some(format!("{PRIVATE_MARKER}\n"));
         pending.continuation_adjustment = Some(format!("{PRIVATE_MARKER}\0"));
@@ -424,23 +416,12 @@ mod extra_capture_contract {
         else {
             anyhow::bail!("fixture lost its selected treatment");
         };
-        for name in [
-            "predicted_role",
-            "predicted_task_family",
-            "predicted_action",
-        ] {
+        for name in ["predicted_role", "predicted_task_family"] {
             ensure!(treatment.attributes.get(name).map(String::as_str) == Some("unknown"));
         }
         for name in ["prediction_confidence_ppm", "task_family_confidence_ppm"] {
             ensure!(treatment.attributes.get(name).map(String::as_str) == Some("1000000"));
         }
-        ensure!(
-            treatment
-                .attributes
-                .get("task_family_reason_codes")
-                .map(String::as_str)
-                == Some("task_code_debugging,task_code_review")
-        );
         ensure!(
             treatment
                 .attributes
@@ -578,7 +559,7 @@ mod extra_capture_contract {
     fn dispatch_rejects_changed_effort_receipts_and_effective_model() -> Result<()> {
         use crate::gateway::caller::CallerContext;
         use crate::gateway::pipeline::{context::PipelineContext, types::PipelineRequest};
-        use crate::gateway::routing::plan::Selection;
+        use crate::gateway::routing::preparation::Receipt;
         use bitrouter_ai::types::ReasoningEffort;
         let context = |prompt: Prompt| {
             let mut request = PipelineRequest::new(
@@ -597,6 +578,16 @@ mod extra_capture_contract {
         let selected = capture.snapshot().context("missing selected policy")?;
         let mut prompt = Fixture::prompt();
         prompt.params.reasoning_effort = pending.selected_effort;
+        prompt.model = pending
+            .route_measurement
+            .as_ref()
+            .context("measurement")?
+            .candidates
+            .iter()
+            .find(|candidate| candidate.tier == pending.selected_tier)
+            .context("selected model")?
+            .model
+            .clone();
         selected.check_routing(&context(prompt.clone()))?;
         prompt.params.reasoning_effort =
             Some(if pending.selected_effort == Some(ReasoningEffort::High) {
@@ -610,14 +601,13 @@ mod extra_capture_contract {
         direct.initialize(input()?)?;
         direct.bypass(Bypass::UnboundRoute)?;
         let mut ctx = context(Fixture::prompt());
-        ctx.emit(Selection {
-            requested_model: "fixture:strong".into(),
-            selected_model: "fixture:strong".into(),
-            selected_context: "full".into(),
-            prompt_digest: format!("sha256:{}", "a".repeat(64)),
-            strategy: Default::default(),
-            reason: "fixture".into(),
-            candidates: Vec::new(),
+        ctx.emit(Receipt {
+            id: "semantic-fixture".into(),
+            assessment: None,
+            error: Some(
+                crate::gateway::model::decision::types::DecisionError::invalid_request("fixture"),
+            ),
+            usage: None,
         });
         direct.route(routing(&ctx)?)?;
         direct.ready()?;
@@ -627,9 +617,11 @@ mod extra_capture_contract {
             ready.check_routing(&context(Fixture::prompt())).is_err(),
             "missing receipt was accepted"
         );
-        ctx.set_model("different-model");
+        let mut changed = Fixture::prompt();
+        changed.params.reasoning_effort = pending.selected_effort;
+        changed.model = "different-model".into();
         ensure!(
-            ready.check_routing(&ctx).is_err(),
+            selected.check_routing(&context(changed)).is_err(),
             "changed model was accepted"
         );
         let mut duplicate = ready.as_ref().clone();

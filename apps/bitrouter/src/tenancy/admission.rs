@@ -8,8 +8,6 @@
 
 #[cfg(all(test, any(feature = "otel-http", feature = "otel-grpc")))]
 mod observation_tests;
-#[cfg(all(feature = "core", feature = "harness"))]
-mod repair;
 #[cfg(test)]
 mod tests;
 pub(in crate::tenancy) mod unknown;
@@ -66,8 +64,6 @@ pub(super) struct Lease {
 struct State {
     closed: bool,
     active: usize,
-    #[cfg(all(feature = "core", feature = "harness"))]
-    learning: usize,
     ingress: usize,
     ingress_bytes: usize,
     tenants: BTreeMap<TenantId, Counts>,
@@ -83,9 +79,6 @@ struct Counts {
     unknown: Option<u64>,
     uncovered: u64,
     pins: usize,
-    repairs: usize,
-    #[cfg(all(feature = "core", feature = "harness"))]
-    learning: usize,
     active: usize,
     queued: usize,
 }
@@ -112,14 +105,6 @@ struct Queued {
 pub(super) struct Ingress {
     admission: Arc<Admission>,
     bytes: usize,
-}
-#[cfg(all(feature = "core", feature = "harness"))]
-pub(in crate::tenancy) struct Repair {
-    admission: Arc<Admission>,
-    tenant: TenantId,
-    charged: u64,
-    keys: Vec<super::receipts::store::obligations::Key>,
-    finished: bool,
 }
 impl Drop for Ingress {
     fn drop(&mut self) {
@@ -570,45 +555,6 @@ impl Admission {
         })
     }
 
-    /// A nested paid Choice must never wait behind its own admitted parent.
-    /// Reuse the same atomic active/receipt reservation and FIFO policy.
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(super) fn try_acquire(
-        self: &Arc<Self>,
-        tenant: &TenantId,
-        limits: &Limits,
-        deadline: Instant,
-    ) -> Result<Lease, ErrorCode> {
-        let limit = usize::from(limits.active_executions).min(self.profile.tenant_active);
-        self.update(|state| {
-            if state.closed {
-                return Err(ErrorCode::AuthorityUnavailable);
-            }
-            let (active, queued) = state
-                .tenants
-                .get(tenant)
-                .map_or((0, 0), |counts| (counts.active, counts.queued));
-            if Instant::now() >= deadline
-                || !state.receipts_ready(tenant)
-                || active >= limit
-                || state.active >= self.profile.instance_active
-                || queued != 0
-                || state.next_eligible(self.profile).is_some()
-            {
-                return Err(ErrorCode::CapacityExceeded);
-            }
-            state.reserve(tenant)?;
-            Ok(Lease {
-                admission: self.clone(),
-                tenant: tenant.clone(),
-                completion: Arc::new(unknown::Completion::default()),
-            })
-        })
-        .inspect_err(|code| {
-            tracing::debug!(component = "execution", reason = ?code, "tenant capacity refusal")
-        })
-    }
-
     /// Reject new and queued acquisitions, waking all queued callers immediately.
     /// Existing leases remain valid until their owners release them.
     pub fn close(&self) {
@@ -788,111 +734,13 @@ impl Lease {
     }
 }
 
-#[cfg(all(feature = "core", feature = "harness"))]
-pub(in crate::tenancy) struct LearningLease {
-    admission: Arc<Admission>,
-    tenant: TenantId,
-}
-#[cfg(all(feature = "core", feature = "harness"))]
-impl Drop for LearningLease {
-    fn drop(&mut self) {
-        self.admission.update(|state| {
-            state.learning = state.learning.saturating_sub(1);
-            if let Some(counts) = state.tenants.get_mut(&self.tenant) {
-                counts.learning = counts.learning.saturating_sub(1);
-            }
-            state.idle(&self.tenant);
-        });
-    }
-}
-#[cfg(all(feature = "core", feature = "harness"))]
-impl Admission {
-    pub(in crate::tenancy) fn learning(
-        self: &Arc<Self>,
-        tenant: &TenantId,
-        maximum: u32,
-    ) -> Result<LearningLease, ErrorCode> {
-        self.update(|state| {
-            if state.closed {
-                return Err(ErrorCode::AuthorityUnavailable);
-            }
-            let limit = usize::try_from(maximum.min(2)).map_err(|_| ErrorCode::CapacityExceeded)?;
-            if state.learning >= 8
-                || state
-                    .tenants
-                    .get(tenant)
-                    .map_or(0, |counts| counts.learning)
-                    >= limit
-            {
-                return Err(ErrorCode::CapacityExceeded);
-            }
-            state.learning += 1;
-            state.tenants.entry(tenant.clone()).or_default().learning += 1;
-            Ok(LearningLease {
-                admission: self.clone(),
-                tenant: tenant.clone(),
-            })
-        })
-    }
-}
 impl Counts {
     fn idle(&self) -> bool {
-        #[cfg(all(feature = "core", feature = "harness"))]
-        if self.learning != 0 {
-            return false;
-        }
-        self.active == 0 && self.queued == 0 && self.pins == 0 && self.repairs == 0
+        self.active == 0 && self.queued == 0 && self.pins == 0
     }
 }
 impl State {
     fn drained(&self) -> bool {
-        #[cfg(all(feature = "core", feature = "harness"))]
-        if self.learning != 0 {
-            return false;
-        }
         self.active == 0 && self.queue.is_empty()
-    }
-}
-
-#[cfg(all(test, feature = "core", feature = "harness"))]
-mod learning_tests {
-    use super::*;
-    #[tokio::test]
-    async fn learning_capacity_is_shared_finite_and_retained_through_close() -> anyhow::Result<()> {
-        let admission = Admission::new();
-        let mut leases = Vec::new();
-        for index in 0..4 {
-            let tenant: TenantId = format!("tenant-{index}").try_into()?;
-            for _ in 0..2 {
-                leases.push(
-                    admission
-                        .learning(&tenant, 8)
-                        .map_err(|code| anyhow::anyhow!("capacity: {code:?}"))?,
-                );
-            }
-            assert!(matches!(
-                admission.learning(&tenant, 8),
-                Err(ErrorCode::CapacityExceeded)
-            ));
-        }
-        let extra = "extra".try_into()?;
-        assert!(matches!(
-            admission.learning(&extra, 8),
-            Err(ErrorCode::CapacityExceeded)
-        ));
-        assert!(matches!(
-            admission.learning(&extra, 0),
-            Err(ErrorCode::CapacityExceeded)
-        ));
-        admission.close();
-        assert!(matches!(
-            admission.learning(&extra, 1),
-            Err(ErrorCode::AuthorityUnavailable)
-        ));
-        assert_eq!(admission.lock().learning, 8);
-        drop(leases);
-        admission.wait_drained().await;
-        assert!(admission.lock().tenants.is_empty());
-        Ok(())
     }
 }

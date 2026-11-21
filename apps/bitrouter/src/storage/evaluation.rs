@@ -4,7 +4,6 @@
 #[cfg(feature = "multi-instance")]
 pub(crate) mod shared;
 
-use crate::gateway::routing::exploration::{AssignmentArm, RouteAssignment};
 use bitrouter_ai::eval::{
     EvalSubject, EvalSubjectIdentity, EvaluationResult, EvidenceItem, RouteActionCandidate,
     RouteDecisionMeasurement,
@@ -109,7 +108,7 @@ pub fn validate_subject(subject: &EvalSubject) -> Result<()> {
         validate_identifier(&decision.selected_tier, "decision.selected_tier")?;
         validate_digest(&decision.policy_digest, "decision.policy_digest")?;
         if let Some(measurement) = &decision.route_measurement {
-            validate_route_measurement_for_experiment(measurement, None)?;
+            validate_deterministic_route_measurement(measurement)?;
         }
     }
     for dimension in &subject.requested_dimensions {
@@ -200,44 +199,12 @@ pub(crate) fn validate_route_measurement(measurement: &RouteDecisionMeasurement)
     Ok(())
 }
 
-pub(crate) fn validate_route_measurement_for_experiment(
-    measurement: &RouteDecisionMeasurement,
-    experiment: Option<&RouteAssignment>,
-) -> Result<()> {
+fn validate_deterministic_route_measurement(measurement: &RouteDecisionMeasurement) -> Result<()> {
     validate_route_measurement(measurement)?;
-    let mut actual_positive = measurement
-        .candidates
-        .iter()
-        .map(|candidate| candidate.logging_probability_ppm)
-        .filter(|probability| *probability > 0)
-        .collect::<Vec<_>>();
-    actual_positive.sort_unstable();
-    let Some(experiment) = experiment else {
-        if actual_positive != [1_000_000] {
-            anyhow::bail!("route measurement without an experiment must be deterministic")
-        }
-        return Ok(());
-    };
-
-    let challenger = experiment.challenger_propensity_ppm;
-    let champion = 1_000_000_u32
-        .checked_sub(challenger)
-        .ok_or_else(|| anyhow::anyhow!("experiment challenger propensity exceeds one million"))?;
-    let expected_action = match experiment.arm {
-        AssignmentArm::Control => champion,
-        AssignmentArm::Challenger => challenger,
-    };
-    if measurement.logging_action_probability_ppm != expected_action {
-        anyhow::bail!("route measurement action probability contradicts experiment arm")
-    }
-    let mut expected_positive = [champion, challenger]
-        .into_iter()
-        .filter(|probability| *probability > 0)
-        .collect::<Vec<_>>();
-    expected_positive.sort_unstable();
-    if actual_positive != expected_positive {
-        anyhow::bail!("route measurement distribution contradicts two-arm experiment")
-    }
+    anyhow::ensure!(
+        measurement.logging_action_probability_ppm == 1_000_000,
+        "route measurement must select one deterministic action"
+    );
     Ok(())
 }
 
@@ -535,8 +502,8 @@ mod tests {
     }
 
     #[test]
-    fn retired_predictive_v1_fallback_field_is_rejected() {
-        let mut retired = serde_json::json!({
+    fn unknown_predictive_fallback_field_is_rejected() {
+        let mut unknown = serde_json::json!({
             "decision_id": "decision-1",
             "policy": "auto",
             "route_projection": "code:generation|implement|normal",
@@ -545,7 +512,7 @@ mod tests {
             "baseline_tier": "balanced",
             "policy_digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         });
-        retired
+        unknown
             .as_object_mut()
             .expect("decision fixture is an object")
             .insert(
@@ -553,7 +520,7 @@ mod tests {
                 serde_json::json!("balanced"),
             );
 
-        assert!(serde_json::from_value::<EvalDecisionRef>(retired).is_err());
+        assert!(serde_json::from_value::<EvalDecisionRef>(unknown).is_err());
     }
 
     #[test]
@@ -605,6 +572,12 @@ mod tests {
                 },
             ],
         )?;
+        assert!(validate_deterministic_route_measurement(&valid).is_err());
+        let mut deterministic = valid.clone();
+        deterministic.logging_action_probability_ppm = 1_000_000;
+        deterministic.candidates[0].logging_probability_ppm = 1_000_000;
+        deterministic.candidates[1].logging_probability_ppm = 0;
+        validate_deterministic_route_measurement(&deterministic)?;
         let invalid = [
             {
                 let mut value = valid.clone();

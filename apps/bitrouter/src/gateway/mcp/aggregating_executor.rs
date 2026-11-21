@@ -146,11 +146,7 @@ impl<E: Executor> AggregatingExecutor<E> {
     /// Build a per-member direct request from the aggregate request. Used by
     /// fan-out and prefix-routed methods.
     fn direct_request(request: &McpRequest, member: &AggregateMember) -> McpRequest {
-        // The aggregate's `request_id` is the inbound id from the JSON-RPC
-        // client. Per-member sub-calls reuse it so settled/observe hooks can
-        // correlate the whole fan-out as one logical request.
         McpRequest {
-            request_id: request.request_id.clone(),
             selector: ServerSelector::Direct(member.server_name.clone()),
             method: request.method.clone(),
             params: request.params.clone(),
@@ -248,10 +244,7 @@ impl<E: Executor> AggregatingExecutor<E> {
         }
         cache_policy.apply(&mut result);
         super::age_cacheable_result(&mut result, merge_at.elapsed());
-        Ok(McpResponse {
-            request_id: request.request_id.clone(),
-            result,
-        })
+        Ok(McpResponse { result })
     }
 
     /// Resolve a prefix-routed request (`tools/call` / `prompts/get`) into the
@@ -383,10 +376,7 @@ impl<E: Executor> AggregatingExecutor<E> {
         }
         cache_policy.apply(&mut result);
         super::age_cacheable_result(&mut result, merge_at.elapsed());
-        Ok(McpResponse {
-            request_id: request.request_id.clone(),
-            result,
-        })
+        Ok(McpResponse { result })
     }
 
     /// `skills/get` — strip the label off `params.uri`, dispatch to the owning
@@ -479,10 +469,7 @@ impl<E: Executor> AggregatingExecutor<E> {
         let mut cache_policy = AggregateCachePolicy::default();
         cache_policy.observe(&result);
         cache_policy.apply(&mut result);
-        Ok(McpResponse {
-            request_id: request.request_id.clone(),
-            result,
-        })
+        Ok(McpResponse { result })
     }
 
     /// `resources/read` — resolve the one member that owns `params.uri` and
@@ -713,19 +700,15 @@ impl<E: Executor> AggregatingExecutor<E> {
             // client. Non-list methods surface as "method not found".
             return match request.method.as_str() {
                 "tools/list" => Ok(McpResponse {
-                    request_id: request.request_id.clone(),
                     result: empty_list_result("tools"),
                 }),
                 "resources/list" => Ok(McpResponse {
-                    request_id: request.request_id.clone(),
                     result: empty_list_result("resources"),
                 }),
                 "resources/templates/list" => Ok(McpResponse {
-                    request_id: request.request_id.clone(),
                     result: empty_list_result("resourceTemplates"),
                 }),
                 "prompts/list" => Ok(McpResponse {
-                    request_id: request.request_id.clone(),
                     result: empty_list_result("prompts"),
                 }),
                 // The gateway declares the skills extension optimistically
@@ -733,7 +716,6 @@ impl<E: Executor> AggregatingExecutor<E> {
                 // time), so an empty catalog must answer with an empty list
                 // rather than an error.
                 SKILLS_LIST_METHOD => Ok(McpResponse {
-                    request_id: request.request_id.clone(),
                     result: empty_list_result("skills"),
                 }),
                 other => Err(BitrouterError::NotFound(format!(
@@ -888,10 +870,7 @@ mod tests {
                         "no canned response for '{name}' / '{composite}'"
                     )))
                 });
-            entry.map(|result| McpResponse {
-                request_id: request.request_id.clone(),
-                result,
-            })
+            entry.map(|result| McpResponse { result })
         }
     }
 

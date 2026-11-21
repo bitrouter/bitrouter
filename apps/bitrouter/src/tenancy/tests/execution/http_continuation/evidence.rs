@@ -242,8 +242,8 @@ async fn lossy_raw_output_never_authorizes_visible_history_detachment() -> Resul
                         .is_none()
                 );
                 let mut follow = body(stream, Some(&public));
-                // Exactly the otherwise-reconstructible visible transcript. A
-                // lossy JSON projection formerly detached this provider state.
+                // Reconstructing the visible transcript must preserve the
+                // retained provider state and its continuation identity.
                 follow["input"] = json!([
                     {"role":"user","content":"follow up"},
                     {"role":"assistant","content":"owned reply"},

@@ -17,8 +17,8 @@
 //!    BitRouter Cloud which may authenticate through the local OAuth flow.
 //!
 //! Precedence is conservative: the merge never overwrites a field the user set
-//! in `bitrouter.yaml`. The providers it configures are no longer compiled-in
-//! built-ins (only the `bitrouter` cloud gateway is — see [`crate::providers::builtin`]);
+//! in `bitrouter.yaml`. Only the `bitrouter` cloud gateway has built-in defaults
+//! (see [`crate::providers::builtin`]);
 //! the merge applies their full transport (base URL, protocol map,
 //! per-protocol endpoints), class, and env-resolved credential directly from
 //! the fetched-or-cached registry data.
@@ -448,7 +448,7 @@ mod v1_tests {
 
 /// Resolve `${VAR}` / `${VAR:-default}` references in a registry `api_base`
 /// against the environment (via [`env_lookup`], so the env overrides a
-/// `bro reload` installs on the daemon apply). Returns `None` when a referenced variable is unset and
+/// `bitrouter reload` installs on the daemon apply). Returns `None` when a referenced variable is unset and
 /// carries no default — the provider then can't form a valid base URL. Used
 /// for the parameterised big-cloud bases (Bedrock `${AWS_REGION}`, Azure
 /// `${AZURE_OPENAI_RESOURCE}`); a fixed base has no `${...}` and passes through
@@ -458,10 +458,8 @@ fn resolve_api_base(raw: &str) -> Option<String> {
 }
 
 /// Merge one public (non-private) registry provider into the config. Fully
-/// configures it from the registry data — these providers are no longer
-/// compiled-in built-ins (only the `bitrouter` cloud gateway is), so the merge
-/// is the single place their transport, protocol map, and credential are
-/// applied.
+/// configures its transport, protocol map and credential from registry data.
+/// Only the `bitrouter` cloud gateway also has compiled-in defaults.
 fn merge_provider(config: &mut Config, provider: &RegistryProvider) {
     let id = provider.name.as_str();
     let class = classify(provider);
@@ -476,7 +474,7 @@ fn merge_provider(config: &mut Config, provider: &RegistryProvider) {
         // personal subscription). Implanting it into a provider the operator
         // *fully hand-declared* (its own models AND its own credential) silently
         // demotes it from routable to explicit-route-only, so the daemon 404s a
-        // canonical id that the local `bro models` resolver — which does
+        // canonical id that the local `bitrouter models` resolver — which does
         // not run this merge — reports as routable. A full manual declaration is
         // the operator's opt-in, so leave its class unset: it ranks last and
         // joins the cascade like any user-declared provider. Stub declarations
@@ -538,7 +536,7 @@ fn merge_provider(config: &mut Config, provider: &RegistryProvider) {
     }
 
     // Not in the config. OAuth / native providers are never auto-added (they
-    // need a local `bro providers login`); an env-keyed provider is
+    // need a local `bitrouter providers login`); an env-keyed provider is
     // auto-added only when its credential is present (principle #5).
     let Some(var) = provider.env_credential_var() else {
         return;
@@ -779,7 +777,7 @@ mod tests {
             bitrouter_ai::types::Capability::Tools,
         ];
         registry_provider.models[0].reasoning_effort =
-            Some(crate::gateway::model::capabilities::ReasoningEffortConfig {
+            Some(crate::config::model::ReasoningEffortConfig {
                 levels: vec![
                     bitrouter_ai::types::ReasoningEffort::Low,
                     bitrouter_ai::types::ReasoningEffort::High,
@@ -875,7 +873,7 @@ mod tests {
         // own credential) must keep `class: None`, so it joins the canonical
         // auto-cascade instead of being demoted to explicit-route-only. Without
         // this, the daemon (which runs the merge) 404s a canonical id that the
-        // local `bro models` resolver (which does not) reports routable.
+        // local `bitrouter models` resolver (which does not) reports routable.
         let mut sub = provider("mysub");
         sub.billing = Billing::Subscription;
         let hand_models = build_models(&sub);
@@ -966,9 +964,8 @@ mod tests {
 
     #[test]
     fn merged_provider_carries_per_model_protocol() -> anyhow::Result<()> {
-        // The providers are no longer compiled-in built-ins, so the merge is the
-        // sole source of their protocol: each model carries its dist-resolved
-        // protocol set (an ordered set like [chat, responses] is preserved).
+        // The registry merge supplies the protocol for each model from its
+        // dist-resolved protocol set; ordering such as [chat, responses] is preserved.
         let mut config = Config::default();
         config.providers.insert(
             "openai".to_string(),
@@ -1344,7 +1341,7 @@ mod tests {
             .context("native override missing")?;
         assert_eq!(
             native.endpoint_profile,
-            Some(crate::gateway::catalog::types::PricingEndpointProfile::OpenaiGlobal)
+            Some(crate::config::PricingEndpointProfile::OpenaiGlobal)
         );
         assert_eq!(native.input_micro_usd_per_token, Some(0.1));
         assert_eq!(native.cache_read_micro_usd_per_token, None);

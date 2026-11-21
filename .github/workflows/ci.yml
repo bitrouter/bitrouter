@@ -117,79 +117,35 @@ jobs:
     - changes
     if: needs.changes.outputs.code == 'true'
   build-linux:
-    name: build Linux test artifacts
+    name: build Linux service test artifacts
     needs:
     - changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
-    # Build the current workspace before archiving.
     timeout-minutes: 120
     env:
       BITROUTER_BUILD_REVISION: ${{ github.sha }}
       CARGO_BUILD_JOBS: '1'
     steps:
     - uses: actions/checkout@v6
-    - name: Prepare memory for the Linux test build
-      env:
-        RUNNER_KIND: ${{ runner.environment }}
-      run: |
-        set -euo pipefail
-        [[ "$GITHUB_ACTIONS" == true && "$RUNNER_KIND" == github-hosted ]]
-        [[ ! -e /swapfile-bitrouter-ci && ! -L /swapfile-bitrouter-ci ]]
-        free -h
-        df -h "$GITHUB_WORKSPACE"
-        sudo fallocate --length 8G /swapfile-bitrouter-ci
-        sudo chmod 600 /swapfile-bitrouter-ci
-        sudo mkswap /swapfile-bitrouter-ci
-        sudo swapon /swapfile-bitrouter-ci
-        free -h
-        df -h "$GITHUB_WORKSPACE"
     - uses: actions-rust-lang/setup-rust-toolchain@v1
       with:
         toolchain: 1.99.1
         cache-on-failure: false
         # Keep cache restore without optional PR cache writes after archive upload.
         cache-save-if: ${{ github.event_name != 'pull_request' }}
-        cache-key: complete-v1
+        cache-key: linux-service-v2
     - uses: taiki-e/install-action@v2
       with:
         tool: nextest@0.9.114
     - name: Validate independent consumer lockfiles before compilation
       run: |
         cargo metadata --locked --manifest-path apps/bitrouter/tests/fixtures/sdk_consumer/Cargo.toml --format-version 1 > /dev/null
-    - name: Build tests and process fixtures once
-      # Leave time for diagnostics upload if this bounded build is interrupted.
-      timeout-minutes: 110
-      run: |
-        set -euo pipefail
-        mkdir -p ci-evidence
-        command -v vmstat
-        vmstat -w -t 30 220 &
-        sampler_pid=$!
-        finish_build() {
-          result=$?
-          trap - EXIT
-          kill "$sampler_pid" 2>/dev/null || true
-          wait "$sampler_pid" 2>/dev/null || true
-          free -h || true
-          df -h "$GITHUB_WORKSPACE" || true
-          exit "$result"
-        }
-        trap finish_build EXIT
-        trap 'exit 143' TERM
-        trap 'exit 130' INT
-        /usr/bin/time -v -o ci-evidence/build-tests.txt cargo nextest run --locked --workspace --all-features --build-jobs 1 --no-run
-        /usr/bin/time -v -o ci-evidence/build-fixtures.txt cargo build --locked --workspace --all-features --examples --jobs 1
-        # Archive without recompiling, including the now-built process fixtures.
-        cargo nextest archive --locked --workspace --all-features --build-jobs 1 --profile ci --archive-file tests.tar.zst
-        cargo nextest list --workspace --all-features --message-format json > ci-evidence/test-inventory.json
-        printf '%s\n' "$GITHUB_SHA" > tests.sha
-        printf '%s\n' "$GITHUB_WORKSPACE" > tests.workspace
-        sha256sum tests.tar.zst > tests.tar.zst.sha256
-        du -sh target tests.tar.zst > ci-evidence/build-size.txt
+    - name: Build the gateway test archive
+      run: bash .github/actions/test-archive/build.sh service
     - uses: actions/upload-artifact@v4
       with:
-        name: linux-tests-${{ github.sha }}
+        name: linux-tests-service-${{ github.sha }}
         path: |-
           tests.tar.zst
           tests.tar.zst.sha256
@@ -198,17 +154,87 @@ jobs:
         compression-level: 0
         retention-days: 2
         overwrite: true
-    - name: Upload test evidence
-      if: always()
-      uses: actions/upload-artifact@v4
+  build-service-process:
+    name: build gateway database and process regressions
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      CARGO_BUILD_JOBS: '1'
+      BITROUTER_BUILD_REVISION: ${{ github.sha }}
+    steps:
+    - uses: actions/checkout@v6
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
       with:
-        name: ${{ github.job }}-${{ strategy.job-index }}-attempt-${{ github.run_attempt }}-evidence
-        path: ci-evidence/
-        retention-days: 7
+        toolchain: 1.99.1
+        cache-key: linux-service-process-v2
+    - uses: taiki-e/install-action@v2
+      with:
+        tool: nextest@0.9.114
+    - run: bash .github/actions/test-archive/build.sh service-process
+    - uses: actions/upload-artifact@v4
+      with:
+        name: linux-tests-service-process-${{ github.sha }}
+        path: |-
+          tests.tar.zst
+          tests.tar.zst.sha256
+          tests.sha
+          tests.workspace
+        compression-level: 0
+        retention-days: 2
+        overwrite: true
+  build-bro:
+    name: build Linux BRO test artifacts
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      BITROUTER_BUILD_REVISION: ${{ github.sha }}
+    steps:
+    - uses: actions/checkout@v6
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        toolchain: 1.99.1
+        cache-key: linux-bro-v2
+    - uses: taiki-e/install-action@v2
+      with:
+        tool: nextest@0.9.114
+    - run: bash .github/actions/test-archive/build.sh bro
+    - uses: actions/upload-artifact@v4
+      with:
+        name: linux-tests-bro-${{ github.sha }}
+        path: |-
+          tests.tar.zst
+          tests.tar.zst.sha256
+          tests.sha
+          tests.workspace
+        compression-level: 0
+        retention-days: 2
+        overwrite: true
+  test-bro:
+    name: test (Linux, BRO)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@v6
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        toolchain: 1.99.1
+        cache-key: bro-tests
+    - uses: taiki-e/install-action@v2
+      with:
+        tool: nextest@0.9.114
+    - name: Provision the Linux workspace sandbox
+      run: bash .github/scripts/ci-bro-sandbox.sh
+    - name: Run the BRO suite
+      env:
+        BRO_TEST_REQUIRE_WORKSPACE_SANDBOX: "1"
+      run: cargo nextest run --locked -p bitrouter-bro --all-features --profile ci --test-threads 2
   test-linux:
     name: test (Linux, ${{ matrix.suite }})
-    needs:
-    - build-linux
+    needs: build-linux
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -218,14 +244,7 @@ jobs:
       env:
         FILTER: ${{ matrix.filter }}
         TEST_THREADS: ${{ matrix.threads }}
-      run: bash .github/scripts/ci-test.sh ordinary --test-threads "$TEST_THREADS" -E "$FILTER"
-    - name: Upload test evidence
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: ${{ github.job }}-${{ strategy.job-index }}-attempt-${{ github.run_attempt }}-evidence
-        path: ci-evidence/
-        retention-days: 7
+      run: bash .github/scripts/ci-test.sh --test-threads "$TEST_THREADS" -E "$FILTER"
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -237,207 +256,97 @@ jobs:
         - suite: integration
           threads: 2
           filter: kind(test)
-  test-capacity:
-    name: test (Linux, capacity ${{ matrix.suite }})
-    needs:
-    - build-linux
+  test-product-process:
+    name: test (BRO and independent SDK clients)
+    needs: [build-service-process, build-bro]
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ matrix.suite == 'recovery-experiment' && 45 || 25 }}
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@v6
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        toolchain: 1.99.1
+        cache: false
+    - name: Build the independent ordered protocol SDK consumer
+      run: |
+        cargo build --locked \
+          --manifest-path apps/bitrouter/tests/fixtures/native_generate_content_ap/Cargo.toml \
+          --target-dir target/native-ap-sdk-consumer --bin native-ap-sdk-consumer
+    - uses: ./.github/actions/test-archive
+      with:
+        product: service-process
+        companion: 'true'
+    - name: Install the BRO process-test sandbox
+      run: bash .github/scripts/ci-bro-sandbox.sh
+    - name: Run gateway routing through the BRO harness
+      run: bash .github/scripts/ci-test.sh --run-ignored only -E 'binary(=product_process)'
+    - name: Verify ordered native JSON and SSE with the independent AP SDK
+      env:
+        BITROUTER_NATIVE_AP_CLIENT: ${{ github.workspace }}/target/native-ap-sdk-consumer/debug/native-ap-sdk-consumer
+      run: |
+        bash .github/scripts/ci-test.sh --run-ignored only --test-threads 1 \
+          -E 'kind(lib) & test(=tenancy::tests::execution::receipts::ordered::generate_content_native::boundaries::process_consumer::native_generate_content_actual_ap_sdk_consumer_keeps_original_tokens_json_sse_h1_h2)'
+  test-service-profile:
+    name: test (gateway ${{ matrix.profile }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
     strategy:
       fail-fast: false
-      max-parallel: 3
       matrix:
         include:
-        - suite: core-tree
-          expected-tests: 5
-          filter: binary(=core_execution) & (test(=capacity::tree_limits::maximum_tree_completes_with_default_counts_and_terminal_ack_loss) | test(=capacity::tree_limits::maximum_tool_batch_keeps_full_replies_after_terminal_ack_loss) | test(=capacity::tree_limits::maximum_tree_byte_failure_survives_terminal_ack_loss_before_persistence) | test(=capacity::tree_limits::maximum_tree_byte_failure_survives_terminal_ack_loss_after_persistence) | test(=capacity::tree_limits::insufficient_artifact_quota_never_dispatches_the_tool_batch))
-        - suite: checkpoints
-          expected-tests: 3
-          filter: kind(lib) & (test(=harness::agent::tests::native::native_checkpoint_capacity_failure_reports_the_resource_cause) | test(=harness::agent::tests::native::native_long_tool_loop_completes_beyond_old_checkpoint_capacity) | test(=harness::service::tests::recovery::native_large_checkpoint_keeps_next_turn_admissible_after_cold_recovery))
-        - suite: recovery-experiment
-          expected-tests: 4
-          filter: kind(lib) & (test(=offline::recovery::tests::saturation::actual_history_crosses_legacy_limits_and_fresh_target_keeps_independent_history) | test(=offline::large::tests::dense_inventory_exceeds_all_v1_total_limits_with_fixed_working_budget) | test(=tenancy::audit::recovery::v2::tests::runner::real_v2_runner_proves_closure_and_refuses_changed_approval_and_revoked_source_key) | test(=tenancy::audit::recovery::v2::tests::restore::real_restore_keeps_old_resource_revisions_and_rotated_oauth_and_refuses_corruption))
+        - profile: minimal
+          flags: --no-default-features
+        - profile: default
+          flags: ''
+        - profile: shared
+          flags: --no-default-features --features multi-instance,http2
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/service-${{ matrix.profile }}
+      CARGO_BUILD_JOBS: '1'
     steps:
     - uses: actions/checkout@v6
-    - uses: ./.github/actions/test-archive
-    - name: Run bounded capacity parents without rebuilding
-      env:
-        FILTER: ${{ matrix.filter }}
-        EXPECTED_TESTS: ${{ matrix.expected-tests }}
-      run: |
-        # A partially renamed allowlist must fail, even if another parent matches.
-        # https://nexte.st/docs/machine-readable/list/
-        cargo-nextest nextest list \
-          --cargo-metadata "$PWD/target/nextest/cargo-metadata.json" \
-          --binaries-metadata "$PWD/target/nextest/binaries-metadata.json" \
-          --workspace-remap "$PWD" --target-dir-remap "$PWD/target" \
-          --profile ci --run-ignored only -E "$FILTER" --message-format json \
-          > ci-evidence/capacity-selection.json
-        jq -e --argjson expected "$EXPECTED_TESTS" '
-          [."rust-suites"[].testcases[] | select(."filter-match".status == "matches")]
-          | length == $expected and all(.ignored == true)
-        ' ci-evidence/capacity-selection.json
-        export BITROUTER_TEST_RECOVERY_KEY="$(openssl rand -base64 32)"
-        bash .github/scripts/ci-test.sh capacity --test-threads 1 --run-ignored only -E "$FILTER"
-    - name: Upload test evidence
-      if: always()
-      uses: actions/upload-artifact@v4
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
       with:
-        name: ${{ github.job }}-${{ strategy.job-index }}-attempt-${{ github.run_attempt }}-evidence
-        path: ci-evidence/
-        retention-days: 7
-  test-process:
-    name: test (Linux, process contracts)
-    needs:
-    - build-linux
+        toolchain: 1.99.1
+        cache-key: service-${{ matrix.profile }}
+    - uses: taiki-e/install-action@v2
+      with:
+        tool: nextest@0.9.114
+    - name: Exercise the native service package
+      env:
+        FLAGS: ${{ matrix.flags }}
+      run: |
+        read -r -a features <<< "$FLAGS"
+        cargo build --locked -p bitrouter "${features[@]}" --bin bitrouter --examples
+        export BITROUTER_TEST_GATEWAY_BINARY="$CARGO_TARGET_DIR/debug/bitrouter"
+        export BITROUTER_TEST_EXAMPLES_DIR="$CARGO_TARGET_DIR/debug/examples"
+        export BITROUTER_TEST_PREBUILT_ONLY=1
+        cargo nextest run --locked -p bitrouter "${features[@]}" --profile ci \
+          --test-threads 2 --retries 0 --no-fail-fast --no-tests fail
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: service-${{ matrix.profile }}-${{ github.run_attempt }}-evidence
+        path: target/service-${{ matrix.profile }}/nextest/ci/junit.xml
+  test-libraries:
+    name: test (contracts, SDK, registry and helpers)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
     steps:
     - uses: actions/checkout@v6
-    - uses: ./.github/actions/test-archive
-    - name: verify native child and file ownership under cleanup faults
-      env:
-        BITROUTER_TEST_EXAMPLES_DIR: ${{ github.workspace }}/target/debug/examples
-      run: bash .github/scripts/ci-test.sh 0 --test-threads 1 --run-ignored only -E 'test(=tenancy::tests::execution::native::session::custody::native36_real_child_and_file_owner_follow_actual_cleanup_disposition)'
-    - name: verify owned capture child and cleanup consumers
-      timeout-minutes: 10
-      env:
-        BITROUTER_OWNED_CAPTURE_FIXTURE: ${{ github.workspace }}/target/debug/examples/owned_capture_fixture
-      run: bash .github/scripts/ci-test.sh 1 --test-threads 1 --run-ignored only -E 'test(=tenancy::tests::execution::native::capture::real_controller_passive_modes_freeze_owned_prefix_without_judge_or_legacy_reads)
-        | test(=tenancy::tests::execution::native::capture::revocation_refuses_new_content_but_retains_admitted_disconnect_cleanup) | test(=tenancy::tests::execution::native::capture::cancelled_initialize_waiter_keeps_real_child_owner_until_service_drain)
-        | test(=tenancy::tests::execution::native::capture::failed_provider_initialization_keeps_partial_client_child_and_capture_until_joined) | test(=tenancy::tests::execution::native::capture::revoke_across_initialize_wait_prevents_the_next_provider_configuration_effect)
-        | test(=tenancy::tests::execution::native::capture::ingress::real_unterminated_child_line_is_refused_before_sdk_accumulation) | test(=tenancy::tests::execution::native::capture::ingress::real_small_frame_flood_is_bounded_while_capture_writer_is_held)
-        | test(=tenancy::tests::execution::native::capture::ingress::real_byte_flood_exhausts_cumulative_allowance_without_frame_reset) | test(=tenancy::tests::execution::native::capture::faults::capture_caught_reaper_unwind_retains_the_actual_child_and_file_owner)
-        | test(=tenancy::tests::execution::native::capture::faults::capture_missed_child_cleanup_keeps_owner_even_after_the_same_child_is_reaped) | test(=harness::acp::up::owned::tests::process::reaped_leader_with_live_descendant_is_not_group_absence)
-        | test(=tenancy::tests::execution::native::capture::faults::reap::exited_child_is_reaped_before_owned_capture_cleanup_ack) | test(=tenancy::tests::execution::native::capture::faults::reap::exited_leader_does_not_skip_owned_live_descendant_cleanup)'
-    - name: verify managed Choice and paid controllers
-      timeout-minutes: 20
-      env:
-        BITROUTER_TEST_EXAMPLES_DIR: ${{ github.workspace }}/target/debug/examples
-        BITROUTER_OWNED_CAPTURE_FIXTURE: ${{ github.workspace }}/target/debug/examples/owned_capture_fixture
-      run: bash .github/scripts/ci-test.sh 2 --test-threads 1 --run-ignored only -E 'test(=tenancy::tests::execution::native::capture::learning::coexistence::joint_choice_and_assessment_use_one_imported_revision_with_separate_child_receipts)
-        | test(=tenancy::tests::execution::native::capture::learning::qualification::controller::checked_controller_shutdown_retains_the_held_paid_execution_and_reaps_its_real_child)
-        | test(=tenancy::tests::execution::native::capture::learning::qualification::controller::rejected_paid_controller_initialization_still_drains_the_real_owner_and_reaps)
-        | test(=tenancy::tests::execution::native::capture::learning::real_checked_controller_checkpoint_is_the_paid_assessment_initiator)'
-    - name: verify public Human checkpoint edits
-      timeout-minutes: 20
-      env:
-        BITROUTER_TEST_EXAMPLES_DIR: ${{ github.workspace }}/target/debug/examples
-        BITROUTER_OWNED_CAPTURE_FIXTURE: ${{ github.workspace }}/target/debug/examples/owned_capture_fixture
-      run: bash .github/scripts/ci-test.sh 3 --test-threads 1 --run-ignored only -E 'test(=tenancy::tests::execution::native::capture::learning::human::handoff::cancelled_manual_queue_wait_is_reconciled_by_the_next_real_acp_callback)
-        | test(=tenancy::tests::execution::native::capture::learning::human::handoff::cancelled_manual_commit_or_domain_rollback_hands_off_before_the_next_acp_operation)
-        | test(=tenancy::tests::execution::native::capture::learning::human::handoff::current_revoke_after_a_known_manual_commit_denies_new_public_actions) | test(=tenancy::tests::execution::native::capture::learning::human::limits::held_paid_terminal_keeps_the_last_history_row_and_review_remains_available)
-        | test(=tenancy::tests::execution::native::capture::learning::human::limits::held_paid_byte_reservation_refuses_manual_growth_before_the_terminal) | test(=tenancy::tests::execution::native::capture::learning::human::limits::full_manual_history_has_no_hidden_paid_reservation_and_replay_does_not_grow_it)
-        | test(=tenancy::tests::execution::native::capture::learning::human::required::faults::public_human_real_begin_failure_retains_owner) | test(=tenancy::tests::execution::native::capture::learning::human::required::faults::public_human_real_consuming_rollback_failure_retains_owner)
-        | test(=tenancy::tests::execution::native::capture::learning::human::required::faults::public_human_real_consuming_commit_failure_retains_owner) | test(=tenancy::tests::execution::native::capture::learning::human::required::faults::public_human_caught_unwind_retains_owner)
-        | test(=tenancy::tests::execution::native::capture::learning::human::required::two_public_editors_compare_the_same_head_and_only_one_commits) | test(=tenancy::tests::execution::native::capture::learning::human::required::cancelled_human_predecessor_keeps_its_original_deadline_on_the_next_acp_callback)
-        | test(=tenancy::tests::execution::native::capture::learning::human::required::queued_manual_edit_rechecks_current_revoke_suspend_and_tenant_scope) | test(=tenancy::tests::execution::native::capture::learning::human::required::public_input_exact_512k_and_one_over_are_distinguished_before_sql)
-        | test(=tenancy::tests::execution::native::capture::learning::human::public_human_correction_and_retraction_win_held_judge_without_losing_paid_facts) | test(=tenancy::tests::execution::native::capture::learning::human::public_manual_no_paid_profile_exact_replay_and_stale_head_leave_controller_healthy)
-        | test(=tenancy::tests::execution::native::capture::learning::human::same_database_equal_native_names_do_not_adopt_another_controller_history) | test(=tenancy::tests::execution::native::capture::learning::human::historical_public_correction_retains_its_prefix_without_overwriting_a_newer_head)'
-    - name: verify stopped native recovery
-      timeout-minutes: 20
-      env:
-        BITROUTER_TEST_EXAMPLES_DIR: ${{ github.workspace }}/target/debug/examples
-        BITROUTER_OWNED_CAPTURE_FIXTURE: ${{ github.workspace }}/target/debug/examples/owned_capture_fixture
-        FILTER: >-
-          kind(lib) & (test(=tenancy::tests::execution::native::session::choice::recovery::companion::authority::native_recovery_committed_repair_survives_revocation_expiry_and_lost_waiter)
-          | test(=tenancy::tests::execution::native::session::choice::recovery::companion::capacity::native_recovery_repairs_above_unknown_policy_without_reopening_admission)
-          | test(=tenancy::tests::execution::native::session::choice::recovery::companion::capacity::native_recovery_validates_released_peers_without_cumulative_history_limit)
-          | test(=tenancy::tests::execution::native::session::choice::recovery::companion::capture::native_recovery_refuses_actual_capture_history_without_retained_reaper_proof)
-          | test(=tenancy::tests::execution::native::session::choice::recovery::companion::custody::native_recovery_unwind_and_overdue_commit_keep_the_exact_owner)
-          | test(=tenancy::tests::execution::native::session::choice::recovery::companion::profiles::native_recovery_refuses_uncovered_generation_and_auxiliary_but_reopens_released_v1)
-          | test(=tenancy::tests::execution::native::session::choice::recovery::companion::scope::native_recovery_checks_exact_seed_scope_and_real_acquisition_origin)
-          | test(=tenancy::tests::execution::native::session::choice::recovery::companion::startup::native_recovery_cancelled_startup_keeps_actual_pool_and_transaction_owner)
-          | test(=tenancy::tests::execution::native::session::choice::recovery::companion::native_recovery_shared_parent_two_real_choices_are_deduplicated)
-          | test(=tenancy::tests::execution::native::session::choice::recovery::marker::native_stopped_owner_marker_precedes_discovery_and_preserves_released_source)
-          | test(=tenancy::tests::execution::native::session::choice::recovery::native_stopped_owner_actual_receipt_repair_and_no_resend)
-          | test(=tenancy::tests::execution::native::session::choice::recovery::companion::observation::owned_startup_and_native_repair_capacity_consumers))
-      run: |
-        cargo-nextest nextest list \
-          --cargo-metadata "$PWD/target/nextest/cargo-metadata.json" \
-          --binaries-metadata "$PWD/target/nextest/binaries-metadata.json" \
-          --workspace-remap "$PWD" --target-dir-remap "$PWD/target" \
-          --profile ci --run-ignored only -E "$FILTER" --message-format json \
-          > ci-evidence/stopped-native-selection.json
-        jq -e '
-          [."rust-suites"[].testcases[] | select(."filter-match".status == "matches")]
-          | length == 12 and all(.ignored == true)
-        ' ci-evidence/stopped-native-selection.json
-        bash .github/scripts/ci-test.sh 4 --test-threads 1 --run-ignored only -E "$FILTER"
-    - name: verify stopped paid recovery
-      timeout-minutes: 20
-      env:
-        BITROUTER_TEST_EXAMPLES_DIR: ${{ github.workspace }}/target/debug/examples
-        BITROUTER_OWNED_CAPTURE_FIXTURE: ${{ github.workspace }}/target/debug/examples/owned_capture_fixture
-      run: bash .github/scripts/ci-test.sh 5 --test-threads 1 --run-ignored only -E 'test(=tenancy::tests::execution::native::capture::learning::recovery::custody::paid_bootstrap_actual_begin_error_keeps_owner_until_process_exit)
-        | test(=tenancy::tests::execution::native::capture::learning::recovery::custody::paid_bootstrap_actual_consuming_rollback_error_keeps_owner_until_process_exit)
-        | test(=tenancy::tests::execution::native::capture::learning::recovery::custody::paid_bootstrap_caught_unwind_keeps_owner_until_process_exit) | test(=tenancy::tests::execution::native::capture::learning::recovery::custody::paid_cancelled_bootstrap_waiter_does_not_cancel_the_claimed_writer)
-        | test(=tenancy::tests::execution::native::capture::learning::recovery::restart::paid_local_cleanup_without_exact_registry_ack_cannot_recover) | test(=tenancy::tests::execution::native::capture::learning::recovery::restart::paid_stopped_counter_pending_and_origin_corruption_refuse_without_repair)
-        | test(=tenancy::tests::execution::native::capture::learning::recovery::restart::paid_stopped_failed_judge_is_interrupted_without_refund_or_resend) | test(=tenancy::tests::execution::native::capture::learning::recovery::restart::paid_stopped_repair_preserves_the_actual_public_human_head)
-        | test(=tenancy::tests::execution::native::capture::learning::recovery::restart::paid_stopped_restart_preserves_known_usage_never_selects_or_resends_and_is_idempotent)
-        | test(=tenancy::tests::execution::native::capture::learning::recovery::restart::paid_bootstrap_two_real_distinct_revisions_fit_the_shared_operation_budget)
-        | test(=tenancy::tests::execution::native::capture::learning::recovery::restart::paid_missing_terminal_after_confirmed_local_stop_repairs_unknown_once_without_resend)
-        | test(=tenancy::tests::execution::native::capture::learning::recovery::commit::paid_repair_consuming_commit_error_keeps_owner_until_death_then_repairs_once)
-        | test(=tenancy::tests::execution::native::capture::learning::recovery::commit::paid_repair_known_commit_publishes_readiness_only_after_ack_without_resending)
-        | test(=tenancy::tests::execution::native::capture::learning::recovery::commit::paid_repair_disconnected_opener_keeps_custody_until_late_known_commit)'
-    - name: verify current resource and Eval dataset cutover through actual restore
-      timeout-minutes: 15
-      run: |
-        export BITROUTER_TEST_RECOVERY_KEY="$(openssl rand -base64 32)"
-        bash .github/scripts/ci-test.sh resource-cutover --test-threads 1 --run-ignored only -E 'test(tenancy::resources::tests::cutover::)'
-        bash .github/scripts/ci-test.sh eval-retained-restore --test-threads 1 --run-ignored only -E 'test(=tenancy::tests::eval::retained::actual_restore_rejects_isolated_old_subject_and_preserves_current_mixed_namespaces)'
-    - name: verify current tenant Eval and Policy update through the SDK
-      timeout-minutes: 10
-      run: bash .github/scripts/ci-test.sh eval-policy --test-threads 1 -E 'test(=tenancy::tests::execution::model_policy::sdk_policy_submit_read_activate_and_dispatch_use_the_public_contract)'
-    - name: verify current local Block consumers serially
-      timeout-minutes: 30
-      shell: bash
-      env:
-        BITROUTER_TEST_EXAMPLES_DIR: ${{ github.workspace }}/target/debug/examples
-        BITROUTER_OWNED_CAPTURE_FIXTURE: ${{ github.workspace }}/target/debug/examples/owned_capture_fixture
-      run: |
-        for case in \
-          tenancy::tests::execution::native::capture::block::actual_block_socket_selection_keeps_one_owner_and_rebuilds_effective_human_head \
-          tenancy::tests::execution::native::capture::block::copied_headers_and_same_name_reopened_controller_cannot_reanimate_an_old_block_link \
-          tenancy::tests::execution::native::capture::block::known_block_intent_cannot_send_after_original_capture_close_or_key_revocation \
-          tenancy::tests::execution::native::capture::block::copied_block_nonce_does_not_authorize_a_second_key_or_another_principal \
-          tenancy::tests::execution::native::capture::block::eligibility::actual_nonmatching_rule_sends_baseline_but_never_creates_a_conclusive_trial_score \
-          tenancy::tests::execution::native::capture::block::eligibility::real_prior_local_turn_cannot_be_enrolled_as_a_fresh_provider_trial \
-          tenancy::tests::execution::native::capture::block::restart::process_crash_reopen_refuses_stale_open_capture_link_before_any_new_provider_send \
-          tenancy::tests::execution::native::capture::block::tenants::same_database_equal_names_keep_live_links_and_block_cohorts_tenant_scoped \
-          tenancy::tests::execution::native::capture::block::faults::block_consuming_commit_error_retains_original_owner_and_denies_another_send \
-          tenancy::tests::execution::native::capture::block::faults::block_lost_deadline_reply_keeps_one_committed_draw_without_provider_send \
-          tenancy::tests::execution::native::capture::block::adoption::actual_adoption_is_withdrawn_after_original_public_human_retraction \
-          tenancy::tests::execution::native::capture::block::adoption::actual_adoption_is_rolled_back_after_original_public_human_severe_correction \
-          tenancy::tests::execution::native::capture::block::coexistence::actual_paid_block_head_validates_original_receipt_and_never_relabels_human_or_refunds \
-          tenancy::tests::execution::native::capture::block::coexistence::actual_block_human_wins_held_judge_and_retraction_preserves_both_paid_facts \
-          tenancy::tests::execution::native::capture::block::coexistence::integrity::actual_selected_paid_block_rejects_missing_job_changed_output_and_missing_judge_receipt \
-          tenancy::tests::execution::native::capture::block::pricing::real_cached_usage_requires_the_effective_retained_tariff; do
-          bash .github/scripts/ci-test.sh block --test-threads 1 --run-ignored only -E "test(=$case)"
-        done
-    - name: verify actual archive, restart and refusal
-      timeout-minutes: 45
-      shell: bash
-      env:
-        BITROUTER_TEST_BRO: ${{ github.workspace }}/target/debug/bro
-      run: |
-        export BITROUTER_TEST_RECOVERY_KEY="$(openssl rand -base64 32)"
-        for case in \
-          actual_cli_verifies_fresh_static_provisioning_and_rejects_changed_evidence \
-          actual_cli_refuses_unreadable_operation_context_and_timestamp \
-          actual_cli_refuses_definition_substitution_and_copied_old_credential \
-          abandoned_recovery_waiter_keeps_actual_file_owner_until_read_rollback_and_close \
-          selected_files::actual_cli_refuses_changed_linked_or_nonprivate_selected_files \
-          selected_files::selected_file_change_during_actual_read_prevents_publication_after_worker_close ; do
-          bash .github/scripts/ci-test.sh "offline-${case//::/-}" --test-threads 1 --run-ignored only -E "test(=offline::recovery::tests::$case)"
-        done
-    - name: Upload test evidence
-      if: always()
-      uses: actions/upload-artifact@v4
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
       with:
-        name: ${{ github.job }}-${{ strategy.job-index }}-attempt-${{ github.run_attempt }}-evidence
-        path: ci-evidence/
-        retention-days: 7
+        toolchain: 1.99.1
+        cache-key: libraries
+    - uses: taiki-e/install-action@v2
+      with:
+        tool: nextest@0.9.114
+    - run: |
+        cargo nextest run --locked --workspace --exclude bitrouter --exclude bitrouter-bro \
+          --all-features --retries 0 --no-fail-fast --no-tests fail
   database-backends:
     name: database (${{ matrix.backend }})
     runs-on: ubuntu-24.04
@@ -473,134 +382,99 @@ jobs:
     steps:
     - uses: actions/checkout@v6
     - uses: ./.github/actions/test-archive
-    - name: provision isolated MySQL baseline test databases
+      with:
+        product: service-process
+    - name: configure MySQL test database permissions
       if: matrix.backend == 'mysql'
       run: |
         docker exec -i -e MYSQL_PWD=fixture-password "${{ job.services.database.id }}" mysql --user=root <<'SQL'
         SET GLOBAL log_bin_trust_function_creators = 1;
-        GRANT ALL PRIVILEGES ON `m0\_baseline\_%`.* TO 'fixture'@'%';
+        GRANT ALL PRIVILEGES ON `bitrouter\_schema\_%`.* TO 'fixture'@'%';
+        GRANT ALL PRIVILEGES ON `bitrouter\_eval\_%`.* TO 'fixture'@'%';
         SQL
     - name: verify current schema baseline and refusal before populating the database
       env:
         BITROUTER_TEST_MIGRATION_DATABASE_URL: ${{ matrix.url }}
         BACKEND: ${{ matrix.backend }}
       run: |
-        bash .github/scripts/ci-test.sh db-baseline --test-threads 1 --run-ignored only -E "(kind(lib)) & test(=db::migration::baseline::server_tests::${BACKEND}_current_baseline_catalog_and_refusal)"
-    - name: exercise migrations and gateway persistence on the selected backend
-      env:
-        BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
-      run: |
-        bash .github/scripts/ci-test.sh db-7 --test-threads 1 --run-ignored only -E '(binary(=database_backends))'
-    - name: exercise retained capture records on the selected backend
-      env:
-        BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
-        BACKEND: ${{ matrix.backend }}
-      run: |
-        filter='binary(=database_capture) & test(=server_database_capture)'
-        if [[ "$BACKEND" == mysql ]]; then
-          filter='binary(=database_capture) & (test(=server_database_capture) | test(mysql_snapshot_races::))'
-        fi
-        bash .github/scripts/ci-test.sh db-8 --test-threads 1 --run-ignored only -E "$filter"
+        bash .github/scripts/ci-test.sh --test-threads 1 --run-ignored only -E "(kind(lib)) & test(=db::migration::baseline::server_tests::${BACKEND}_current_baseline_catalog_and_refusal)"
     - name: verify tenant eval conflicts preserve the transaction and creator
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
       run: |
-        bash .github/scripts/ci-test.sh db-9 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(eval::store::scope_tests::server_immutable_conflicts_preserve_transaction_and_first_creator)'
-    - name: provision isolated MySQL evaluation test databases
-      if: matrix.backend == 'mysql'
-      run: |
-        docker exec -i -e MYSQL_PWD=fixture-password "${{ job.services.database.id }}" mysql --user=root <<'SQL'
-        GRANT ALL PRIVILEGES ON `bitrouter\_eval\_%`.* TO 'fixture'@'%';
-        SQL
+        bash .github/scripts/ci-test.sh --test-threads 1 --run-ignored only -E "(kind(lib)) & (test(=eval::store::scope_tests::server_immutable_conflicts_preserve_transaction_and_first_creator))"
     - name: verify tenant eval composites share one stable transaction
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
       run: |
-        bash .github/scripts/ci-test.sh db-11 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(eval::store::owned_tests::server::)'
+        bash .github/scripts/ci-test.sh --test-threads 1 --run-ignored only -E "(kind(lib)) & (test(=eval::store::owned_tests::server::lifecycle::server_owned_eval_committed_replay_preserves_provenance_and_snapshot) | test(=eval::store::owned_tests::server::lifecycle::server_owned_eval_external_rr_winner_is_rejected_without_replay_or_events) | test(=eval::store::owned_tests::server::lifecycle::server_owned_eval_freeze_keeps_rr_membership_across_external_admission_commit) | test(=eval::store::owned_tests::server::lifecycle::server_owned_eval_terminal_fault_rolls_back_result_and_prior_dispute) | test(=eval::store::owned_tests::server::server_owned_eval_composites_share_rr_transaction_and_scoped_winner_reads))"
     - name: verify directory projections and receipt history on the selected backend
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
       run: |
-        bash .github/scripts/ci-test.sh db-13 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(tenancy::tests::execution::evaluation::server::)'
+        bash .github/scripts/ci-test.sh --test-threads 1 --run-ignored only -E "(kind(lib)) & (test(=tenancy::tests::execution::evaluation::server::server_owned_trajectory_directory_projection_preserves_integer_decoders_and_bounds) | test(=tenancy::tests::execution::evaluation::server::server_owned_trajectory_empty_source_compatibility_refuses_retained_rows) | test(=tenancy::tests::execution::evaluation::server::server_owned_trajectory_known_receipts_drain_restart_and_scan_with_one_reservation))"
     - name: verify owned HTTP continuation consumers on the selected backend
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
       run: |
-        bash .github/scripts/ci-test.sh db-15 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(=tenancy::tests::execution::http_continuation::server::server_http034_consumer_exact_cas_absence_race_and_restart)'
+        bash .github/scripts/ci-test.sh --test-threads 1 --run-ignored only -E "(kind(lib)) & (test(=tenancy::tests::execution::http_continuation::server::server_http034_consumer_exact_cas_absence_race_and_restart))"
     - name: verify current execution receipt persistence on the selected backend
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
       run: |
-        bash .github/scripts/ci-test.sh db-16 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(=tenancy::receipts::store::tests::server::server_receipts_commit_rollback_reconnect_scope_and_immutable_conflict)'
+        bash .github/scripts/ci-test.sh --test-threads 1 --run-ignored only -E "(kind(lib)) & (test(=tenancy::receipts::store::tests::server::server_receipts_commit_rollback_reconnect_scope_and_immutable_conflict))"
     - name: verify current owned OAuth and compound receipts on the selected backend
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
       run: |
-        bash .github/scripts/ci-test.sh db-17 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(=tenancy::oauth::storage::tests::server::owned_oauth_slot_and_auxiliary_receipt_real_commit_rollback_reconnect)'
-    - name: verify native harness consumers on the selected backend
-      env:
-        BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
-        FIXTURE_BACKEND: ${{ matrix.backend }}
-        FIXTURE_CONTAINER: ${{ job.services.database.id }}
-      run: |
-        # This job owns a fresh service container. Plain CREATE refuses an
-        # existing database; DROP is reached only after confirmed test cleanup.
-        if [[ "$FIXTURE_BACKEND" == 'postgres' ]]; then
-          docker exec -e PGPASSWORD=fixture-password "$FIXTURE_CONTAINER"      psql --username=fixture --dbname=bitrouter_test --set=ON_ERROR_STOP=1      --command='CREATE DATABASE bitrouter_eval_native36 TEMPLATE template0'
-        else
-          docker exec -e MYSQL_PWD=fixture-password "$FIXTURE_CONTAINER"      mysql --user=fixture --database=bitrouter_test      --execute='CREATE DATABASE bitrouter_eval_native36 CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin'
-        fi
-        export BITROUTER_TEST_NATIVE_DATABASE_URL="${BITROUTER_TEST_DATABASE_URL%/*}/bitrouter_eval_native36"
-        bash .github/scripts/ci-test.sh db-18 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(=tenancy::tests::execution::native::session::server::server_native36_persistent_consumer_rotation_rollback_and_foreign_row)'
-        if [[ "$FIXTURE_BACKEND" == 'postgres' ]]; then
-          docker exec -e PGPASSWORD=fixture-password "$FIXTURE_CONTAINER"      psql --username=fixture --dbname=bitrouter_test --set=ON_ERROR_STOP=1      --command='DROP DATABASE bitrouter_eval_native36'
-        else
-          docker exec -e MYSQL_PWD=fixture-password "$FIXTURE_CONTAINER"      mysql --user=fixture --database=bitrouter_test      --execute='DROP DATABASE bitrouter_eval_native36'
-        fi
-    - name: verify owned capture actor and child on the selected backend
-      env:
-        BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
-        BITROUTER_OWNED_CAPTURE_FIXTURE: ${{ github.workspace }}/target/debug/examples/owned_capture_fixture
-      run: |
-        bash .github/scripts/ci-test.sh db-19 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(=tenancy::tests::execution::native::capture::server::server_capture03_actor_facade_namespace_replay_and_reconnect)'
+        bash .github/scripts/ci-test.sh --test-threads 1 --run-ignored only -E "(kind(lib)) & (test(=tenancy::oauth::storage::tests::server::owned_oauth_slot_and_auxiliary_receipt_real_commit_rollback_reconnect))"
     - name: verify MySQL transaction snapshot boundaries
       if: matrix.backend == 'mysql'
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
       run: |
-        bash .github/scripts/ci-test.sh db-20 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(mysql_tests)'
+        bash .github/scripts/ci-test.sh --test-threads 1 --run-ignored only -E "(kind(lib)) & (test(=gateway::observability::inventory::server_tests::mysql_tests::locked_gateway_inventory_sees_new_and_changed_rows_after_older_snapshots))"
     - name: verify admission and stream pressure across official gateway processes
       if: matrix.backend == 'postgres'
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
       run: |
-        export BITROUTER_TEST_GATEWAY_BINARY="$GITHUB_WORKSPACE/target/debug/bro"
-        bash .github/scripts/ci-test.sh db-21 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(gateway::shared::store::tests::postgres_)'
-        bash .github/scripts/ci-test.sh db-21 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(official_http2_tenant_and_account_concurrency_cross_replicas)'
-        bash .github/scripts/ci-test.sh db-21 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(official_concurrent_static_)'
+        export BITROUTER_TEST_GATEWAY_BINARY="$GITHUB_WORKSPACE/target/debug/bitrouter"
+        bash .github/scripts/ci-test.sh --test-threads 1 --run-ignored only -E "(kind(lib)) & (test(=gateway::shared::store::tests::postgres_due_states_retries_serialization_abort_with_filtered_fresh_scan) | test(=gateway::shared::store::tests::postgres_get_retries_serialization_abort_with_a_fresh_transaction) | test(=gateway::shared::store::tests::postgres_retry_uses_deadline_and_never_retries_uncertain_errors))"
+        bash .github/scripts/ci-test.sh --test-threads 1 --run-ignored only -E "(kind(lib)) & (test(=gateway::shared::runtime::process_tests::bootstrap::admission::official_http2_tenant_and_account_concurrency_cross_replicas))"
+        bash .github/scripts/ci-test.sh --test-threads 1 --run-ignored only -E "(kind(lib)) & (test(=gateway::shared::runtime::process_tests::bootstrap::admission::concurrent_static::official_concurrent_static_http1_single_instance) | test(=gateway::shared::runtime::process_tests::bootstrap::admission::concurrent_static::official_concurrent_static_http1_two_instances) | test(=gateway::shared::runtime::process_tests::bootstrap::admission::concurrent_static::official_concurrent_static_http2_single_instance) | test(=gateway::shared::runtime::process_tests::bootstrap::admission::concurrent_static::official_concurrent_static_http2_two_instances))"
         # Keep the real-socket stream regression in PR coverage even though
         # the complete packaged-process campaign runs separately.
-        bash .github/scripts/ci-test.sh db-21 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(official_stalled_response_reader_releases_local_capacity_without_provider_success)'
+        bash .github/scripts/ci-test.sh --test-threads 1 --run-ignored only -E "(kind(lib)) & (test(=gateway::shared::runtime::process_tests::bootstrap::admission::recovery::provider::slow_reader::official_stalled_response_reader_releases_local_capacity_without_provider_success))"
     - name: verify PostgreSQL credential and transaction regressions
       if: matrix.backend == 'postgres'
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
       run: |
-        bash .github/scripts/ci-test.sh db-shared-schema --test-threads 1 --run-ignored only -E '(kind(lib)) & test(gateway::shared::schema::current_validation::tests::)'
-        bash .github/scripts/ci-test.sh db-shared-subjects --test-threads 1 --run-ignored only -E '(kind(lib)) & test(=gateway::shared::tests::evaluation::preflight::postgres_shared_eval_subject_prejoin)'
-        bash .github/scripts/ci-test.sh db-22 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(gateway::shared::authentication::concurrency_tests::)'
-        bash .github/scripts/ci-test.sh db-22 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(gateway::shared::engine::admission::contention_tests::)'
-        bash .github/scripts/ci-test.sh db-22 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(gateway::shared::engine::attempts::contention_tests::)'
-        bash .github/scripts/ci-test.sh db-22 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(gateway::shared::engine::contract_tests::)'
-    - name: Upload test evidence
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: ${{ github.job }}-${{ strategy.job-index }}-attempt-${{ github.run_attempt }}-evidence
-        path: ci-evidence/
-        retention-days: 7
+        bash .github/scripts/ci-test.sh --test-threads 1 --run-ignored only -E "(kind(lib)) & (test(=gateway::shared::schema::current_validation::tests::ut_postgres_shared_schema_accepts_current_fixture) | test(=gateway::shared::schema::current_validation::tests::ut_postgres_shared_schema_composition_refuses_foreign_objects) | test(=gateway::shared::schema::current_validation::tests::ut_postgres_shared_schema_composition_refuses_mutated_shared_layout) | test(=gateway::shared::schema::current_validation::tests::ut_postgres_shared_schema_composition_restarts_ordinary_baseline) | test(=gateway::shared::schema::current_validation::tests::ut_postgres_shared_schema_refuses_corrupt_uniqueness) | test(=gateway::shared::schema::current_validation::tests::ut_postgres_shared_schema_refuses_filters_constraints_and_indexes) | test(=gateway::shared::schema::current_validation::tests::ut_postgres_shared_schema_refuses_native_continuation_columns))"
+        bash .github/scripts/ci-test.sh --test-threads 1 --run-ignored only -E "(kind(lib)) & (test(=gateway::shared::tests::evaluation::preflight::postgres_shared_eval_subject_prejoin))"
+        bash .github/scripts/ci-test.sh --test-threads 1 --run-ignored only -E "(kind(lib)) & (test(=gateway::shared::authentication::concurrency_tests::postgres_static_reads_cross_independent_pools) | test(=gateway::shared::authentication::concurrency_tests::postgres_static_reads_share_one_pool))"
+        bash .github/scripts/ci-test.sh --test-threads 1 --run-ignored only -E "(kind(lib)) & (test(=gateway::shared::engine::admission::contention_tests::postgres_admission_survives_heartbeat_single_owner) | test(=gateway::shared::engine::admission::contention_tests::postgres_admission_survives_heartbeat_two_owners))"
+        bash .github/scripts/ci-test.sh --test-threads 1 --run-ignored only -E "(kind(lib)) & (test(=gateway::shared::engine::attempts::contention_tests::postgres_dispatch_shares_resource_fence_single_owner) | test(=gateway::shared::engine::attempts::contention_tests::postgres_dispatch_shares_resource_fence_two_owners))"
+        bash .github/scripts/ci-test.sh --test-threads 1 --run-ignored only -E "(kind(lib)) & (test(=gateway::shared::engine::contract_tests::postgres_capture_identity_rejects_before_attempt_or_terminal_writes) | test(=gateway::shared::engine::contract_tests::postgres_invalid_source_publication_rejection_preserves_authority) | test(=gateway::shared::engine::contract_tests::postgres_join_checks_old_retained_publication_and_terminal_beyond_first_page) | test(=gateway::shared::engine::contract_tests::postgres_read_committed_terminal_invalidates_serializable_execution_snapshot))"
+    - name: exercise current schema and gateway persistence on the selected backend
+      env:
+        BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
+      run: |
+        bash .github/scripts/ci-test.sh --test-threads 1 --run-ignored only -E "(kind(lib)) & (test(=tests::database_backends::server_database_behaviors))"
+    - name: Verify competing inventory controllers across reconnect
+      env:
+        BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
+        BACKEND: ${{ matrix.backend }}
+      run: |
+        case "$BACKEND" in
+          postgres) test=postgres_competing_gateway_controllers_share_one_durable_reservation ;;
+          mysql) test=mysql_tests::competing_gateway_controllers_share_one_durable_reservation ;;
+          *) exit 1 ;;
+        esac
+        bash .github/scripts/ci-test.sh --test-threads 1 --run-ignored only -E "(kind(lib)) & (test(=gateway::observability::inventory::server_tests::$test))"
     needs:
-    - build-linux
+    - build-service-process
   application-features:
     name: feature compile
     runs-on: ubuntu-latest
@@ -614,12 +488,12 @@ jobs:
     - name: Check isolated production feature closures
       shell: bash
       env:
-        FEATURES: '["", "http2", "core", "harness", "core,harness", "mcp", "server-tools", "guardrails", "otel-http", "otel-grpc", "otel-http,otel-grpc", "harness,otel-http",
+        FEATURES: '["", "http2", "eval-publication", "mcp", "server-tools", "guardrails", "otel-http", "otel-grpc", "otel-http,otel-grpc",
           "db-postgres", "multi-instance", "multi-instance,http2", "db-mysql", "mcp,server-tools,otel-http,db-postgres,db-mysql"]'
       run: |
         while IFS= read -r PROFILE_FEATURES; do
         # Keep dev-dependencies out of the production feature closure.
-        cargo check --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --bin bro
+        cargo check --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --bin bitrouter
         cargo tree --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" -e normal,build --prefix none > profile-tree.txt
         # Only the minimal gateway distributions promise an h2-free
         # production closure. Other features (such as otel-grpc) may need h2.
@@ -629,28 +503,16 @@ jobs:
               echo '::error::minimal HTTP/1 gateway profile pulled h2'; exit 1
             fi ;;
         esac
-        if grep -Eq '^(ratatui(-[^ ]*)?|crossterm) v' profile-tree.txt; then
-               echo '::error::headless profile pulled terminal dependencies'; exit 1
+        if grep -Eq '^agent-client-protocol[^ ]* v' profile-tree.txt; then
+          echo '::error::service feature pulled ACP'; exit 1
+        fi
+        cargo tree --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" \
+          -e normal,build -i jsonschema --depth 1 --prefix none > profile-schema-owners.txt
+        if grep -Ev '^(jsonschema|bitrouter-registry) v' profile-schema-owners.txt; then
+          echo '::error::unexpected service schema validator owner'; exit 1
         fi
         case ",$PROFILE_FEATURES," in
-          *,harness,*) ;;
-          *) if grep -Eq '^agent-client-protocol[^ ]* v' profile-tree.txt; then
-               echo '::error::profile without harness pulled ACP runtime'; exit 1
-             fi ;;
-        esac
-        case ",$PROFILE_FEATURES," in
-          *,harness,*) ;;
-          *)
-             # Registry admission validates its wire schema in every profile.
-             # The application must still keep harness result validation optional.
-             cargo tree --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" \
-               -e normal,build -i jsonschema --depth 1 --prefix none > profile-schema-owners.txt
-             if grep -Ev '^(jsonschema|bitrouter-registry) v' profile-schema-owners.txt; then
-               echo '::error::profile without harness pulled schema validation outside registry'; exit 1
-             fi ;;
-        esac
-        case ",$PROFILE_FEATURES," in
-          *,mcp,*|*,server-tools,*|*,harness,*) ;;
+          *,mcp,*|*,server-tools,*) ;;
           *) if grep -Eq '^(rmcp|process-wrap) v' profile-tree.txt; then
                echo '::error::profile without MCP pulled its transport runtime'; exit 1
              fi ;;
@@ -691,11 +553,18 @@ jobs:
     steps:
     - uses: actions/checkout@v6
     - uses: actions-rust-lang/setup-rust-toolchain@v1
-    - name: verify final workspace membership
+    - name: Inspect native build and test dependency boundaries
       run: |
-        cargo metadata --no-deps --format-version 1 | jq -e '
-          [.packages[].name] | sort ==
-          ["bitrouter", "bitrouter-ai", "bitrouter-guardrails", "bitrouter-registry", "bitrouter-sdk", "dist-helper"]'
+        for flags in '' '--no-default-features' '--no-default-features --features multi-instance,http2' '--all-features'; do
+          cargo tree --locked -p bitrouter $flags -e normal,build,dev --prefix none > service-tree.txt
+          if grep -E '^(bitrouter-bro|agent-client-protocol[^ ]*) v' service-tree.txt; then
+            echo '::error::The service test or build closure includes BRO/ACP'; exit 1
+          fi
+        done
+        cargo tree --locked -p bitrouter-bro --all-features -e normal,build,dev --prefix none > bro-tree.txt
+        if grep -E '^(bitrouter|bitrouter-registry|bitrouter-guardrails|sea-orm(-[^ ]*)?|sqlx-(postgres|mysql)|axum|rmcp) v' bro-tree.txt; then
+          echo '::error::BRO builds gateway implementation dependencies'; exit 1
+        fi
     - name: verify SDK without HTTP/2
       run: |
         # Check production before test dependencies can enable HTTP/2.
@@ -719,11 +588,11 @@ jobs:
           if grep -Eq '^(axum|axum-core|hyper|hyper-util) v' ai-tree.txt; then
             echo '::error::AI contracts pulled HTTP framework dependencies'; exit 1
           fi
-          if grep -Eq '^(bitrouter(-sdk)?|reqwest|tokio(-[^ ]*)?|sea-orm(-[^ ]*)?|sqlx(-[^ ]*)?|ratatui(-[^ ]*)?|crossterm|opentelemetry[^ ]*|tracing-opentelemetry|agent-client-protocol[^ ]*|rmcp) v' ai-tree.txt; then
+          if grep -Eq '^(bitrouter(-sdk|-bro|-build|-update)?|reqwest|tokio(-[^ ]*)?|sea-orm(-[^ ]*)?|sqlx(-[^ ]*)?|opentelemetry[^ ]*|tracing-opentelemetry|agent-client-protocol[^ ]*|rmcp) v' ai-tree.txt; then
             echo '::error::AI public contracts pulled runtime dependencies'; exit 1
           fi
           cargo tree --locked -p bitrouter-sdk $flags -e normal,build --prefix none > sdk-tree.txt
-          if grep -Eq '^(bitrouter|axum|sea-orm(-[^ ]*)?|sqlx(-[^ ]*)?|ratatui(-[^ ]*)?|crossterm|opentelemetry[^ ]*|tracing-opentelemetry|agent-client-protocol[^ ]*|rmcp) v' sdk-tree.txt; then
+          if grep -Eq '^(bitrouter(-bro|-build|-update)?|axum|sea-orm(-[^ ]*)?|sqlx(-[^ ]*)?|opentelemetry[^ ]*|tracing-opentelemetry|agent-client-protocol[^ ]*|rmcp) v' sdk-tree.txt; then
             echo '::error::HTTP SDK pulled service, execution or UI dependencies'; exit 1
           fi
         done
@@ -733,7 +602,7 @@ jobs:
         fi
         cargo tree --locked -p bitrouter -e normal,build --prefix none > host-tree.txt
         if grep -Eq '^bitrouter-guardrails v' host-tree.txt; then
-          echo '::error::default bro links the optional matcher'; exit 1
+          echo '::error::default service links the optional matcher'; exit 1
         fi
     needs:
     - changes
@@ -806,7 +675,7 @@ jobs:
               'pub struct bitrouter_ai::eval::EvalSubject'
               'pub struct bitrouter_ai::eval::AdmissionOutcome'
             )
-            forbidden='bitrouter_ai::(axum|wire|event|observe|extension|error|core|harness)(::|[ {]|$)|protocol::mcp_skills::|tenancy::private_adapter::|ReasoningEffortConfig|axum_core::|http::|futures_core::|ExtensionApi|NativeExecutionControl|NativePrivateContextRuntime|CommitGate|VerifiedBatch|CheckpointBatchExt|HarnessManifestExt|ClientMessageExt|ToolResultLimitsExt|::capture_cache|::commitment\(|ToolResultOutput::(from_untyped_value|to_provider_string)|DataContent::(to_url|from_url)|Source::synthesize_id|GenerationParams::(extras_for_protocol|extra_value_for_protocol)|Prompt::required_capabilities|ModelTokenLimits::output_reservation_covers_model|NativeRoute::requires_input_count|Limits::within|Capabilities::negotiate|bitrouter::|bitrouter_sdk::|reqwest::|tokio::|sea_orm|sqlx|ratatui|crossterm|opentelemetry|tracing_subscriber|agent_client_protocol|rmcp::'
+            forbidden='bitrouter_ai::(axum|wire|event|observe|extension|error|core|harness)(::|[ {]|$)|protocol::mcp_skills::|tenancy::private_adapter::|ReasoningEffortConfig|axum_core::|http::|futures_core::|ExtensionApi|NativeExecutionControl|NativePrivateContextRuntime|CommitGate|VerifiedBatch|CheckpointBatchExt|HarnessManifestExt|ClientMessageExt|ToolResultLimitsExt|::capture_cache|::commitment\(|ToolResultOutput::(from_untyped_value|to_provider_string)|DataContent::(to_url|from_url)|Source::synthesize_id|GenerationParams::(extras_for_protocol|extra_value_for_protocol)|Prompt::required_capabilities|ModelTokenLimits::output_reservation_covers_model|NativeRoute::requires_input_count|Limits::within|Capabilities::negotiate|bitrouter::|bitrouter_sdk::|reqwest::|tokio::|sea_orm|sqlx|opentelemetry|tracing_subscriber|agent_client_protocol|rmcp::'
           else
             sentinels=(
               'pub struct bitrouter_sdk::gateway::GatewayClient'
@@ -823,6 +692,7 @@ jobs:
               'bitrouter_sdk::tenancy::TenancyClient::observe_admission_profiles'
               'bitrouter_sdk::tenancy::TenancyClient::usage_evidence'
               'bitrouter_sdk::gateway::GatewayClient::chat_completions'
+              'bitrouter_sdk::gateway::GatewayClient::chat_reply_with_correlation'
               'bitrouter_sdk::gateway::GatewayClient::stream_responses'
               'pub struct bitrouter_sdk::control::ControlClient'
               'bitrouter_sdk::control::ControlClient::reload'
@@ -830,7 +700,7 @@ jobs:
               'bitrouter_sdk::gateway::GatewayClient::submit_eval_result'
               'bitrouter_sdk::gateway::GatewayClient::eval_snapshot'
             )
-            forbidden='bitrouter::|axum|sea_orm|sqlx|ratatui|crossterm|opentelemetry|tracing_subscriber|agent_client_protocol|rmcp::|tokio_tungstenite|tungstenite::'
+            forbidden='bitrouter::|axum|sea_orm|sqlx|opentelemetry|tracing_subscriber|agent_client_protocol|rmcp::|tokio_tungstenite|tungstenite::'
           fi
           for sentinel in "${sentinels[@]}"; do
             if ! grep -qF "$sentinel" "$listing"; then
@@ -926,7 +796,7 @@ jobs:
     - changes
     if: needs.changes.outputs.code == 'true'
   test-platform:
-    name: test (${{ matrix.os }})
+    name: test (${{ matrix.os }}, ${{ matrix.package }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.timeout-minutes }}
     strategy:
@@ -934,26 +804,35 @@ jobs:
       matrix:
         include:
         - os: macos-latest
+          package: bitrouter
           timeout-minutes: 45
-          expected-tests: 16
-          targets: --test daemon --test host_lifecycle --test mcp_config_pty --test onboarding_pty
-          filter: (binary(=daemon) & (test(=status_route_and_stop_roundtrip_over_the_control_socket) | test(=concurrent_clients_are_all_served) | test(=socket_file_has_owner_only_permissions)))
-            | (binary(=host_lifecycle) & test(=sigterm_control_error_drains_inflight_inference_before_nonzero_exit)) | binary(=mcp_config_pty) | binary(=onboarding_pty)
+          targets: --lib --test mcp_config_pty
+          filter: test(=tests::daemon::status_route_and_stop_roundtrip_over_the_control_socket) | test(=tests::daemon::concurrent_clients_are_all_served) | test(=tests::daemon::socket_file_has_owner_only_permissions)
+            | test(=tests::host_lifecycle::sigterm_control_error_drains_inflight_inference_before_nonzero_exit) | binary(=mcp_config_pty) | test(/^tests::onboarding_pty::/)
         - os: windows-latest
+          package: bitrouter
           # Leave time for the test suite after the all-features MSVC build.
           timeout-minutes: 60
-          expected-tests: 20
-          targets: --lib --test daemon --test invocation
-          filter: test(=tenancy::ownership::unsupported_claim_tests::native_recovery_connector_refuses_before_creating_non_unix_authority) | test(=tenancy::tests::execution::native::local_tenancy_remains_unavailable_without_creating_files)
+          targets: --lib --test invocation
+          filter: test(=tenancy::ownership::unsupported_claim_tests::native_recovery_connector_refuses_before_creating_non_unix_authority)
             | test(=providers::cli_install::tests::install_command_is_the_official_native_installer) | test(=paths::tests::replacing_private_file_overwrites_existing_destination_on_windows)
-            | test(harness::tools::tests::powershell_) | test(=harness::tools::tests::dropped_powershell_future_stops_descendants) | test(=status_route_and_stop_roundtrip_over_the_control_socket)
-            | test(=concurrent_clients_are_all_served) | test(=probe_status_reports_none_when_nothing_listens) | test(=client_fails_clearly_when_no_daemon_is_listening)
-            | test(=update::tests::official_basename_is_required_even_in_the_same_install_prefix)
-            | test(=update::tests::reduced_profiles_delegate_for_every_install_method_and_channel)
+            | test(=tests::daemon::status_route_and_stop_roundtrip_over_the_control_socket)
+            | test(=tests::daemon::concurrent_clients_are_all_served) | test(=tests::daemon::probe_status_reports_none_when_nothing_listens) | test(=tests::daemon::client_fails_clearly_when_no_daemon_is_listening)
+            | (binary(=invocation) & test(=gateway_update_delegates_for_the_installed_profile_and_channel))
             | test(=daemon_locator::tests::config_identity_survives_file_deletion_and_recreation)
-            | test(=policy_lock::files_tests::current_source_history_cas_and_exact_rollback)
+            | test(=policy_source::files_tests::current_source_history_cas_and_exact_rollback)
             | test(=db::tests::relative_sqlite_urls_anchor_to_config_home_and_preserve_queries)
-            | (binary(=invocation) & (test(=canonical_help_is_bro_and_has_no_alias_warning) | test(=alias_preserves_help_and_structured_stdout)))
+            | (binary(=invocation) & test(=gateway_help_and_status_use_the_service_identity))
+        - os: macos-latest
+          package: bitrouter-bro
+          timeout-minutes: 45
+          targets: ''
+          filter: all()
+        - os: windows-latest
+          package: bitrouter-bro
+          timeout-minutes: 45
+          targets: ''
+          filter: all()
     steps:
     - uses: actions/checkout@v6
     - uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -964,38 +843,33 @@ jobs:
     - uses: taiki-e/install-action@v2
       with:
         tool: nextest@0.9.114
+    - name: Build the platform gateway process
+      if: matrix.package == 'bitrouter'
+      shell: bash
+      run: |
+        cargo build --locked -p bitrouter --all-features --bin bitrouter --jobs 2
+        gateway_binary="$GITHUB_WORKSPACE/target/debug/bitrouter"
+        if [[ "$RUNNER_OS" == Windows ]]; then gateway_binary+=.exe; fi
+        test -f "$gateway_binary"
+        printf 'BITROUTER_TEST_GATEWAY_BINARY=%s\n' "$gateway_binary" >> "$GITHUB_ENV"
+        printf 'BITROUTER_TEST_PREBUILT_ONLY=1\n' >> "$GITHUB_ENV"
     - name: Build platform fixtures
-      if: runner.os == 'macOS'
+      if: runner.os == 'macOS' && matrix.package == 'bitrouter'
       run: cargo build --locked -p bitrouter --all-features --example onboarding_fixture --jobs 2
+    - name: Build BRO ACP adapter
+      if: matrix.package == 'bitrouter-bro'
+      run: cargo build --locked -p bitrouter-bro --example bro_acp_fixture --jobs 2
     - name: Verify platform behavior
       shell: bash
       env:
+        PACKAGE: ${{ matrix.package }}
         TARGETS: ${{ matrix.targets }}
         FILTER: ${{ matrix.filter }}
-        EXPECTED_TESTS: ${{ matrix.expected-tests }}
         BITROUTER_TEST_EXAMPLES_DIR: ${{ github.workspace }}/target/debug/examples
       run: |
         read -r -a targets <<< "$TARGETS"
-        mkdir -p ci-evidence
-        cargo nextest list --locked -p bitrouter --all-features "${targets[@]}" --build-jobs 2 \
-          --profile ci -E "$FILTER" --message-format json > ci-evidence/platform-selection.json
-        # Require the entire platform allowlist, not merely one surviving match.
-        # https://nexte.st/docs/machine-readable/list/
-        jq -e --argjson expected "$EXPECTED_TESTS" '
-          [."rust-suites"[].testcases[] | select(."filter-match".status == "matches")]
-          | length == $expected and all(.ignored == false)
-        ' ci-evidence/platform-selection.json
-        cargo nextest run --locked -p bitrouter --all-features "${targets[@]}" --build-jobs 2 \
+        cargo nextest run --locked -p "$PACKAGE" --all-features "${targets[@]}" --build-jobs 2 \
           --profile ci --test-threads 2 --retries 0 --no-fail-fast --no-tests fail -E "$FILTER"
-    - name: Upload platform evidence
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: ${{ github.job }}-${{ strategy.job-index }}-attempt-${{ github.run_attempt }}-evidence
-        path: |
-          ci-evidence/
-          target/nextest/ci/junit.xml
-        retention-days: 7
     needs:
     - changes
     if: needs.changes.outputs.code == 'true'
@@ -1026,8 +900,12 @@ jobs:
     - clippy
     - build-linux
     - test-linux
-    - test-process
-    - test-capacity
+    - test-product-process
+    - build-service-process
+    - build-bro
+    - test-bro
+    - test-service-profile
+    - test-libraries
     - database-backends
     - application-features
     - feature-isolation

@@ -1,5 +1,6 @@
 //! Curated selection only; never writes provider inventory or bindings.
 use super::*;
+use bitrouter_registry::curation::DiscoveryPolicy;
 use regex::Regex;
 
 struct Rule {
@@ -66,23 +67,8 @@ fn rules(policy: &Value) -> Result<(Vec<Rule>, u64)> {
 }
 pub(super) fn validate(policy: &Value) -> Result<()> {
     rules(policy)?;
-    let mut ids = BTreeSet::new();
-    for record in policy["retired_models"]
-        .as_array()
-        .context("retired_models must be evidence objects")?
-    {
-        let id = record["id"]
-            .as_str()
-            .filter(|s| canonical_id(s))
-            .context("tombstone ID")?;
-        if !ids.insert(id)
-            || !https(&record["source_url"])
-            || record["recorded_at"].as_str().and_then(timestamp).is_none()
-            || record["reason"].as_str().is_none_or(str::is_empty)
-        {
-            bail!("invalid curation tombstone evidence");
-        }
-    }
+    let policy = DiscoveryPolicy::from_value(policy)?;
+    policy.tombstone_ids()?;
     Ok(())
 }
 fn classify(id: &str, rules: &[Rule]) -> Result<Option<(String, Vec<u64>, usize)>> {
@@ -138,19 +124,8 @@ pub(super) fn apply(
         .join("model-discovery.yaml");
     let policy = &sources.files[&policy_path];
     let (rules, days) = rules(policy)?;
-    let tombstones = policy["retired_models"]
-        .as_array()
-        .context("retired_models must be evidence objects")?;
-    let mut retired = BTreeSet::new();
-    for record in tombstones {
-        if !https(&record["source_url"])
-            || record["recorded_at"].as_str().and_then(timestamp).is_none()
-            || record["reason"].as_str().is_none_or(str::is_empty)
-        {
-            bail!("invalid curation tombstone evidence");
-        }
-        retired.insert(record["id"].as_str().context("tombstone ID")?.to_owned());
-    }
+    let policy = DiscoveryPolicy::from_value(policy)?;
+    let excluded = policy.tombstone_ids()?;
     // Eligibility uses the staged provider inventory, independently of curation.
     let providers = sources
         .records("providers")
@@ -167,7 +142,7 @@ pub(super) fn apply(
         .context("identity data missing")?
     {
         let id = row["id"].as_str().context("model ID")?;
-        if retired.contains(id) || !available(&eligibility, id) {
+        if excluded.contains(id) || !available(&eligibility, id) {
             continue;
         }
         if let Some((family, version, retain)) = classify(id, &rules)? {
@@ -211,7 +186,7 @@ pub(super) fn apply(
             .clone();
         records.retain(|record| {
             record["id"].as_str().is_some_and(|id| {
-                ids.contains(id) && !retired.contains(id) && available(&eligibility, id)
+                ids.contains(id) && !excluded.contains(id) && available(&eligibility, id)
             })
         });
         for record in &mut records {

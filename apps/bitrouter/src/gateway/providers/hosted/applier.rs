@@ -151,9 +151,6 @@ fn map_credential_error(error: CredentialError, onboarding_hint: &str) -> ModelE
             ),
         },
         CredentialError::Storage(failure) => ModelError::CredentialStorage { failure },
-        CredentialError::WrongCredentialKind => {
-            ModelError::configuration("stored OAuth credential was rejected by bearer resolution")
-        }
     }
 }
 

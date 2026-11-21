@@ -1,1026 +1,5 @@
 [
   {
-    "name": "acp_assessment_revisions",
-    "columns": [
-      {
-        "name": "revision_id",
-        "kind": "varchar(64)",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "session_key",
-        "kind": "varchar(64)",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "checkpoint_id",
-        "kind": "varchar(64)",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "created_at",
-        "kind": "text",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "revision_json",
-        "kind": "text",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null,
-        "mysql_kind": "longtext"
-      },
-      {
-        "name": "installation_id",
-        "kind": "varchar(128)",
-        "nullable": true,
-        "binary": true,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "tenant_id",
-        "kind": "varchar(128)",
-        "nullable": true,
-        "binary": true,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "creator_principal_id",
-        "kind": "varchar(128)",
-        "nullable": true,
-        "binary": true,
-        "automatic": false,
-        "default": null
-      }
-    ],
-    "primary": [
-      "revision_id"
-    ],
-    "unique": [],
-    "foreign": [],
-    "checks": [],
-    "indexes": [
-      {
-        "name": "idx_acp_revisions_checkpoint",
-        "columns": [
-          "checkpoint_id"
-        ],
-        "unique": false
-      },
-      {
-        "name": "idx_acp_revisions_session",
-        "columns": [
-          "session_key"
-        ],
-        "unique": false
-      },
-      {
-        "name": "idx_legacy33_7_scope",
-        "columns": [
-          "installation_id",
-          "tenant_id"
-        ],
-        "unique": false
-      }
-    ]
-  },
-  {
-    "name": "acp_canonical_sessions",
-    "columns": [
-      {
-        "name": "session_key",
-        "kind": "varchar(64)",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "owner",
-        "kind": "text",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "source",
-        "kind": "text",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "native_session_id",
-        "kind": "text",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "head",
-        "kind": "bigint",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "history_origin",
-        "kind": "text",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "parent_key",
-        "kind": "varchar(64)",
-        "nullable": true,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "parent_watermark",
-        "kind": "bigint",
-        "nullable": true,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "deleted",
-        "kind": "boolean",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "installation_id",
-        "kind": "varchar(128)",
-        "nullable": true,
-        "binary": true,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "tenant_id",
-        "kind": "varchar(128)",
-        "nullable": true,
-        "binary": true,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "creator_principal_id",
-        "kind": "varchar(128)",
-        "nullable": true,
-        "binary": true,
-        "automatic": false,
-        "default": null
-      }
-    ],
-    "primary": [
-      "session_key"
-    ],
-    "unique": [],
-    "foreign": [],
-    "checks": [],
-    "indexes": [
-      {
-        "name": "idx_legacy33_1_scope",
-        "columns": [
-          "installation_id",
-          "tenant_id"
-        ],
-        "unique": false
-      }
-    ]
-  },
-  {
-    "name": "acp_capture_connections",
-    "columns": [
-      {
-        "name": "connection_id",
-        "kind": "varchar(64)",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "owner",
-        "kind": "text",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "source",
-        "kind": "text",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "controller_instance_id",
-        "kind": "text",
-        "nullable": true,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "route_scope_id",
-        "kind": "text",
-        "nullable": true,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "state",
-        "kind": "text",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "head",
-        "kind": "bigint",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "started_at",
-        "kind": "text",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "metadata_json",
-        "kind": "text",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "installation_id",
-        "kind": "varchar(128)",
-        "nullable": true,
-        "binary": true,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "tenant_id",
-        "kind": "varchar(128)",
-        "nullable": true,
-        "binary": true,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "creator_principal_id",
-        "kind": "varchar(128)",
-        "nullable": true,
-        "binary": true,
-        "automatic": false,
-        "default": null
-      }
-    ],
-    "primary": [
-      "connection_id"
-    ],
-    "unique": [],
-    "foreign": [],
-    "checks": [],
-    "indexes": [
-      {
-        "name": "idx_legacy33_0_scope",
-        "columns": [
-          "installation_id",
-          "tenant_id"
-        ],
-        "unique": false
-      }
-    ]
-  },
-  {
-    "name": "acp_capture_events",
-    "columns": [
-      {
-        "name": "connection_id",
-        "kind": "varchar(64)",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "sequence",
-        "kind": "bigint",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "session_key",
-        "kind": "varchar(64)",
-        "nullable": true,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "session_sequence",
-        "kind": "bigint",
-        "nullable": true,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "replay",
-        "kind": "boolean",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "event_json",
-        "kind": "text",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null,
-        "mysql_kind": "longtext"
-      },
-      {
-        "name": "captured_at",
-        "kind": "text",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "installation_id",
-        "kind": "varchar(128)",
-        "nullable": true,
-        "binary": true,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "tenant_id",
-        "kind": "varchar(128)",
-        "nullable": true,
-        "binary": true,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "creator_principal_id",
-        "kind": "varchar(128)",
-        "nullable": true,
-        "binary": true,
-        "automatic": false,
-        "default": null
-      }
-    ],
-    "primary": [
-      "connection_id",
-      "sequence"
-    ],
-    "unique": [],
-    "foreign": [],
-    "checks": [],
-    "indexes": [
-      {
-        "name": "idx_acp_session_sequence",
-        "columns": [
-          "session_key",
-          "session_sequence"
-        ],
-        "unique": true
-      },
-      {
-        "name": "idx_legacy33_2_scope",
-        "columns": [
-          "installation_id",
-          "tenant_id"
-        ],
-        "unique": false
-      }
-    ]
-  },
-  {
-    "name": "acp_checkpoint_members",
-    "columns": [
-      {
-        "name": "checkpoint_id",
-        "kind": "varchar(64)",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "session_key",
-        "kind": "varchar(64)",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "installation_id",
-        "kind": "varchar(128)",
-        "nullable": true,
-        "binary": true,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "tenant_id",
-        "kind": "varchar(128)",
-        "nullable": true,
-        "binary": true,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "creator_principal_id",
-        "kind": "varchar(128)",
-        "nullable": true,
-        "binary": true,
-        "automatic": false,
-        "default": null
-      }
-    ],
-    "primary": [
-      "checkpoint_id",
-      "session_key"
-    ],
-    "unique": [],
-    "foreign": [],
-    "checks": [],
-    "indexes": [
-      {
-        "name": "idx_acp_members_session",
-        "columns": [
-          "session_key"
-        ],
-        "unique": false
-      },
-      {
-        "name": "idx_legacy33_5_scope",
-        "columns": [
-          "installation_id",
-          "tenant_id"
-        ],
-        "unique": false
-      }
-    ]
-  },
-  {
-    "name": "acp_checkpoints",
-    "columns": [
-      {
-        "name": "checkpoint_id",
-        "kind": "varchar(64)",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "session_key",
-        "kind": "varchar(64)",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "manifest_json",
-        "kind": "text",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null,
-        "mysql_kind": "longtext"
-      },
-      {
-        "name": "watermark",
-        "kind": "bigint",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "deleted",
-        "kind": "boolean",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "installation_id",
-        "kind": "varchar(128)",
-        "nullable": true,
-        "binary": true,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "tenant_id",
-        "kind": "varchar(128)",
-        "nullable": true,
-        "binary": true,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "creator_principal_id",
-        "kind": "varchar(128)",
-        "nullable": true,
-        "binary": true,
-        "automatic": false,
-        "default": null
-      }
-    ],
-    "primary": [
-      "checkpoint_id"
-    ],
-    "unique": [],
-    "foreign": [],
-    "checks": [],
-    "indexes": [
-      {
-        "name": "idx_acp_checkpoints_session",
-        "columns": [
-          "session_key"
-        ],
-        "unique": false
-      },
-      {
-        "name": "idx_legacy33_4_scope",
-        "columns": [
-          "installation_id",
-          "tenant_id"
-        ],
-        "unique": false
-      }
-    ]
-  },
-  {
-    "name": "acp_effective_assessments",
-    "columns": [
-      {
-        "name": "session_key",
-        "kind": "varchar(64)",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "revision_id",
-        "kind": "varchar(64)",
-        "nullable": true,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "installation_id",
-        "kind": "varchar(128)",
-        "nullable": true,
-        "binary": true,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "tenant_id",
-        "kind": "varchar(128)",
-        "nullable": true,
-        "binary": true,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "creator_principal_id",
-        "kind": "varchar(128)",
-        "nullable": true,
-        "binary": true,
-        "automatic": false,
-        "default": null
-      }
-    ],
-    "primary": [
-      "session_key"
-    ],
-    "unique": [],
-    "foreign": [],
-    "checks": [],
-    "indexes": [
-      {
-        "name": "idx_legacy33_8_scope",
-        "columns": [
-          "installation_id",
-          "tenant_id"
-        ],
-        "unique": false
-      }
-    ]
-  },
-  {
-    "name": "acp_resource_observations",
-    "columns": [
-      {
-        "name": "observation_id",
-        "kind": "varchar(64)",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "checkpoint_id",
-        "kind": "varchar(64)",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "observed_at",
-        "kind": "text",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "observation_json",
-        "kind": "text",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null,
-        "mysql_kind": "longtext"
-      },
-      {
-        "name": "revision",
-        "kind": "bigint",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "installation_id",
-        "kind": "varchar(128)",
-        "nullable": true,
-        "binary": true,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "tenant_id",
-        "kind": "varchar(128)",
-        "nullable": true,
-        "binary": true,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "creator_principal_id",
-        "kind": "varchar(128)",
-        "nullable": true,
-        "binary": true,
-        "automatic": false,
-        "default": null
-      }
-    ],
-    "primary": [
-      "observation_id"
-    ],
-    "unique": [],
-    "foreign": [],
-    "checks": [],
-    "indexes": [
-      {
-        "name": "idx_acp_resources_checkpoint",
-        "columns": [
-          "checkpoint_id"
-        ],
-        "unique": false
-      },
-      {
-        "name": "idx_legacy33_6_scope",
-        "columns": [
-          "installation_id",
-          "tenant_id"
-        ],
-        "unique": false
-      }
-    ]
-  },
-  {
-    "name": "adequacy_exploration",
-    "columns": [
-      {
-        "name": "fingerprint",
-        "kind": "varchar",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "observed",
-        "kind": "integer",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "adequate_trials",
-        "kind": "integer",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "locked",
-        "kind": "boolean",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "updated_at",
-        "kind": "varchar",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "created_at",
-        "kind": "varchar",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      }
-    ],
-    "primary": [
-      "fingerprint"
-    ],
-    "unique": [],
-    "foreign": [],
-    "checks": [],
-    "indexes": []
-  },
-  {
-    "name": "adequacy_pins",
-    "columns": [
-      {
-        "name": "fingerprint",
-        "kind": "varchar",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "pinned_at_unix",
-        "kind": "bigint",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "created_at",
-        "kind": "varchar",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      }
-    ],
-    "primary": [
-      "fingerprint"
-    ],
-    "unique": [],
-    "foreign": [],
-    "checks": [],
-    "indexes": []
-  },
-  {
-    "name": "adequacy_reliability_events",
-    "columns": [
-      {
-        "name": "sequence",
-        "kind": "bigint",
-        "nullable": false,
-        "binary": false,
-        "automatic": true,
-        "default": null
-      },
-      {
-        "name": "request_id",
-        "kind": "varchar",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "route_key",
-        "kind": "varchar",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "provider",
-        "kind": "varchar",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "model",
-        "kind": "varchar",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "credential_class",
-        "kind": "varchar",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "endpoint_scope",
-        "kind": "varchar",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "protocol",
-        "kind": "varchar",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "observation",
-        "kind": "varchar",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "half_open_probe",
-        "kind": "boolean",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "observed_at_unix",
-        "kind": "bigint",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "created_at",
-        "kind": "varchar",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      }
-    ],
-    "primary": [
-      "sequence"
-    ],
-    "unique": [
-      [
-        "request_id"
-      ]
-    ],
-    "foreign": [],
-    "checks": [],
-    "indexes": []
-  },
-  {
-    "name": "adequacy_semantic_success",
-    "columns": [
-      {
-        "name": "evidence_id",
-        "kind": "varchar",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "fingerprint",
-        "kind": "varchar",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "task_id",
-        "kind": "varchar",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "created_at",
-        "kind": "varchar",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      }
-    ],
-    "primary": [
-      "evidence_id"
-    ],
-    "unique": [],
-    "foreign": [],
-    "checks": [],
-    "indexes": [
-      {
-        "name": "idx_adequacy_semantic_success_fingerprint",
-        "columns": [
-          "fingerprint"
-        ],
-        "unique": false
-      }
-    ]
-  },
-  {
     "name": "api_keys",
     "columns": [
       {
@@ -1129,511 +108,6 @@
     ]
   },
   {
-    "name": "bro_acceptance_keys",
-    "columns": [
-      {
-        "name": "scope",
-        "kind": "varchar(512)",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "key",
-        "kind": "varchar(128)",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "fingerprint",
-        "kind": "varchar(64)",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "thread_id",
-        "kind": "varchar",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "turn_id",
-        "kind": "varchar",
-        "nullable": true,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      }
-    ],
-    "primary": [
-      "scope",
-      "key"
-    ],
-    "unique": [],
-    "foreign": [
-      {
-        "columns": [
-          "thread_id"
-        ],
-        "table": "bro_executions",
-        "references": [
-          "id"
-        ],
-        "delete": "CASCADE",
-        "update": "NO ACTION"
-      }
-    ],
-    "checks": [],
-    "indexes": []
-  },
-  {
-    "name": "bro_execution_index",
-    "columns": [
-      {
-        "name": "position",
-        "kind": "bigint",
-        "nullable": false,
-        "binary": false,
-        "automatic": true,
-        "default": null
-      },
-      {
-        "name": "execution_id",
-        "kind": "varchar(128)",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      }
-    ],
-    "primary": [
-      "position"
-    ],
-    "unique": [
-      [
-        "execution_id"
-      ]
-    ],
-    "foreign": [
-      {
-        "columns": [
-          "execution_id"
-        ],
-        "table": "bro_executions",
-        "references": [
-          "id"
-        ],
-        "delete": "RESTRICT",
-        "update": "NO ACTION"
-      }
-    ],
-    "checks": [],
-    "indexes": []
-  },
-  {
-    "name": "bro_execution_records",
-    "columns": [
-      {
-        "name": "execution_id",
-        "kind": "varchar",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "sequence",
-        "kind": "bigint",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "payload",
-        "kind": "text",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      }
-    ],
-    "primary": [
-      "execution_id",
-      "sequence"
-    ],
-    "unique": [],
-    "foreign": [
-      {
-        "columns": [
-          "execution_id"
-        ],
-        "table": "bro_executions",
-        "references": [
-          "id"
-        ],
-        "delete": "CASCADE",
-        "update": "NO ACTION"
-      }
-    ],
-    "checks": [],
-    "indexes": []
-  },
-  {
-    "name": "bro_executions",
-    "columns": [
-      {
-        "name": "id",
-        "kind": "varchar",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "version",
-        "kind": "bigint",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "format_version",
-        "kind": "integer",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": "0"
-      }
-    ],
-    "primary": [
-      "id"
-    ],
-    "unique": [],
-    "foreign": [],
-    "checks": [],
-    "indexes": []
-  },
-  {
-    "name": "bro_managed_sessions",
-    "columns": [
-      {
-        "name": "id",
-        "kind": "varchar",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "revision",
-        "kind": "bigint",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "payload_bytes",
-        "kind": "bigint",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "payload",
-        "kind": "text",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null,
-        "mysql_kind": "longtext"
-      },
-      {
-        "name": "installation_id",
-        "kind": "varchar(128)",
-        "nullable": true,
-        "binary": true,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "tenant_id",
-        "kind": "varchar(128)",
-        "nullable": true,
-        "binary": true,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "creator_principal_id",
-        "kind": "varchar(128)",
-        "nullable": true,
-        "binary": true,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "session_principal_id",
-        "kind": "varchar(128)",
-        "nullable": true,
-        "binary": true,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "logical_name",
-        "kind": "varchar(128)",
-        "nullable": true,
-        "binary": true,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "harness_id",
-        "kind": "varchar(128)",
-        "nullable": true,
-        "binary": true,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "session_id",
-        "kind": "varchar(128)",
-        "nullable": true,
-        "binary": true,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "execution_revision",
-        "kind": "varchar(128)",
-        "nullable": true,
-        "binary": true,
-        "automatic": false,
-        "default": null
-      }
-    ],
-    "primary": [
-      "id"
-    ],
-    "unique": [],
-    "foreign": [],
-    "checks": [],
-    "indexes": [
-      {
-        "name": "idx_native36_scope",
-        "columns": [
-          "installation_id",
-          "tenant_id"
-        ],
-        "unique": false
-      }
-    ]
-  },
-  {
-    "name": "bro_runtime_owners",
-    "columns": [
-      {
-        "name": "generation",
-        "kind": "bigint",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "server_instance_id",
-        "kind": "varchar(128)",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "stopped_at_ms",
-        "kind": "bigint",
-        "nullable": true,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      }
-    ],
-    "primary": [
-      "generation"
-    ],
-    "unique": [
-      [
-        "server_instance_id"
-      ]
-    ],
-    "foreign": [],
-    "checks": [],
-    "indexes": []
-  },
-  {
-    "name": "bro_runtime_ownership",
-    "columns": [
-      {
-        "name": "id",
-        "kind": "integer",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "generation",
-        "kind": "bigint",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "server_instance_id",
-        "kind": "varchar(128)",
-        "nullable": true,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "stopped_at_ms",
-        "kind": "bigint",
-        "nullable": true,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      }
-    ],
-    "primary": [
-      "id"
-    ],
-    "unique": [],
-    "foreign": [],
-    "checks": [],
-    "indexes": []
-  },
-  {
-    "name": "checkpoint_evolution",
-    "columns": [
-      {
-        "name": "record_id",
-        "kind": "varchar(64)",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "scope_id",
-        "kind": "varchar(64)",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "kind",
-        "kind": "varchar(32)",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "session_key",
-        "kind": "varchar(64)",
-        "nullable": true,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "revision",
-        "kind": "bigint",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "body",
-        "kind": "text",
-        "nullable": false,
-        "binary": false,
-        "automatic": false,
-        "default": null,
-        "mysql_kind": "longtext"
-      },
-      {
-        "name": "installation_id",
-        "kind": "varchar(128)",
-        "nullable": true,
-        "binary": true,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "tenant_id",
-        "kind": "varchar(128)",
-        "nullable": true,
-        "binary": true,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "creator_principal_id",
-        "kind": "varchar(128)",
-        "nullable": true,
-        "binary": true,
-        "automatic": false,
-        "default": null
-      }
-    ],
-    "primary": [
-      "record_id"
-    ],
-    "unique": [],
-    "foreign": [],
-    "checks": [],
-    "indexes": [
-      {
-        "name": "idx_checkpoint_evolution_scope_kind",
-        "columns": [
-          "scope_id",
-          "kind"
-        ],
-        "unique": false
-      },
-      {
-        "name": "idx_checkpoint_evolution_session",
-        "columns": [
-          "session_key"
-        ],
-        "unique": false
-      },
-      {
-        "name": "idx_legacy33_3_scope",
-        "columns": [
-          "installation_id",
-          "tenant_id"
-        ],
-        "unique": false
-      }
-    ]
-  },
-  {
     "name": "eval_admission_events",
     "columns": [
       {
@@ -1642,7 +116,8 @@
         "nullable": false,
         "binary": false,
         "automatic": true,
-        "default": null
+        "default": null,
+        "sqlite_kind": "integer"
       },
       {
         "name": "result_id",
@@ -2164,6 +639,115 @@
     ]
   },
   {
+    "name": "gateway_request_records",
+    "columns": [
+      {
+        "name": "record_id",
+        "kind": "varchar(64)",
+        "nullable": false,
+        "binary": true,
+        "automatic": false,
+        "default": null
+      },
+      {
+        "name": "scope_id",
+        "kind": "varchar(64)",
+        "nullable": false,
+        "binary": true,
+        "automatic": false,
+        "default": null
+      },
+      {
+        "name": "kind",
+        "kind": "varchar(32)",
+        "nullable": false,
+        "binary": true,
+        "automatic": false,
+        "default": null
+      },
+      {
+        "name": "session_key",
+        "kind": "varchar(64)",
+        "nullable": true,
+        "binary": true,
+        "automatic": false,
+        "default": null
+      },
+      {
+        "name": "revision",
+        "kind": "bigint",
+        "nullable": false,
+        "binary": false,
+        "automatic": false,
+        "default": null
+      },
+      {
+        "name": "body",
+        "kind": "text",
+        "nullable": false,
+        "binary": false,
+        "automatic": false,
+        "default": null,
+        "mysql_kind": "longtext"
+      },
+      {
+        "name": "installation_id",
+        "kind": "varchar(128)",
+        "nullable": true,
+        "binary": true,
+        "automatic": false,
+        "default": null
+      },
+      {
+        "name": "tenant_id",
+        "kind": "varchar(128)",
+        "nullable": true,
+        "binary": true,
+        "automatic": false,
+        "default": null
+      },
+      {
+        "name": "creator_principal_id",
+        "kind": "varchar(128)",
+        "nullable": true,
+        "binary": true,
+        "automatic": false,
+        "default": null
+      }
+    ],
+    "primary": [
+      "record_id"
+    ],
+    "unique": [],
+    "foreign": [],
+    "checks": [],
+    "indexes": [
+      {
+        "name": "idx_gateway_request_records_scope_kind",
+        "columns": [
+          "scope_id",
+          "kind"
+        ],
+        "unique": false
+      },
+      {
+        "name": "idx_gateway_request_records_session",
+        "columns": [
+          "session_key"
+        ],
+        "unique": false
+      },
+      {
+        "name": "idx_gateway_request_records_ownership",
+        "columns": [
+          "installation_id",
+          "tenant_id"
+        ],
+        "unique": false
+      }
+    ]
+  },
+  {
     "name": "provider_continuation_key_epoch",
     "columns": [
       {
@@ -2420,7 +1004,7 @@
         "name": "request_id",
         "kind": "varchar",
         "nullable": false,
-        "binary": false,
+        "binary": true,
         "automatic": false,
         "default": null
       },
@@ -2428,7 +1012,7 @@
         "name": "user_id",
         "kind": "varchar",
         "nullable": false,
-        "binary": false,
+        "binary": true,
         "automatic": false,
         "default": null
       },
@@ -2436,7 +1020,7 @@
         "name": "api_key_id",
         "kind": "varchar",
         "nullable": false,
-        "binary": false,
+        "binary": true,
         "automatic": false,
         "default": null
       },
@@ -2644,7 +1228,7 @@
         "name": "launch_id",
         "kind": "varchar",
         "nullable": true,
-        "binary": false,
+        "binary": true,
         "automatic": false,
         "default": null
       },
@@ -2660,7 +1244,7 @@
         "name": "controller_instance_id",
         "kind": "varchar",
         "nullable": true,
-        "binary": false,
+        "binary": true,
         "automatic": false,
         "default": null
       },
@@ -2668,7 +1252,7 @@
         "name": "acp_session_id",
         "kind": "varchar",
         "nullable": true,
-        "binary": false,
+        "binary": true,
         "automatic": false,
         "default": null
       },
@@ -2676,7 +1260,7 @@
         "name": "native_root_session_id",
         "kind": "varchar",
         "nullable": true,
-        "binary": false,
+        "binary": true,
         "automatic": false,
         "default": null
       },
@@ -2684,7 +1268,7 @@
         "name": "native_agent_thread_id",
         "kind": "varchar",
         "nullable": true,
-        "binary": false,
+        "binary": true,
         "automatic": false,
         "default": null
       },
@@ -2724,7 +1308,7 @@
         "name": "route_scope_id",
         "kind": "varchar",
         "nullable": true,
-        "binary": false,
+        "binary": true,
         "automatic": false,
         "default": null
       },
@@ -2910,7 +1494,7 @@
         "name": "scope_json",
         "kind": "text",
         "nullable": false,
-        "binary": false,
+        "binary": true,
         "automatic": false,
         "default": null,
         "mysql_kind": "longtext"
@@ -2919,7 +1503,7 @@
         "name": "expires_at",
         "kind": "text",
         "nullable": false,
-        "binary": false,
+        "binary": true,
         "automatic": false,
         "default": null,
         "mysql_kind": "longtext"
@@ -3004,7 +1588,7 @@
         "name": "document_json",
         "kind": "text",
         "nullable": false,
-        "binary": false,
+        "binary": true,
         "automatic": false,
         "default": null,
         "mysql_kind": "longtext"
@@ -3029,7 +1613,7 @@
         "name": "compiled_json",
         "kind": "text",
         "nullable": false,
-        "binary": false,
+        "binary": true,
         "automatic": false,
         "default": null,
         "mysql_kind": "longtext"
@@ -3038,7 +1622,7 @@
         "name": "dependencies_json",
         "kind": "text",
         "nullable": false,
-        "binary": false,
+        "binary": true,
         "automatic": false,
         "default": null,
         "mysql_kind": "longtext"
@@ -3204,7 +1788,7 @@
         "name": "permissions_json",
         "kind": "text",
         "nullable": false,
-        "binary": false,
+        "binary": true,
         "automatic": false,
         "default": null,
         "mysql_kind": "longtext"
@@ -3213,7 +1797,7 @@
         "name": "scope_json",
         "kind": "text",
         "nullable": false,
-        "binary": false,
+        "binary": true,
         "automatic": false,
         "default": null,
         "mysql_kind": "longtext"
@@ -3222,7 +1806,7 @@
         "name": "expires_at",
         "kind": "text",
         "nullable": false,
-        "binary": false,
+        "binary": true,
         "automatic": false,
         "default": null,
         "mysql_kind": "longtext"
@@ -3231,7 +1815,7 @@
         "name": "created_at",
         "kind": "text",
         "nullable": false,
-        "binary": false,
+        "binary": true,
         "automatic": false,
         "default": null,
         "mysql_kind": "longtext"
@@ -3333,7 +1917,7 @@
         "name": "intent_json",
         "kind": "text",
         "nullable": false,
-        "binary": false,
+        "binary": true,
         "automatic": false,
         "default": null,
         "mysql_kind": "longtext"
@@ -3412,7 +1996,7 @@
         "name": "receipt_json",
         "kind": "text",
         "nullable": false,
-        "binary": false,
+        "binary": true,
         "automatic": false,
         "default": null,
         "mysql_kind": "longtext"
@@ -3429,7 +2013,7 @@
         "name": "disposition_json",
         "kind": "text",
         "nullable": false,
-        "binary": false,
+        "binary": true,
         "automatic": false,
         "default": null,
         "mysql_kind": "longtext"
@@ -3459,6 +2043,15 @@
         "default": null
       },
       {
+        "name": "storage_kind",
+        "kind": "integer",
+        "nullable": false,
+        "binary": false,
+        "automatic": false,
+        "default": "0",
+        "sqlite_only": true
+      },
+      {
         "name": "receipt_format",
         "kind": "integer",
         "nullable": false,
@@ -3485,7 +2078,21 @@
           "execution_id"
         ],
         "unique": false
+      },
+      {
+        "name": "idx_tenancy_receipts_storage",
+        "columns": [
+          "installation_id",
+          "storage_kind",
+          "tenant_id",
+          "execution_id"
+        ],
+        "unique": false,
+        "sqlite_only": true
       }
+    ],
+    "sqlite_checks": [
+      "(\"storage_kind\" IN (0, 1))"
     ]
   },
   {
@@ -3551,7 +2158,7 @@
         "name": "created_at",
         "kind": "text",
         "nullable": false,
-        "binary": false,
+        "binary": true,
         "automatic": false,
         "default": null,
         "mysql_kind": "longtext"
@@ -3640,7 +2247,7 @@
         "name": "metadata_json",
         "kind": "text",
         "nullable": false,
-        "binary": false,
+        "binary": true,
         "automatic": false,
         "default": null,
         "mysql_kind": "longtext"
@@ -3649,7 +2256,7 @@
         "name": "payload_json",
         "kind": "text",
         "nullable": false,
-        "binary": false,
+        "binary": true,
         "automatic": false,
         "default": null,
         "mysql_kind": "longtext"
@@ -3661,6 +2268,24 @@
         "binary": true,
         "automatic": false,
         "default": null
+      },
+      {
+        "name": "pending_tenant_id",
+        "kind": "varchar(128)",
+        "nullable": true,
+        "binary": true,
+        "automatic": false,
+        "default": null,
+        "sqlite_only": true
+      },
+      {
+        "name": "pending_execution_id",
+        "kind": "varchar(128)",
+        "nullable": true,
+        "binary": true,
+        "automatic": false,
+        "default": null,
+        "sqlite_only": true
       }
     ],
     "primary": [
@@ -3678,6 +2303,17 @@
           "slot_key"
         ],
         "unique": false
+      },
+      {
+        "name": "idx_tenancy_oauth_execution",
+        "columns": [
+          "installation_id",
+          "pending_tenant_id",
+          "pending_execution_id",
+          "slot_key"
+        ],
+        "unique": false,
+        "sqlite_only": true
       }
     ]
   },
@@ -3728,7 +2364,7 @@
         "name": "read_context_json",
         "kind": "text",
         "nullable": false,
-        "binary": false,
+        "binary": true,
         "automatic": false,
         "default": null,
         "mysql_kind": "longtext"
@@ -3753,7 +2389,7 @@
         "name": "result_json",
         "kind": "text",
         "nullable": false,
-        "binary": false,
+        "binary": true,
         "automatic": false,
         "default": null,
         "mysql_kind": "longtext"
@@ -3762,7 +2398,7 @@
         "name": "response_json",
         "kind": "text",
         "nullable": false,
-        "binary": false,
+        "binary": true,
         "automatic": false,
         "default": null,
         "mysql_kind": "longtext"
@@ -3771,7 +2407,7 @@
         "name": "created_at",
         "kind": "text",
         "nullable": false,
-        "binary": false,
+        "binary": true,
         "automatic": false,
         "default": null,
         "mysql_kind": "longtext"
@@ -3834,7 +2470,7 @@
         "name": "created_at",
         "kind": "text",
         "nullable": false,
-        "binary": false,
+        "binary": true,
         "automatic": false,
         "default": null,
         "mysql_kind": "longtext"
@@ -3849,6 +2485,85 @@
         "subject"
       ]
     ],
+    "foreign": [],
+    "checks": [],
+    "indexes": []
+  },
+  {
+    "name": "tenancy_receipt_archive",
+    "sqlite_only": true,
+    "columns": [
+      {
+        "name": "installation_id",
+        "kind": "varchar(128)",
+        "nullable": false,
+        "binary": true,
+        "automatic": false,
+        "default": null
+      },
+      {
+        "name": "tenant_id",
+        "kind": "varchar(128)",
+        "nullable": false,
+        "binary": true,
+        "automatic": false,
+        "default": null
+      },
+      {
+        "name": "execution_id",
+        "kind": "varchar(128)",
+        "nullable": false,
+        "binary": true,
+        "automatic": false,
+        "default": null
+      },
+      {
+        "name": "format_version",
+        "kind": "bigint",
+        "nullable": false,
+        "binary": false,
+        "automatic": false,
+        "default": null
+      },
+      {
+        "name": "codec",
+        "kind": "bigint",
+        "nullable": false,
+        "binary": false,
+        "automatic": false,
+        "default": null
+      },
+      {
+        "name": "receipt_bytes",
+        "kind": "bigint",
+        "nullable": false,
+        "binary": false,
+        "automatic": false,
+        "default": null
+      },
+      {
+        "name": "usage_bytes",
+        "kind": "bigint",
+        "nullable": false,
+        "binary": false,
+        "automatic": false,
+        "default": null
+      },
+      {
+        "name": "payload",
+        "kind": "blob",
+        "nullable": false,
+        "binary": false,
+        "automatic": false,
+        "default": null
+      }
+    ],
+    "primary": [
+      "installation_id",
+      "tenant_id",
+      "execution_id"
+    ],
+    "unique": [],
     "foreign": [],
     "checks": [],
     "indexes": []
@@ -3892,7 +2607,7 @@
         "name": "evidence_json",
         "kind": "text",
         "nullable": false,
-        "binary": false,
+        "binary": true,
         "automatic": false,
         "default": null,
         "mysql_kind": "longtext"
@@ -4067,7 +2782,7 @@
         "name": "payload_json",
         "kind": "text",
         "nullable": false,
-        "binary": false,
+        "binary": true,
         "automatic": false,
         "default": null,
         "mysql_kind": "longtext"
@@ -4076,7 +2791,7 @@
         "name": "dependency_json",
         "kind": "text",
         "nullable": false,
-        "binary": false,
+        "binary": true,
         "automatic": false,
         "default": null,
         "mysql_kind": "longtext"
@@ -4141,7 +2856,7 @@
         "name": "created_at",
         "kind": "text",
         "nullable": false,
-        "binary": false,
+        "binary": true,
         "automatic": false,
         "default": null,
         "mysql_kind": "longtext"
@@ -4154,6 +2869,111 @@
     "foreign": [],
     "checks": [],
     "indexes": []
+  },
+  {
+    "name": "tenancy_unknown_obligations",
+    "sqlite_only": true,
+    "columns": [
+      {
+        "name": "installation_id",
+        "kind": "varchar(128)",
+        "nullable": false,
+        "binary": true,
+        "automatic": false,
+        "default": null
+      },
+      {
+        "name": "tenant_id",
+        "kind": "varchar(128)",
+        "nullable": false,
+        "binary": true,
+        "automatic": false,
+        "default": null
+      },
+      {
+        "name": "execution_id",
+        "kind": "varchar(128)",
+        "nullable": false,
+        "binary": true,
+        "automatic": false,
+        "default": null
+      },
+      {
+        "name": "source_mask",
+        "kind": "integer",
+        "nullable": false,
+        "binary": false,
+        "automatic": false,
+        "default": null
+      },
+      {
+        "name": "first_seconds",
+        "kind": "bigint",
+        "nullable": false,
+        "binary": false,
+        "automatic": false,
+        "default": null
+      },
+      {
+        "name": "first_nanos",
+        "kind": "integer",
+        "nullable": false,
+        "binary": false,
+        "automatic": false,
+        "default": null
+      },
+      {
+        "name": "due_seconds",
+        "kind": "bigint",
+        "nullable": false,
+        "binary": false,
+        "automatic": false,
+        "default": null
+      },
+      {
+        "name": "due_nanos",
+        "kind": "integer",
+        "nullable": false,
+        "binary": false,
+        "automatic": false,
+        "default": null
+      },
+      {
+        "name": "escalated",
+        "kind": "integer",
+        "nullable": false,
+        "binary": false,
+        "automatic": false,
+        "default": null
+      }
+    ],
+    "primary": [
+      "installation_id",
+      "tenant_id",
+      "execution_id"
+    ],
+    "unique": [],
+    "foreign": [],
+    "checks": [
+      "(\"source_mask\" BETWEEN 1 AND 7)",
+      "(\"first_nanos\" BETWEEN 0 AND 999999999)",
+      "(\"due_nanos\" BETWEEN 0 AND 999999999)",
+      "(\"escalated\" IN (0, 1))"
+    ],
+    "indexes": [
+      {
+        "name": "idx_tenancy_unknown_due",
+        "columns": [
+          "installation_id",
+          "escalated",
+          "due_seconds",
+          "due_nanos",
+          "tenant_id",
+          "execution_id"
+        ],
+        "unique": false
+      }
+    ]
   },
   {
     "name": "tenancy_usage_evidence",
@@ -4210,7 +3030,7 @@
         "name": "evidence_json",
         "kind": "text",
         "nullable": false,
-        "binary": false,
+        "binary": true,
         "automatic": false,
         "default": null,
         "mysql_kind": "longtext"
@@ -4222,6 +3042,15 @@
         "binary": false,
         "automatic": false,
         "default": null
+      },
+      {
+        "name": "storage_kind",
+        "kind": "integer",
+        "nullable": false,
+        "binary": false,
+        "automatic": false,
+        "default": "0",
+        "sqlite_only": true
       }
     ],
     "primary": [
@@ -4232,7 +3061,10 @@
     "unique": [],
     "foreign": [],
     "checks": [],
-    "indexes": []
+    "indexes": [],
+    "sqlite_checks": [
+      "(\"storage_kind\" IN (0, 1))"
+    ]
   },
   {
     "name": "trajectory_episodes",

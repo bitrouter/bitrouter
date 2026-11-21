@@ -19,7 +19,7 @@ use anyhow::Result;
 
 use crate::daemon::ObserveStatusProvider;
 use crate::paths::ConfigSource;
-use crate::policy_lock::{LoadedPolicy, PolicyRuntime};
+use crate::policy_source::{LoadedPolicy, PolicyRuntime};
 
 pub(crate) trait ObserveReportRuntime: Sized {
     fn from_snapshot(snapshot: crate::daemon::ObserveStatusPayload, reachable: bool) -> Self;
@@ -128,7 +128,7 @@ pub async fn disk_policy(source: &ConfigSource) -> Result<PolicyReport> {
         ConfigSource::File(path) => Some(path.as_path()),
         _ => None,
     };
-    let loaded = crate::policy_lock::load_for_config(&config, path)
+    let loaded = crate::policy_source::load_for_config(&config, path)
         .await
         .map_err(|_| anyhow::anyhow!("invalid_policy"))?;
     Ok(PolicyReport::from_loaded(
@@ -153,23 +153,8 @@ pub fn providers(config: &Config, source: &str) -> ProvidersReport {
 }
 
 pub fn agents(config: &Config, source: &str) -> AgentsReport {
-    #[cfg(feature = "harness")]
-    let agents = crate::agents::list(config)
-        .into_iter()
-        .map(|row| AgentEntry {
-            id: row.id,
-            configured: row.configured,
-            in_catalog: row.in_catalog,
-            description: if row.in_catalog {
-                row.description
-            } else {
-                "Custom configured agent".into()
-            },
-        })
-        .collect();
     // Reduced builds retain configuration inspection without loading an agent
     // execution catalog or claiming that a configured agent can run locally.
-    #[cfg(not(feature = "harness"))]
     let agents = {
         let mut ids: Vec<_> = config.agents.keys().collect();
         ids.sort();
@@ -222,7 +207,7 @@ mod tests {
         let document: bitrouter_ai::policy::Document = serde_json::from_str(
             r#"{"spec_version":"policy/1.0.0-beta.1","policies":{"auto":{"tiers":{"strong":{"model":"fixture/strong"}},"default_tier":"strong"},"auto:cost":{"tiers":{"cheap":{"model":"fixture/cheap"}},"default_tier":"cheap"}}}"#,
         )?;
-        let digest = crate::policy_lock::semantic_digest(&document)?;
+        let digest = crate::policy_source::semantic_digest(&document)?;
         let loaded = LoadedPolicy {
             path: None,
             document: document.clone(),
@@ -264,7 +249,6 @@ mod snapshot_tests {
             Some(&path),
             None,
             crate::gateway::observability::decision::PendingEvalDecisionStore::default(),
-            None,
         )
         .await?;
         let active_before = runtime.administration_snapshot();

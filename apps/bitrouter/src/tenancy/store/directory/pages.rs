@@ -67,6 +67,7 @@ pub(super) async fn principal_page_in(
     .await
 }
 
+#[cfg(test)]
 pub(super) async fn credential_page_in(
     db: &impl ConnectionTrait,
     after: Option<&CredentialId>,

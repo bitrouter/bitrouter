@@ -8,7 +8,9 @@ use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 
-use bitrouter::telemetry::cardinality::CardinalityLimiter;
+#[path = "../src/telemetry/cardinality.rs"]
+mod cardinality;
+use cardinality::CardinalityLimiter;
 
 fn bench_cardinality_capping(c: &mut Criterion) {
     let mut group = c.benchmark_group("cardinality");
@@ -30,6 +32,7 @@ fn bench_cardinality_capping(c: &mut Criterion) {
         for i in 0..10 {
             limiter.cap(&format!("key_{i}"));
         }
+        assert_eq!(limiter.cardinality(), 10);
         let keys: Vec<String> = (100..200).map(|i| format!("key_{i}")).collect();
         b.iter(|| {
             for key in &keys {

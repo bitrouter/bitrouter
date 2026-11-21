@@ -1,23 +1,23 @@
 //! Gateway service implementation.
 
 pub mod assembly;
-pub mod caller;
-pub mod catalog;
+pub(crate) mod caller;
+pub(crate) mod catalog;
 pub mod error;
 pub mod extensions;
-pub mod http;
-pub mod mcp;
-pub mod metering;
-pub mod model;
-pub mod observability;
-pub mod pipeline;
-pub mod providers;
-pub mod routing;
+pub(crate) mod http;
+pub(crate) mod mcp;
+pub(crate) mod metering;
+pub(crate) mod model;
+pub(crate) mod observability;
+pub(crate) mod pipeline;
+pub(crate) mod providers;
+pub(crate) mod routing;
 #[cfg(feature = "multi-instance")]
 pub(crate) mod shared;
 pub(crate) mod transport;
 
-pub mod conversion_report;
+pub(crate) mod conversion_report;
 
 /// HTTP adapters for embedding gateway handlers.
 pub mod http_adapter;

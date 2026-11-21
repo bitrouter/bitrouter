@@ -1,15 +1,15 @@
 use super::*;
+use anyhow::ensure;
 
 pub(super) enum Change {
     Routing,
     Policy,
-    SessionDeleted,
+    ReservationLost,
 }
 
 pub(super) struct ChangeAfterAdmission {
     pub(super) change: Change,
     pub(super) db: DatabaseConnection,
-    pub(super) identity: SessionIdentity,
     pub(super) routing: Arc<ConfigRoutingTable>,
     pub(super) policies: Arc<PolicyRuntime>,
 }
@@ -18,9 +18,9 @@ pub(super) struct ChangeAfterAdmission {
 impl PreRequestHook for ChangeAfterAdmission {
     async fn check(
         &self,
-        _ctx: &mut PipelineContext,
+        ctx: &mut PipelineContext,
     ) -> crate::gateway::error::Result<HookDecision> {
-        let change: Result<()> = async {
+        let result: Result<()> = async {
             match self.change {
                 Change::Routing => {
                     self.routing
@@ -32,198 +32,157 @@ impl PreRequestHook for ChangeAfterAdmission {
                         .reload_for_config(&self.routing.snapshot_config(), None)
                         .await?;
                 }
-                Change::SessionDeleted => {
-                    sessions::Entity::update_many()
-                        .col_expr(
-                            sessions::Column::Deleted,
-                            sea_orm::sea_query::Expr::value(true),
-                        )
-                        .filter(sessions::Column::SessionKey.eq(self.identity.key()?))
-                        .exec(&self.db)
-                        .await?;
+                Change::ReservationLost => {
+                    let observed = &ctx
+                        .get_event::<GatewayRequestObserved>()
+                        .context("missing observation")?
+                        .request;
+                    let key = crate::storage::gateway_records::digest(&observed.request_id)?;
+                    let store = GatewayRecords::new(self.db.clone(), "gateway-request-admission")?;
+                    ensure!(
+                        records::Entity::delete_by_id(store.id("gateway_request", &key)?)
+                            .exec(&self.db)
+                            .await?
+                            .rows_affected
+                            == 1
+                    );
                 }
             }
             Ok(())
         }
         .await;
-        change.map_err(internal)?;
+        result.map_err(internal)?;
         Ok(HookDecision::Allow)
     }
 }
 
 #[tokio::test]
-async fn dispatch_rejects_routing_policy_and_session_changes_without_learning() -> Result<()> {
-    for change in [Change::Routing, Change::Policy, Change::SessionDeleted] {
+async fn dispatch_rejects_changed_routing_and_policy_before_upstream_send() -> Result<()> {
+    for change in [Change::Routing, Change::Policy] {
         let fixture = fixture(Failure::Change(change)).await?;
-        let error = fixture
-            .pipeline
-            .execute(request("changed", true)?)
-            .await
-            .err()
-            .context("changed canonical request was dispatched")?;
-        assert!(
-            error
-                .to_string()
-                .contains("canonical evolution state could not be verified")
+        ensure!(
+            fixture
+                .pipeline
+                .execute(request("changed", true)?)
+                .await
+                .is_err()
         );
         fixture
             .pipeline
             .drain_required_pending_settlements()
             .await?;
-        let inventory = saved(&fixture, "changed").await?;
-        let execution = execution(&fixture, "changed").await?;
-        assert_eq!(execution.attempt_id, inventory.attempt_id);
-        assert_eq!(execution.settlement, inventory.settlement);
-        let settlement = execution.settlement.context("failed settlement missing")?;
-        assert_eq!(settlement.outcome, Some(ExecutionOutcome::Failed));
-        assert_eq!(settlement.total_cost_micro_usd, Some(0));
-        assert!(settlement.hops.is_empty());
-        assert!(
-            fixture
-                .upstream
-                .received_requests()
-                .await
-                .context("requests missing")?
-                .is_empty()
+        let row = saved(&fixture, "changed").await?;
+        let terminal = row.settlement.context("missing settlement")?;
+        assert_eq!(terminal.outcome, Some(ExecutionOutcome::Failed));
+        assert_eq!(terminal.total_cost_micro_usd, Some(0));
+        ensure!(
+            terminal.hops.is_empty()
+                && fixture
+                    .upstream
+                    .received_requests()
+                    .await
+                    .context("mock")?
+                    .is_empty()
         );
     }
     Ok(())
 }
 
-async fn second_controller(fixture: &Fixture) -> Result<()> {
-    connections::ActiveModel {
-        connection_id: Set("second-capture".into()),
-        owner: Set(fixture.identity.owner.clone()),
-        source: Set(fixture.identity.source.clone()),
-        controller_instance_id: Set(Some("second-controller".into())),
-        route_scope_id: Set(Some("scope".into())),
-        state: Set("recording".into()),
-        head: Set(0),
-        started_at: Set("fixture".into()),
-        metadata_json: Set("{}".into()),
-    }
-    .insert(&fixture.db)
-    .await?;
-    fixture
-        .tracker
-        .inventory()
-        .register_capture("second-capture", "scope", "second-controller")
-        .await?;
-    events::ActiveModel {
-        connection_id: Set("second-capture".into()),
-        sequence: Set(1),
-        session_key: Set(Some(fixture.identity.key()?)),
-        session_sequence: Set(Some(2)),
-        replay: Set(false),
-        event_json: Set("{}".into()),
-        captured_at: Set("fixture".into()),
-    }
-    .insert(&fixture.db)
-    .await?;
-    sessions::Entity::update_many()
-        .col_expr(sessions::Column::Head, sea_orm::sea_query::Expr::value(2))
-        .filter(sessions::Column::SessionKey.eq(fixture.identity.key()?))
-        .exec(&fixture.db)
-        .await?;
-    connections::Entity::update_many()
-        .col_expr(
-            connections::Column::Head,
-            sea_orm::sea_query::Expr::value(1),
-        )
-        .filter(connections::Column::ConnectionId.eq("second-capture"))
-        .exec(&fixture.db)
-        .await?;
-    Ok(())
-}
-
-fn second_request(id: &str) -> Result<PipelineRequest> {
-    let mut request = request(id, true)?;
-    request.headers.insert(
-        "x-bitrouter-controller-instance-id",
-        "second-controller".parse()?,
-    );
-    Ok(request)
-}
-
 #[tokio::test]
-async fn context_revalidation_rejects_stale_fences_without_rewriting_execution() -> Result<()> {
-    for change in [Change::Routing, Change::Policy, Change::SessionDeleted] {
+async fn http_context_revalidation_rejects_stale_fences_without_rewriting_execution() -> Result<()>
+{
+    for change in [Change::Routing, Change::Policy, Change::ReservationLost] {
         let fixture = fixture(Failure::None).await?;
-        let mut ctx = PipelineContext::new(request("rebuild-changed", true)?);
-        let retained = ctx.require_generation_prompt()?.messages.clone();
-        let mut initial = ctx.require_generation_prompt()?.clone();
-        initial
-            .messages
-            .insert(0, Message::text(Role::User, "old history"));
-        ctx.apply_routing_prompt(initial)?;
+        let mut request = request("stale", true)?;
+        request.inbound_protocol = Some(bitrouter_ai::types::ApiProtocol::ChatCompletions);
+        let mut ctx = PipelineContext::new(request);
+        let prompt = serde_json::to_value(ctx.require_generation_prompt()?)?;
+        let delivery_attempt = ctx.delivery_attempt_id();
         NormalizedScope.check(&mut ctx).await?;
         fixture.tracker.check(&mut ctx).await?;
         fixture.binding.check(&mut ctx).await?;
-        ctx.replace_managed_messages(retained)?;
-        let execution_before = serde_json::to_value(execution(&fixture, "rebuild-changed").await?)?;
-        let inventory_before = serde_json::to_value(saved(&fixture, "rebuild-changed").await?)?;
+        let observation = serde_json::to_value(ctx.get_event::<GatewayRequestObserved>())?;
         ChangeAfterAdmission {
             change,
             db: fixture.db.clone(),
-            identity: fixture.identity.clone(),
             routing: fixture.routing.clone(),
             policies: fixture.policies.clone(),
         }
         .check(&mut ctx)
         .await?;
-        assert!(
+        let inventory = fixture.tracker.inventory.clone();
+        let before = serde_json::to_value(inventory.request("scope", "stale").await?)?;
+        ensure!(
             PreRequestHook::revalidate_context(&fixture.binding, &ctx)
                 .await
                 .is_err()
         );
-        assert!(
+        ensure!(
             RouteHook::revalidate_context(&fixture.binding, &[], &ctx)
                 .await
                 .is_err()
         );
+        assert_eq!(ctx.request_id(), "stale");
+        assert_eq!(ctx.delivery_attempt_id(), delivery_attempt);
         assert_eq!(
-            serde_json::to_value(execution(&fixture, "rebuild-changed").await?)?,
-            execution_before
+            serde_json::to_value(ctx.require_generation_prompt()?)?,
+            prompt
         );
         assert_eq!(
-            serde_json::to_value(saved(&fixture, "rebuild-changed").await?)?,
-            inventory_before
+            ctx.inbound_protocol(),
+            Some(bitrouter_ai::types::ApiProtocol::ChatCompletions)
         );
-        assert!(
+        assert_eq!(
+            serde_json::to_value(ctx.get_event::<GatewayRequestObserved>())?,
+            observation
+        );
+        assert_eq!(
+            serde_json::to_value(inventory.request("scope", "stale").await?)?,
+            before
+        );
+        ensure!(
             fixture
                 .upstream
                 .received_requests()
                 .await
-                .context("requests missing")?
+                .context("mock")?
                 .is_empty()
         );
     }
     Ok(())
+}
+
+pub(super) fn second_request(id: &str) -> Result<PipelineRequest> {
+    let mut req = request(id, true)?;
+    req.headers
+        .insert("x-bitrouter-controller-id", "other-controller".parse()?);
+    req.headers.insert(
+        "x-bitrouter-acp-session-id",
+        "another-claimed-session".parse()?,
+    );
+    Ok(req)
 }
 
 #[tokio::test]
 async fn another_controller_cannot_repeat_a_completed_execution_or_replace_its_charge() -> Result<()>
 {
     let fixture = fixture(Failure::None).await?;
-    second_controller(&fixture).await?;
-    fixture
-        .pipeline
-        .execute(request("shared-id", true)?)
-        .await?;
+    fixture.pipeline.execute(request("paid", true)?).await?;
     fixture
         .pipeline
         .drain_required_pending_settlements()
         .await?;
-    let original = serde_json::to_value(execution(&fixture, "shared-id").await?)?;
-    let charge = crate::metering::entities::requests::Entity::find_by_id("shared-id")
+    let original = serde_json::to_value(saved(&fixture, "paid").await?)?;
+    let charges = crate::metering::entities::requests::Entity::find_by_id("paid");
+    let before = charges
+        .clone()
         .one(&fixture.db)
         .await?
-        .context("original charge missing")?;
-
-    assert!(
+        .context("missing paid charge")?;
+    ensure!(
         fixture
             .pipeline
-            .execute(second_request("shared-id")?)
+            .execute(second_request("paid")?)
             .await
             .is_err()
     );
@@ -232,21 +191,16 @@ async fn another_controller_cannot_repeat_a_completed_execution_or_replace_its_c
         .drain_required_pending_settlements()
         .await?;
     assert_eq!(
-        serde_json::to_value(execution(&fixture, "shared-id").await?)?,
+        serde_json::to_value(saved(&fixture, "paid").await?)?,
         original
     );
-    assert_eq!(
-        crate::metering::entities::requests::Entity::find_by_id("shared-id")
-            .one(&fixture.db)
-            .await?,
-        Some(charge)
-    );
-    assert!(
+    assert_eq!(charges.one(&fixture.db).await?, Some(before));
+    ensure!(
         fixture
             .tracker
-            .inventory()
-            .scoped_store("scope", "second-controller")?
-            .get::<GatewayRequest>(super::super::super::inventory::INVENTORY_KIND, "shared-id")
+            .inventory
+            .clone()
+            .request("different-principal", "paid")
             .await?
             .is_none()
     );
@@ -255,7 +209,7 @@ async fn another_controller_cannot_repeat_a_completed_execution_or_replace_its_c
             .upstream
             .received_requests()
             .await
-            .context("requests missing")?
+            .context("mock")?
             .len(),
         1
     );
@@ -265,65 +219,46 @@ async fn another_controller_cannot_repeat_a_completed_execution_or_replace_its_c
 #[tokio::test]
 async fn competing_controller_admissions_cannot_initialize_two_attempts() -> Result<()> {
     let fixture = fixture(Failure::None).await?;
-    second_controller(&fixture).await?;
-    let mut first = PipelineContext::new(request("race", true)?);
-    let mut second = PipelineContext::new(second_request("race")?);
-    // Deterministically interleave admission: both controller-scoped inventory
-    // checks finish before either creates the owner-scoped execution record.
-    for ctx in [&mut first, &mut second] {
-        NormalizedScope.check(ctx).await?;
-        fixture.tracker.check(ctx).await?;
-    }
-    let first_attempt = first
-        .get_event::<GatewayRequestObserved>()
-        .context("first admission missing")?
-        .request
-        .attempt_id
-        .clone();
-    let second_attempt = second
-        .get_event::<GatewayRequestObserved>()
-        .context("second admission missing")?
-        .request
-        .attempt_id
-        .clone();
-    assert_ne!(first_attempt, second_attempt);
-    fixture.binding.check(&mut first).await?;
-    let original = serde_json::to_value(execution(&fixture, "race").await?)?;
-    assert!(fixture.binding.check(&mut second).await.is_err());
-    assert!(
-        second
-            .get_event::<CanonicalRequestReplayRejected>()
-            .is_some()
+    let (a, b) = tokio::join!(
+        fixture.pipeline.execute(request("race", false)?),
+        fixture.pipeline.execute(second_request("race")?)
+    );
+    ensure!(
+        a.is_ok() ^ b.is_ok(),
+        "expected exactly one accepted request"
+    );
+    fixture
+        .pipeline
+        .drain_required_pending_settlements()
+        .await?;
+    let row = saved(&fixture, "race").await?;
+    assert_eq!(
+        row.controller_instance_id,
+        if a.is_ok() {
+            "controller"
+        } else {
+            "other-controller"
+        }
     );
     assert_eq!(
-        serde_json::to_value(execution(&fixture, "race").await?)?,
-        original
+        row.settlement.context("winning settlement")?.outcome,
+        Some(ExecutionOutcome::Completed)
     );
-    assert_eq!(execution(&fixture, "race").await?.attempt_id, first_attempt);
     assert_eq!(
-        records::Entity::find()
-            .filter(records::Column::Kind.eq(EXECUTION_KIND))
-            .count(&fixture.db)
-            .await?,
-        1
-    );
-    let losing = fixture
-        .tracker
-        .inventory()
-        .scoped_store("scope", "second-controller")?
-        .get::<GatewayRequest>(super::super::super::inventory::INVENTORY_KIND, "race")
-        .await?
-        .context("losing admission missing")?
-        .1;
-    assert_eq!(losing.attempt_id, second_attempt);
-    assert!(losing.settlement.is_none());
-    assert!(
         fixture
             .upstream
             .received_requests()
             .await
-            .context("requests missing")?
-            .is_empty()
+            .context("mock")?
+            .len(),
+        1
+    );
+    assert_eq!(
+        records::Entity::find()
+            .filter(records::Column::Kind.eq("gateway_request"))
+            .count(&fixture.db)
+            .await?,
+        1
     );
     Ok(())
 }

@@ -4,7 +4,7 @@ use crate::offline::files;
 use anyhow::{Context, Result, ensure};
 use std::{
     fs::File,
-    io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
+    io::{BufReader, BufWriter, Read, Write},
     path::Path,
 };
 
@@ -139,24 +139,6 @@ pub(crate) struct Sorted<'a, const WIDTH: usize> {
 impl<const WIDTH: usize> Sorted<'_, WIDTH> {
     pub(crate) fn len(&self) -> u64 {
         self.len
-    }
-
-    /// Exact lookup for fixed-width spool binary searches; preserves next().
-    pub(crate) fn read_at(&mut self, index: u64) -> Result<Option<[u8; WIDTH]>> {
-        self.workspace.check()?;
-        if index >= self.len {
-            return Ok(None);
-        }
-        let width = u64::try_from(WIDTH)?;
-        let offset = index.checked_mul(width).context("sort offset overflow")?;
-        let current = self
-            .read
-            .checked_mul(width)
-            .context("sort offset overflow")?;
-        self.input.seek(SeekFrom::Start(offset))?;
-        let value = record::<WIDTH>(&mut self.input)?.context("sort output truncated")?;
-        self.input.seek(SeekFrom::Start(current))?;
-        Ok(Some(value))
     }
 
     pub(crate) fn next(&mut self) -> Result<Option<[u8; WIDTH]>> {

@@ -225,7 +225,7 @@ pub(super) struct Progress {
 
 pub(super) struct Control {
     proof: Arc<Proof>,
-    #[cfg(all(test, feature = "core"))]
+    #[cfg(all(test, feature = "eval-publication"))]
     test_target: Option<JobTarget>,
     progress: watch::Sender<Progress>,
     stopped: AtomicBool,
@@ -257,7 +257,7 @@ impl Control {
         proof.record(Disposition::NoTransaction);
         Self {
             proof,
-            #[cfg(all(test, feature = "core"))]
+            #[cfg(all(test, feature = "eval-publication"))]
             test_target: None,
             progress: watch::channel(Progress {
                 phase: Phase::Preparing,
@@ -276,7 +276,7 @@ impl Control {
         self
     }
 
-    #[cfg(all(test, feature = "core"))]
+    #[cfg(all(test, feature = "eval-publication"))]
     pub fn with_test_target(mut self, target: Option<JobTarget>) -> Self {
         self.test_target = target;
         self
@@ -374,7 +374,7 @@ impl Control {
             };
             if let Some(gate) = gate.filter(|gate| {
                 let matches = gate.phase == phase;
-                #[cfg(feature = "core")]
+                #[cfg(feature = "eval-publication")]
                 let matches = matches
                     && gate
                         .target
@@ -625,19 +625,17 @@ impl Control {
     }
 }
 
-#[cfg(all(test, feature = "core"))]
+#[cfg(all(test, feature = "eval-publication"))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum JobTarget {
     Eval,
     Settlement,
-    #[cfg(feature = "harness")]
-    NativeLoad,
 }
 
 #[cfg(test)]
 pub(super) struct Gate {
     phase: Phase,
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     target: Option<JobTarget>,
     unwind: AtomicBool,
     pub entered: tokio::sync::Notify,
@@ -695,12 +693,12 @@ impl Proof {
     pub fn hold(&self, phase: Phase) -> Arc<Gate> {
         self.hold_matching(
             phase,
-            #[cfg(feature = "core")]
+            #[cfg(feature = "eval-publication")]
             None,
         )
     }
 
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     pub fn hold_for(&self, phase: Phase, target: JobTarget) -> Arc<Gate> {
         self.hold_matching(phase, Some(target))
     }
@@ -708,11 +706,11 @@ impl Proof {
     fn hold_matching(
         &self,
         phase: Phase,
-        #[cfg(feature = "core")] target: Option<JobTarget>,
+        #[cfg(feature = "eval-publication")] target: Option<JobTarget>,
     ) -> Arc<Gate> {
         let gate = Arc::new(Gate {
             phase,
-            #[cfg(feature = "core")]
+            #[cfg(feature = "eval-publication")]
             target,
             unwind: AtomicBool::new(false),
             entered: tokio::sync::Notify::new(),

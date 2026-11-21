@@ -1,11 +1,5 @@
-//! Routing for the `language_model` protocol: the `RoutingTable` trait,
-//! `RoutingPrefs`, `ModelInfo`, and the `FallbackPolicy`. The full cascade
-//! resolution (Strategy 0–3) and config/registry tables land in Phase 4; this
-//! module carries the trait surface plus a `StaticRoutingTable` used by the
-//! pipeline tests and the minimal server path.
+//! Model resolution, routing preferences, and provider fallback policy.
 
-use std::collections::HashMap;
-use std::sync::RwLock;
 use {
     bitrouter_ai::routing::ModelInfo, bitrouter_ai::routing::RouterRequestIdentity,
     bitrouter_ai::routing::SortOrder,
@@ -98,12 +92,6 @@ impl ModelResolution {
 /// an explicit literal policy binding.
 #[async_trait]
 pub trait ModelSelector: Send + Sync {
-    /// Require complete admitted context even when native execution pins a model
-    /// and bypasses selection. This is a constraint, not a context transformation.
-    fn preserves_context(&self) -> bool {
-        false
-    }
-
     /// Freeze and validate named-policy inputs after entry admission and before
     /// paid semantic inference. Selection must consume this same snapshot.
     async fn prepare_selection(&self, _policy: &str, _ctx: &mut PipelineContext) -> Result<()> {
@@ -114,10 +102,9 @@ pub trait ModelSelector: Send + Sync {
     async fn select_policy(&self, policy: &str, ctx: &mut PipelineContext) -> Result<()>;
 }
 
-/// Resolves a model name into a fallback chain. v1 has no single-target
-/// `route()` — everything is `route_chain()`; a "single target" is just a
-/// length-1 chain. Implementations: `ConfigRoutingTable` (yaml) and
-/// `StaticRoutingTable` here.
+/// Resolves a model name into an ordered fallback chain. A single-target route
+/// is a chain with one entry. Configuration-backed tables own live routing;
+/// tests may supply an in-memory table.
 #[async_trait]
 pub trait RoutingTable: Send + Sync {
     /// Resolve a raw model selector once before app-level model selection.
@@ -169,24 +156,12 @@ pub trait RoutingTable: Send + Sync {
 
     /// Look up one model's info.
     fn model_info(&self, model: &str) -> Option<ModelInfo>;
-
-    /// Hot-reload the underlying config.
-    async fn reload(&self) -> Result<()>;
-
-    /// Stage-0 preset prompt-body overrides for `model`. Implementations that
-    /// don't know about presets return an empty [`PromptOverrides`]; the
-    /// pipeline applies these (shallow-merge into params, set system prompt)
-    /// before execution. Default impl returns nothing so non-preset-aware
-    /// tables (e.g. [`StaticRoutingTable`]) work unchanged.
-    async fn preset_overrides(&self, _model: &str) -> Result<PromptOverrides> {
-        Ok(PromptOverrides::default())
-    }
 }
 
 /// Prompt body overrides carried by a preset, shallow-merged into the request.
 ///
-/// Returned by [`RoutingTable::preset_overrides`] and applied by the pipeline
-/// *before* the request is dispatched: a non-empty `system_prompt` is set on
+/// Carried by [`ModelResolution::overrides`] and applied by the pipeline
+/// before dispatch: a non-empty `system_prompt` is set on
 /// the canonical [`Prompt`](bitrouter_ai::types::Prompt) when it has none,
 /// and `params` entries are inserted into
 /// [`GenerationParams::supplemental_extra`](bitrouter_ai::types::GenerationParams::supplemental_extra)
@@ -247,85 +222,87 @@ impl FallbackPolicy for DefaultFallbackPolicy {
     }
 }
 
-/// A trivial in-memory routing table: `model -> ordered targets`. Used by the
-/// Phase-1 pipeline tests and the minimal server path. Phase 4 replaces it with
-/// `ConfigRoutingTable`.
+/// In-memory routing fixture with explicitly supplied target chains.
+#[cfg(test)]
 pub struct StaticRoutingTable {
-    routes: RwLock<HashMap<String, Vec<RoutingTarget>>>,
+    routes: std::sync::RwLock<std::collections::HashMap<String, Vec<RoutingTarget>>>,
 }
 
-impl StaticRoutingTable {
-    /// An empty table.
-    pub fn new() -> Self {
-        Self {
-            routes: RwLock::new(HashMap::new()),
+#[cfg(test)]
+mod fixtures {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::RwLock;
+
+    impl StaticRoutingTable {
+        /// An empty table.
+        pub fn new() -> Self {
+            Self {
+                routes: RwLock::new(HashMap::new()),
+            }
+        }
+
+        /// Register a chain for `model`.
+        pub fn insert(&self, model: impl Into<String>, chain: Vec<RoutingTarget>) {
+            self.routes
+                .write()
+                .expect("routing table lock poisoned")
+                .insert(model.into(), chain);
         }
     }
 
-    /// Register a chain for `model`.
-    pub fn insert(&self, model: impl Into<String>, chain: Vec<RoutingTarget>) {
-        self.routes
-            .write()
-            .expect("routing table lock poisoned")
-            .insert(model.into(), chain);
-    }
-}
-
-impl Default for StaticRoutingTable {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[async_trait]
-impl RoutingTable for StaticRoutingTable {
-    async fn route_chain(
-        &self,
-        model: &str,
-        prefs: &RoutingPrefs,
-        _caller: &CallerContext,
-    ) -> Result<Vec<RoutingTarget>> {
-        let guard = self.routes.read().expect("routing table lock poisoned");
-        let mut chain = guard
-            .get(model)
-            .cloned()
-            .ok_or_else(|| BitrouterError::NotFound(format!("no route for model '{model}'")))?;
-
-        if !prefs.only.is_empty() {
-            chain.retain(|t| prefs.only.contains(&t.provider_name));
+    impl Default for StaticRoutingTable {
+        fn default() -> Self {
+            Self::new()
         }
-        chain.retain(|t| !prefs.ignore.contains(&t.provider_name));
-        if matches!(prefs.sort, SortOrder::Alphabetical) {
-            chain.sort_by(|a, b| a.provider_name.cmp(&b.provider_name));
-        }
-        if chain.is_empty() {
-            return Err(BitrouterError::NotFound(format!(
-                "no route for model '{model}' after applying routing preferences"
-            )));
-        }
-        Ok(chain)
     }
 
-    fn list_models(&self) -> Vec<ModelInfo> {
-        let guard = self.routes.read().expect("routing table lock poisoned");
-        guard
-            .iter()
-            .map(|(id, chain)| ModelInfo {
-                id: id.clone(),
+    #[async_trait]
+    impl RoutingTable for StaticRoutingTable {
+        async fn route_chain(
+            &self,
+            model: &str,
+            prefs: &RoutingPrefs,
+            _caller: &CallerContext,
+        ) -> Result<Vec<RoutingTarget>> {
+            let guard = self.routes.read().expect("routing table lock poisoned");
+            let mut chain = guard
+                .get(model)
+                .cloned()
+                .ok_or_else(|| BitrouterError::NotFound(format!("no route for model '{model}'")))?;
+
+            if !prefs.only.is_empty() {
+                chain.retain(|t| prefs.only.contains(&t.provider_name));
+            }
+            chain.retain(|t| !prefs.ignore.contains(&t.provider_name));
+            if matches!(prefs.sort, SortOrder::Alphabetical) {
+                chain.sort_by(|a, b| a.provider_name.cmp(&b.provider_name));
+            }
+            if chain.is_empty() {
+                return Err(BitrouterError::NotFound(format!(
+                    "no route for model '{model}' after applying routing preferences"
+                )));
+            }
+            Ok(chain)
+        }
+
+        fn list_models(&self) -> Vec<ModelInfo> {
+            let guard = self.routes.read().expect("routing table lock poisoned");
+            guard
+                .iter()
+                .map(|(id, chain)| ModelInfo {
+                    id: id.clone(),
+                    providers: chain.iter().map(|t| t.provider_name.clone()).collect(),
+                })
+                .collect()
+        }
+
+        fn model_info(&self, model: &str) -> Option<ModelInfo> {
+            let guard = self.routes.read().expect("routing table lock poisoned");
+            guard.get(model).map(|chain| ModelInfo {
+                id: model.to_string(),
                 providers: chain.iter().map(|t| t.provider_name.clone()).collect(),
             })
-            .collect()
-    }
-
-    fn model_info(&self, model: &str) -> Option<ModelInfo> {
-        let guard = self.routes.read().expect("routing table lock poisoned");
-        guard.get(model).map(|chain| ModelInfo {
-            id: model.to_string(),
-            providers: chain.iter().map(|t| t.provider_name.clone()).collect(),
-        })
-    }
-
-    async fn reload(&self) -> Result<()> {
-        Ok(())
+        }
     }
 }

@@ -2,15 +2,17 @@ use super::*;
 
 #[test]
 fn reviewed_model_has_complete_receipt_and_dispatch_shapes() -> Result<()> {
-    let tables = expected()?;
-    ensure!(tables.len() == 52);
-    ensure!(
-        tables
-            .iter()
-            .map(|table| table.columns.len())
-            .sum::<usize>()
-            == 449
-    );
+    let tables = expected(DatabaseBackend::Postgres)?;
+    ensure!(!tables.is_empty());
+    let records = tables
+        .iter()
+        .find(|table| table.name == "gateway_request_records")
+        .context("gateway request records table")?;
+    ensure!(records.primary == ["record_id"]);
+    ensure!(records.indexes.iter().any(|index| {
+        index.name == "idx_gateway_request_records_scope_kind"
+            && index.columns == ["scope_id", "kind"]
+    }));
     for name in ["tenancy_execution_receipts", "tenancy_dispatch_intents"] {
         let table = tables
             .iter()
@@ -30,13 +32,12 @@ fn reviewed_model_has_complete_receipt_and_dispatch_shapes() -> Result<()> {
 
 #[test]
 fn server_model_excludes_sqlite_only_pending_obligation_projection() -> Result<()> {
-    let tables = expected()?;
+    let tables = expected(DatabaseBackend::Postgres)?;
     let slots = tables
         .iter()
         .find(|table| table.name == "tenancy_oauth_slots")
         .context("OAuth slot table")?;
-    // m043 adds these lookup projections only on SQLite. Servers retain the
-    // m037 slot columns and state index; the baseline never runs m043 there.
+    // Pending-work projection columns and their index are SQLite-only.
     ensure!(slots.columns.len() == 11);
     ensure!(slots.columns.iter().all(|column| !matches!(
         column.name.as_str(),
@@ -49,7 +50,7 @@ fn server_model_excludes_sqlite_only_pending_obligation_projection() -> Result<(
 }
 #[test]
 fn altered_keys_and_checks_are_not_hidden_by_catalog_names() -> Result<()> {
-    let table = expected()?
+    let table = expected(DatabaseBackend::Postgres)?
         .into_iter()
         .find(|table| table.name == "tenancy_dispatch_intents")
         .context("dispatch table")?;
@@ -129,6 +130,8 @@ fn default_values_cannot_be_replaced_with_expressions() -> Result<()> {
         name: "active".into(),
         kind: "integer".into(),
         mysql_kind: None,
+        sqlite_kind: None,
+        sqlite_only: false,
         nullable: false,
         binary: false,
         automatic: false,
@@ -167,36 +170,17 @@ fn default_values_cannot_be_replaced_with_expressions() -> Result<()> {
 
 #[test]
 fn mysql_content_types_follow_explicit_backend_ddl() -> Result<()> {
-    let tables = expected()?;
-    // m019, m020 and m027 widen only these non-tenancy content fields.
-    for (table, column) in [
-        ("acp_capture_events", "event_json"),
-        ("acp_checkpoints", "manifest_json"),
-        ("acp_resource_observations", "observation_json"),
-        ("acp_assessment_revisions", "revision_json"),
-        ("checkpoint_evolution", "body"),
-        ("bro_managed_sessions", "payload"),
-    ] {
-        let field = tables
+    let tables = expected(DatabaseBackend::Postgres)?;
+    let find = |name: &str, column: &str| {
+        tables
             .iter()
-            .find(|candidate| candidate.name == table)
+            .find(|table| table.name == name)
             .and_then(|table| table.columns.iter().find(|field| field.name == column))
-            .context("backend content field")?;
-        ensure!(kind(DatabaseBackend::MySql, field) == "longtext");
-        ensure!(kind(DatabaseBackend::Postgres, field) == "text");
-    }
-    // Adjacent JSON and timestamp fields retain their original TEXT declaration.
-    for (table, column) in [
-        ("acp_capture_connections", "metadata_json"),
-        ("acp_resource_observations", "observed_at"),
-    ] {
-        let field = tables
-            .iter()
-            .find(|candidate| candidate.name == table)
-            .and_then(|table| table.columns.iter().find(|field| field.name == column))
-            .context("unchanged text field")?;
-        ensure!(kind(DatabaseBackend::MySql, field) == "text");
-    }
+            .context("backend content field")
+    };
+    let content = find("gateway_request_records", "body")?;
+    ensure!(kind(DatabaseBackend::MySql, content) == "longtext");
+    ensure!(kind(DatabaseBackend::Postgres, content) == "text");
     Ok(())
 }
 
@@ -251,7 +235,7 @@ fn outbox_index_fixture() -> BTreeMap<String, ObservedIndex> {
 
 #[test]
 fn mysql_index_prefixes_are_exact_and_do_not_apply_to_postgres() -> Result<()> {
-    let table = expected()?
+    let table = expected(DatabaseBackend::Postgres)?
         .into_iter()
         .find(|table| table.name == "trajectory_outbox")
         .context("outbox table")?;

@@ -10,11 +10,9 @@
 /// Whether this build contains an OTLP transport.
 pub const OTEL_ENABLED: bool = cfg!(any(feature = "otel-http", feature = "otel-grpc"));
 
-#[cfg(all(feature = "harness", any(feature = "otel-http", feature = "otel-grpc")))]
-pub mod acp;
 #[cfg(feature = "otel-http")]
 mod auth_client;
-#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+#[cfg(feature = "otel-http")]
 pub mod bearer;
 #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
 pub mod cardinality;

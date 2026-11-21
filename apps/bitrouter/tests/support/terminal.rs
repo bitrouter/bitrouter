@@ -64,6 +64,10 @@ impl Terminal {
     }
 
     pub fn finish(&mut self, success: bool) -> Result<Value> {
+        Ok(serde_json::from_slice(&self.finish_stdout(success)?)?)
+    }
+
+    pub fn finish_stdout(&mut self, success: bool) -> Result<Vec<u8>> {
         self.wait("__ONBOARDING_FIXTURE_DONE__")?;
         let result: Value =
             serde_json::from_slice(&std::fs::read(self.home.path().join("result.json"))?)?;
@@ -78,7 +82,7 @@ impl Terminal {
         );
         let stdout = std::fs::read(self.home.path().join("stdout"))?;
         ensure!(!stdout.contains(&0x1b), "terminal controls in JSON");
-        Ok(serde_json::from_slice(&stdout)?)
+        Ok(stdout)
     }
 }
 

@@ -18,7 +18,7 @@ use bitrouter_ai::types::ModelOperation;
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
-use crate::policy_lock::semantic_digest;
+use crate::policy_source::semantic_digest;
 use bitrouter_ai::policy::Document;
 
 const MAX_BYTES: usize = 64 * 1024;
@@ -47,7 +47,7 @@ enum PolicyEvaluation {
 impl Requirements {
     pub fn from_config(config: &Config, document: Option<&Document>) -> Result<Self> {
         if let Some(document) = document {
-            crate::policy_lock::validate_for_config(config, document)?;
+            crate::policy_source::validate_for_config(config, document)?;
         }
         let value = Self {
             format: 1,
@@ -174,17 +174,12 @@ impl Inputs {
         identifier(&self.execution_id)?;
         identifier(&self.owner)?;
         ensure!(
-            self.routing.len() <= 2,
-            "too many projection routing receipts"
-        );
-        ensure!(
-            self.routing.len() != 2 || self.routing[0].kind != self.routing[1].kind,
+            self.routing.len() <= 1,
             "duplicate projection routing evidence"
         );
         for item in &self.routing {
             ensure!(
-                item.redacted
-                    && matches!(item.kind.as_str(), "routing.assessment" | "routing.plan"),
+                item.redacted && item.kind == "routing.assessment",
                 "invalid projection routing evidence"
             );
             identifier(&item.evidence_id)?;
@@ -305,6 +300,14 @@ impl Inputs {
             ..
         } = &self.policy
         {
+            if let Some(measurement) = &treatment.decision.route_measurement {
+                ensure!(
+                    measurement.candidates.iter().any(|candidate| candidate.tier
+                        == treatment.decision.selected_tier
+                        && candidate.model == ctx.model()),
+                    "dispatch model differs from captured policy"
+                );
+            }
             ensure!(
                 ctx.generation_prompt()
                     .and_then(|prompt| prompt.params.reasoning_effort)
@@ -312,17 +315,10 @@ impl Inputs {
                 "dispatch effort differs from captured policy"
             );
         }
-        if let Some(plan) = ctx.get_event::<crate::gateway::routing::plan::Selection>() {
-            ensure!(
-                plan.selected_model == ctx.model(),
-                "dispatch model differs from captured route"
-            );
-        }
         Ok(())
     }
 
-    /// Merge only genuinely observed progress; an absent legacy value is handled
-    /// by the caller and never converted to an explicit no-policy outcome.
+    /// Merge observed evidence; an absent value never implies a policy bypass.
     pub fn merge(&mut self, incoming: &Self) -> Result<()> {
         incoming.check_identity(&self.execution_id, &self.owner, self.operation)?;
         self.validate()?;
@@ -495,11 +491,6 @@ pub(super) fn routing(
     ctx: &crate::gateway::pipeline::context::PipelineContext,
 ) -> Result<Vec<EvidenceItem>> {
     let receipt = ctx.get_event::<crate::gateway::routing::preparation::Receipt>();
-    let selection = ctx.get_event::<crate::gateway::routing::plan::Selection>();
-    check_size(&(receipt, selection))?;
-    crate::gateway::observability::decision::routing_evidence_from(
-        ctx.request_id(),
-        receipt,
-        selection,
-    )
+    check_size(&receipt)?;
+    crate::gateway::observability::decision::routing_evidence_from(ctx.request_id(), receipt)
 }
