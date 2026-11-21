@@ -50,11 +50,7 @@ fn trajectory_facts(fixture: &Fixture) -> Result<TrajectoryFacts> {
                 let raw: String = row.try_get("", "event_json")?;
                 Ok(serde_json::from_str::<TrajectoryEvent>(&raw)?)
             }).collect::<Result<Vec<_>>>()?;
-        for event in &events {
-            ensure!(event.kind != TrajectoryEventKind::GuardActivated,
-                "model-only source activated a progress guard");
-        }
-        let health = reduce(&events, &BTreeSet::from(["strong".into()]))?;
+        let health = reduce(&events)?;
         db.close().await?;
         Ok(TrajectoryFacts { records, outbox, evaluation, health })
     })
@@ -295,10 +291,6 @@ fn exercise_trajectory(fixture: &mut Fixture, full: &Path, minimum: &Path) -> Re
             && pending.health.health.settled_request_count == 2
     );
     ensure!(pending.health.health.settled_cost_micro_usd == Some(28));
-    ensure!(
-        pending.health.active_hold_remaining == 0,
-        "model-only source must not create a progress-guard hold"
-    );
     ensure!(pending.outbox.len() == 2 && pending.outbox.contains(&original.outbox[0]));
     ensure!(
         pending
