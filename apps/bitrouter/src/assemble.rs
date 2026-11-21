@@ -939,8 +939,17 @@ async fn assemble_app(
                         }
                         BearerPlan::StaticOnly => None,
                     };
-                    #[cfg(not(feature = "otel-http"))]
-                    let BearerPlan::StaticOnly = bearer_plan;
+                    #[cfg(all(feature = "otel-grpc", not(feature = "otel-http")))]
+                    if bearer_plan == BearerPlan::MissingStaticBearer {
+                        // The host emits startup diagnostics after installing
+                        // its subscriber; logging here would lose the warning.
+                        ignored_config.push(
+                            "telemetry: attribution=account requires an explicit static bearer \
+                             for OTLP/gRPC; configure telemetry.bearer_token or \
+                             BITROUTER_TELEMETRY_TOKEN; the signed-in session is HTTP-only"
+                                .to_owned(),
+                        );
+                    }
                     match OtelExporter::new(
                         otel_config,
                         #[cfg(feature = "otel-http")]
@@ -2091,7 +2100,7 @@ impl MetricsRenderer for EmptyMetricsRenderer {
 /// or `account`, without an explicit token) wants a live source. Every other
 /// exporter path — gRPC, a static `bearer_token`, `attribution: anonymous`,
 /// or the generic `otel` / environment opt-ins — uses the static header path
-/// (`StaticOnly`) and never reads the credential store.
+/// and never reads the credential store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BearerPlan {
     /// Build a live account-bearer source (resolved per export, refresh-aware).
@@ -2099,6 +2108,10 @@ enum BearerPlan {
     /// the "exporting anonymously" warning when the source resolves to `None`.
     #[cfg(feature = "otel-http")]
     LiveSource { warn_if_unmet: bool },
+    /// gRPC account attribution needs an explicit static bearer. Report the
+    /// missing token through startup diagnostics without reading credentials.
+    #[cfg(all(feature = "otel-grpc", not(feature = "otel-http")))]
+    MissingStaticBearer,
     /// No live source — static `Authorization` header (or anonymous). The
     /// credential store is never read.
     StaticOnly,
@@ -2160,9 +2173,9 @@ fn build_otel_config(
             // Decide the live-bearer plan from attribution + whether an explicit
             // static token is present. The account bearer is NOT snapshotted
             // here anymore — when no explicit token is set and attribution is
-            // auto/account, the call site builds a live source that refreshes
-            // per export. `build_telemetry_otel_config` resolves the explicit
-            // token itself into the static `bearer_token`.
+            // auto/account, the HTTP call site builds a live source that
+            // refreshes per export. `build_telemetry_otel_config` resolves the
+            // explicit token itself into the static `bearer_token`.
             let has_explicit =
                 opt_in.bearer_token.is_some() || std::env::var("BITROUTER_TELEMETRY_TOKEN").is_ok();
             let bearer_plan = telemetry_bearer_plan(opt_in.attribution, has_explicit);
@@ -2196,7 +2209,8 @@ fn build_otel_config(
 ///
 /// - `anonymous` → never read the credential store: `StaticOnly`.
 /// - an explicit token is set → use the static header: `StaticOnly`.
-/// - gRPC → static metadata only: `StaticOnly`.
+/// - gRPC → static metadata only; `account` without an explicit token requests
+///   a startup warning.
 /// - HTTP `auto` / `account` with no explicit token → `LiveSource`; `account`
 ///   additionally asks the call site to warn when no credential is available.
 #[cfg(feature = "otel-http")]
@@ -2212,7 +2226,16 @@ fn telemetry_bearer_plan(attribution: TelemetryAttribution, has_explicit: bool) 
     }
 }
 
-#[cfg(not(feature = "otel-http"))]
+#[cfg(all(feature = "otel-grpc", not(feature = "otel-http")))]
+fn telemetry_bearer_plan(attribution: TelemetryAttribution, has_explicit: bool) -> BearerPlan {
+    if attribution == TelemetryAttribution::Account && !has_explicit {
+        BearerPlan::MissingStaticBearer
+    } else {
+        BearerPlan::StaticOnly
+    }
+}
+
+#[cfg(not(any(feature = "otel-http", feature = "otel-grpc")))]
 fn telemetry_bearer_plan(_: TelemetryAttribution, _: bool) -> BearerPlan {
     BearerPlan::StaticOnly
 }
@@ -2235,15 +2258,15 @@ enum TelemetryLevel {
 #[derive(Debug, Clone, Copy, serde::Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum TelemetryAttribution {
-    /// Account-attributed when a `bitrouter cloud login` session (or an explicit
-    /// `bearer_token`) is available; anonymous otherwise. The default — signing
-    /// in upgrades attribution automatically, with no config change.
+    /// Account-attributed when an explicit `bearer_token` is available, or with
+    /// OTLP/HTTP when a `bitrouter cloud login` session is available; anonymous
+    /// otherwise. Signing in upgrades HTTP attribution without a config change.
     #[default]
     Auto,
-    /// Require account attribution: use the signed-in session / explicit bearer.
-    /// If neither is available the export still proceeds **anonymously** (it is
-    /// best-effort and must never be dropped for want of a token), but a warning
-    /// is logged so the misconfiguration is visible.
+    /// Request account attribution: use an explicit bearer or, with OTLP/HTTP,
+    /// the signed-in session. gRPC requires a static bearer. If no usable bearer
+    /// is available, export still proceeds anonymously with a warning; missing
+    /// attribution must not drop telemetry.
     Account,
     /// Always anonymous — never attach a bearer, even when signed in or a
     /// `bearer_token` is configured. The opt-out for users who want telemetry
@@ -2534,6 +2557,14 @@ mod telemetry_opt_in_tests {
             TelemetryAttribution::Anonymous,
         ] {
             for has_explicit in [false, true] {
+                #[cfg(feature = "otel-grpc")]
+                if attribution == TelemetryAttribution::Account && !has_explicit {
+                    assert_eq!(
+                        telemetry_bearer_plan(attribution, has_explicit),
+                        BearerPlan::MissingStaticBearer
+                    );
+                    continue;
+                }
                 assert_eq!(
                     telemetry_bearer_plan(attribution, has_explicit),
                     BearerPlan::StaticOnly
