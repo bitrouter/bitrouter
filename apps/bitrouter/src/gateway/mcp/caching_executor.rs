@@ -275,12 +275,12 @@ fn apply_invalidation(
         return;
     };
     match event.kind {
-        InvalidationKind::ToolsListChanged => sc.evict_method("tools/list"),
-        InvalidationKind::ResourcesListChanged => {
+        InvalidationKind::Tools => sc.evict_method("tools/list"),
+        InvalidationKind::Resources => {
             sc.evict_method("resources/list");
             sc.evict_method("resources/templates/list");
         }
-        InvalidationKind::PromptsListChanged => sc.evict_method("prompts/list"),
+        InvalidationKind::Prompts => sc.evict_method("prompts/list"),
     }
 }
 
@@ -686,7 +686,7 @@ mod tests {
         assert_eq!(inner.calls.load(Ordering::SeqCst), 1);
         tx.send(InvalidationEvent {
             server_name: "a".into(),
-            kind: InvalidationKind::ToolsListChanged,
+            kind: InvalidationKind::Tools,
         })
         .unwrap();
         // Give the spawned receiver task a chance to drain.

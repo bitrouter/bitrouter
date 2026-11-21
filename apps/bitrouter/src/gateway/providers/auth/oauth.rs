@@ -31,7 +31,7 @@ pub enum OAuthError {
     /// (RFC 6749 §5.2). Surface the error code so the CLI can suggest a
     /// fix (e.g. `invalid_grant` → re-run the flow).
     #[error("OAuth token endpoint returned error '{error}'{}", description.as_deref().map(|d| format!(" ({d})")).unwrap_or_default())]
-    OAuthError {
+    Rejected {
         /// The RFC 6749 §5.2 error code.
         error: String,
         /// Optional human-readable description.
@@ -76,7 +76,7 @@ pub async fn parse_token_reply(
         message: "token response is not valid OAuth JSON".into(),
     })?;
     if let Some(error) = parsed.error {
-        return Err(OAuthError::OAuthError {
+        return Err(OAuthError::Rejected {
             error: safe_error_code(&error).into(),
             description: None,
         });
@@ -183,7 +183,7 @@ impl crate::gateway::providers::auth::store::OAuthRefresher for RefreshGrant {
     ) -> crate::gateway::model::error::Result<OAuthToken> {
         refresh(&self.client, &self.endpoint, &self.client_id, current).await.map_err(|error| {
             crate::gateway::model::error::ModelError::Provider {
-                status: if matches!(error, OAuthError::OAuthError { .. } | OAuthError::MissingRefreshToken) { 401 } else { 502 },
+                status: if matches!(error, OAuthError::Rejected { .. } | OAuthError::MissingRefreshToken) { 401 } else { 502 },
                 message: "selected OAuth credential could not refresh; explicitly reauthenticate this account".into(),
             }
         })

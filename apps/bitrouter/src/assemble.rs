@@ -383,7 +383,6 @@ pub(crate) fn otel_status(exporter: &OtelExporter) -> ObserveStatusPayload {
 /// Adding a reader without adding it here fails that test — the list cannot
 /// silently drift, which matters because a *missing* id is worse than no guard
 /// at all: the daemon would warn, on every start, about a plugin it reads.
-
 pub(crate) const KNOWN_PLUGIN_IDS: &[&str] = &["bitrouter-policy", "bitrouter-telemetry"];
 
 /// Reject removed built-in configuration before activating the default host.

@@ -42,7 +42,7 @@ use {
 /// client polling.
 pub enum ReloadSubmission {
     Local,
-    Remote(OperationReport),
+    Remote(Box<OperationReport>),
 }
 
 /// One selected target for a passive administration action.
@@ -228,7 +228,9 @@ impl InspectionTarget {
                     )),
                 }
             }
-            Self::Remote { client, .. } => Ok(ReloadSubmission::Remote(client.reload().await?)),
+            Self::Remote { client, .. } => {
+                Ok(ReloadSubmission::Remote(Box::new(client.reload().await?)))
+            }
         }
     }
 

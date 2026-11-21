@@ -1,7 +1,6 @@
 //! Shared semantic routing through actual App policy selection and all stock
 //! inbound adapters. Provider labels are fixtures; these are contract tests.
-#[path = "../../tests/support/decision.rs"]
-mod decision;
+use super::decision;
 
 use crate::config;
 use crate::gateway::http::AppState;

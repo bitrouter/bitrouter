@@ -8,8 +8,7 @@ use portable_pty::{CommandBuilder, PtySize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-#[path = "../../tests/support/example_binary.rs"]
-mod example_binary;
+use super::example_binary;
 
 #[path = "../../tests/support/terminal.rs"]
 mod terminal;

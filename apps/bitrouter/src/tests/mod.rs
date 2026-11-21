@@ -1,5 +1,16 @@
 //! Tests of private application assembly and its real transports.
 
+#[path = "model_support/conversion.rs"]
+mod conversion;
+#[path = "../../tests/support/decision.rs"]
+mod decision;
+#[cfg(any(unix, feature = "mcp"))]
+#[path = "../../tests/support/example_binary.rs"]
+mod example_binary;
+#[cfg(any(unix, feature = "mcp"))]
+#[path = "../../tests/support/prebuilt_example.rs"]
+mod prebuilt_example;
+
 mod agent_trace_generalization;
 mod artifact_build_metadata;
 mod artifact_profiles;

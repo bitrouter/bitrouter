@@ -1,8 +1,6 @@
 //! Required canonical content cannot be silently omitted by a target projection.
 
-#[path = "model_support/conversion.rs"]
-mod conversion;
-use conversion::{adapters, prompt, refusal};
+use super::conversion::{adapters, prompt, refusal};
 
 use crate::gateway::conversion_report::{ConversionEffect, ConversionLocation};
 use crate::gateway::model::protocol::messages::MessagesAdapter;

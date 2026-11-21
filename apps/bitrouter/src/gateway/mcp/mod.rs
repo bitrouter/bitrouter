@@ -280,13 +280,13 @@ pub struct InvalidationEvent {
 pub enum InvalidationKind {
     /// `notifications/tools/list_changed` — drop the server's `tools/list`
     /// cache.
-    ToolsListChanged,
+    Tools,
     /// `notifications/resources/list_changed` — drop the server's
     /// `resources/list` (and `resources/templates/list`) caches.
-    ResourcesListChanged,
+    Resources,
     /// `notifications/prompts/list_changed` — drop the server's
     /// `prompts/list` cache.
-    PromptsListChanged,
+    Prompts,
 }
 
 /// One frame of a streaming MCP execution.
