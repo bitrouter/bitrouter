@@ -83,7 +83,6 @@ pub(super) fn route_data(value: &mut RouteData) -> Result<()> {
         overrides: _,
         policy,
         chains: _,
-        native: _, // Only selector strings and indices; no additional opaque IDs.
         candidates,
     } = value;
     reference(root)?;

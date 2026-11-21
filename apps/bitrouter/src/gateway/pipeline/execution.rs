@@ -2877,7 +2877,8 @@ fn filter_reasoning_effort_targets(chain: &mut Vec<RoutingTarget>, prompt: &Prom
     let Some(effort) = prompt.params.reasoning_effort else {
         return Ok(());
     };
-    let policy_owned = prompt.params.reasoning_effort_source == ReasoningEffortSource::Policy;
+    let policy_owned =
+        prompt.params.reasoning_effort_source == bitrouter_ai::types::ReasoningEffortSource::Policy;
     chain.retain(|target| match &target.reasoning_effort {
         Some(support) => support.levels.contains(&effort),
         None => !policy_owned,

@@ -177,9 +177,6 @@ impl TenantExecution {
         if let Some(continuation) = &http_continuation {
             builder.pre_resolution_hook(continuation.clone());
         }
-        if let Some(policy) = &self.continuation {
-            builder.native_private_context(policy.clone());
-        }
         if let Some(policy) = self.route.policy() {
             if !self.route.dependencies().contains(policy.reference()) || policy.name().is_empty() {
                 return Err(self.reject(bitrouter_ai::tenancy::operation::ErrorCode::Forbidden));
