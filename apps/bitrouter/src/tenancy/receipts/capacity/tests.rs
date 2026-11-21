@@ -4,6 +4,65 @@ fn failure(code: ErrorCode) -> anyhow::Error {
     anyhow::anyhow!("{code:?}")
 }
 
+#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+#[test]
+fn metrics_keep_total_live_potentials_while_policy_uses_uncovered() -> Result<()> {
+    let mut accounting = Accounting::default();
+    for uncovered in 0..3 {
+        accounting.reserve(0, uncovered).map_err(failure)?;
+    }
+    ensure!(accounting.observed(3) == Some((3 * RESERVATION, 0, 3, 0)));
+    ensure!(accounting.observed(2).is_none());
+    accounting.totals.uncovered = 0;
+    accounting.totals.unknown = 3;
+    ensure!(accounting.observed(3) == Some((3 * RESERVATION, 0, 3, 3)));
+    accounting
+        .reserve_physical_write(100, true)
+        .map_err(failure)?;
+    ensure!(accounting.physical_write_reserved() == 100);
+    ensure!(accounting.observed(3) == Some((3 * RESERVATION, 0, 3, 3)));
+    accounting.finish_physical_write(100).map_err(failure)?;
+    ensure!(accounting.physical_write_reserved() == 0);
+    ensure!(accounting.observed(3) == Some((3 * RESERVATION, 0, 3, 3)));
+    Ok(())
+}
+
+#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+#[test]
+fn inconsistent_live_reservations_are_not_observed() {
+    let mut accounting = Accounting::default();
+    let valid = Totals {
+        live: 1,
+        uncovered: 1,
+        reserved: RESERVATION,
+        ..Default::default()
+    };
+    accounting.totals = valid;
+    assert_eq!(accounting.observed(1), Some((RESERVATION, 0, 1, 0)));
+    for invalid in [
+        Totals {
+            uncovered: 2,
+            ..valid
+        },
+        Totals {
+            reserved: RESERVATION - 1,
+            ..valid
+        },
+        Totals {
+            reserved: RESERVATION + 1,
+            ..valid
+        },
+        Totals {
+            live: u64::MAX / RESERVATION + 1,
+            reserved: 0,
+            ..valid
+        },
+    ] {
+        accounting.totals = invalid;
+        assert!(accounting.observed(u64::MAX).is_none(), "{invalid:?}");
+    }
+}
+
 #[test]
 fn configured_receipt_gates_reject_independently_without_partial_reservation() -> Result<()> {
     use crate::config::tenancy::capacity::Receipts;

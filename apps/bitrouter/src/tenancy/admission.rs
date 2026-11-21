@@ -79,7 +79,6 @@ struct Counts {
     unknown: Option<u64>,
     uncovered: u64,
     pins: usize,
-    repairs: usize,
     active: usize,
     queued: usize,
 }
@@ -737,7 +736,7 @@ impl Lease {
 
 impl Counts {
     fn idle(&self) -> bool {
-        self.active == 0 && self.queued == 0 && self.pins == 0 && self.repairs == 0
+        self.active == 0 && self.queued == 0 && self.pins == 0
     }
 }
 impl State {
