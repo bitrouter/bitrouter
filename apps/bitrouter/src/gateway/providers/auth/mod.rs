@@ -439,13 +439,6 @@ pub trait AuthApplier: Send + Sync {
         false
     }
 
-    /// Whether provider body/auth shaping preserves a requested output-token
-    /// limit. Unknown remains `None`; managed execution also checks the final
-    /// wire body before sending it.
-    fn output_token_limit_support(&self, _target: &ModelTarget) -> Option<bool> {
-        None
-    }
-
     /// Pure, deterministic normalization of the expected managed wire body.
     /// This must preserve required input and controls. It performs no I/O and
     /// must not depend on credentials; final authenticated requests are checked
