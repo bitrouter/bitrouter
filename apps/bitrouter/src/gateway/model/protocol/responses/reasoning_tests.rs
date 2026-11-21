@@ -3,8 +3,7 @@ use crate::gateway::model::conversion::ReportAdmission;
 use serde_json::{Value, json};
 
 #[test]
-fn responses_reasoning_replay_preserves_empty_encrypted_and_stored_items_in_order()
--> anyhow::Result<()> {
+fn responses_output_preserves_empty_encrypted_and_stored_items_in_order() -> anyhow::Result<()> {
     let adapter = ResponsesAdapter;
     let output = json!([
         {"type":"reasoning", "id":"rs_a", "summary":[
@@ -30,29 +29,19 @@ fn responses_reasoning_replay_preserves_empty_encrypted_and_stored_items_in_orde
         role: Role::Assistant,
         content: result.content.clone(),
     });
-    adapter
-        .validate_managed_prompt(&prompt)
-        .map_err(ModelError::invalid_request)?;
-    let request = managed_render(&adapter, &prompt)?;
-    assert_eq!(
-        request["input"].as_array().map(|items| &items[1..]),
-        output.as_array().map(Vec::as_slice)
-    );
+    assert!(adapter.render_request(&prompt).is_err());
     let rendered = adapter.render_response(&result, &prompt, "request")?;
     assert_eq!(rendered["output"], output);
     let public: bitrouter_ai::protocol::responses::ResponsesResponse =
         serde_json::from_value(rendered)?;
     assert_eq!(serde_json::to_value(public)?["output"], output);
     let inbound = adapter.parse_request(json!({"model":"served", "input":output}))?;
-    adapter
-        .validate_managed_prompt(&inbound)
-        .map_err(ModelError::invalid_request)?;
-    assert_eq!(managed_render(&adapter, &inbound)?["input"], output);
+    assert!(adapter.render_request(&inbound).is_err());
     Ok(())
 }
 
 #[test]
-fn responses_reasoning_managed_replay_rejects_malformed_or_unsynchronized_items() -> Result<()> {
+fn responses_reasoning_projection_rejects_malformed_or_unsynchronized_items() -> Result<()> {
     let adapter = ResponsesAdapter;
     let valid = json!({"type":"reasoning", "id":"rs_a", "summary":[{"type":"summary_text", "text":"checked"}], "encrypted_content":"opaque"});
     for (key, value) in [
@@ -88,38 +77,38 @@ fn responses_reasoning_managed_replay_rejects_malformed_or_unsynchronized_items(
     };
     *text = "changed".into();
     assert_eq!(
-        adapter.validate_managed_prompt(&prompt),
+        validate_reasoning_projection(&prompt.messages[0].content[0]),
         Err("responses_reasoning_item_invalid")
     );
     if let Content::Reasoning { text, .. } = &mut prompt.messages[0].content[0] {
         *text = "checked".into();
     }
     prompt.messages[0].role = Role::User;
-    assert_eq!(
-        adapter.validate_managed_prompt(&prompt),
-        Err("responses_reasoning_role_invalid")
-    );
+    assert!(adapter.admission(&prompt).require_admitted().is_err());
+    assert!(adapter.render_request(&prompt).is_err());
     Ok(())
 }
 
 #[test]
-fn responses_input_does_not_move_messages_across_tools_or_reasoning() -> Result<()> {
+fn responses_input_keeps_messages_between_tool_calls() -> Result<()> {
     let adapter = ResponsesAdapter;
     let mut prompt = adapter.parse_request(json!({"model":"served", "input":"task"}))?;
     let result = adapter.parse_response(json!({"output":[
         {"type":"function_call", "call_id":"call_a", "name":"inspect", "arguments":"{}"},
         {"type":"message", "role":"assistant", "content":[{"type":"output_text", "text":"middle"}]},
-        {"type":"reasoning", "id":"rs_a", "summary":[], "encrypted_content":"opaque"},
+        {"type":"function_call", "call_id":"call_b", "name":"inspect", "arguments":"{}"},
         {"type":"message", "role":"assistant", "content":[{"type":"output_text", "text":"last"}]}
     ]}))?;
     prompt.messages = vec![Message {
         role: Role::Assistant,
         content: result.content,
     }];
-    let rendered = managed_render(&adapter, &prompt)?;
+    let rendered = adapter.render_request(&prompt)?;
     assert_eq!(rendered["input"][0]["type"], "function_call");
+    assert_eq!(rendered["input"][0]["call_id"], "call_a");
     assert_eq!(rendered["input"][1]["content"][0]["text"], "middle");
-    assert_eq!(rendered["input"][2]["type"], "reasoning");
+    assert_eq!(rendered["input"][2]["type"], "function_call");
+    assert_eq!(rendered["input"][2]["call_id"], "call_b");
     assert_eq!(rendered["input"][3]["content"][0]["text"], "last");
     Ok(())
 }
@@ -141,10 +130,6 @@ fn codex_message_phase_survives_stateless_replay() -> Result<()> {
         role: Role::Assistant,
         content: result.content.clone(),
     });
-    adapter
-        .validate_managed_prompt(&prompt)
-        .map_err(ModelError::invalid_request)?;
-    assert!(super::super::managed::validate_prompt(&ApiProtocol::Messages, &prompt).is_err());
     for protocol in [
         ApiProtocol::Messages,
         ApiProtocol::ChatCompletions,
@@ -175,7 +160,7 @@ fn codex_message_phase_survives_stateless_replay() -> Result<()> {
 }
 
 #[test]
-fn empty_reasoning_content_remains_replayable_without_stored_state() -> Result<()> {
+fn empty_reasoning_output_is_preserved_without_granting_replay_authority() -> Result<()> {
     for content in [Value::Null, json!([])] {
         let item = json!({"type":"reasoning", "id":"rs_empty", "summary":[], "content":content, "encrypted_content":"opaque"});
         let response = json!({"output":[item.clone()]});
@@ -185,58 +170,46 @@ fn empty_reasoning_content_remains_replayable_without_stored_state() -> Result<(
             ResponsesAdapter.parse_request(json!({"model":"served", "input":"task"}))?;
         prompt.messages.push(Message {
             role: Role::Assistant,
-            content: result.content,
+            content: result.content.clone(),
         });
-        ResponsesAdapter
-            .validate_managed_prompt(&prompt)
-            .map_err(ModelError::invalid_request)?;
         assert_eq!(
-            managed_render(&ResponsesAdapter, &prompt)?["input"][1],
+            ResponsesAdapter.render_response(&result, &prompt, "request")?["output"][0],
             item
         );
+        assert!(ResponsesAdapter.render_request(&prompt).is_err());
     }
     Ok(())
 }
 
-fn managed_render(adapter: &ResponsesAdapter, prompt: &Prompt) -> Result<Value> {
-    let target = ModelTarget {
-        provider_name: "openai".into(),
-        service_id: "served".into(),
-        api_protocol: ApiProtocol::Responses,
-        api_base: "https://example.invalid".into(),
-        api_key: String::new(),
-        credential_priority: Default::default(),
-        account_label: None,
-        auth_scheme: crate::gateway::model::target::AuthScheme::Bearer,
-        compatibility: Default::default(),
-    };
-    adapter
-        .render_managed_request_for_target(prompt, &target)
-        .map(|(body, _)| body)
-}
-
 #[test]
-fn managed_replay_admits_legacy_and_typed_items_without_changing_history() -> Result<()> {
+fn retained_reasoning_never_grants_plain_projection_authority() -> Result<()> {
     let adapter = ResponsesAdapter;
     let item = json!({"type":"reasoning", "id":"rs_private", "summary":[{"type":"summary_text","text":"summary"}], "content":[{"type":"reasoning_text","text":"reasoning"}], "encrypted_content":"opaque"});
-    for legacy in [false, true] {
+    for metadata_only in [false, true] {
         let mut prompt = adapter.parse_request(json!({"model":"served", "input":"task"}))?;
         let retained = NativeReasoning::Responses(item.clone());
         let mut metadata = ProviderMetadata::new();
-        if legacy {
+        if metadata_only {
             set_provider_metadata(&mut metadata, "openai", "reasoningItem", item.clone());
         }
         prompt.messages.push(Message {
             role: Role::Assistant,
             content: vec![Content::Reasoning {
                 text: retained.visible_text(),
-                native: (!legacy).then_some(retained),
+                native: (!metadata_only).then_some(retained),
                 provider_metadata: metadata,
             }],
         });
         let original = prompt.clone();
         assert!(adapter.render_request(&prompt).is_err());
-        assert_eq!(managed_render(&adapter, &prompt)?["input"][1], item);
+        let report = adapter.admission(&prompt);
+        if !metadata_only {
+            assert!(report.issues.iter().any(|issue| {
+                issue.reason
+                    == crate::gateway::conversion_report::ConversionReason::NativeReasoningAuthorityUnproven
+            }));
+        }
+        assert!(report.require_admitted().is_err());
         assert_eq!(prompt, original);
         if let Content::Reasoning {
             provider_metadata, ..
@@ -249,7 +222,8 @@ fn managed_replay_admits_legacy_and_typed_items_without_changing_history() -> Re
                 json!(true),
             );
         }
-        assert!(managed_render(&adapter, &prompt).is_err());
+        assert!(validate_reasoning_projection(&prompt.messages[1].content[0]).is_err());
+        assert!(adapter.render_request(&prompt).is_err());
     }
     let mut prompt = adapter.parse_request(json!({"model":"served", "input":[item]}))?;
     if let Content::Reasoning {
@@ -263,6 +237,7 @@ fn managed_replay_admits_legacy_and_typed_items_without_changing_history() -> Re
             json!({"type":"reasoning", "id":"conflict", "summary":[]}),
         );
     }
-    assert!(managed_render(&adapter, &prompt).is_err());
+    assert!(validate_reasoning_projection(&prompt.messages[0].content[0]).is_err());
+    assert!(adapter.render_request(&prompt).is_err());
     Ok(())
 }

@@ -257,7 +257,6 @@ pub(crate) fn reject_google_continuity_part(
 pub mod chat_completions;
 pub mod decisions;
 pub mod generate_content;
-mod managed;
 pub mod messages;
 pub mod responses;
 
@@ -381,44 +380,6 @@ pub trait OutboundAdapter: Send + Sync {
     /// The wire protocol this adapter speaks.
     fn protocol(&self) -> ApiProtocol;
 
-    /// Validate managed request semantics before rendering. Ordinary compatibility
-    /// calls retain their existing conversion behavior. Custom adapters explicitly
-    /// opt in; successful rendering alone does not establish preservation.
-    fn validate_managed_prompt(&self, _prompt: &Prompt) -> std::result::Result<(), &'static str> {
-        Err("managed_protocol_validation_unsupported")
-    }
-
-    /// Check the final authenticated body against the originally rendered input.
-    /// Envelope adapters must validate their inner request rather than guessing
-    /// a built-in wire from a provider/model name. No private data enters errors.
-    fn validate_managed_body(
-        &self,
-        _expected: &serde_json::Value,
-        _actual: &serde_json::Value,
-        _target: &ModelTarget,
-    ) -> std::result::Result<(), &'static str> {
-        Err("managed_body_validation_unsupported")
-    }
-
-    /// Whether this adapter can inspect the output bound in a final request,
-    /// including any provider envelope. Custom adapters opt in by overriding
-    /// this and [`Self::output_token_limit`].
-    fn supports_output_token_limit_validation(&self) -> bool {
-        inbound_adapter_for(&self.protocol()).is_some()
-    }
-
-    /// Read the output-token bound after all provider/auth body mutations.
-    /// Built-in wires reuse their canonical parser. A custom adapter must
-    /// understand its final envelope rather than assuming a public wire shape.
-    fn output_token_limit(&self, body: &serde_json::Value) -> Result<Option<u32>> {
-        let adapter = inbound_adapter_for(&self.protocol()).ok_or_else(|| {
-            crate::gateway::model::error::ModelError::invalid_request(
-                "output reservation validation is unsupported for this protocol",
-            )
-        })?;
-        Ok(adapter.parse_request(body.clone())?.params.max_tokens)
-    }
-
     /// Render a canonical [`Prompt`] into this protocol's upstream request body.
     fn render_request(&self, prompt: &Prompt) -> Result<serde_json::Value>;
 
@@ -433,24 +394,6 @@ pub trait OutboundAdapter: Send + Sync {
         _target: &ModelTarget,
     ) -> Result<serde_json::Value> {
         self.render_request(prompt)
-    }
-
-    /// Render history after the host has validated private-origin and target
-    /// bindings. The host must still verify final credential authority before
-    /// dispatch. Ordinary callers must use `render_request_for_target`.
-    fn render_managed_request_for_target(
-        &self,
-        prompt: &Prompt,
-        target: &ModelTarget,
-    ) -> Result<(
-        serde_json::Value,
-        crate::gateway::conversion_report::ConversionReport,
-    )> {
-        self.validate_managed_prompt(prompt)
-            .map_err(crate::gateway::model::error::ModelError::invalid_request)?;
-        let report = self.admission(prompt);
-        report.require_admitted()?;
-        Ok((self.render_request_for_target(prompt, target)?, report))
     }
 
     /// Content-free admission shared by direct calls and router preflight.
