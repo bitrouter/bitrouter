@@ -1,8 +1,6 @@
 //! Initial argument, JSON, ordering and nested-attribute admission.
 
-#[path = "model_support/conversion.rs"]
-mod conversion;
-use conversion::{adapters, prompt, refusal, require_refusal};
+use super::conversion::{adapters, prompt, refusal, require_refusal};
 
 use crate::gateway::conversion_report::{
     ConversionEffect, ConversionLocation, ConversionReport, ConversionStage,

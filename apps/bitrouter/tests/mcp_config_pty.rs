@@ -6,6 +6,8 @@ use portable_pty::{CommandBuilder, PtySize};
 
 #[path = "support/example_binary.rs"]
 mod example_binary;
+#[path = "support/prebuilt_example.rs"]
+mod prebuilt_example;
 
 #[path = "support/terminal.rs"]
 mod terminal;

@@ -3,8 +3,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-#[path = "prebuilt_example.rs"]
-mod prebuilt_example;
+use super::prebuilt_example;
 
 pub fn build(package: &str, example: &str) -> Result<PathBuf, String> {
     if let Some(path) = prebuilt_example::from_env(example)? {

@@ -513,7 +513,7 @@ async fn policy_rejection_records_sanitized_zero_usage_evidence() -> Result<()> 
         record
             .raw_usage_json
             .as_deref()
-            .map(|raw| serde_json::from_str::<serde_json::Value>(raw))
+            .map(serde_json::from_str::<serde_json::Value>)
             .transpose()
             .map_err(|error| crate::gateway::error::BitrouterError::internal(error.to_string()))?,
         Some(serde_json::json!({
@@ -568,7 +568,7 @@ async fn upstream_rate_limit_records_sanitized_zero_usage_evidence() -> Result<(
         record
             .raw_usage_json
             .as_deref()
-            .map(|raw| serde_json::from_str::<serde_json::Value>(raw))
+            .map(serde_json::from_str::<serde_json::Value>)
             .transpose()
             .map_err(|error| crate::gateway::error::BitrouterError::internal(error.to_string()))?,
         Some(serde_json::json!({

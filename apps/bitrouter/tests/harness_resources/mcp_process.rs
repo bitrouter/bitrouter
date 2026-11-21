@@ -11,8 +11,7 @@ use tokio_util::sync::CancellationToken;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
-#[path = "../support/prebuilt_example.rs"]
-mod prebuilt_example;
+use crate::tests::prebuilt_example;
 
 fn fixture_binary() -> Result<&'static Path, String> {
     static BINARY: OnceLock<Result<PathBuf, String>> = OnceLock::new();

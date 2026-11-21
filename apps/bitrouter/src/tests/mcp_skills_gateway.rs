@@ -17,8 +17,7 @@ use sha2::{Digest, Sha256};
 #[path = "../../tests/support/mcp_fixture.rs"]
 mod mcp_fixture;
 
-#[path = "../../tests/support/example_binary.rs"]
-mod example_binary;
+use super::example_binary;
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 

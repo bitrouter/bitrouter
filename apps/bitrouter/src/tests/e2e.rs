@@ -13,8 +13,7 @@
 //! a three-protocol upstream and a three-provider config, so it lives here
 //! rather than in its own file.
 
-#[path = "../../tests/support/decision.rs"]
-mod decision;
+use super::decision;
 
 use crate::config;
 use crate::gateway::caller::CallerContext;

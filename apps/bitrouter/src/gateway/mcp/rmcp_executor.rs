@@ -124,7 +124,7 @@ impl ClientHandler for BitrouterMcpClient {
         async move {
             let _ = tx.send(InvalidationEvent {
                 server_name,
-                kind: InvalidationKind::ToolsListChanged,
+                kind: InvalidationKind::Tools,
             });
         }
     }
@@ -138,7 +138,7 @@ impl ClientHandler for BitrouterMcpClient {
         async move {
             let _ = tx.send(InvalidationEvent {
                 server_name,
-                kind: InvalidationKind::ResourcesListChanged,
+                kind: InvalidationKind::Resources,
             });
         }
     }
@@ -152,7 +152,7 @@ impl ClientHandler for BitrouterMcpClient {
         async move {
             let _ = tx.send(InvalidationEvent {
                 server_name,
-                kind: InvalidationKind::PromptsListChanged,
+                kind: InvalidationKind::Prompts,
             });
         }
     }
