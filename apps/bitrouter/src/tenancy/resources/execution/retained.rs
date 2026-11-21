@@ -12,7 +12,7 @@ use super::super::{
     compiler::RouteEnvelope,
     manifest::{Artifact, CredentialBinding, Definition},
 };
-use super::{Candidate, Chain, RetainedPolicy, RouteData, ValidatedEnvelope, native_v1, target};
+use super::{Candidate, Chain, RetainedPolicy, RouteData, ValidatedEnvelope, budget, target};
 use crate::gateway::pipeline::routing::PromptOverrides;
 use bitrouter_ai::policy::Document;
 
@@ -121,7 +121,7 @@ pub(super) fn decode_with_operation(
     let mut target_count = 0_usize;
     let mut content_bytes = 0_usize;
     let mut dependency_count = 0_usize;
-    let mut native_budget = native_v1::Budget::with_operation(operation);
+    let mut decode_budget = budget::Budget::with_operation(operation);
     for route in routes {
         let dependencies = dependencies(&route.reference, &graph)?;
         dependency_count = dependency_count
@@ -141,7 +141,7 @@ pub(super) fn decode_with_operation(
             &policies,
             &mut target_count,
             &mut content_bytes,
-            &mut native_budget,
+            &mut decode_budget,
         )?;
         ensure!(
             retained
@@ -198,14 +198,14 @@ fn route_data(
     policies: &HashMap<ResourceRef, Policy>,
     target_count: &mut usize,
     content_bytes: &mut usize,
-    native_budget: &mut native_v1::Budget<'_>,
+    decode_budget: &mut budget::Budget<'_>,
 ) -> Result<RouteData> {
     // Derive runtime-only limits/ordering from authenticated source. Keeping
     // these out of the target codec preserves the authenticated representation.
     let runtime_config = if source.native_route {
-        native_budget.native_route_config(&source.routing)?
+        decode_budget.native_route_config(&source.routing)?
     } else {
-        native_budget.routing_config(&source.routing)?
+        decode_budget.routing_config(&source.routing)?
     };
     let root_preferences = runtime_config.resolve_router(&route.selector)?.prefs;
     let policy = match (&route.policy, &route.policy_name) {
@@ -236,7 +236,7 @@ fn route_data(
                 .checked_add(1)
                 .context(ExecutionCapacityExceeded)?;
             ensure!(*target_count <= MAX_TARGETS, ExecutionCapacityExceeded);
-            native_budget.target(&approved.target)?;
+            decode_budget.target(&approved.target)?;
             let (target, projection) = target::decode(approved.target)?;
             *content_bytes = content_bytes
                 .checked_add(projection.len().saturating_mul(2))
@@ -299,21 +299,7 @@ fn route_data(
         chains.iter().any(|chain| chain.selector == route.selector),
         "retained base chain missing"
     );
-    let native = if source.native_route {
-        // This explicit ordered wire artifact grants no native-selection-v1
-        // authority, whose original source/protocol contract remains closed.
-        native_v1::NativeChains::Unavailable(native_v1::Unavailable::Unsupported)
-    } else {
-        native_v1::derive(
-            &route.selector,
-            &source.routing,
-            &source.credentials,
-            &chains,
-            &candidates,
-            native_budget,
-        )
-    };
-    native_budget.check_operation()?;
+    decode_budget.check_operation()?;
     Ok(RouteData {
         admission: source.admission,
         reference: route.reference,
@@ -325,7 +311,6 @@ fn route_data(
         },
         policy,
         chains,
-        native,
         candidates,
     })
 }

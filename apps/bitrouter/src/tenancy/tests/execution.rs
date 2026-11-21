@@ -22,7 +22,6 @@ mod http_continuation;
 mod ingress;
 mod lifecycle_http;
 mod model_policy;
-pub(in crate::tenancy) mod native;
 mod oauth_cases;
 mod receipts;
 mod rejections;

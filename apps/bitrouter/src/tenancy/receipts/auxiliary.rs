@@ -1,6 +1,6 @@
 //! Private non-model effects under the existing terminal owner.
 //!
-//! Refresh and controlled input counting are exclusive bounded consumers.
+//! Refresh is the live consumer. Stored count snapshots retain their validation format.
 use bitrouter_ai::tenancy::{configuration::ResourceRef, operation::ErrorCode};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
@@ -39,7 +39,6 @@ enum Cell {
 enum Mode {
     Empty,
     Refresh(Cell),
-    Counts(count::State),
 }
 struct State {
     closed: bool,
@@ -153,11 +152,7 @@ impl Journal {
                     .lock()
                     .map_err(|_| ErrorCode::StorageUnavailable)?;
                 state.closed = true;
-                if match &state.mode {
-                    Mode::Empty | Mode::Refresh(Cell::Settled(_)) => true,
-                    Mode::Counts(counts) => counts.settled(),
-                    _ => false,
-                } {
+                if matches!(&state.mode, Mode::Empty | Mode::Refresh(Cell::Settled(_))) {
                     return Ok(());
                 }
             }
@@ -172,7 +167,6 @@ impl Journal {
         match &state.mode {
             Mode::Empty => Ok(Snapshot::Refresh(Vec::new())),
             Mode::Refresh(Cell::Settled(fact)) => Ok(Snapshot::Refresh(vec![fact.clone()])),
-            Mode::Counts(counts) => Ok(Snapshot::Counts(counts.snapshot()?)),
             _ => Err(ErrorCode::StorageUnavailable),
         }
     }
