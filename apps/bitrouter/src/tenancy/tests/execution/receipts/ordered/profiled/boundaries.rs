@@ -293,7 +293,7 @@ async fn capacity_profile_case(envelope: bool, shared_health: bool) -> Result<()
     revoke(&harness, reference(1)?).await?;
     let values: bitrouter_ai::tenancy::generation_defaults::GenerationDefaultsEnvelope =
         serde_json::from_value(
-            json!({"schema_version":1,"configuration_defaults":"apply","supplemental":{"vendor_knob":"bounded"}}),
+            json!({"schema_version":2,"configuration_defaults":"apply","supplemental":{"vendor_knob":"bounded"}}),
         )?;
     let id = if envelope {
         let binding = binding.with_generation_defaults_envelope(&values)?;
