@@ -1,7 +1,7 @@
 //! Read existing skill directories without an installation index or version store.
 
-use crate::gateway::caller::CallerContext;
 #[cfg(feature = "harness")]
+use crate::gateway::caller::CallerContext;
 #[cfg(feature = "harness")]
 use crate::managed_contract::harness::skills::{LocalScope, LocalSkill, LocalSkillCatalog};
 #[cfg(feature = "harness")]
