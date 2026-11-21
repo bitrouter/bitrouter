@@ -10,7 +10,6 @@
 //! pipeline, and renders the result back in the **same** inbound protocol —
 //! the outbound (provider) protocol is chosen per routing target.
 
-pub(crate) mod managed_profile;
 mod tenant_receipts;
 
 use std::convert::Infallible;
@@ -330,8 +329,6 @@ pub fn build_router_with_options(state: AppState, options: RouterOptions) -> Rou
         .route("/health", get(health))
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(state);
-    #[cfg(not(feature = "core"))]
-    let router = managed_profile::disabled(router);
     match options.router_wrapper {
         Some(wrapper) => wrapper(router),
         None => router,
@@ -463,7 +460,7 @@ async fn mcp_invoke_inner(
     // rejects everything else as "method not found"). Without this, every
     // spec-compliant client (Claude clients, opencode, the MCP SDK) fails its
     // opening `initialize` over Streamable HTTP and never reaches a tool call;
-    // only handshake-skipping callers (curl, `bro tools`) worked before.
+    // only handshake-skipping callers (curl, `bitrouter tools`) worked before.
     // See <https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle>.
     match method.as_str() {
         "server/discover" => {
@@ -1320,6 +1317,9 @@ async fn responses(
     headers: HeaderMap,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
+    if headers.contains_key("bitrouter-beta") {
+        return BitrouterError::bad_request("unsupported Responses header").into_response();
+    }
     handle(state, headers, ApiProtocol::Responses, body).await
 }
 
@@ -1340,6 +1340,7 @@ async fn handle(
     body: serde_json::Value,
 ) -> Response {
     add_inbound_protocol_hint(&mut headers, &inbound);
+    let client_request_id = headers.contains_key(BITROUTER_REQUEST_ID_HEADER);
     let request_id = match add_request_id_hint(&mut headers) {
         Ok(request_id) => request_id,
         Err(error) => return error.into_response(),
@@ -1359,6 +1360,7 @@ async fn handle(
         inbound,
         input,
         request_id,
+        client_request_id,
         #[cfg(feature = "multi-instance")]
         None,
     )
@@ -1368,6 +1370,11 @@ async fn handle(
 /// Validate the original protocol document before shared admission. Configurable
 /// prompt transforms and route/default expansion run only after that boundary.
 pub(crate) fn parse_input(inbound: &ApiProtocol, body: serde_json::Value) -> Result<PipelineInput> {
+    if *inbound == ApiProtocol::Responses
+        && (body.get("bitrouter").is_some() || body["multi_agent"]["enabled"] == true)
+    {
+        return Err(BitrouterError::bad_request("unsupported Responses members"));
+    }
     if body.get("bitrouter_generation_defaults").is_some() {
         return Err(BitrouterError::bad_request(
             "unknown generation request member",
@@ -1412,6 +1419,7 @@ pub(crate) async fn handle_shared(
         inbound,
         input,
         correlation_id,
+        false,
         Some(admission),
     )
     .await
@@ -1423,6 +1431,7 @@ async fn execute_input(
     inbound: ApiProtocol,
     input: PipelineInput,
     request_id: String,
+    client_request_id: bool,
     #[cfg(feature = "multi-instance")] admission: Option<
         Arc<crate::gateway::shared::admitted::SharedAdmission>,
     >,
@@ -1476,6 +1485,14 @@ async fn execute_input(
             PipelineRequest::new_decisions(request.model.clone(), caller, request.clone())
         }
     };
+    if client_request_id {
+        req.extensions
+            .insert(crate::gateway::metering::replay::ClientRequestIdClaim);
+    } else {
+        req.extensions.insert(Arc::new(
+            crate::gateway::pipeline::types::AllocatedRequestId::new(request_id.clone()),
+        ));
+    }
     req.request_id = request_id.clone();
     req.original_model = original_model;
     req.headers = headers;
@@ -1893,15 +1910,11 @@ fn add_request_id_hint(headers: &mut HeaderMap) -> Result<String> {
             .to_str()
             .map_err(|_| BitrouterError::bad_request("request id header is not valid text"))?
             .trim();
-        if request_id.is_empty() {
-            return Err(BitrouterError::bad_request(
-                "request id header must not be empty",
-            ));
-        }
+        crate::gateway::pipeline::types::validate_client_request_id(request_id)?;
         return Ok(request_id.to_string());
     }
 
-    let request_id = uuid::Uuid::new_v4().to_string();
+    let request_id = crate::gateway::pipeline::types::new_request_id();
     if let Ok(value) = HeaderValue::from_str(&request_id) {
         headers.insert(BITROUTER_REQUEST_ID_HEADER, value);
     }
@@ -3162,7 +3175,11 @@ mod tests {
 
         let request_id = add_request_id_hint(&mut headers).unwrap();
 
-        assert!(!request_id.is_empty());
+        assert!(request_id.starts_with(crate::gateway::pipeline::types::GENERATED_REQUEST_PREFIX));
+        assert!(
+            add_request_id_hint(&mut headers).is_err(),
+            "a client cannot claim the server namespace"
+        );
         assert_eq!(
             headers
                 .get("x-bitrouter-request-id")

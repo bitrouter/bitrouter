@@ -10,7 +10,7 @@ use bitrouter::gateway::routing::workflow::decision::{
 };
 use bitrouter::gateway::routing::workflow::ir::ProtocolKind;
 use bitrouter::gateway::routing::workflow::online::OnlineWorkflowState;
-use bitrouter::{config, policy_lock};
+use bitrouter::{config, policy_source};
 use bitrouter_ai::types::ApiProtocol;
 use http::HeaderMap;
 use serde::Deserialize;
@@ -166,7 +166,7 @@ policies:
 "#,
     )?;
     let config = config::parse_with(raw, |_| None)?;
-    let error = policy_lock::load_for_config(&config, Some(&config_path))
+    let error = policy_source::load_for_config(&config, Some(&config_path))
         .await
         .err()
         .ok_or_else(|| anyhow::anyhow!("retired source was accepted"))?;

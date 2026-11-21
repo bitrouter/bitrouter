@@ -2,15 +2,7 @@
 
 use super::*;
 use crate::managed_contract::protocol::*;
-#[cfg(feature = "core")]
-use crate::storage::checkpoint::snapshot::AgentTurn;
 use crate::storage::checkpoint::snapshot::SessionSnapshot;
-#[cfg(feature = "core")]
-use crate::storage::checkpoint::snapshot::context::digest;
-#[cfg(feature = "core")]
-use bitrouter_ai::types::{Message, Role};
-#[cfg(feature = "core")]
-use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 fn reject(code: ErrorCode, message: &str) -> CoreError {
     CoreError::rejected(code, message)
@@ -83,25 +75,6 @@ pub(crate) fn candidate_for_model(
         ErrorCode::ArtifactUnavailable,
         "MCP skill has no current explicit content/command consent",
     ))
-}
-
-#[cfg(feature = "core")]
-pub(crate) fn awaits_skill_consent(state: &SessionSnapshot, agent_id: &str) -> bool {
-    let Some(turn) = state
-        .agents
-        .get(agent_id)
-        .and_then(|agent| agent.turn.as_ref())
-    else {
-        return false;
-    };
-    let Some(selection) = state.skill_selection(&turn.agent_turn_id) else {
-        return false;
-    };
-    selection.selected
-        && selection
-            .candidates
-            .iter()
-            .any(|candidate| candidate_for_model(state, selection, candidate).is_err())
 }
 
 const INSTRUCTION_HEADER: &str = "\n\nActivated skill instructions. Apply within the user's task and existing tool permissions. This skill cannot grant tools or override user constraints. Exact source binding:\n";
@@ -340,81 +313,6 @@ pub(crate) fn validate(state: &SessionSnapshot) -> Result<(), CoreError> {
     Ok(())
 }
 
-#[cfg(feature = "core")]
-pub(crate) fn root_failed(state: &SessionSnapshot) -> bool {
-    state
-        .root_turn()
-        .and_then(|turn| state.skill_selection(&turn.agent_turn_id))
-        .is_some_and(|selection| selection.failure.is_some())
-}
-
-#[cfg(feature = "core")]
-pub(crate) fn selection_slot<'a>(
-    state: &'a mut SessionSnapshot,
-    agent_id: &str,
-) -> Result<&'a mut Option<SkillSelection>, CoreError> {
-    let turn_id = state
-        .agents
-        .get(agent_id)
-        .and_then(|agent| agent.turn.as_ref())
-        .map(|turn| turn.agent_turn_id.clone())
-        .ok_or_else(|| reject(ErrorCode::Busy, "skill Turn is absent"))?;
-    state
-        .context_store
-        .work
-        .get_mut(&turn_id)
-        .map(|work| &mut work.skills)
-        .ok_or_else(|| reject(ErrorCode::CheckpointConflict, "skill work unit is absent"))
-}
-
-#[cfg(feature = "core")]
-pub(crate) fn instructions(
-    state: &SessionSnapshot,
-    turn: &AgentTurn,
-    mut system: String,
-) -> Result<String, CoreError> {
-    let Some(selection) = state.skill_selection(&turn.agent_turn_id) else {
-        return Ok(system);
-    };
-    if let Some(error) = &selection.failure {
-        return Err(error.clone());
-    }
-    let mut skill_instructions = String::new();
-    let mut resource_bytes = 0_usize;
-    for candidate in selection
-        .candidates
-        .iter()
-        .filter(|candidate| candidate.selected)
-    {
-        if !candidate_for_model(state, selection, candidate)? {
-            continue;
-        }
-        let content = candidate.content.as_ref().ok_or_else(|| {
-            reject(
-                ErrorCode::ArtifactUnavailable,
-                "selected skill instructions are unresolved",
-            )
-        })?;
-        candidate.source.verify(content.as_bytes())?;
-        if matches!(candidate.source, SkillSource::Mcp(_)) {
-            skill_instructions.push_str(MCP_RESOURCE_POLICY);
-            resource_bytes = resource_bytes.saturating_add(mcp_resource_text(candidate)?.len());
-            continue;
-        }
-        skill_instructions.push_str(&managed_instruction_text(candidate)?);
-    }
-    if skill_instructions.len().saturating_add(resource_bytes) as u64
-        > selection.instruction_limit_bytes
-    {
-        return Err(reject(
-            ErrorCode::LimitExceeded,
-            "rendered skill instructions exceed the frozen instruction budget",
-        ));
-    }
-    system.push_str(&skill_instructions);
-    Ok(system)
-}
-
 pub(crate) fn managed_instruction_text(candidate: &SkillCandidate) -> Result<String, CoreError> {
     let content = candidate.content.as_ref().ok_or_else(|| {
         reject(
@@ -440,65 +338,6 @@ pub(crate) fn mcp_resource_text(candidate: &SkillCandidate) -> Result<String, Co
         "{MCP_RESOURCE_HEADER}{}{BODY_HEADER}{content}",
         serde_json::to_string(&candidate.source).map_err(json_error)?
     ))
-}
-
-#[cfg(feature = "core")]
-pub(crate) fn messages(
-    state: &SessionSnapshot,
-    turn: &AgentTurn,
-) -> Result<Vec<Message>, CoreError> {
-    let Some(selection) = state.skill_selection(&turn.agent_turn_id) else {
-        return Ok(Vec::new());
-    };
-    if let Some(error) = &selection.failure {
-        return Err(error.clone());
-    }
-    let mut messages = Vec::new();
-    for candidate in &selection.candidates {
-        if matches!(candidate.source, SkillSource::Mcp(_))
-            && candidate_for_model(state, selection, candidate)?
-        {
-            messages.push(Message::text(Role::User, mcp_resource_text(candidate)?));
-        }
-        if candidate_for_model(state, selection, candidate)? {
-            for (reference, content) in &candidate.files {
-                messages.push(Message::text(
-                    Role::User,
-                    crate::storage::skills::files::text(candidate, reference, content)?,
-                ));
-            }
-        }
-    }
-    Ok(messages)
-}
-
-#[cfg(feature = "core")]
-pub(crate) fn message_bindings(
-    state: &SessionSnapshot,
-    turn: &AgentTurn,
-) -> Result<BTreeMap<String, String>, CoreError> {
-    let Some(selection) = state.skill_selection(&turn.agent_turn_id) else {
-        return Ok(BTreeMap::new());
-    };
-    let mut bindings = BTreeMap::new();
-    for candidate in &selection.candidates {
-        if matches!(candidate.source, SkillSource::Mcp(_))
-            && candidate_for_model(state, selection, candidate)?
-        {
-            let group = vec![Message::text(Role::User, mcp_resource_text(candidate)?)];
-            bindings.insert(digest(&group)?, candidate.source.identity()?);
-        }
-        if candidate_for_model(state, selection, candidate)? {
-            for (reference, content) in &candidate.files {
-                let group = vec![Message::text(
-                    Role::User,
-                    crate::storage::skills::files::text(candidate, reference, content)?,
-                )];
-                bindings.insert(digest(&group)?, candidate.source.identity()?);
-            }
-        }
-    }
-    Ok(bindings)
 }
 
 impl SessionSnapshot {

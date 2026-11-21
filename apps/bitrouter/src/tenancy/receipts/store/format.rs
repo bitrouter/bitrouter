@@ -79,7 +79,7 @@ impl Terminal {
             }
         }
     }
-    #[cfg(any(test, all(feature = "core", feature = "harness")))]
+    #[cfg(test)]
     pub fn v1(&self) -> Result<&Arc<Candidate>> {
         match self {
             Self::V1(c) => Ok(c),

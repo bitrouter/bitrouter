@@ -31,7 +31,7 @@ use sea_orm::DatabaseConnection;
 
 use crate::gateway::caller::CallerContext;
 use crate::gateway::error::Result;
-use crate::gateway::extensions::legacy::PluginId;
+use crate::gateway::extensions::plugin::PluginId;
 use crate::gateway::mcp::McpContext;
 use crate::gateway::mcp::PreRequestHook as McpPreRequestHook;
 use crate::gateway::pipeline::context::PipelineContext;

@@ -41,7 +41,7 @@ impl Terminal {
         command.args([
             std::ffi::OsStr::new("terminal"),
             home.path().as_os_str(),
-            std::ffi::OsStr::new(env!("CARGO_BIN_EXE_bro")),
+            std::ffi::OsStr::new(env!("CARGO_BIN_EXE_bitrouter")),
         ]);
         command.args([namespace]);
         command.args(args);
@@ -82,6 +82,7 @@ impl Terminal {
     }
 }
 
+#[cfg(feature = "mcp")]
 #[test]
 fn guided_add_and_eof_leave_canonical_terminal_and_json_output() -> Result<()> {
     let mut terminal = Terminal::start(&["add", "two"], false)?;
@@ -106,6 +107,7 @@ fn guided_add_and_eof_leave_canonical_terminal_and_json_output() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "mcp")]
 #[test]
 fn editor_receives_one_raw_entry_and_output_does_not_corrupt_json() -> Result<()> {
     let mut terminal = Terminal::start(&["edit", "one"], false)?;

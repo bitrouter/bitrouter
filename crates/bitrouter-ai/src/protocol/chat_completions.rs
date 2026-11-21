@@ -143,7 +143,7 @@ pub struct ChatJsonSchema {
 
 /// One element of [`ChatRequest`]'s `messages` array — a chat turn carrying
 /// role + optional content + optional tool calls / tool-call reply id.
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ChatMessage {
     pub role: String,
@@ -178,7 +178,7 @@ pub struct ChatMessage {
 }
 
 /// One assistant tool-call entry on a [`ChatMessage`].
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ChatToolCall {
     pub id: String,
@@ -197,7 +197,7 @@ pub struct ChatToolCall {
 }
 
 /// The `function` payload of a [`ChatToolCall`]: name + raw JSON argument string.
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ChatFunctionCall {
     #[serde(default)]
@@ -329,7 +329,7 @@ pub struct ChatOutputMessage {
 }
 
 /// Chat token counts; no canonical accounting conversion is performed.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ChatUsage {
     pub prompt_tokens: u64,
@@ -353,7 +353,7 @@ pub struct ChatUsage {
 }
 
 /// Optional detailed prompt token counts.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ChatPromptTokenDetails {
     #[serde(
@@ -374,7 +374,7 @@ pub struct ChatPromptTokenDetails {
 }
 
 /// Optional detailed completion token counts.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ChatCompletionTokenDetails {
     #[serde(

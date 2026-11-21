@@ -379,3 +379,26 @@ async fn actual_upsert_and_loaded_shrink_estimates_cover_sampled_file_growth() -
     removed?;
     Ok(())
 }
+
+#[tokio::test]
+async fn ledger_refuses_foreign_settlement_without_replacing_the_first_charge() -> Result<()> {
+    let (store, service) = owned_store().await?;
+    store.record_request(metric("single-charge")).await?;
+    let original = requests::Entity::find_by_id("single-charge")
+        .one(&store.db)
+        .await?
+        .context("charge")?;
+    let mut foreign = metric("single-charge");
+    foreign.user_id = "another-user".into();
+    foreign.api_key_id = "another-key".into();
+    foreign.estimated_charge_micro_usd = 1000;
+    ensure!(store.record_request(foreign).await.is_err());
+    ensure!(
+        requests::Entity::find_by_id("single-charge")
+            .one(&store.db)
+            .await?
+            == Some(original)
+    );
+    service.shutdown().await?;
+    Ok(())
+}

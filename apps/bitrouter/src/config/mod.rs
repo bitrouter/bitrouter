@@ -58,41 +58,6 @@ mod tests;
 use pattern::PatternMap;
 use resolution::RouterResolution;
 
-/// Retained native-model, onboarding-launch and headless prompt defaults.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
-#[serde(default)]
-pub struct ChatConfig {
-    /// Saved harness for an explicit onboarding native launch; bare `bro` starts the daemon.
-    pub agent: Option<String>,
-    /// Default daemon-routable model for native tasks and Threads.
-    pub model: Option<String>,
-    /// Prompt-expansion commands.
-    ///
-    /// `/name args` in a `bro run` or `bro acp prompt` input
-    /// sends `prompt` with `$ARGUMENTS` replaced by everything typed after the
-    /// name.
-    ///
-    /// There is deliberately no key that *runs* anything. A command here
-    /// produces a prompt and nothing else, which is what lets the registry be
-    /// open — user-authored, unreviewed — while the registry of commands that
-    /// reach BitRouter's own ports stays closed and guarded.
-    pub commands: Vec<PromptCommandConfig>,
-}
-
-/// One user-authored command that expands to a prompt.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
-pub struct PromptCommandConfig {
-    /// What to type after the slash. May not be a name BitRouter answers —
-    /// that is rejected when the config is loaded, not resolved at runtime.
-    pub name: String,
-    /// One line for `/commands`.
-    #[serde(default)]
-    pub description: String,
-    /// The prompt to send. `$ARGUMENTS` is replaced by whatever was typed
-    /// after the name; a template that uses it twice gets it twice.
-    pub prompt: String,
-}
-
 /// The top-level configuration.
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
@@ -108,13 +73,9 @@ pub struct Config {
     pub control: ControlConfig,
     /// Opt-in local resource-tenancy authority.
     pub tenancy: tenancy::TenancyConfig,
-    /// Opt-in privileged BRO coding task API, separate from inference and control.
-    pub agent_api: AgentApiConfig,
-    /// Typed decision backend for native context routing. Absent means the
-    /// conservative compiler runs without remote semantic judgments.
+    /// Decision backend for model-routing classification. If omitted, model
+    /// selection uses the available local classification.
     pub decision_model: Option<decision::DecisionModelConfig>,
-    /// The interactive session's own configuration.
-    pub chat: ChatConfig,
     /// Outbound / upstream HTTP settings (the client that calls providers).
     pub upstream: UpstreamConfig,
     /// Database connection settings.
@@ -125,8 +86,6 @@ pub struct Config {
     pub eval: EvalConfig,
     /// Durable trajectory progress-control and local operations settings.
     pub trajectory: TrajectoryConfig,
-    /// Opt-in local storage of observable ACP conversation content.
-    pub acp_recording: AcpRecordingConfig,
     /// Durable provider continuation mapping lifecycle.
     pub continuation: ContinuationConfig,
     /// Upstream providers, keyed by provider id.
@@ -177,15 +136,12 @@ impl Default for Config {
             server: ServerConfig::default(),
             control: ControlConfig::default(),
             tenancy: tenancy::TenancyConfig::default(),
-            agent_api: AgentApiConfig::default(),
             decision_model: None,
-            chat: ChatConfig::default(),
             upstream: UpstreamConfig::default(),
             database: DatabaseConfig::default(),
             gateway_state: gateway_state::GatewayStateConfig::default(),
             eval: EvalConfig::default(),
             trajectory: TrajectoryConfig::default(),
-            acp_recording: AcpRecordingConfig::default(),
             continuation: ContinuationConfig::default(),
             providers: HashMap::new(),
             models: HashMap::new(),
@@ -336,33 +292,6 @@ impl Default for ControlConfig {
     }
 }
 
-/// Privileged HTTP access to the BRO task service. The app validates a
-/// loopback listener, nonempty token environment variable, and workspace
-/// allowlist before binding; `server.skip_auth` never grants this authority.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
-#[serde(default, deny_unknown_fields)]
-pub struct AgentApiConfig {
-    /// Whether to bind the task HTTP listener.
-    pub enabled: bool,
-    /// Loopback host and port, distinct from inference and control.
-    pub listen: String,
-    /// Environment variable containing the dedicated task bearer token.
-    pub token_env: String,
-    /// Exact server-owned workspace paths admitted for task submission.
-    pub workspaces: Vec<std::path::PathBuf>,
-}
-
-impl Default for AgentApiConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            listen: "127.0.0.1:4359".into(),
-            token_env: String::new(),
-            workspaces: Vec::new(),
-        }
-    }
-}
-
 /// Largest accepted durable evaluation publication batch.
 pub const MAX_TRAJECTORY_OUTBOX_BATCH_SIZE: usize = 1_000;
 
@@ -386,15 +315,6 @@ impl Default for ContinuationConfig {
             prune_batch_size: 1_000,
         }
     }
-}
-
-/// Local ACP conversation content recording, independent of routing evidence.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(default)]
-pub struct AcpRecordingConfig {
-    /// Store observable session messages and tool results until explicitly deleted.
-    /// No content is recorded or sent to an evaluator by default.
-    pub enabled: bool,
 }
 
 /// Durable trajectory progress-control settings.
@@ -868,7 +788,7 @@ pub struct ServerConfig {
     ///
     /// `RUST_LOG` overrides this when set, following the Rust convention. The
     /// filter is resolved once at startup, so changing it needs a restart —
-    /// `bro reload` will not pick it up. Applies to `bro serve`
+    /// `bitrouter reload` will not pick it up. Applies to `bitrouter serve`
     /// (and therefore `start`); other subcommands install their subscriber
     /// before any config is read and honour `RUST_LOG` only.
     pub log_level: String,
@@ -1654,7 +1574,7 @@ where
 /// Replace every `${VAR}` occurrence with the value of environment variable
 /// `VAR`. An undefined variable is an error. Used by the config loader.
 /// Reads via [`env_lookup`] so daemon-side overrides (installed by the
-/// CLI's `bro reload`) take precedence over the live process env.
+/// CLI's `bitrouter reload`) take precedence over the live process env.
 pub fn substitute_env(input: &str) -> Result<String> {
     substitute_with(input, env_lookup)
 }
@@ -1998,7 +1918,7 @@ pub async fn load(path: impl AsRef<std::path::Path>) -> Result<Config> {
 /// of generic discovery, including when a provider is withheld or unsupported.
 ///
 /// The HTTP client is built with bounded `connect_timeout` + `timeout` so an
-/// unreachable provider can't stall a `bro reload` for the OS-level
+/// unreachable provider can't stall a `bitrouter reload` for the OS-level
 /// connect window (minutes). Discovery is best-effort; a 5s overall cap is
 /// well above any healthy `/models` round-trip and far below the default.
 pub async fn discover_models(config: &mut Config) {

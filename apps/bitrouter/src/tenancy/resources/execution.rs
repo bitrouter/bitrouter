@@ -1,7 +1,5 @@
 //! Immutable, selected-route execution views. Membership never caches grants.
 
-#[cfg(all(feature = "core", feature = "harness"))]
-mod block_cost;
 mod compact;
 mod native_v1;
 mod ordered;
@@ -69,7 +67,6 @@ pub(super) fn qualify_profiled_target(value: &Value) -> Result<()> {
 
 /// A validated retained revision. No mutable source or authority handles live here.
 pub(crate) struct RetainedExecutionRevision {
-    bro_capture: bool,
     installation: InstallationId,
     tenant: TenantId,
     revision: RevisionId,
@@ -80,7 +77,6 @@ pub(crate) struct RetainedExecutionRevision {
 
 /// The result of the single authenticated decode, consumed without rereading JSON.
 pub(super) struct ValidatedEnvelope {
-    pub(super) bro_capture: bool,
     document: Configuration,
 
     routes: HashMap<String, Arc<RouteData>>,
@@ -103,29 +99,6 @@ impl ValidatedEnvelope {
     pub(super) fn require_capabilities(&self) -> std::result::Result<(), ErrorCode> {
         for route in self.routes.values() {
             route.require_capabilities()?;
-        }
-        Ok(())
-    }
-
-    pub(super) fn require_bro_capture(&self) -> std::result::Result<(), ErrorCode> {
-        if !cfg!(all(feature = "core", feature = "harness")) {
-            return Err(ErrorCode::CapabilityMismatch);
-        }
-        for route in self.routes.values() {
-            route.require_capabilities_for(true)?;
-        }
-        Ok(())
-    }
-
-    /// Recovery owns retained current obligations; it never enables new dispatch.
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(super) fn require_obligation_capabilities(&self) -> Result<()> {
-        for route in self.routes.values() {
-            if let Some(policy) = &route.policy {
-                policy
-                    .require_capabilities()
-                    .map_err(|_| anyhow::anyhow!("invalid obligation policy source"))?;
-            }
         }
         Ok(())
     }
@@ -155,7 +128,7 @@ impl RetainedExecutionRevision {
                             classifier_digest.is_none_or(|digest| {
                                 definition.classifier_digest.as_deref() == Some(digest)
                             }) && source_digest.is_none_or(|digest| {
-                                crate::policy_lock::semantic_digest(policy.document())
+                                crate::policy_source::semantic_digest(policy.document())
                                     .is_ok_and(|actual| actual == digest)
                             })
                         })
@@ -196,7 +169,6 @@ impl RetainedExecutionRevision {
         validated: ValidatedEnvelope,
     ) -> std::result::Result<Self, ErrorCode> {
         let mut value = Self {
-            bro_capture: validated.bro_capture,
             installation,
             tenant,
             revision,
@@ -219,79 +191,6 @@ impl RetainedExecutionRevision {
     }
     pub(crate) fn document(&self) -> &Configuration {
         &self.document
-    }
-
-    /// Capture has one subject route; an explicitly selected judge is the only
-    /// additional exposed root accepted by this controller profile.
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(crate) fn capture_model(&self) -> std::result::Result<&ResourceRef, ErrorCode> {
-        if let [reference] = self.document.routes.as_slice() {
-            return Ok(reference);
-        }
-        let mut parents = self
-            .routes
-            .values()
-            .filter(|route| route.assessment.is_some());
-        let parent = parents.next().ok_or(ErrorCode::CapabilityMismatch)?;
-        if parents.next().is_some() || self.document.routes.len() != 2 {
-            return Err(ErrorCode::CapabilityMismatch);
-        }
-        Ok(&parent.reference)
-    }
-
-    /// Conservative bootstrap inspection of retained bytes, not selection or
-    /// dispatch. It returns only the exact static credential reference to audit.
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(in crate::tenancy) fn paid_recovery_credentials(
-        &self,
-        subject: &str,
-        evaluator: &ResourceRef,
-    ) -> std::result::Result<Vec<ResourceRef>, ErrorCode> {
-        self.paid_credentials(subject, evaluator)
-    }
-
-    #[cfg(all(feature = "core", feature = "harness"))]
-    fn paid_credentials(
-        &self,
-        subject: &str,
-        evaluator: &ResourceRef,
-    ) -> std::result::Result<Vec<ResourceRef>, ErrorCode> {
-        let parent = self
-            .routes
-            .get(subject)
-            .ok_or(ErrorCode::AuthorityUnavailable)?;
-        let child = self
-            .routes
-            .get(evaluator.resource_id.as_str())
-            .ok_or(ErrorCode::AuthorityUnavailable)?;
-        if parent.policy.is_some()
-            || parent.choice.is_some()
-            || parent.assessment.as_ref() != Some(evaluator)
-            || child.reference != *evaluator
-        {
-            return Err(ErrorCode::CapabilityMismatch);
-        }
-        child.static_assessment()?;
-        let mut references = Vec::new();
-        for candidate in parent.candidates.iter().chain(&child.candidates) {
-            if candidate
-                .target
-                .model_constraints
-                .input_token_counting
-                .is_some()
-                || candidate
-                    .target
-                    .headers
-                    .iter()
-                    .any(|header| header.passthrough())
-            {
-                return Err(ErrorCode::CapabilityMismatch);
-            }
-            if !references.contains(&candidate.credential) {
-                references.push(candidate.credential.clone());
-            }
-        }
-        Ok(references)
     }
 
     pub(crate) fn authority_revision(&self) -> AuthorityRevision {
@@ -321,7 +220,6 @@ impl RetainedExecutionRevision {
             return Err(ErrorCode::InvalidRequest);
         }
         Ok(RetainedRoute {
-            bro_capture: self.bro_capture,
             data: data.clone(),
             selection: RouteSelection::Wire(inbound.clone()),
             ordered: None,
@@ -344,7 +242,6 @@ impl RetainedExecutionRevision {
             return Err(ErrorCode::CapabilityMismatch);
         }
         Ok(RetainedRoute {
-            bro_capture: self.bro_capture,
             data: data.clone(),
             selection: RouteSelection::Native(operation),
             ordered: None,
@@ -423,7 +320,6 @@ impl RouteSelection {
 
 /// One request's selection-bound view of exactly one qualified route.
 pub(crate) struct RetainedRoute {
-    bro_capture: bool,
     data: Arc<RouteData>,
     selection: RouteSelection,
     ordered: Option<ordered::Selection>,
@@ -449,20 +345,7 @@ struct RouteData {
 
 struct RetainedChoice {
     route: Arc<RouteData>,
-    #[cfg(all(feature = "core", feature = "harness"))]
-    policy: crate::gateway::model::decision::policy::DecisionPolicy,
     digest: String,
-}
-
-/// Secret-free immutable provenance; executable selection remains private.
-#[cfg(all(feature = "core", feature = "harness"))]
-#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ChoiceProfile {
-    pub(crate) parent: ResourceRef,
-    pub(crate) child: ResourceRef,
-    pub(crate) policy: crate::gateway::model::decision::policy::DecisionPolicy,
-    pub(crate) digest: String,
 }
 
 impl RouteData {
@@ -489,15 +372,9 @@ impl RouteData {
         Ok(())
     }
     fn require_capabilities(&self) -> std::result::Result<(), ErrorCode> {
-        self.require_capabilities_for(false)
-    }
-
-    fn require_capabilities_for(&self, bro_capture: bool) -> std::result::Result<(), ErrorCode> {
         // These current, independent native profiles belong to the local BRO
         // owner. Compiling their types never grants the gateway their effects.
-        if (self.block.is_some() || self.choice.is_some() || self.assessment.is_some())
-            && (!bro_capture || !cfg!(all(feature = "core", feature = "harness")))
-        {
+        if self.block.is_some() || self.choice.is_some() || self.assessment.is_some() {
             return Err(ErrorCode::CapabilityMismatch);
         }
         // A retained routing artifact owns routing, never provider-global state.
@@ -573,7 +450,7 @@ pub(crate) struct RetainedPolicy {
 impl RetainedPolicy {
     fn require_capabilities(&self) -> std::result::Result<(), ErrorCode> {
         let config = self.configuration()?;
-        crate::policy_lock::validate_for_config(&config, self.document())
+        crate::policy_source::validate_for_config(&config, self.document())
             .map_err(|_| ErrorCode::CapabilityMismatch)
     }
 
@@ -626,208 +503,11 @@ impl RetainedRoute {
             .map(|chain| chain.sort)
             .ok_or(ErrorCode::Forbidden)
     }
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(crate) fn block_profile(&self) -> Option<&super::block::Profile> {
-        self.data.block.as_deref()
-    }
-
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(in crate::tenancy) fn stopped_recovery_profile(&self) -> bool {
-        fn supported(route: &RouteData) -> bool {
-            route.policy.is_none()
-                && route.block.is_none()
-                && route.assessment.is_none()
-                && !route.candidates.is_empty()
-                && route.candidates.iter().all(|candidate| {
-                    let target = &candidate.target;
-                    target.model_constraints.input_token_counting.is_none()
-                        && target.api_key_override.is_none()
-                        && target.api_base_override.is_none()
-                        && !target.headers.iter().any(|header| header.passthrough())
-                        && url::Url::parse(&target.api_base)
-                            .is_ok_and(|url| matches!(url.scheme(), "http" | "https"))
-                })
-                && route
-                    .choice
-                    .as_ref()
-                    .is_none_or(|choice| supported(&choice.route))
-        }
-        supported(&self.data)
-    }
-
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(crate) fn choice_profile(&self) -> Option<ChoiceProfile> {
-        self.data.choice.as_ref().map(|choice| ChoiceProfile {
-            parent: self.data.reference.clone(),
-            child: choice.route.reference.clone(),
-            policy: choice.policy.clone(),
-            digest: choice.digest.clone(),
-        })
-    }
-
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(in crate::tenancy) fn choice_route(&self) -> std::result::Result<Arc<Self>, ErrorCode> {
-        if !matches!(
-            self.selection,
-            RouteSelection::Native(ModelOperation::Generation)
-        ) {
-            return Err(ErrorCode::CapabilityMismatch);
-        }
-        let choice = self
-            .data
-            .choice
-            .as_ref()
-            .ok_or(ErrorCode::CapabilityMismatch)?;
-        // A hidden child cannot escape the root's cache accounting.
-        let revision = self
-            ._revision
-            .as_ref()
-            .ok_or(ErrorCode::AuthorityUnavailable)?;
-        Ok(Arc::new(Self {
-            bro_capture: self.bro_capture,
-            data: choice.route.clone(),
-            selection: RouteSelection::Native(ModelOperation::Decisions),
-            ordered: None,
-            generation_defaults: self.generation_defaults.clone(),
-            _revision: Some(revision.clone()),
-        }))
-    }
-
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(in crate::tenancy) fn configuration(
-        &self,
-    ) -> std::result::Result<&Configuration, ErrorCode> {
-        self._revision
-            .as_ref()
-            .map(|revision| revision.document())
-            .ok_or(ErrorCode::AuthorityUnavailable)
-    }
-
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(crate) fn assessment_reference(&self) -> Option<&ResourceRef> {
-        self.data.assessment.as_ref()
-    }
-
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(in crate::tenancy) fn block_receipt_target(
-        &self,
-        selector: &str,
-        target: &bitrouter_ai::tenancy::execution::Target,
-    ) -> bool {
-        let Some(revision) = &self._revision else {
-            return false;
-        };
-        self.data
-            .chains
-            .iter()
-            .filter(|chain| chain.selector == selector)
-            .flat_map(|chain| &chain.candidates)
-            .any(|index| {
-                self.data.candidates.get(*index).is_some_and(|candidate| {
-                    candidate.receipt_target(revision.installation_id(), self.reference(), target)
-                })
-            })
-    }
-
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(in crate::tenancy) fn block_token_pricing_input(
-        &self,
-        prompt: &bitrouter_ai::types::Prompt,
-    ) -> bool {
-        // Unknown/vendor extras or tool-bearing input cannot prove token-only cost.
-        prompt.tools.is_empty()
-            && prompt.system_provider_metadata.is_empty()
-            && prompt.messages.iter().all(|message| message.content.iter().all(|content| {
-                matches!(content, bitrouter_ai::types::Content::Text { provider_metadata, .. } if provider_metadata.is_empty())
-            }))
-            && prompt.params.extra.is_empty()
-            // Compilation always retains these canonical generation defaults.
-            // They affect token quantities, already measured in the receipt,
-            // and do not introduce a separate billable extension.
-            && self.data.overrides.params.keys().all(|key| {
-                matches!(key.as_str(), "max_output_tokens" | "temperature")
-            })
-    }
-
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(in crate::tenancy) fn block_token_cost(
-        &self,
-        selector: &str,
-        attempt: &bitrouter_ai::tenancy::execution::Attempt,
-    ) -> Option<u64> {
-        if !attempt.usage.complete
-            || attempt.usage.provenance != bitrouter_ai::tenancy::execution::Provenance::Provider
-        {
-            return None;
-        }
-        let target = attempt.target.as_ref()?;
-        let revision = self._revision.as_ref()?;
-        let known = bitrouter_ai::types::Usage {
-            prompt_tokens: attempt.usage.input_tokens?,
-            completion_tokens: attempt.usage.output_tokens?,
-            cache_read_tokens: attempt.usage.cache_read_tokens?,
-            cache_write_tokens: attempt.usage.cache_write_tokens?,
-            reasoning_tokens: attempt.usage.reasoning_tokens?,
-            web_search_count: 0,
-            origin: bitrouter_ai::types::UsageOrigin::AuthoritativeReceipt,
-            raw: None,
-        };
-        let mut price = None;
-        for index in self
-            .data
-            .chains
-            .iter()
-            .filter(|chain| chain.selector == selector)
-            .flat_map(|chain| &chain.candidates)
-        {
-            let candidate = self.data.candidates.get(*index)?;
-            if !candidate.receipt_target(revision.installation_id(), self.reference(), target) {
-                continue;
-            }
-            let pricing = self.data.block_pricing.get(*index)?.as_ref()?;
-            let cost = block_cost::known(pricing, &known)?;
-            // The public receipt omits protocol/endpoint. It is sufficient only
-            // when every exact credential-bound candidate has the same tariff result.
-            if price.as_ref().is_some_and(|old| old != &cost) {
-                return None;
-            }
-            price = Some(cost);
-        }
-        block_cost::receipt_cost(&price?)
-    }
-
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(in crate::tenancy) fn block_candidate(
-        &self,
-        selector: &str,
-        target: &RoutingTarget,
-    ) -> std::result::Result<(), ErrorCode> {
-        let projection = target::project(target).map_err(|_| ErrorCode::Forbidden)?;
-        if !self.selected_chains().any(|(name, indices)| {
-            name == selector
-                && indices
-                    .iter()
-                    .filter_map(|i| self.data.candidates.get(*i))
-                    .any(|candidate| candidate.projection == projection)
-        }) {
-            return Err(ErrorCode::Forbidden);
-        }
-        Ok(())
-    }
-
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(in crate::tenancy) fn block_chain(
-        &self,
-        selector: &str,
-        prefs: &RoutingPrefs,
-    ) -> GatewayResult<Vec<RoutingTarget>> {
-        self.chain(selector, prefs, false)
-    }
 
     /// Admission checks only the literal selected route, before acquiring a
     /// lease. Unused policy documents do not confer or require capabilities.
     pub(crate) fn require_capabilities(&self) -> std::result::Result<(), ErrorCode> {
-        self.data.require_capabilities_for(self.bro_capture)
+        self.data.require_capabilities()
     }
 
     /// Configuration defaults enter canonical fields before routing, accounting

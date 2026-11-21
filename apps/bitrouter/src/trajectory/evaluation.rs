@@ -49,7 +49,7 @@ pub(crate) fn validate_evaluation_envelope(envelope: &TrajectoryEvaluationEnvelo
     Ok(())
 }
 
-#[cfg(feature = "core")]
+#[cfg(feature = "eval-publication")]
 pub(crate) fn validate_builtin_trajectory_result(result: &EvaluationResult) -> Result<()> {
     use crate::trajectory::evaluation::{
         TRAJECTORY_EVALUATOR_AUTHORITY_ID, TRAJECTORY_EVALUATOR_ID, TRAJECTORY_EVALUATOR_VERSION,

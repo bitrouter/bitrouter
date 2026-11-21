@@ -1,107 +1,13 @@
-//! `bro update` — in-place self-updater built on cargo-dist's
-//! `axoupdater`. Decision logic (install-method detection, release channel,
-//! nudge-cache TTL) lives in small pure functions so it can be unit-tested
-//! without touching the network or replacing the running binary.
+//! Service release updates, package-manager delegation and passive checks.
 
 use crate::commands::invocation;
 use crate::output::reports::update::UpdateReport;
 use crate::{daemon, style};
 use anyhow::Result;
-use axoupdater::{AxoUpdater, UpdateRequest};
 use bitrouter_ai::artifact::{ArtifactIdentity, DistributionProfile};
+use bitrouter_update::{Product, channel, install::Installation};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-
-/// How the running `bro` binary was installed, used to pick the right
-/// upgrade path when there is no cargo-dist receipt to self-update from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum InstallMethod {
-    Homebrew,
-    Cargo,
-    Npm,
-    Unknown,
-}
-
-/// True when `exe` is the binary the cargo-dist npm wrapper unpacks and execs.
-/// The wrapper extracts the platform binary to `<pkg>/node_modules/.bin_real/`
-/// and spawns it directly, so a process launched via `npm`/`npx` reports that
-/// path from `current_exe()`. Matched on path components so it holds on both
-/// `/`- and `\`-separated platforms.
-fn is_npm_install(exe: &Path) -> bool {
-    fn normal(c: Option<std::path::Component<'_>>) -> Option<&str> {
-        match c {
-            Some(std::path::Component::Normal(s)) => s.to_str(),
-            _ => None,
-        }
-    }
-    // .../ node_modules / .bin_real / <binary>
-    let mut rev = exe.components().rev();
-    rev.next(); // the binary file itself
-    normal(rev.next()) == Some(".bin_real") && normal(rev.next()) == Some("node_modules")
-}
-
-/// Best-effort classification from the executable path and the resolved Cargo
-/// home. npm installs run from `.../node_modules/.bin_real/...`; Homebrew
-/// installs live under a `Cellar/bitrouter/...` path; `cargo install` places the
-/// binary in `<CARGO_HOME>/bin`.
-fn detect_install_method(exe: &Path, cargo_home: Option<&Path>) -> InstallMethod {
-    // npm is checked first, and deliberately before Homebrew: a global npm
-    // install under a Homebrew-managed Node lives beneath `/opt/homebrew/...`,
-    // so the `/homebrew/` substring below would otherwise misclassify it.
-    if is_npm_install(exe) {
-        return InstallMethod::Npm;
-    }
-    let exe_str = exe.to_string_lossy();
-    if exe_str.contains("/Cellar/bitrouter/") || exe_str.contains("/homebrew/") {
-        return InstallMethod::Homebrew;
-    }
-    if cargo_home.is_some_and(|home| exe.starts_with(home.join("bin"))) {
-        return InstallMethod::Cargo;
-    }
-    InstallMethod::Unknown
-}
-
-/// Only an unclassified executable may rely on a cargo-dist receipt. Receipts
-/// are global user state and can describe a different installation method.
-fn should_load_receipt(method: InstallMethod) -> bool {
-    method == InstallMethod::Unknown
-}
-
-/// Stable lowercase label for the JSON `install_method` field.
-fn method_label(method: InstallMethod) -> &'static str {
-    match method {
-        InstallMethod::Homebrew => "homebrew",
-        InstallMethod::Cargo => "cargo",
-        InstallMethod::Npm => "npm",
-        InstallMethod::Unknown => "unknown",
-    }
-}
-
-/// The exact command a user should run to upgrade a package-manager-managed
-/// install. Unknown installs get the generic re-run-the-installer hint.
-fn delegation_command(method: InstallMethod) -> String {
-    match method {
-        InstallMethod::Homebrew => "brew upgrade bitrouter".to_string(),
-        InstallMethod::Cargo => "cargo install bitrouter --force".to_string(),
-        // CI publishes prereleases to npm under the default `latest` tag; switch
-        // to `@next` here if a dedicated prerelease dist-tag is ever introduced.
-        InstallMethod::Npm => "npm i -g bitrouter@latest".to_string(),
-        InstallMethod::Unknown => {
-            "curl --proto '=https' --tlsv1.2 -LsSf \
-             https://github.com/bitrouter/bitrouter/releases/latest/download/bitrouter-installer.sh | sh"
-                .to_string()
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum UpdatePlan {
-    ReleaseInstaller,
-    Delegated {
-        command: String,
-        reason: Option<String>,
-    },
-}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CommandShell {
@@ -153,38 +59,12 @@ fn has_release_installer(artifact: &ArtifactIdentity) -> bool {
     artifact.profile == DistributionProfile::Full
 }
 
-/// Preserve the artifact builder's effective feature set verbatim. In
-/// particular, do not infer a profile from the installation path or normalize
-/// aliases/transitive features a second time here.
-fn plan_update(
-    method: InstallMethod,
-    artifact: &ArtifactIdentity,
-    spec: &VersionSpec,
-) -> UpdatePlan {
-    if !has_release_installer(artifact) {
-        let profile = artifact.profile.as_str();
-        let shell = CommandShell::native();
-        let shell_label = shell.label();
-        return UpdatePlan::Delegated {
-            command: source_install_command(artifact, spec, shell),
-            reason: Some(format!(
-                "No matching release installer/receipt is available for the {profile} profile. \
-                 Build from source with the exact installed features. Without --tag \
-                 (including --stable), Cargo's \
-                 registry version selection applies. Cargo installs into its configured bin \
-                 directory; select that binary if this installation lives elsewhere. \
-                 Run the printed command in {shell_label}."
-            )),
-        };
-    }
-    if should_load_receipt(method) {
-        UpdatePlan::ReleaseInstaller
-    } else {
-        UpdatePlan::Delegated {
-            command: delegation_command(method),
-            reason: None,
-        }
-    }
+fn source_reason(artifact: &ArtifactIdentity) -> String {
+    format!(
+        "No matching release installer/receipt is available for the {} profile. Build from source with the exact installed features. Without --tag, Cargo's registry version selection applies. Run the printed command in {}.",
+        artifact.profile.as_str(),
+        CommandShell::native().label()
+    )
 }
 
 /// A source update must explicitly disable defaults even for an empty feature
@@ -195,7 +75,8 @@ fn source_install_command(
     spec: &VersionSpec,
     shell: CommandShell,
 ) -> String {
-    let mut command = "cargo install bitrouter --force --no-default-features".to_string();
+    let mut command =
+        "cargo install bitrouter --bin bitrouter --force --no-default-features".to_string();
     if !artifact.features.is_empty() {
         command.push_str(" --features ");
         command.push_str(&shell.quote(&artifact.features.join(",")));
@@ -224,9 +105,6 @@ fn source_install_command(
     }
 }
 
-/// Resolved release target, decoupled from axoupdater's own request type so the
-/// decision is unit-testable. Converted to an `axoupdater::UpdateRequest` by
-/// `to_request`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum VersionSpec {
     /// Newest stable (non-prerelease) release.
@@ -247,39 +125,30 @@ fn choose_spec(tag: Option<&str>, stable: bool) -> VersionSpec {
     }
 }
 
-/// Options parsed from the `bro update` flags.
+fn same_capabilities(candidate: &ArtifactIdentity, resident: &ArtifactIdentity) -> bool {
+    candidate.profile == resident.profile
+        && candidate.features == resident.features
+        && candidate.target == resident.target
+}
+
+/// Options parsed from the `bitrouter update` flags.
 #[derive(Debug)]
 pub struct UpdateOptions {
     pub check: bool,
     pub tag: Option<String>,
     pub stable: bool,
-    pub restart: bool,
     pub yes: bool,
 }
 
-/// The result of `run`: the report to emit through the [`Output`] driver, plus
-/// whether the dispatch layer should ask the newly installed binary to run a
-/// safe handoff before emitting.
-///
-/// [`Output`]: crate::output::Output
-#[derive(Debug)]
-pub struct RunOutcome {
-    /// The single result value for `bro update`, rendered to stdout.
-    pub report: UpdateReport,
-    /// A running daemon needs a safe handoff to pick up the new binary.
-    pub restart_needed: bool,
-}
-
-impl RunOutcome {
+impl UpdateReport {
     /// Record replacement identity after the installer has completed.
-    /// Failed verification preserves the installation result but prevents an
-    /// automatic handoff, including for legacy targets without `build-info`.
+    /// A verification failure is reported with the completed installation result.
     pub fn record_target_verification(
         &mut self,
         result: std::result::Result<ArtifactIdentity, String>,
     ) {
         let verified = result.and_then(|target| {
-            match self.report.target_version.as_deref() {
+            match self.target_version.as_deref() {
                 Some(expected) if target.version == expected => {}
                 Some(expected) => {
                     return Err(format!(
@@ -289,199 +158,96 @@ impl RunOutcome {
                 }
                 None => return Err("the installer target version is unknown".to_string()),
             }
-            let Some(current) = self.report.current_artifact.as_ref() else {
+            let Some(current) = self.current_artifact.as_ref() else {
                 return Err("the invoking artifact identity is unknown".to_string());
             };
-            if !crate::upgrade::same_capabilities(current, &target) {
+            if !same_capabilities(current, &target) {
                 return Err(
                     "installed artifact capabilities (profile, features or target) do not match the invoking executable"
                         .to_string(),
                 );
             }
+            if self.target_artifact.as_ref().is_some_and(|staged| staged != &target) {
+                return Err("installed executable differs from the verified staged artifact".to_string());
+            }
             Ok(target)
         });
         match verified {
             Ok(target) => {
-                self.report.target_artifact = Some(target);
-                self.report.target_verification_error = None;
+                self.target_artifact = Some(target);
+                self.target_verification_error = None;
             }
             Err(error) => {
-                self.report.target_artifact = None;
-                if self.restart_needed {
-                    self.report.daemon = Some("deferred");
-                    self.report.daemon_reason = Some(format!(
-                        "the running daemon was not handed off because the installed artifact could not be verified: {error}"
-                    ));
-                }
-                self.report.target_verification_error = Some(error);
-                self.restart_needed = false;
+                self.target_artifact = None;
+                self.target_verification_error = Some(error);
             }
         }
     }
-
-    /// A terminal outcome that needs no daemon restart.
-    fn done(report: UpdateReport) -> Self {
-        Self {
-            report,
-            restart_needed: false,
-        }
-    }
 }
 
-/// Resolve `$CARGO_HOME`, falling back to `~/.cargo`, for install detection.
-fn cargo_home() -> Option<std::path::PathBuf> {
-    if let Some(h) = std::env::var_os("CARGO_HOME") {
-        return Some(std::path::PathBuf::from(h));
-    }
-    std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".cargo"))
-}
-
-/// Translate our channel decision into axoupdater's request type.
-fn to_request(spec: VersionSpec) -> UpdateRequest {
-    match spec {
-        VersionSpec::Latest => UpdateRequest::Latest,
-        VersionSpec::LatestPrerelease => UpdateRequest::LatestMaybePrerelease,
-        VersionSpec::Tag(t) => UpdateRequest::SpecificTag(t),
-    }
-}
-
-/// The receipt helper checks only the installation prefix. Require the
-/// canonical executable basename too, so a renamed copy beside `bro` cannot
-/// update the separate official binary. Callers resolve symlinks first.
-/// https://github.com/axodotdev/axoupdater/blob/v0.10.0/axoupdater/src/receipt.rs#L97-L136
-fn has_official_executable_name(canonical_exe: &Path) -> bool {
-    let expected = if cfg!(windows) { "bro.exe" } else { "bro" };
-    canonical_exe
-        .file_name()
-        .is_some_and(|name| name == expected)
-}
-
-/// Configure an axoupdater for the `bitrouter` app. Used only for an unknown
-/// install method: package-manager installs must delegate even if an unrelated
-/// cargo-dist receipt exists on the machine.
-fn build_updater(spec: VersionSpec) -> std::result::Result<AxoUpdater, &'static str> {
-    let exe = std::env::current_exe()
-        .and_then(|path| path.canonicalize())
-        .map_err(
-            |_| "The canonical executable path could not be verified; self-update was refused.",
-        )?;
-    if !has_official_executable_name(&exe) {
-        return Err(
-            "The canonical executable is not the official bro binary; self-update of a renamed copy was refused.",
-        );
-    }
-    let mut updater = AxoUpdater::new_for("bitrouter");
-    if let Err(e) = updater.load_receipt() {
-        tracing::debug!(error = %e, "no install receipt; delegating to package manager");
-        return Err("No usable cargo-dist install receipt is available for this installation.");
-    }
-    configure_owned_updater(&mut updater, spec)?;
-    Ok(updater)
-}
-
-/// Check ownership before enabling forced updates or making any network call.
-/// axoupdater 0.10.0 returns early from is_update_needed when always_update is
-/// true, bypassing its usual ownership check:
-/// https://github.com/axodotdev/axoupdater/blob/v0.10.0/axoupdater/src/lib.rs#L332-L339
-/// Use the real receipt helper (including legacy prefix normalization):
-/// https://github.com/axodotdev/axoupdater/blob/v0.10.0/axoupdater/src/receipt.rs#L97-L136
-fn configure_owned_updater(
-    updater: &mut AxoUpdater,
-    spec: VersionSpec,
-) -> std::result::Result<(), &'static str> {
-    match updater.check_receipt_is_for_this_executable() {
-        Ok(true) => {}
-        Ok(false) => {
-            return Err(
-                "The cargo-dist receipt belongs to a different executable installation; self-update was refused.",
-            );
-        }
-        Err(e) => {
-            tracing::debug!(error = %e, "could not verify install receipt ownership");
-            return Err(
-                "Ownership of this executable could not be verified from the cargo-dist receipt; self-update was refused.",
-            );
-        }
-    }
-    updater.always_update(matches!(spec, VersionSpec::Tag(_)));
-    updater.configure_version_specifier(to_request(spec));
-    Ok(())
-}
-
-pub async fn run(opts: UpdateOptions, socket: &Path) -> Result<RunOutcome> {
+/// Replace the service executable and report whether the daemon needs a restart.
+///
+/// # Errors
+/// Refuses a mismatched installation receipt, release plan or staged executable.
+pub async fn run(opts: UpdateOptions, socket: &Path) -> Result<UpdateReport> {
     let artifact = crate::artifact::current();
     let current = artifact.version.clone();
-    let spec = choose_spec(opts.tag.as_deref(), opts.stable);
-
-    // 1. The running binary's path is authoritative. A global cargo-dist
-    // receipt can outlive an older Cargo install while this invocation runs a
-    // Homebrew or npm binary, so never let that receipt override a known
-    // package-manager install.
-    let exe = std::env::current_exe()?;
-    let method = detect_install_method(&exe, cargo_home().as_deref());
-    if let UpdatePlan::Delegated { command, reason } = plan_update(method, &artifact, &spec) {
-        let mut report = UpdateReport::delegated(current, method_label(method), command);
-        report.manual_reason = reason;
-        return Ok(RunOutcome::done(report.with_current_artifact(artifact)));
+    let exe = std::env::current_exe()?.canonicalize()?;
+    let method = bitrouter_update::install_method(&exe, bitrouter_update::cargo_home().as_deref());
+    if !has_release_installer(&artifact) {
+        let spec = choose_spec(opts.tag.as_deref(), opts.stable);
+        let command = source_install_command(&artifact, &spec, CommandShell::native());
+        let mut report = UpdateReport::delegated(current, method, command);
+        report.manual_reason = Some(source_reason(&artifact));
+        return Ok(report.with_current_artifact(artifact));
     }
-
-    let target_label = match &spec {
-        VersionSpec::Tag(t) => format!("version {t}"),
-        _ => "the latest release".to_string(),
+    let install = match method {
+        "homebrew" | "npm" => None,
+        _ => Installation::load(Product::Service, &exe, &current)?,
     };
-
-    // 2. Only a full-profile unknown install with verified receipt ownership
-    // can use the release installer, including when --tag forces an update.
-    let mut updater = match build_updater(spec) {
-        Ok(updater) => updater,
-        Err(reason) => {
-            let mut report = UpdateReport::delegated(
-                current,
-                method_label(InstallMethod::Unknown),
-                delegation_command(InstallMethod::Unknown),
-            );
-            report.manual_reason = Some(reason.to_string());
-            return Ok(RunOutcome::done(report.with_current_artifact(artifact)));
-        }
+    let Some(install) = install else {
+        let command = bitrouter_update::manual_command(Product::Service, method);
+        let mut report = UpdateReport::delegated(current, method, command);
+        report.manual_reason =
+            Some("This executable has no matching self-managed installation.".into());
+        return Ok(report.with_current_artifact(artifact));
     };
-
-    // 3. Dry run.
+    let release = channel::resolve(
+        Product::Service,
+        &artifact.target,
+        opts.tag.as_deref(),
+        opts.stable,
+    )
+    .await?;
+    let available = opts.tag.is_some() || release.version.cmp_precedence(&current.parse()?).is_gt();
+    let new_version = release.version.to_string();
     if opts.check {
-        let available = updater.is_update_needed().await?;
-        let target = if available {
-            updater.query_new_version().await?.map(|v| v.to_string())
-        } else {
-            None
-        };
-        return Ok(RunOutcome::done(
-            UpdateReport::checked(current, available, target).with_current_artifact(artifact),
-        ));
+        return Ok(
+            UpdateReport::checked(current, available, available.then_some(new_version))
+                .with_current_artifact(artifact),
+        );
     }
-
-    // 4. Confirm + swap. The prompt is interactive UI, not the command result,
-    // so it goes to stderr — stdout carries only the final report.
-    if !opts.yes && !confirm(&current, &target_label)? {
-        return Ok(RunOutcome::done(
-            UpdateReport::aborted(current).with_current_artifact(artifact),
-        ));
+    if !available {
+        install.finish_interrupted()?;
+        return Ok(UpdateReport::unchanged(current).with_current_artifact(artifact));
     }
-    let Some(result) = updater.run().await? else {
-        return Ok(RunOutcome::done(
-            UpdateReport::unchanged(current).with_current_artifact(artifact),
-        ));
-    };
-    let new_version = result.new_version.to_string();
+    if !opts.yes && !confirm(&current, &new_version)? {
+        return Ok(UpdateReport::aborted(current).with_current_artifact(artifact));
+    }
+    let candidate = release.stage().await?;
+    let identity: ArtifactIdentity = serde_json::from_value(candidate.identity.clone())?;
+    anyhow::ensure!(
+        same_capabilities(&artifact, &identity),
+        "staged service capabilities mismatch"
+    );
+    install.apply(candidate)?;
 
-    // 5. The old process cannot safely preflight migrations compiled into the
-    // newly installed binary. The dispatch layer invokes that binary to
-    // attempt the handoff and sets the final daemon outcome before emitting.
     let daemon_running = daemon::endpoint_in_use(socket);
-    let _legacy_restart_flag = opts.restart;
-    let daemon = daemon_running.then_some("handoff_pending");
-    Ok(RunOutcome {
-        report: UpdateReport::updated(current, new_version, daemon).with_current_artifact(artifact),
-        restart_needed: daemon_running,
-    })
+    let daemon = daemon_running.then_some("restart_needed");
+    let mut report =
+        UpdateReport::updated(current, new_version, daemon).with_current_artifact(artifact);
+    report.target_artifact = Some(identity);
+    Ok(report)
 }
 
 /// Interactive y/N confirmation. Defaults to no on empty input or non-tty EOF.
@@ -559,7 +325,7 @@ const NUDGE_DISABLE_ENV: &str = "BITROUTER_NO_UPDATE_CHECK";
 /// Nudge network check cadence: once per day.
 const NUDGE_TTL_SECS: i64 = 24 * 60 * 60;
 
-/// Best-effort "update available" line for `bro status`. Never returns an
+/// Best-effort "update available" line for `bitrouter status`. Never returns an
 /// error and never blocks meaningfully: it respects the opt-out env var, checks
 /// the network at most once per `NUDGE_TTL_SECS` (cached under `home`), and
 /// swallows every failure.
@@ -607,7 +373,7 @@ pub async fn maybe_nudge(home: &Path, p: &style::Palette) {
 
     if let Some(latest) = latest.filter(|l| is_newer(l, &artifact.version)) {
         // Diagnostic, not the command result — goes to stderr so it never
-        // pollutes a command's JSON stdout (e.g. `bro status`).
+        // pollutes a command's JSON stdout (e.g. `bitrouter status`).
         eprintln!();
         eprintln!(
             "  {dim}↑ {latest} available — run `{cli} update`{reset}",
@@ -625,19 +391,19 @@ async fn query_latest(artifact: &ArtifactIdentity) -> Option<String> {
         return None;
     }
     let exe = std::env::current_exe().ok()?;
-    if !should_load_receipt(detect_install_method(&exe, cargo_home().as_deref())) {
+    let method = bitrouter_update::install_method(&exe, bitrouter_update::cargo_home().as_deref());
+    if matches!(method, "npm" | "homebrew") {
         return None;
     }
-    let mut updater = build_updater(VersionSpec::LatestPrerelease).ok()?;
+    Installation::load(Product::Service, &exe, &artifact.version).ok()??;
     tokio::time::timeout(
         std::time::Duration::from_secs(3),
-        updater.query_new_version(),
+        channel::resolve(Product::Service, &artifact.target, None, false),
     )
     .await
+    .ok()?
     .ok()
-    .and_then(|r| r.ok())
-    .flatten()
-    .map(|v| v.to_string())
+    .map(|release| release.version.to_string())
 }
 
 /// True when `candidate` is a strictly greater semver than `current`. Parse
@@ -656,7 +422,6 @@ fn is_newer(candidate: &str, current: &str) -> bool {
 mod tests {
     use super::*;
     use crate::output::CliReport;
-    use std::path::Path;
 
     fn artifact(profile: DistributionProfile, features: &[&str]) -> ArtifactIdentity {
         ArtifactIdentity {
@@ -691,20 +456,17 @@ mod tests {
         current: &ArtifactIdentity,
         target_version: &str,
         daemon_running: bool,
-    ) -> RunOutcome {
-        RunOutcome {
-            report: UpdateReport::updated(
-                current.version.clone(),
-                target_version.to_string(),
-                daemon_running.then_some("handoff_pending"),
-            )
-            .with_current_artifact(current.clone()),
-            restart_needed: daemon_running,
-        }
+    ) -> UpdateReport {
+        UpdateReport::updated(
+            current.version.clone(),
+            target_version.to_string(),
+            daemon_running.then_some("restart_needed"),
+        )
+        .with_current_artifact(current.clone())
     }
 
     #[test]
-    fn verified_replacement_preserves_pending_handoff_and_distinct_identities() {
+    fn verified_replacement_reports_restart_and_distinct_identities() {
         let current = full_artifact();
         let mut target = current.clone();
         target.version = "1.0.0-alpha.20".into();
@@ -712,22 +474,17 @@ mod tests {
         for daemon_running in [false, true] {
             let mut outcome = completed_update(&current, &target.version, daemon_running);
             outcome.record_target_verification(Ok(target.clone()));
-            assert_eq!(outcome.report.status, "updated");
-            assert_eq!(outcome.report.current_artifact.as_ref(), Some(&current));
-            assert_eq!(outcome.report.target_artifact.as_ref(), Some(&target));
-            assert!(outcome.report.target_verification_error.is_none());
-            assert_eq!(outcome.restart_needed, daemon_running);
-            assert_eq!(
-                outcome.report.daemon,
-                daemon_running.then_some("handoff_pending")
-            );
-            assert!(outcome.report.daemon_reason.is_none());
-            assert_eq!(outcome.report.exit_code(), 0);
+            assert_eq!(outcome.status, "updated");
+            assert_eq!(outcome.current_artifact.as_ref(), Some(&current));
+            assert_eq!(outcome.target_artifact.as_ref(), Some(&target));
+            assert!(outcome.target_verification_error.is_none());
+            assert_eq!(outcome.daemon, daemon_running.then_some("restart_needed"));
+            assert_eq!(outcome.exit_code(), 0);
         }
     }
 
     #[test]
-    fn unverified_rollback_retains_installation_and_only_defers_an_existing_daemon() {
+    fn unverified_target_reports_the_installation_and_restart_requirement() {
         let current = full_artifact();
         for error in [
             "legacy release does not support build-info",
@@ -737,39 +494,19 @@ mod tests {
             for daemon_running in [false, true] {
                 let mut outcome = completed_update(&current, "1.0.0-alpha.18", daemon_running);
                 outcome.record_target_verification(Err(error.to_string()));
-                assert_eq!(outcome.report.status, "updated");
-                assert_eq!(
-                    outcome.report.target_version.as_deref(),
-                    Some("1.0.0-alpha.18")
-                );
-                assert_eq!(outcome.report.current_artifact.as_ref(), Some(&current));
-                assert!(outcome.report.target_artifact.is_none());
-                assert_eq!(
-                    outcome.report.target_verification_error.as_deref(),
-                    Some(error)
-                );
-                assert!(!outcome.restart_needed);
-                assert_eq!(outcome.report.daemon, daemon_running.then_some("deferred"));
-                if daemon_running {
-                    assert!(
-                        outcome
-                            .report
-                            .daemon_reason
-                            .as_deref()
-                            .is_some_and(|reason| {
-                                reason.contains("not handed off") && reason.contains(error)
-                            })
-                    );
-                } else {
-                    assert!(outcome.report.daemon_reason.is_none());
-                }
-                assert_eq!(outcome.report.exit_code(), i32::from(daemon_running));
+                assert_eq!(outcome.status, "updated");
+                assert_eq!(outcome.target_version.as_deref(), Some("1.0.0-alpha.18"));
+                assert_eq!(outcome.current_artifact.as_ref(), Some(&current));
+                assert!(outcome.target_artifact.is_none());
+                assert_eq!(outcome.target_verification_error.as_deref(), Some(error));
+                assert_eq!(outcome.daemon, daemon_running.then_some("restart_needed"));
+                assert_eq!(outcome.exit_code(), 1);
             }
         }
     }
 
     #[test]
-    fn mismatched_replacement_defers_resident_without_claiming_verified_identity() {
+    fn mismatched_replacement_does_not_claim_verified_identity() {
         let current = full_artifact();
         let mut target = current.clone();
         target.version = "1.0.0-alpha.20".into();
@@ -789,149 +526,31 @@ mod tests {
         ] {
             let mut outcome = completed_update(&current, &target.version, true);
             outcome.record_target_verification(Ok(candidate));
-            assert_eq!(outcome.report.status, "updated");
-            assert_eq!(
-                outcome.report.target_version.as_ref(),
-                Some(&target.version)
-            );
-            assert_eq!(outcome.report.current_artifact.as_ref(), Some(&current));
-            assert!(outcome.report.target_artifact.is_none());
+            assert_eq!(outcome.status, "updated");
+            assert_eq!(outcome.target_version.as_ref(), Some(&target.version));
+            assert_eq!(outcome.current_artifact.as_ref(), Some(&current));
+            assert!(outcome.target_artifact.is_none());
             assert!(
                 outcome
-                    .report
                     .target_verification_error
                     .as_deref()
                     .is_some_and(|error| error.contains(expected_error))
             );
-            assert!(!outcome.restart_needed);
-            assert_eq!(outcome.report.daemon, Some("deferred"));
-            assert!(
-                outcome
-                    .report
-                    .daemon_reason
-                    .as_deref()
-                    .is_some_and(|reason| reason.contains("not handed off"))
-            );
-            assert_eq!(outcome.report.exit_code(), 1);
+            assert_eq!(outcome.daemon, Some("restart_needed"));
+            assert_eq!(outcome.exit_code(), 1);
         }
     }
 
     #[test]
-    fn full_profile_preserves_install_method_policy() {
-        let full = full_artifact();
-        for spec in [
-            VersionSpec::Latest,
-            VersionSpec::LatestPrerelease,
-            VersionSpec::Tag("1.0.0-alpha.18".into()),
-        ] {
-            for method in [
-                InstallMethod::Homebrew,
-                InstallMethod::Cargo,
-                InstallMethod::Npm,
-            ] {
-                assert_eq!(
-                    plan_update(method, &full, &spec),
-                    UpdatePlan::Delegated {
-                        command: delegation_command(method),
-                        reason: None,
-                    }
-                );
-            }
-            assert_eq!(
-                plan_update(InstallMethod::Unknown, &full, &spec),
-                UpdatePlan::ReleaseInstaller
-            );
-        }
-    }
-
-    #[test]
-    fn reduced_profiles_delegate_for_every_install_method_and_channel() -> Result<()> {
-        for (identity, features) in [
-            (artifact(DistributionProfile::Gateway, &[]), vec![]),
-            (
-                artifact(
-                    DistributionProfile::GatewayShared,
-                    &["db-postgres", "multi-instance"],
-                ),
-                vec!["db-postgres", "multi-instance"],
-            ),
-            (
-                artifact(DistributionProfile::Custom, &["core"]),
-                vec!["core"],
-            ),
-            (
-                artifact(
-                    DistributionProfile::Custom,
-                    &["core", "harness", "mcp", "otel-http", "tui"],
-                ),
-                vec!["core", "harness", "mcp", "otel-http", "tui"],
-            ),
-        ] {
-            for method in [
-                InstallMethod::Homebrew,
-                InstallMethod::Cargo,
-                InstallMethod::Npm,
-                InstallMethod::Unknown,
-            ] {
-                for spec in [
-                    VersionSpec::Latest,
-                    VersionSpec::LatestPrerelease,
-                    VersionSpec::Tag("v1.0.0-alpha.18".into()),
-                ] {
-                    let UpdatePlan::Delegated { command, reason } =
-                        plan_update(method, &identity, &spec)
-                    else {
-                        anyhow::bail!("a reduced profile selected the full release installer");
-                    };
-                    assert!(
-                        reason
-                            .as_deref()
-                            .is_some_and(|r| r.contains(identity.profile.as_str()))
-                    );
-                    assert!(
-                        reason
-                            .as_deref()
-                            .is_some_and(|r| r.contains(CommandShell::native().label()))
-                    );
-                    let mut expected = vec![
-                        "cargo",
-                        "install",
-                        "bitrouter",
-                        "--force",
-                        "--no-default-features",
-                    ]
-                    .into_iter()
-                    .map(str::to_string)
-                    .collect::<Vec<_>>();
-                    if !features.is_empty() {
-                        expected.extend(["--features".to_string(), features.join(",")]);
-                    }
-                    if matches!(spec, VersionSpec::Tag(_)) {
-                        expected.extend(["--version".to_string(), "=1.0.0-alpha.18".to_string()]);
-                    }
-                    if cfg!(windows) {
-                        let mut expected_command =
-                            "cargo install bitrouter --force --no-default-features".to_string();
-                        if !features.is_empty() {
-                            expected_command
-                                .push_str(&format!(" --features '{}'", features.join(",")));
-                        }
-                        if matches!(spec, VersionSpec::Tag(_)) {
-                            expected_command.push_str(" --version '=1.0.0-alpha.18'");
-                        }
-                        assert_eq!(
-                            command,
-                            format!(
-                                "& {{ $PSNativeCommandArgumentPassing = 'Standard'; {expected_command} }}"
-                            )
-                        );
-                    } else {
-                        assert_eq!(shell_words::split(&command)?, expected);
-                    }
-                }
-            }
-        }
-        Ok(())
+    fn installed_revision_mismatch_fails_verification() {
+        let current = full_artifact();
+        let mut outcome = completed_update(&current, &current.version, true);
+        outcome.target_artifact = Some(current.clone());
+        let mut different = current;
+        different.source_revision = Some("concurrent-release".into());
+        outcome.record_target_verification(Ok(different));
+        assert_eq!(outcome.daemon, Some("restart_needed"));
+        assert!(outcome.target_artifact.is_none());
     }
 
     #[test]
@@ -949,6 +568,8 @@ mod tests {
                 vec![
                     "cargo".to_string(),
                     "install".to_string(),
+                    "bitrouter".to_string(),
+                    "--bin".to_string(),
                     "bitrouter".to_string(),
                     "--force".to_string(),
                     "--no-default-features".to_string(),
@@ -969,7 +590,7 @@ mod tests {
         let gateway = artifact(DistributionProfile::Gateway, &[]);
         assert_eq!(
             source_install_command(&gateway, &VersionSpec::Latest, CommandShell::PowerShell),
-            "& { $PSNativeCommandArgumentPassing = 'Standard'; cargo install bitrouter --force --no-default-features }"
+            "& { $PSNativeCommandArgumentPassing = 'Standard'; cargo install bitrouter --bin bitrouter --force --no-default-features }"
         );
         let custom = artifact(DistributionProfile::Custom, &["core", "mcp"]);
         assert_eq!(
@@ -978,7 +599,7 @@ mod tests {
                 &VersionSpec::Tag("v1.0.0-alpha.18".into()),
                 CommandShell::PowerShell,
             ),
-            "& { $PSNativeCommandArgumentPassing = 'Standard'; cargo install bitrouter --force --no-default-features --features 'core,mcp' --version '=1.0.0-alpha.18' }"
+            "& { $PSNativeCommandArgumentPassing = 'Standard'; cargo install bitrouter --bin bitrouter --force --no-default-features --features 'core,mcp' --version '=1.0.0-alpha.18' }"
         );
     }
 
@@ -1004,146 +625,10 @@ mod tests {
                     CommandShell::PowerShell,
                 ),
                 format!(
-                    "& {{ $PSNativeCommandArgumentPassing = 'Standard'; cargo install bitrouter --force --no-default-features --git https://github.com/bitrouter/bitrouter {quoted_argument} }}"
+                    "& {{ $PSNativeCommandArgumentPassing = 'Standard'; cargo install bitrouter --bin bitrouter --force --no-default-features --git https://github.com/bitrouter/bitrouter {quoted_argument} }}"
                 )
             );
         }
-    }
-
-    #[test]
-    fn official_basename_is_required_even_in_the_same_install_prefix() {
-        let prefix = Path::new("/install/bin");
-        let official = if cfg!(windows) { "bro.exe" } else { "bro" };
-        assert!(has_official_executable_name(&prefix.join(official)));
-        for renamed in [
-            "bro-renamed",
-            "bro-renamed.exe",
-            "bro.exe.old",
-            "bro-backup",
-            "bitrouter",
-            "bitrouter.exe",
-            "another-tool",
-        ] {
-            assert!(!has_official_executable_name(&prefix.join(renamed)));
-        }
-        let other_platform = if cfg!(windows) { "bro" } else { "bro.exe" };
-        assert!(!has_official_executable_name(&prefix.join(other_platform)));
-        assert!(!has_official_executable_name(Path::new("")));
-        assert!(!has_official_executable_name(Path::new("/")));
-    }
-
-    #[test]
-    fn missing_receipt_ownership_refuses_forced_tag() {
-        let mut updater = AxoUpdater::new_for("bitrouter");
-        assert!(
-            configure_owned_updater(&mut updater, VersionSpec::Tag("1.0.0-alpha.18".into()))
-                .is_err()
-        );
-    }
-
-    #[tokio::test]
-    async fn wrong_receipt_refuses_forced_tag_before_enabling_always_update() -> Result<()> {
-        let other_install = tempfile::tempdir()?;
-        let prefix = other_install
-            .path()
-            .to_str()
-            .ok_or_else(|| anyhow::anyhow!("non-UTF-8 test path"))?;
-        for spec in [
-            VersionSpec::LatestPrerelease,
-            VersionSpec::Tag("1.0.0-alpha.18".into()),
-        ] {
-            let mut updater = AxoUpdater::new_for("bitrouter");
-            // Exercise axoupdater's actual receipt helper without global env
-            // changes, network calls, or invoking an installer.
-            updater.set_install_dir(prefix);
-            assert!(!updater.check_receipt_is_for_this_executable()?);
-            assert!(configure_owned_updater(&mut updater, spec).is_err());
-            // With no release source configured, this can only succeed by
-            // refusing the foreign receipt before any network request. It
-            // would be true if our --tag path had enabled always_update.
-            assert!(!updater.is_update_needed().await?);
-        }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn owned_receipt_can_force_a_tag_without_querying_a_release() -> Result<()> {
-        let exe = std::env::current_exe()?.canonicalize()?;
-        let prefix = exe
-            .parent()
-            .and_then(Path::to_str)
-            .ok_or_else(|| anyhow::anyhow!("test executable has no UTF-8 parent"))?;
-        let mut updater = AxoUpdater::new_for("bitrouter");
-        updater.set_install_dir(prefix);
-        assert!(updater.check_receipt_is_for_this_executable()?);
-        configure_owned_updater(&mut updater, VersionSpec::Tag("1.0.0-alpha.18".into()))
-            .map_err(anyhow::Error::msg)?;
-        // Forced-tag eligibility returns immediately; no source or installer
-        // is configured and no update is performed.
-        assert!(updater.is_update_needed().await?);
-        Ok(())
-    }
-
-    #[test]
-    fn detects_homebrew_from_cellar_path() {
-        let exe = Path::new("/opt/homebrew/Cellar/bitrouter/1.0.0/bin/bro");
-        assert_eq!(detect_install_method(exe, None), InstallMethod::Homebrew);
-    }
-
-    #[test]
-    fn managed_homebrew_binary_does_not_load_a_global_receipt() {
-        // A cargo-dist receipt is global to the user, not to an executable.
-        // `run` must therefore delegate based on this path before it attempts
-        // to load any receipt.
-        let exe = Path::new("/opt/homebrew/Cellar/bitrouter/1.0.0/bin/bro");
-        assert!(!should_load_receipt(detect_install_method(exe, None)));
-    }
-
-    #[test]
-    fn detects_cargo_from_cargo_home_bin() {
-        let exe = Path::new("/home/me/.cargo/bin/bro");
-        let cargo_home = Path::new("/home/me/.cargo");
-        assert_eq!(
-            detect_install_method(exe, Some(cargo_home)),
-            InstallMethod::Cargo
-        );
-    }
-
-    #[test]
-    fn detects_npm_from_bin_real_path() {
-        let exe = Path::new("/usr/local/lib/node_modules/bitrouter/node_modules/.bin_real/bro");
-        assert_eq!(detect_install_method(exe, None), InstallMethod::Npm);
-    }
-
-    #[test]
-    fn npm_under_homebrew_node_is_npm_not_homebrew() {
-        // A global npm install under a Homebrew-managed Node contains
-        // `/homebrew/`; npm detection must win over the Homebrew heuristic.
-        let exe = Path::new("/opt/homebrew/lib/node_modules/bitrouter/node_modules/.bin_real/bro");
-        assert_eq!(detect_install_method(exe, None), InstallMethod::Npm);
-    }
-
-    #[test]
-    fn unknown_when_no_signal_matches() {
-        let exe = Path::new("/usr/local/bin/bro");
-        assert_eq!(detect_install_method(exe, None), InstallMethod::Unknown);
-    }
-
-    #[test]
-    fn delegation_command_is_method_specific() {
-        assert_eq!(
-            delegation_command(InstallMethod::Homebrew),
-            "brew upgrade bitrouter"
-        );
-        assert_eq!(
-            delegation_command(InstallMethod::Cargo),
-            "cargo install bitrouter --force"
-        );
-        assert_eq!(
-            delegation_command(InstallMethod::Npm),
-            "npm i -g bitrouter@latest"
-        );
-        assert!(delegation_command(InstallMethod::Unknown).contains("bitrouter-installer.sh"));
     }
 
     #[test]

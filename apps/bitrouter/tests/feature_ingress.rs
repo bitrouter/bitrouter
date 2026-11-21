@@ -8,7 +8,7 @@ use bitrouter::daemon::{self, DaemonCommand, DaemonResponse};
 use bitrouter::paths::ConfigSource;
 
 fn command(directory: &Path) -> tokio::process::Command {
-    let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_bro"));
+    let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_bitrouter"));
     command
         .current_dir(directory)
         .env_clear()
@@ -49,62 +49,6 @@ async fn build_info_reports_the_executable_without_opening_configuration() -> Re
     Ok(())
 }
 
-#[tokio::test]
-async fn offline_skills_commands_preserve_valid_and_invalid_entries() -> Result<()> {
-    let directory = tempfile::tempdir()?;
-    let created = tokio::time::timeout(
-        Duration::from_secs(20),
-        command(directory.path())
-            .args([
-                "skills",
-                "init",
-                "retained",
-                "--output",
-                "skills/retained/SKILL.md",
-            ])
-            .output(),
-    )
-    .await??;
-    ensure!(
-        created.status.success(),
-        "skill initialization failed: {}",
-        String::from_utf8_lossy(&created.stderr)
-    );
-    let report: serde_json::Value = serde_json::from_slice(&created.stdout)?;
-    ensure!(report["created"] == true);
-    let skill = directory.path().join("skills/retained/SKILL.md");
-    let original = std::fs::read(&skill)?;
-
-    let broken = directory.path().join("skills/broken");
-    std::fs::create_dir_all(&broken)?;
-    std::fs::write(broken.join("SKILL.md"), "no frontmatter\n")?;
-    let listed = tokio::time::timeout(
-        Duration::from_secs(20),
-        command(directory.path()).args(["skills", "list"]).output(),
-    )
-    .await??;
-    ensure!(
-        listed.status.success(),
-        "skill inspection failed: {}",
-        String::from_utf8_lossy(&listed.stderr)
-    );
-    let report: serde_json::Value = serde_json::from_slice(&listed.stdout)?;
-    let rows = report["skills"]
-        .as_array()
-        .context("missing skills report")?;
-    ensure!(rows.len() == 2);
-    ensure!(rows[0]["name"] == "broken" && rows[0]["valid"] == false);
-    ensure!(
-        rows[0]["problem"] == "SKILL.md has no YAML frontmatter block",
-        "invalid skill disappeared or changed its diagnostic"
-    );
-    ensure!(rows[1]["name"] == "retained" && rows[1]["valid"] == true);
-    ensure!(rows[1].get("problem").is_none());
-    ensure!(std::fs::read(&skill)? == original);
-    Ok(())
-}
-
-#[cfg(not(feature = "harness"))]
 #[tokio::test]
 async fn unavailable_agent_execution_rejects_without_reading_inputs_or_creating_state() -> Result<()>
 {
@@ -155,7 +99,7 @@ async fn unavailable_agent_execution_rejects_without_reading_inputs_or_creating_
             "{arguments:?}: accepted unavailable execution"
         );
         ensure!(
-            diagnostic.contains("harness feature"),
+            output.status.code() == Some(2) && diagnostic.contains("unrecognized subcommand"),
             "{arguments:?}: {diagnostic}"
         );
         ensure!(std::fs::read_to_string(&config)? == invalid);
@@ -200,15 +144,10 @@ async fn unavailable_database_backend_rejects_before_service_activation() -> Res
             .await
             .err()
             .context("reload accepted unavailable driver")?;
-        let preflight = bitrouter::upgrade_preflight::Preflight::check_explicit(&source)
-            .await
-            .err()
-            .context("preflight accepted unavailable driver")?;
         for diagnostic in [
             connect.to_string(),
             format!("{assembly:#}"),
             format!("{reload:#}"),
-            format!("{preflight:#}"),
         ] {
             ensure!(diagnostic.contains(feature), "{diagnostic}");
             ensure!(
@@ -281,12 +220,6 @@ async fn unavailable_ingress_rejects_before_assembly_reload_or_preflight_effects
             "mcp feature",
         ));
     }
-    if !cfg!(feature = "harness") {
-        cases.push((
-            "agent_api:\n  enabled: true\n".to_owned(),
-            "harness feature",
-        ));
-    }
     for (activation, expected) in cases {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("bitrouter.yaml");
@@ -304,11 +237,7 @@ async fn unavailable_ingress_rejects_before_assembly_reload_or_preflight_effects
             .await
             .err()
             .context("reload accepted an unavailable ingress")?;
-        let preflight = bitrouter::upgrade_preflight::Preflight::check_explicit(&source)
-            .await
-            .err()
-            .context("preflight accepted an unavailable ingress")?;
-        for error in [assembly, reload, preflight] {
+        for error in [assembly, reload] {
             ensure!(format!("{error:#}").contains(expected), "{error:#}");
         }
         ensure!(std::fs::read_to_string(&path)? == raw);
@@ -321,12 +250,21 @@ async fn unavailable_ingress_rejects_before_assembly_reload_or_preflight_effects
 async fn unavailable_ingress_commands_reject_before_configuration_or_logs() -> Result<()> {
     let mut cases: Vec<(&[&str], &str)> = Vec::new();
     cases.extend([
-        (&["code", "--config", "missing.yaml"][..], "removed"),
-        (&["tui", "--config", "missing.yaml"][..], "removed"),
-        (&["chat", "--config", "missing.yaml"][..], "removed"),
+        (
+            &["code", "--config", "missing.yaml"][..],
+            "unrecognized subcommand",
+        ),
+        (
+            &["tui", "--config", "missing.yaml"][..],
+            "unrecognized subcommand",
+        ),
+        (
+            &["chat", "--config", "missing.yaml"][..],
+            "unrecognized subcommand",
+        ),
         (
             &["agents", "attach", "fixture", "--config", "missing.yaml"][..],
-            "removed",
+            "unrecognized subcommand",
         ),
     ]);
     if !cfg!(feature = "mcp") {
@@ -349,24 +287,20 @@ async fn unavailable_ingress_commands_reject_before_configuration_or_logs() -> R
             ),
         ]);
     }
-    if !cfg!(feature = "harness") {
-        cases.push((
-            &["acp", "serve", "--config", "missing.yaml"],
-            "harness feature",
-        ));
-    }
-    if !cfg!(all(feature = "core", feature = "harness")) {
-        cases.extend([
-            (
-                &["task", "run", "hello", "--config", "missing.yaml"][..],
-                "core feature and harness feature",
-            ),
-            (
-                &["task", "managed", "hello", "--config", "missing.yaml"][..],
-                "core feature and harness feature",
-            ),
-        ]);
-    }
+    cases.extend([
+        (
+            &["acp", "serve", "--config", "missing.yaml"][..],
+            "unrecognized subcommand",
+        ),
+        (
+            &["task", "run", "hello", "--config", "missing.yaml"][..],
+            "unrecognized subcommand",
+        ),
+        (
+            &["task", "managed", "hello", "--config", "missing.yaml"][..],
+            "unrecognized subcommand",
+        ),
+    ]);
     for (arguments, expected) in cases {
         let directory = tempfile::tempdir()?;
         let output = tokio::time::timeout(
@@ -413,11 +347,6 @@ async fn gateway_serves_inference_with_only_its_enabled_local_listeners() -> Res
     );
     // Tuning without any selected server tool is dormant in every profile.
     raw.push_str("server_tools:\n  max_iterations: 7\n");
-    if !cfg!(feature = "harness") {
-        // An enabled harness rejects this nonexistent workspace. A gateway
-        // must neither discover nor reserve it while retaining saved settings.
-        raw.push_str("agent_api:\n  enabled: false\n  workspaces: ['missing-workspace']\n");
-    }
     std::fs::write(&config_path, &raw)?;
     let config = bitrouter::config::parse_with(&raw, |_| None)?;
     let source = ConfigSource::File(config_path.clone());
@@ -446,11 +375,9 @@ async fn gateway_serves_inference_with_only_its_enabled_local_listeners() -> Res
         socket.with_extension("agent.sock"),
         socket.with_extension("acp.sock"),
     ];
-    if !cfg!(feature = "harness") {
-        std::fs::write(&supervisor_ledger, dormant_ledger)?;
-        for endpoint in &endpoints {
-            std::fs::write(endpoint, "not a harness endpoint")?;
-        }
+    std::fs::write(&supervisor_ledger, dormant_ledger)?;
+    for endpoint in &endpoints {
+        std::fs::write(endpoint, "not a harness endpoint")?;
     }
     let stdout_path = directory.path().join("gateway.stdout");
     let stderr_path = directory.path().join("gateway.stderr");
@@ -478,17 +405,7 @@ async fn gateway_serves_inference_with_only_its_enabled_local_listeners() -> Res
         }
     })
     .await??;
-    if !cfg!(feature = "harness") {
-        let status = daemon::send_command(&socket, &DaemonCommand::Status).await?;
-        let DaemonResponse::Status {
-            handoff_activity: Some(activity),
-            ..
-        } = status
-        else {
-            anyhow::bail!("gateway did not report handoff activity");
-        };
-        ensure!(activity.supervised_runs == Some(0));
-        ensure!(activity.route_leases == 0);
+    {
         let commands = [
             DaemonCommand::AcpRouteList {
                 api_principal: "local".into(),
@@ -557,26 +474,6 @@ async fn gateway_serves_inference_with_only_its_enabled_local_listeners() -> Res
             }
         }
     }
-    // The replacement executable's update continuation must be reachable in
-    // every profile without using a session/harness command as a trampoline.
-    let before_handoff = process.id().context("gateway has no process identity")?;
-    let handoff = tokio::time::timeout(
-        Duration::from_secs(20),
-        command(directory.path())
-            .args(["--json", "__daemon-handoff", "--config"])
-            .arg(&config_path)
-            .arg("--socket")
-            .arg(&socket)
-            .output(),
-    )
-    .await??;
-    ensure!(
-        handoff.status.success(),
-        "{}{}",
-        String::from_utf8_lossy(&handoff.stdout),
-        String::from_utf8_lossy(&handoff.stderr)
-    );
-    ensure!(process.id() == Some(before_handoff) && process.try_wait()?.is_none());
     let client = reqwest::Client::new();
     ensure!(
         client
@@ -600,16 +497,9 @@ async fn gateway_serves_inference_with_only_its_enabled_local_listeners() -> Res
         body["choices"][0]["message"]["content"] == "ready",
         "{body}"
     );
-    if !cfg!(feature = "harness") {
-        for endpoint in &endpoints {
-            ensure!(std::fs::read_to_string(endpoint)? == "not a harness endpoint");
-            ensure!(!endpoint.with_extension("sock.lock").exists());
-        }
-    }
-    #[cfg(all(unix, feature = "harness"))]
     for endpoint in &endpoints {
-        let connection = tokio::net::UnixStream::connect(endpoint).await?;
-        drop(connection);
+        ensure!(std::fs::read_to_string(endpoint)? == "not a harness endpoint");
+        ensure!(!endpoint.with_extension("sock.lock").exists());
     }
     ensure!(matches!(
         daemon::send_command(&socket, &DaemonCommand::Stop).await?,
@@ -627,14 +517,7 @@ async fn gateway_serves_inference_with_only_its_enabled_local_listeners() -> Res
     );
     #[cfg(unix)]
     ensure!(!socket.exists());
-    if cfg!(feature = "harness") {
-        #[cfg(unix)]
-        for endpoint in &endpoints {
-            ensure!(!endpoint.exists());
-        }
-    } else {
-        ensure!(std::fs::read(&supervisor_ledger)? == dormant_ledger);
-        ensure!(!supervisor_ledger.with_extension("json.tmp").exists());
-    }
+    ensure!(std::fs::read(&supervisor_ledger)? == dormant_ledger);
+    ensure!(!supervisor_ledger.with_extension("json.tmp").exists());
     Ok(())
 }

@@ -1,5 +1,5 @@
 //! Concrete consumers of H's transaction custody; no independent writer task.
-#[cfg(feature = "core")]
+#[cfg(feature = "eval-publication")]
 use super::super::eval::Settlement;
 use super::super::eval::{self, Job, Request};
 use super::*;
@@ -162,7 +162,7 @@ impl Worker {
         Ok(body)
     }
 
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     pub(super) async fn execute_settlement(
         &self,
         job: &Settlement,
@@ -217,7 +217,7 @@ impl Worker {
     /// Keep the original cause until the SQL owner acknowledges rollback. A
     /// statement constraint still fails the observation and closes authority;
     /// it does not prove that independent receipt storage is unhealthy.
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     pub(super) async fn rollback_observation(
         &self,
         control: &Control,

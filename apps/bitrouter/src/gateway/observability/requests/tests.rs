@@ -1,7 +1,10 @@
 use super::*;
-use anyhow::Context;
+use crate::storage::evolution::EvolutionStore;
+use crate::storage::execution::{EXECUTION_KIND, ExecutionRecord};
+use crate::storage::session_identity::SessionIdentity;
+use anyhow::{Context, ensure};
 use bitrouter_ai::types::{GenerationParams, Message, Prompt, Role};
-use sea_orm::{ActiveModelTrait, PaginatorTrait, Set};
+use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, PaginatorTrait, QueryFilter};
 use serde_json::json;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
@@ -17,7 +20,7 @@ use crate::gateway::pipeline::executor::HttpExecutor;
 use crate::gateway::pipeline::hooks::RouteHook;
 use crate::gateway::pipeline::types::PipelineRequest;
 use crate::metering::{MeteringRecorder, MeteringStore, PricingTable};
-use crate::policy_lock::PolicyRuntime;
+use crate::policy_source::PolicyRuntime;
 use crate::session_identity::{NativeSessionIdentity, RequestOrigin};
 use crate::storage::evolution::records;
 
@@ -34,19 +37,24 @@ impl PreRequestHook for NormalizedScope {
         &self,
         ctx: &mut PipelineContext,
     ) -> crate::gateway::error::Result<HookDecision> {
+        let scope = if ctx.caller().api_key_id() == "key" {
+            "scope"
+        } else {
+            "other-scope"
+        };
         ctx.emit(ApiPrincipalEstablished {
-            route_scope_id: "scope".into(),
+            route_scope_id: scope.into(),
         });
         ctx.insert_extension(Arc::new(RequestSessionContext {
             origin: RequestOrigin::AcpHarnessRequest,
-            api_principal_id: "scope".into(),
-            claimed_controller_instance_id: Some(
-                ctx.headers()
-                    .get("x-bitrouter-controller-instance-id")
-                    .and_then(|value| value.to_str().ok())
-                    .unwrap_or("controller")
-                    .to_owned(),
-            ),
+            api_principal_id: scope.into(),
+            claimed_controller_instance_id: ctx
+                .headers()
+                .get("x-bitrouter-controller-id")
+                .and_then(|value| value.to_str().ok())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned),
             acp_session_id: ctx
                 .headers()
                 .get("x-bitrouter-acp-session-id")
@@ -89,8 +97,10 @@ impl RouteHook for RejectRequest {
 enum Failure {
     None,
     Preparation,
+    Upstream,
     Route,
     Change(binding::Change),
+    Hold(HoldWinner),
 }
 
 struct Fixture {
@@ -120,65 +130,25 @@ async fn fixture_with_storage(
         source: "fixture".into(),
         native_session_id: "session".into(),
     };
-    let key = identity.key()?;
-    // Seed the retained capture representation without constructing a recorder,
-    // session service, policy-learning service or scheduler.
-    connections::ActiveModel {
-        connection_id: Set("capture".into()),
-        owner: Set(identity.owner.clone()),
-        source: Set(identity.source.clone()),
-        controller_instance_id: Set(Some("controller".into())),
-        route_scope_id: Set(Some("scope".into())),
-        state: Set("recording".into()),
-        head: Set(0),
-        started_at: Set("fixture".into()),
-        metadata_json: Set("{}".into()),
-    }
-    .insert(&db)
-    .await?;
-    tracker
-        .inventory()
-        .register_capture("capture", "scope", "controller")
-        .await?;
-    sessions::ActiveModel {
-        session_key: Set(key.clone()),
-        owner: Set(identity.owner.clone()),
-        source: Set(identity.source.clone()),
-        native_session_id: Set(identity.native_session_id.clone()),
-        head: Set(1),
-        history_origin: Set("new".into()),
-        deleted: Set(false),
-        parent_key: Set(None),
-        parent_watermark: Set(None),
-    }
-    .insert(&db)
-    .await?;
-    events::ActiveModel {
-        connection_id: Set("capture".into()),
-        sequence: Set(1),
-        session_key: Set(Some(key)),
-        session_sequence: Set(Some(1)),
-        replay: Set(false),
-        event_json: Set("{}".into()),
-        captured_at: Set("fixture".into()),
-    }
-    .insert(&db)
-    .await?;
-    connections::Entity::update_many()
-        .col_expr(
-            connections::Column::Head,
-            sea_orm::sea_query::Expr::value(1),
-        )
-        .filter(connections::Column::ConnectionId.eq("capture"))
-        .exec(&db)
-        .await?;
+    let bro_tables = db.query_one(sea_orm::Statement::from_string(
+        sea_orm::DbBackend::Sqlite,
+        "SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND (name LIKE 'acp_capture_%' OR name='acp_canonical_sessions')"
+    )).await?.context("no gateway schema")?.try_get::<i64>("","n")?;
+    assert_eq!(bro_tables, 0, "fresh gateway database contains BRO tables");
     let upstream = MockServer::start().await;
-    Mock::given(method("POST")).and(path("/chat/completions"))
+    if matches!(failure, Failure::Upstream) {
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(400))
+            .mount(&upstream)
+            .await;
+    } else {
+        Mock::given(method("POST")).and(path("/chat/completions"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "id":"response", "object":"chat.completion", "model":"fixture-model",
             "choices":[{"index":0,"message":{"role":"assistant","content":"response"},"finish_reason":"stop"}],
             "usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}
         }))).mount(&upstream).await;
+    }
     let config = crate::config::parse_with(
         &format!(
             r#"
@@ -228,18 +198,20 @@ models:
         ))
         .settlement_recorder(tracker.clone());
     match failure {
-        Failure::None => {}
+        Failure::None | Failure::Upstream => {}
         Failure::Preparation => {
             builder.pre_request_hook(RejectRequest);
         }
         Failure::Route => {
             builder.route_hook(RejectRequest);
         }
+        Failure::Hold(hold) => {
+            builder.pre_request_hook(hold);
+        }
         Failure::Change(change) => {
             builder.pre_request_hook(binding::ChangeAfterAdmission {
                 change,
                 db: db.clone(),
-                identity: identity.clone(),
                 routing: routing.clone(),
                 policies: policies.clone(),
             });
@@ -271,6 +243,9 @@ fn request(id: &str, bound: bool) -> Result<PipelineRequest> {
     };
     let mut request = PipelineRequest::new("model", CallerContext::new("key", "caller"), prompt);
     request.request_id = id.into();
+    request
+        .headers
+        .insert("x-bitrouter-controller-id", "controller".parse()?);
     if bound {
         request
             .headers
@@ -280,24 +255,12 @@ fn request(id: &str, bound: bool) -> Result<PipelineRequest> {
 }
 
 async fn saved(fixture: &Fixture, id: &str) -> Result<GatewayRequest> {
-    Ok(fixture
+    fixture
         .tracker
         .inventory()
-        .scoped_store("scope", "controller")?
-        .get(super::super::inventory::INVENTORY_KIND, id)
+        .request("scope", id)
         .await?
-        .context("inventory missing")?
-        .1)
-}
-
-async fn execution(fixture: &Fixture, id: &str) -> Result<ExecutionRecord> {
-    Ok(
-        EvolutionStore::new(fixture.db.clone(), &fixture.identity.owner)?
-            .get::<ExecutionRecord>(EXECUTION_KIND, id)
-            .await?
-            .context("execution missing")?
-            .1,
-    )
+        .context("inventory missing")
 }
 
 #[tokio::test]
@@ -310,21 +273,13 @@ async fn tracked_requests_settle_and_reject_replay_without_learning() -> Result<
             .drain_required_pending_settlements()
             .await?;
         let before = saved(&fixture, id).await?;
-        assert_eq!(before.binding.is_some(), bound);
+        assert!(before.binding.is_none() && before.anchors.is_empty() && !before.coverage_ready);
         let settlement = before.settlement.as_ref().context("settlement missing")?;
         assert_eq!(settlement.outcome, Some(ExecutionOutcome::Completed));
         assert_eq!(settlement.hops.len(), 1);
         assert_eq!(settlement.hops[0].status, "completed");
         assert_eq!(settlement.final_metered_cost_micro_usd, None);
         assert_eq!(settlement.total_cost_micro_usd, None);
-        if bound {
-            let execution = execution(&fixture, id).await?;
-            assert_eq!(execution.attempt_id, before.attempt_id);
-            assert_eq!(execution.identity, fixture.identity);
-            assert_eq!(execution.settlement, before.settlement);
-            assert!(execution.intent.is_none());
-            assert_eq!(execution.dispatch_route, "model");
-        }
         let charge_before = crate::metering::entities::requests::Entity::find_by_id(id)
             .one(&fixture.db)
             .await?;
@@ -362,7 +317,7 @@ async fn tracked_requests_settle_and_reject_replay_without_learning() -> Result<
             .filter(records::Column::Kind.eq(EXECUTION_KIND))
             .count(&fixture.db)
             .await?,
-        1
+        0
     );
     Ok(())
 }
@@ -444,8 +399,7 @@ async fn earlier_execution_is_protected_before_gateway_inventory_insertion() -> 
         fixture
             .tracker
             .inventory()
-            .scoped_store("scope", "controller")?
-            .get::<GatewayRequest>(super::super::inventory::INVENTORY_KIND, "earlier")
+            .request("scope", "earlier")
             .await?
             .is_none()
     );
@@ -524,7 +478,6 @@ async fn context_revalidation_retains_the_original_request_and_attempt() -> Resu
     fixture.tracker.check(&mut ctx).await?;
     fixture.binding.check(&mut ctx).await?;
     let before = saved(&fixture, "rebuild").await?;
-    let execution_before = serde_json::to_value(execution(&fixture, "rebuild").await?)?;
     let observation = serde_json::to_value(ctx.get_event::<GatewayRequestObserved>())?;
 
     ctx.replace_managed_messages(retained)?;
@@ -548,10 +501,6 @@ async fn context_revalidation_retains_the_original_request_and_attempt() -> Resu
         observation
     );
     assert_eq!(
-        serde_json::to_value(execution(&fixture, "rebuild").await?)?,
-        execution_before
-    );
-    assert_eq!(
         records::Entity::find()
             .filter(records::Column::Kind.eq(super::super::inventory::INVENTORY_KIND))
             .count(&fixture.db)
@@ -565,6 +514,277 @@ async fn context_revalidation_retains_the_original_request_and_attempt() -> Resu
             .await
             .context("requests missing")?
             .is_empty()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn provider_failure_retains_failed_hop_and_never_replays_it() -> Result<()> {
+    let fixture = fixture(Failure::Upstream).await?;
+    assert!(
+        fixture
+            .pipeline
+            .execute(request("after-send", false)?)
+            .await
+            .is_err()
+    );
+    fixture
+        .pipeline
+        .drain_required_pending_settlements()
+        .await?;
+    let original = saved(&fixture, "after-send").await?;
+    let settlement = original.settlement.as_ref().context("settlement missing")?;
+    assert_eq!(settlement.outcome, Some(ExecutionOutcome::Failed));
+    assert_eq!(settlement.hops.len(), 1);
+    assert_eq!(settlement.hops[0].status, "failed");
+    assert!(settlement.total_cost_micro_usd.is_none());
+    assert!(
+        fixture
+            .pipeline
+            .execute(binding::second_request("after-send")?)
+            .await
+            .is_err()
+    );
+    fixture
+        .pipeline
+        .drain_required_pending_settlements()
+        .await?;
+    assert_eq!(
+        serde_json::to_value(saved(&fixture, "after-send").await?)?,
+        serde_json::to_value(original)?
+    );
+    assert_eq!(
+        fixture
+            .upstream
+            .received_requests()
+            .await
+            .context("mock")?
+            .len(),
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn imported_controller_fact_and_global_charge_prevent_new_admission() -> Result<()> {
+    let fixture = fixture(Failure::None).await?;
+    let inventory = fixture.tracker.inventory();
+    let old_store = GatewayInventory::store_for(fixture.db.clone(), "scope", "retired-controller")?;
+    let historical = GatewayRequest {
+        request_id: "m0".into(),
+        attempt_id: "original-attempt".into(),
+        route_scope_id: "scope".into(),
+        controller_instance_id: "retired-controller".into(),
+        runtime_epoch: "m0-epoch".into(),
+        admitted_at: "m0".into(),
+        anchors: Default::default(),
+        binding: None,
+        coverage_ready: false,
+        settlement: None,
+    };
+    let original = old_store
+        .initialize("gateway_request", "m0", None, &historical)
+        .await?;
+    assert!(
+        fixture
+            .pipeline
+            .execute(binding::second_request("m0")?)
+            .await
+            .is_err()
+    );
+    assert!(inventory.request("scope", "m0").await?.is_none());
+    let after = old_store
+        .get::<GatewayRequest>("gateway_request", "m0")
+        .await?
+        .context("lost M0 fact")?;
+    assert_eq!(
+        serde_json::to_value(original)?,
+        serde_json::to_value(after)?
+    );
+    assert!(
+        fixture
+            .upstream
+            .received_requests()
+            .await
+            .context("mock")?
+            .is_empty()
+    );
+
+    // A pure metering fact also owns its primary key, including rows from
+    // before route scope or controller correlation was recorded.
+    let mut ordinary = request("paid-before-inventory", false)?;
+    ordinary.headers.remove("x-bitrouter-controller-id");
+    fixture.pipeline.execute(ordinary).await?;
+    fixture
+        .pipeline
+        .drain_required_pending_settlements()
+        .await?;
+    // Model the M0 ledger row whose original writer had no service inventory.
+    let inventory_store = crate::storage::evolution::EvolutionStore::new(
+        fixture.db.clone(),
+        "gateway-request-admission-v2",
+    )?;
+    let key = crate::storage::evolution::digest(&"paid-before-inventory")?;
+    ensure!(
+        records::Entity::delete_by_id(inventory_store.id("gateway_request", &key)?)
+            .exec(&fixture.db)
+            .await?
+            .rows_affected
+            == 1
+    );
+    let charges = crate::metering::entities::requests::Entity::find_by_id("paid-before-inventory");
+    let original = charges
+        .clone()
+        .one(&fixture.db)
+        .await?
+        .context("missing charge")?;
+    assert!(
+        inventory
+            .request("scope", "paid-before-inventory")
+            .await?
+            .is_none()
+    );
+    assert!(
+        fixture
+            .pipeline
+            .execute(binding::second_request("paid-before-inventory")?)
+            .await
+            .is_err()
+    );
+    fixture
+        .pipeline
+        .drain_required_pending_settlements()
+        .await?;
+    assert_eq!(charges.one(&fixture.db).await?, Some(original));
+    assert!(
+        inventory
+            .request("scope", "paid-before-inventory")
+            .await?
+            .is_none()
+    );
+    assert_eq!(
+        fixture
+            .upstream
+            .received_requests()
+            .await
+            .context("mock")?
+            .len(),
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn tagged_admission_excludes_marked_and_unrelated_imports_before_decoding() -> Result<()> {
+    let fixture = fixture(Failure::None).await?;
+    let store = GatewayInventory::store_for(fixture.db.clone(), "scope", "old")?;
+    for id in ["unrelated", "marked"] {
+        store
+            .initialize("gateway_request", id, None, &json!({}))
+            .await?;
+        let record = store.id("gateway_request", id)?;
+        use sea_orm::{DbBackend, Statement};
+        fixture.db.execute(Statement::from_sql_and_values(DbBackend::Sqlite,
+            "UPDATE checkpoint_evolution SET body='poison', creator_principal_id=? WHERE record_id=?",
+            [((id=="marked").then_some("other")).into(),record.into()])).await?;
+    }
+    let inventory = fixture.tracker.inventory();
+    assert!(matches!(
+        inventory.begin("scope", "controller", "marked").await?,
+        BeginResult::Tracked(_)
+    ));
+    assert!(
+        inventory
+            .request("unrelated-principal", "marked")
+            .await?
+            .is_none()
+    );
+    assert!(matches!(
+        inventory
+            .begin("other-scope", "controller", "marked")
+            .await?,
+        BeginResult::Duplicate
+    ));
+    ensure!(inventory.request("scope", "marked").await?.is_some());
+    ensure!(inventory.request("other-scope", "marked").await?.is_none());
+    Ok(())
+}
+
+#[derive(Clone, Default)]
+struct HoldWinner {
+    admitted: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
+}
+
+#[async_trait]
+impl PreRequestHook for HoldWinner {
+    async fn check(
+        &self,
+        ctx: &mut PipelineContext,
+    ) -> crate::gateway::error::Result<HookDecision> {
+        if ctx.caller().api_key_id() == "key" {
+            self.admitted.notify_one();
+            self.release.notified().await;
+        }
+        Ok(HookDecision::Allow)
+    }
+}
+
+#[tokio::test]
+async fn global_claim_excludes_foreign_billed_requests_before_settlement() -> Result<()> {
+    let hold = HoldWinner::default();
+    let fixture = fixture(Failure::Hold(hold.clone())).await?;
+    let check = async {
+        hold.admitted.notified().await;
+        let mut other = request("in-flight", true)?;
+        other.caller = CallerContext::new("second-key", "second-user");
+        // Ordinary HTTP and controller-tagged clients share the same ledger.
+        other.headers.remove("x-bitrouter-controller-id");
+        other
+            .extensions
+            .insert(crate::gateway::metering::replay::ClientRequestIdClaim);
+        ensure!(fixture.pipeline.execute(other).await.is_err());
+        ensure!(
+            fixture
+                .tracker
+                .inventory()
+                .request("other-scope", "in-flight")
+                .await?
+                .is_none()
+        );
+        ensure!(
+            crate::metering::entities::requests::Entity::find_by_id("in-flight")
+                .one(&fixture.db)
+                .await?
+                .is_none()
+        );
+        hold.release.notify_one();
+        Ok::<_, anyhow::Error>(())
+    };
+    let winner = fixture.pipeline.execute(request("in-flight", true)?);
+    let (winner, checked) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        tokio::join!(winner, check)
+    })
+    .await?;
+    winner?;
+    checked?;
+    fixture
+        .pipeline
+        .drain_required_pending_settlements()
+        .await?;
+    let row = crate::metering::entities::requests::Entity::find_by_id("in-flight")
+        .one(&fixture.db)
+        .await?
+        .context("missing charge")?;
+    ensure!(row.user_id == "caller" && row.api_key_id == "key");
+    ensure!(
+        fixture
+            .upstream
+            .received_requests()
+            .await
+            .context("provider observation")?
+            .len()
+            == 1
     );
     Ok(())
 }

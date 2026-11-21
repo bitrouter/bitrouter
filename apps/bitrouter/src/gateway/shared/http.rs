@@ -302,10 +302,9 @@ async fn infer(state: Arc<Serving>, mut request: Request, inbound: ApiProtocol) 
         Ok(acquired) => acquired,
         Err(error) => return failure(error),
     };
-    // Shared serving owns ordinary inference only. Keep profile inspection
-    // inside the reserved path, before any durable admission or duplicate lookup.
     if inbound == ApiProtocol::Responses && request.headers().contains_key("bitrouter-beta") {
-        return model_http::managed_profile::unavailable();
+        return crate::gateway::error::BitrouterError::bad_request("unsupported Responses header")
+            .into_response();
     }
     let (key_hash, correlation, idempotency) = match request_identity(request.headers()) {
         Ok(identity) => identity,
@@ -323,9 +322,6 @@ async fn infer(state: Arc<Serving>, mut request: Request, inbound: ApiProtocol) 
         Ok(body) => body,
         Err(error) => return error.into_response(),
     };
-    if inbound == ApiProtocol::Responses && model_http::managed_profile::is_managed(&body) {
-        return model_http::managed_profile::unavailable();
-    }
     let fingerprint = match fingerprint::request(&inbound, &headers, &body) {
         Ok(fingerprint) => fingerprint,
         Err(error) => return error.into_response(),

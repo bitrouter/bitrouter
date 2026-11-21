@@ -1571,11 +1571,6 @@ impl HttpExecutor {
             target,
             shared::has_admission(ctx) || tenancy::has_execution(ctx),
         );
-        #[cfg(all(feature = "core", feature = "harness"))]
-        let choice_gate = tenancy::execution(ctx)
-            .map(|execution| execution.choice_gate())
-            .transpose()?
-            .flatten();
         let cancellation = tenancy::cancellation(ctx)?;
         let url = transport.endpoint_url(&target.model_target(), false);
         let trace_headers = ctx.take_outbound_trace_headers();
@@ -1627,12 +1622,6 @@ impl HttpExecutor {
                     None,
                 )
             };
-            #[cfg(all(feature = "core", feature = "harness"))]
-            let _tenant_attempt = match &choice_gate {
-                Some(gate) => gate.arm(&body, &target.service_id, arm).await?,
-                None => arm()?,
-            };
-            #[cfg(not(all(feature = "core", feature = "harness")))]
             let _tenant_attempt = arm()?;
             if let Some(guard) = routing_guard {
                 guard.sent()?;

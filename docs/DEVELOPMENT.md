@@ -12,9 +12,8 @@ line starting at `1.0.0-beta.1`. Increment the beta number for subsequent beta
 releases and keep the `1.0.0` base. Published formats and service contracts use
 the versions defined in their own specifications.
 
-Prepare beta versions explicitly in the release PR. The previous independently
-versioned SDK can still rank highest in the registry, so the automated version
-proposal can compare against that older SDK release.
+Assign the next beta version when preparing a software release. PRs that make
+up the same release share one version.
 
 Sync the workspace dependency requirements, both plugin manifests, the
 standalone SDK consumer lockfiles and version-pinned installation examples.
@@ -86,7 +85,7 @@ available without following a chain of removed documents.
 
 ### Working material
 
-Task plans, implementation trackers, agent handoffs, dated test logs, raw
+Task plans, implementation trackers, dated test logs, raw
 experiment outputs and acceptance receipts belong in their PR, issue, CI
 artifact or untracked local work area. Do not add them to tracked `docs/`.
 Current engineering rules belong in development guides and should be updated

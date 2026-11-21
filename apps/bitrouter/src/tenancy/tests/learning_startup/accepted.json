@@ -1,0 +1,35 @@
+[
+  {
+    "record_id": "065166a290ad39ce92e3935a1c3c91281a30d0317e62716f3681808dc9e6d939",
+    "scope_id": "e8a8aae99a796bc9d5abe1e14c28c6255b9facb1e79f69b4800515855078accb",
+    "kind": "owned_judge_budget",
+    "session_key": null,
+    "revision": 0,
+    "body": "{\"version\":1,\"configuration\":\"721ffe17-f842-4328-a235-24b44bbd746a\",\"accepted\":1}",
+    "installation_id": "198267c8-e1b9-46a2-ac6a-98ccf8cbe917",
+    "tenant_id": "tenant-a",
+    "creator_principal_id": "principal-a"
+  },
+  {
+    "record_id": "ace0304ba4d3bb1fcb279cfbfbdae16f7a7d15ec548aa2769bf9cb45ba67551e",
+    "scope_id": "e8a8aae99a796bc9d5abe1e14c28c6255b9facb1e79f69b4800515855078accb",
+    "kind": "owned_judge_pending",
+    "session_key": "8ab67aa430f9ad2c47eb3877e705bbb921e53a9dd69932376d535a26422d779e",
+    "revision": 0,
+    "body": "{\"version\":2,\"job\":\"b0658f5421a02156c96cc07d64243a2bdcdab6d6614c64dd37ac15bcca4032ca\",\"session\":\"8ab67aa430f9ad2c47eb3877e705bbb921e53a9dd69932376d535a26422d779e\",\"configuration\":\"721ffe17-f842-4328-a235-24b44bbd746a\",\"route\":{\"owner_kind\":\"tenant\",\"owner_id\":\"tenant-a\",\"resource_kind\":\"route\",\"resource_id\":\"literal:judge\",\"revision_id\":\"r1\"},\"checkpoint\":\"db6ca33ff36288a95ff54fb76b27d80152a6f47949ae192ddf0282c5b2b45ef6\",\"prefix_digest\":\"93092af8964c5945fc465317702deafeb935fda26e6522fd1c6f012b219e6bfc\",\"input_digest\":\"6faafac1e3a07f851b68608567fbf374f2291080b9e7aecb0bb47cb0e4d7d7bd\",\"expected_revision\":null,\"execution\":\"6b9cb9af-6808-42d7-974d-8b3c37cedd48\",\"status\":\"accepted\",\"accepted_at\":\"2026-11-18T11:20:49Z\",\"output\":null,\"assessment\":null,\"history_reservation\":{\"checkpoint\":\"db6ca33ff36288a95ff54fb76b27d80152a6f47949ae192ddf0282c5b2b45ef6\",\"rows\":1,\"bytes\":1048576,\"state\":{\"state\":\"held\"}}}",
+    "installation_id": "198267c8-e1b9-46a2-ac6a-98ccf8cbe917",
+    "tenant_id": "tenant-a",
+    "creator_principal_id": "principal-a"
+  },
+  {
+    "record_id": "b0658f5421a02156c96cc07d64243a2bdcdab6d6614c64dd37ac15bcca4032ca",
+    "scope_id": "e8a8aae99a796bc9d5abe1e14c28c6255b9facb1e79f69b4800515855078accb",
+    "kind": "owned_judge_job",
+    "session_key": "8ab67aa430f9ad2c47eb3877e705bbb921e53a9dd69932376d535a26422d779e",
+    "revision": 0,
+    "body": "{\"version\":2,\"job\":\"b0658f5421a02156c96cc07d64243a2bdcdab6d6614c64dd37ac15bcca4032ca\",\"session\":\"8ab67aa430f9ad2c47eb3877e705bbb921e53a9dd69932376d535a26422d779e\",\"configuration\":\"721ffe17-f842-4328-a235-24b44bbd746a\",\"route\":{\"owner_kind\":\"tenant\",\"owner_id\":\"tenant-a\",\"resource_kind\":\"route\",\"resource_id\":\"literal:judge\",\"revision_id\":\"r1\"},\"checkpoint\":\"db6ca33ff36288a95ff54fb76b27d80152a6f47949ae192ddf0282c5b2b45ef6\",\"prefix_digest\":\"93092af8964c5945fc465317702deafeb935fda26e6522fd1c6f012b219e6bfc\",\"input_digest\":\"6faafac1e3a07f851b68608567fbf374f2291080b9e7aecb0bb47cb0e4d7d7bd\",\"expected_revision\":null,\"execution\":\"6b9cb9af-6808-42d7-974d-8b3c37cedd48\",\"status\":\"accepted\",\"accepted_at\":\"2026-11-18T11:20:49Z\",\"output\":null,\"assessment\":null,\"history_reservation\":{\"checkpoint\":\"db6ca33ff36288a95ff54fb76b27d80152a6f47949ae192ddf0282c5b2b45ef6\",\"rows\":1,\"bytes\":1048576,\"state\":{\"state\":\"held\"}}}",
+    "installation_id": "198267c8-e1b9-46a2-ac6a-98ccf8cbe917",
+    "tenant_id": "tenant-a",
+    "creator_principal_id": "principal-a"
+  }
+]

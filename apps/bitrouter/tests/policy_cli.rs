@@ -7,7 +7,7 @@ use anyhow::{Context, Result, ensure};
 use bitrouter_ai::policy::Document;
 
 fn invoke(home: &Path, args: &[&str]) -> Result<Output> {
-    Command::new(env!("CARGO_BIN_EXE_bro"))
+    Command::new(env!("CARGO_BIN_EXE_bitrouter"))
         .current_dir(home)
         .env("BITROUTER_HOME", home)
         .args(args)
@@ -257,7 +257,7 @@ fn a_named_show_exports_the_complete_source_document() -> Result<()> {
         shown == source && shown.policies.len() == 2,
         "named show exported a subset"
     );
-    ensure!(digest == bitrouter::policy_lock::semantic_digest(&shown)?);
+    ensure!(digest == bitrouter::policy_source::semantic_digest(&shown)?);
     Ok(())
 }
 
@@ -576,7 +576,7 @@ async fn live_cli_publication_reload_and_rollback_keep_disk_and_runtime_equal() 
     let socket = home.join("bitrouter.sock");
     let log = home.join("daemon.stderr");
     let mut daemon = Foreground(
-        Command::new(env!("CARGO_BIN_EXE_bro"))
+        Command::new(env!("CARGO_BIN_EXE_bitrouter"))
             .env_clear()
             .env("HOME", home)
             .env("USERPROFILE", home)

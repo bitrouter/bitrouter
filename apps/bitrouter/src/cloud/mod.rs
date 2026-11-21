@@ -1,11 +1,11 @@
-//! Cloud authentication glue and the `bro cloud …` CLI entry points.
+//! Cloud authentication glue and the `bitrouter cloud …` CLI entry points.
 //!
 //! Two daemon-side responsibilities, both keyed on the `"bitrouter"`
 //! provider id:
 //!
 //! - [`enable_in_zero_config`] — auto-add the `bitrouter` provider to the in-memory
 //!   zero-config `providers:` map when the user has signed in via
-//!   `bro cloud login` (an `account-credentials.json` file is present
+//!   `bitrouter cloud login` (an `account-credentials.json` file is present
 //!   at the default path). The env-var path (`$BITROUTER_API_KEY`) is
 //!   already covered by [`crate::providers::apply::zero_config`].
 //! - [`register_if_configured`] — register the hosted provider applier.
@@ -13,7 +13,7 @@
 //! The account module owns product persistence/settings and assembles the AI
 //! hosted session shared by model, Cloud management and telemetry consumers.
 //!
-//! The [`cli`] sub-module owns the `bro cloud` subcommand surface
+//! The [`cli`] sub-module owns the `bitrouter cloud` subcommand surface
 //! — typed wrappers around the application-owned management client.
 
 pub mod account;
@@ -42,13 +42,13 @@ const FIRST_PARTY_TELEMETRY_ORIGIN: &str = "https://telemetry.bitrouter.ai";
 const DEFAULT_ACCOUNT_ORIGIN: &str = "https://api.bitrouter.ai";
 
 /// Insert the `bitrouter` provider into `config.providers` when the user
-/// has run `bro cloud login` (i.e. the credentials file exists at the
+/// has run `bitrouter cloud login` (i.e. the credentials file exists at the
 /// default path) and the entry is not already present.
 ///
 /// No-op when the credentials file is absent — `crate::providers::apply::zero_config`
 /// already handles the `$BITROUTER_API_KEY` env-var path. Together the two
 /// paths give a signed-in user the cloud provider on every fresh
-/// `bro serve` regardless of which credential source they chose.
+/// `bitrouter serve` regardless of which credential source they chose.
 pub fn enable_in_zero_config(config: &mut Config) {
     let Ok(path) = default_credentials_path() else {
         return;
@@ -80,49 +80,6 @@ pub fn default_manager() -> Result<Arc<CredentialManager>> {
     let manager = CredentialManager::new(path)
         .map_err(|error| anyhow::anyhow!("building BitRouter Cloud credential manager: {error}"))?;
     Ok(Arc::new(manager))
-}
-
-/// One lazily constructed account manager shared by the Cloud consumers of a
-/// standalone ACP invocation. Construction does not read the credential store;
-/// resolution remains best-effort at each consumer boundary.
-#[cfg(feature = "harness")]
-#[derive(Clone)]
-pub(crate) struct StandaloneCloudCredentials {
-    manager: Option<Arc<CredentialManager>>,
-}
-
-#[cfg(feature = "harness")]
-impl StandaloneCloudCredentials {
-    /// Construct the invocation-scoped manager once. A path-construction
-    /// failure preserves the existing best-effort fallback behavior.
-    pub(crate) fn new() -> Self {
-        Self {
-            manager: default_manager().ok(),
-        }
-    }
-
-    #[cfg(all(test, any(feature = "otel-http", feature = "otel-grpc")))]
-    pub(crate) fn with_manager(manager: Arc<CredentialManager>) -> Self {
-        Self {
-            manager: Some(manager),
-        }
-    }
-
-    /// Resolve the stored account bearer for ACP routing, when available.
-    pub(crate) async fn routing_fallback(&self, target_base_url: &str) -> Option<String> {
-        let manager = self.manager.as_ref()?.clone();
-        cloud_bearer_for_base_url_with_manager(manager, target_base_url).await
-    }
-
-    /// Build the account telemetry source from the same invocation manager.
-    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
-    pub(crate) async fn telemetry_bearer(
-        &self,
-        endpoint: &str,
-    ) -> Option<Arc<dyn TelemetryBearer>> {
-        let manager = self.manager.as_ref()?.clone();
-        cloud_bearer_source(manager, endpoint).await
-    }
 }
 
 /// Register the BitRouter Cloud applier on `appliers` when the `bitrouter`
@@ -224,7 +181,7 @@ fn credential_origin_for_exporter(exporter: &str) -> String {
 
 /// Resolve the signed-in Cloud bearer only when `target_base_url` has the
 /// exact origin recorded at login. This permits headless gateway clients to
-/// reuse `bro cloud login` without ever forwarding that credential to
+/// reuse `bitrouter cloud login` without ever forwarding that credential to
 /// an arbitrary remote host.
 pub async fn cloud_bearer_for_base_url(target_base_url: &str) -> Option<String> {
     let manager = default_manager().ok()?;

@@ -4,16 +4,20 @@ use std::path::Path;
 use std::process::Stdio;
 
 use anyhow::{Context, Result, ensure};
+#[cfg(feature = "mcp")]
 use bitrouter::config::mcp::{McpServerConfig, McpTransport};
-use serde_json::{Value, json};
+use serde_json::Value;
+#[cfg(feature = "mcp")]
+use serde_json::json;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
+#[cfg(feature = "mcp")]
 #[path = "harness_resources/mcp_fixture.rs"]
 mod mcp_fixture;
 
 fn cli(home: &Path, path: &Path, args: &[&str]) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_bro"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bitrouter"));
     command
         .current_dir(home)
         .env("HOME", home)
@@ -100,6 +104,7 @@ async fn explicit_blocking_input_keeps_sigint_cancellation_and_source_bytes() ->
     Ok(())
 }
 
+#[cfg(feature = "mcp")]
 #[tokio::test]
 async fn full_entries_crud_redaction_defaults_and_source_preservation() -> Result<()> {
     let home = tempfile::tempdir()?;
@@ -251,6 +256,7 @@ async fn failures_are_noninteractive_secret_safe_and_do_not_replace_source() -> 
     Ok(())
 }
 
+#[cfg(feature = "mcp")]
 #[tokio::test]
 async fn shortcut_creation_path_and_explicit_connect_only_on_check() -> Result<()> {
     let upstream = mcp_fixture::server(false).await;
@@ -308,7 +314,7 @@ async fn shortcut_creation_path_and_explicit_connect_only_on_check() -> Result<(
     let raw: Value = serde_saphyr::from_str(&std::fs::read_to_string(&args_path)?)?;
     ensure!(raw["mcp_servers"]["local"]["transport"]["args"] == json!(["--flag", "two words"]));
     let default = home.path().join("bitrouter.yaml");
-    let mut command = Command::new(env!("CARGO_BIN_EXE_bro"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bitrouter"));
     command
         .current_dir(home.path())
         .env("HOME", home.path())
@@ -343,6 +349,7 @@ async fn unsupported_yaml_and_prefix_conflicts_fail_without_rewriting() -> Resul
     Ok(())
 }
 
+#[cfg(feature = "mcp")]
 #[tokio::test]
 async fn shortcut_conflicts_and_relative_paths_have_explicit_cli_contracts() -> Result<()> {
     let home = tempfile::tempdir()?;
@@ -398,14 +405,14 @@ async fn shortcut_conflicts_and_relative_paths_have_explicit_cli_contracts() -> 
         reported.is_absolute() && std::fs::canonicalize(reported)? == std::fs::canonicalize(&path)?
     );
     for command in ["list", "show", "add", "edit", "remove", "check"] {
-        let output = Command::new(env!("CARGO_BIN_EXE_bro"))
+        let output = Command::new(env!("CARGO_BIN_EXE_bitrouter"))
             .args(["mcp", command, "--help"])
             .output()
             .await?;
         ensure!(output.status.success(), "help failed for {command}");
         ensure!(!output.stdout.contains(&0x1b));
     }
-    let help = Command::new(env!("CARGO_BIN_EXE_bro"))
+    let help = Command::new(env!("CARGO_BIN_EXE_bitrouter"))
         .args(["mcp", "--help"])
         .output()
         .await?;
@@ -469,5 +476,27 @@ async fn local_mcp_commands_preserve_shared_process_source_before_input() -> Res
         ensure!(std::fs::read_to_string(&path)? == original);
         ensure!(std::fs::read_dir(home.path())?.count() == 1);
     }
+    Ok(())
+}
+
+#[cfg(not(feature = "mcp"))]
+#[tokio::test]
+async fn minimum_gateway_refuses_to_save_unavailable_mcp_servers() -> Result<()> {
+    let home = tempfile::tempdir()?;
+    let path = home.path().join("bitrouter.yaml");
+    let original = "# operator config\nserver: { skip_auth: true }\n";
+    std::fs::write(&path, original)?;
+    let rejected = result(
+        cli(
+            home.path(),
+            &path,
+            &["add", "local", "--command", "fixture"],
+        ),
+        None,
+        false,
+    )
+    .await?;
+    ensure!(rejected["error"]["kind"] == "bad_request", "{rejected}");
+    ensure!(std::fs::read_to_string(&path)? == original);
     Ok(())
 }

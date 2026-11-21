@@ -1,8 +1,8 @@
 use super::*;
-#[cfg(not(feature = "core"))]
 mod trajectory_features;
 use bitrouter_ai::tenancy::configuration::{
-    Activation, Configuration, ConfigurationPut, ConfigurationRevision, GenerationDefaults, Limits,
+    Activation, Configuration, ConfigurationPut, ConfigurationRevision, GenerationDefaults,
+    Learning, LearningMode, Limits,
 };
 
 fn empty_document() -> Configuration {
@@ -13,12 +13,38 @@ fn empty_document() -> Configuration {
             max_output_tokens: 1024,
             temperature: 0.0,
         },
-        eval_publication: false,
+        learning: Learning {
+            mode: LearningMode::Off,
+            max_evaluations: 0,
+        },
         limits: Limits {
             active_executions: 1,
             queued_work: 0,
+            learning_jobs: 0,
         },
     }
+}
+
+#[test]
+fn gateway_profile_separates_eval_observation_from_scheduled_learning() {
+    use crate::tenancy::configuration::validate_profile;
+
+    let mut document = empty_document();
+    assert!(validate_profile(&document).is_ok());
+    document.learning.mode = LearningMode::Observe;
+    assert_eq!(
+        validate_profile(&document).is_ok(),
+        cfg!(feature = "eval-publication")
+    );
+
+    document.learning.max_evaluations = 1;
+    assert_eq!(validate_profile(&document), Err(ErrorCode::InvalidRequest));
+    document.learning.max_evaluations = 0;
+    document.limits.learning_jobs = 1;
+    assert_eq!(validate_profile(&document), Err(ErrorCode::InvalidRequest));
+    document.limits.learning_jobs = 0;
+    document.learning.mode = LearningMode::Explore;
+    assert_eq!(validate_profile(&document), Err(ErrorCode::InvalidRequest));
 }
 
 fn retained(value: StoredResponse) -> Result<ConfigurationRevision> {
@@ -96,9 +122,8 @@ async fn configuration_get_authenticates_public_metadata_before_returning_it() -
     Ok(())
 }
 
-#[cfg(not(feature = "core"))]
 #[tokio::test]
-async fn minimal_build_rejects_activation_and_restore_of_retained_learning() -> Result<()> {
+async fn gateway_rejects_activation_and_restore_of_unavailable_learning() -> Result<()> {
     use sha2::{Digest, Sha256};
     for was_active in [false, true] {
         let fixture = Fixture::new().await?;
@@ -133,10 +158,14 @@ async fn minimal_build_rejects_activation_and_restore_of_retained_learning() -> 
                 .map_err(failure)?;
             fixture.service.shutdown().await?;
         }
-        // Preserve a valid compiler binding, as produced by a full build, then
-        // exercise the minimal binary's activation/restart boundary.
+        // Preserve a valid compiler binding for a retained document whose
+        // requested profile is unavailable to this gateway.
         let mut document = revision.document;
-        document.eval_publication = true;
+        document.learning.mode = if cfg!(feature = "eval-publication") {
+            LearningMode::Explore
+        } else {
+            LearningMode::Observe
+        };
         let compiled = fixture
             .service
             .resources

@@ -44,6 +44,3 @@ pub(crate) async fn insert(
         Err(error) => Err(error),
     }
 }
-
-#[cfg(all(test, feature = "core", feature = "harness"))]
-pub(crate) mod tests;

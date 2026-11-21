@@ -14,7 +14,7 @@ pub struct Credentials {
     /// `Authorization: Bearer <access_token>` (RFC 6750 §2.1).
     pub access_token: String,
     /// RFC 6749 §1.5 refresh token. Optional — the AS may decline to
-    /// issue one, or `bro cloud login` may have been run with a
+    /// issue one, or `bitrouter cloud login` may have been run with a
     /// scope the AS refuses to refresh.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refresh_token: Option<String>,
@@ -109,7 +109,7 @@ pub enum CredentialKind {
     ApiKey,
 }
 
-/// A credential persisted by `bro cloud login`.
+/// A credential persisted by `bitrouter cloud login`.
 ///
 /// New files use a tagged representation. Deserialization also accepts the
 /// original untagged OAuth object so existing logins continue to work.

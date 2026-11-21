@@ -3,8 +3,6 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-#[cfg(feature = "harness")]
-use anyhow::ensure;
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
@@ -76,12 +74,7 @@ pub struct Instance {
     pub resource_binding: Option<String>,
 }
 
-impl Instance {
-    #[cfg(feature = "harness")]
-    fn key(&self) -> String {
-        format!("{}:{}", self.kind.name(), self.id)
-    }
-}
+impl Instance {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Coverage {
@@ -101,225 +94,6 @@ pub struct Report {
     pub instances: Option<Vec<Instance>>,
     pub next_cursor: Option<String>,
     pub limit: usize,
-}
-
-/// References to the actual native owners, shared with the host listeners.
-#[cfg(feature = "harness")]
-#[derive(Clone)]
-pub struct NativeOwners {
-    pub threads: crate::harness::service::ThreadService,
-    pub acp: crate::harness::acp::native::NativeAcpServer,
-    #[cfg(feature = "core")]
-    pub managed: crate::orchestrator_api::ManagedCoreApi,
-    #[cfg(feature = "core")]
-    pub(crate) managed_native: crate::managed_task::owner::Owner,
-}
-
-#[cfg(feature = "harness")]
-pub(crate) async fn snapshot(
-    instance: &str,
-    supervisor: Option<&crate::harness::supervisor::Supervisor>,
-    native: Option<&NativeOwners>,
-    after: Option<&str>,
-    limit: usize,
-) -> Result<Report> {
-    ensure!(
-        (1..=MAX_PAGE).contains(&limit),
-        "limit must be 1–{MAX_PAGE}"
-    );
-    let after_key = after
-        .map(|cursor| {
-            let (boot, key) = cursor
-                .split_once('/')
-                .ok_or_else(|| anyhow::anyhow!("invalid connection cursor"))?;
-            ensure!(
-                boot == instance && !key.is_empty() && key.len() <= 1024,
-                "connection cursor belongs to another daemon boot or is invalid"
-            );
-            Ok::<_, anyhow::Error>(key)
-        })
-        .transpose()?;
-    let mut rows = Vec::new();
-    let mut coverage = Vec::new();
-    if let Some(native) = native {
-        let native_instance = native.threads.capabilities().server_instance_id;
-        for worker in native.threads.active_workers() {
-            rows.push(Instance {
-                kind: Kind::NativeWorker,
-                id: worker.turn_id.clone(),
-                agent: "native".into(),
-                state: serde_json::to_value(worker.status)?
-                    .as_str()
-                    .unwrap_or("unknown")
-                    .into(),
-                thread_id: Some(worker.thread_id),
-                turn_id: Some(worker.turn_id),
-                run_id: None,
-                session_id: None,
-                agent_session_id: None,
-                via: None,
-                connection_id: None,
-                parent_run_id: None,
-                harness_id: None,
-                execution_epoch: None,
-                runtime_instance_id: Some(native_instance.clone()),
-                model: None,
-                model_selector: Some(worker.model),
-                model_source: None,
-                resource_binding: worker.resource_binding,
-            });
-        }
-        for (connection, thread) in native.acp.connected_attachments().await {
-            rows.push(Instance {
-                kind: Kind::NativeAcpAttachment,
-                id: format!("{connection}:{thread}"),
-                agent: "native".into(),
-                state: "attached".into(),
-                thread_id: Some(thread.clone()),
-                turn_id: None,
-                run_id: None,
-                session_id: Some(thread),
-                agent_session_id: None,
-                via: None,
-                connection_id: Some(connection),
-                parent_run_id: None,
-                harness_id: None,
-                execution_epoch: None,
-                runtime_instance_id: Some(native_instance.clone()),
-                model: None,
-                model_selector: None,
-                model_source: None,
-                resource_binding: None,
-            });
-        }
-        #[cfg(feature = "core")]
-        rows.extend(native.managed.connected_sessions().await?);
-        #[cfg(feature = "core")]
-        for report in native.managed_native.active_sessions().await? {
-            let Some(grant) = report.grant else {
-                continue;
-            };
-            rows.push(Instance {
-                kind: Kind::ManagedNativeSession,
-                id: grant.session_id.clone(),
-                agent: "native_managed".into(),
-                state: report.state,
-                thread_id: None,
-                turn_id: None,
-                run_id: report.run.as_ref().map(|run| run.run_id.clone()),
-                session_id: Some(grant.session_id),
-                agent_session_id: None,
-                via: None,
-                connection_id: None,
-                parent_run_id: None,
-                harness_id: Some(grant.harness_id),
-                execution_epoch: Some(grant.execution_epoch),
-                runtime_instance_id: Some(grant.core_instance_id),
-                model: None,
-                model_selector: report.run.map(|run| run.input.model),
-                model_source: None,
-                resource_binding: None,
-            });
-        }
-    }
-    for source in [
-        "native_worker",
-        "native_acp_attachment",
-        "managed_core_channel",
-        "managed_native_session",
-    ] {
-        coverage.push(Coverage {
-            source: source.into(), status: if native.is_some() && (matches!(source, "native_worker" | "native_acp_attachment") || cfg!(feature = "core")) { "observed" } else { "unavailable" }.into(),
-            detail: match source {
-                "native_worker" => "Resident TurnWorker guards across daemon callers; cold/loaded Threads and queued Turns excluded",
-                "native_acp_attachment" => "Live session attachments only; initialized connections without a session are outside this view",
-                "managed_native_session" => "Daemon-owned NativeSession drivers and cleanup; released or lost-owner journals excluded",
-                _ => "Daemon-owned managed Core channel bindings; disconnected retained sessions excluded; harness execution is separately owned",
-            }.into(),
-        });
-    }
-    if let Some(supervisor) = supervisor {
-        for run in supervisor.connected_runs().await {
-            rows.push(Instance {
-                kind: Kind::SupervisedAcp,
-                id: run.run_id.clone(),
-                agent: run.agent_id,
-                state: match (run.process, run.turn) {
-                    (crate::client::sessions::wire::ProcessState::Stopping, _) => "stopping",
-                    (_, crate::client::sessions::wire::TurnState::Idle) => "idle",
-                    (_, crate::client::sessions::wire::TurnState::Submitting) => "submitting",
-                    (_, crate::client::sessions::wire::TurnState::Working) => "working",
-                    (_, crate::client::sessions::wire::TurnState::Cancelling) => "cancelling",
-                }
-                .into(),
-                thread_id: None,
-                turn_id: None,
-                run_id: Some(run.run_id),
-                session_id: run.native_session_id,
-                agent_session_id: run.agent_session_id,
-                via: run.via,
-                connection_id: None,
-                parent_run_id: run.parent_run_id,
-                harness_id: None,
-                execution_epoch: None,
-                runtime_instance_id: None,
-                model_source: run
-                    .confirmed_route
-                    .as_ref()
-                    .map(|_| "confirmed_route".into()),
-                model: run.confirmed_route,
-                model_selector: None,
-                resource_binding: None,
-            });
-        }
-    }
-    coverage.push(Coverage {
-        source: "supervised_acp".into(), status: if supervisor.is_some() { "observed" } else { "unavailable" }.into(),
-        detail: "Initialized live controller and unreaped process; idle/detached included; retained runs and leases excluded".into(),
-    });
-    for (source, detail) in [
-        (
-            "embedded_managed_native",
-            "Independent library embeddings are outside this daemon; product task managed uses managed_native_session",
-        ),
-        (
-            "independent_acp_controller",
-            "Owned by an independent CLI process; route leases do not prove connection liveness",
-        ),
-        (
-            "native_launcher",
-            "External harness owns its UI/process; no daemon-owned connection proof",
-        ),
-        (
-            "inference_only",
-            "Router request traffic does not identify a live agent instance",
-        ),
-    ] {
-        coverage.push(Coverage {
-            source: source.into(),
-            status: "not_observable".into(),
-            detail: detail.into(),
-        });
-    }
-    rows.sort_by_key(Instance::key);
-    rows.retain(|row| after_key.is_none_or(|key| row.key().as_str() > key));
-    let next_cursor = if rows.len() > limit {
-        rows.get(limit - 1)
-            .map(|row| format!("{instance}/{}", row.key()))
-    } else {
-        None
-    };
-    rows.truncate(limit);
-    Ok(Report {
-        daemon_state: "running".into(),
-        server_instance_id: Some(instance.into()),
-        sampled_at: Some(chrono::Utc::now()),
-        resolved_via: "owner_local_control".into(),
-        coverage,
-        instances: (native.is_some() || supervisor.is_some()).then_some(rows),
-        next_cursor,
-        limit,
-    })
 }
 
 pub(crate) async fn resolve_socket(
@@ -455,33 +229,6 @@ impl CliReport for Report {
         if let Some(cursor) = &self.next_cursor {
             human.line(&format!("next_cursor: {cursor}"))?;
         }
-        Ok(())
-    }
-}
-
-#[cfg(all(test, feature = "harness"))]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn missing_inspection_owners_are_unknown_and_invalid_pages_are_rejected() -> Result<()> {
-        let report = snapshot("boot", None, None, None, MAX_PAGE).await?;
-        assert_eq!(report.daemon_state, "running");
-        assert!(report.instances.is_none());
-        assert!(
-            report
-                .coverage
-                .iter()
-                .all(|source| source.status != "observed")
-        );
-        for limit in [0, MAX_PAGE + 1] {
-            assert!(snapshot("boot", None, None, None, limit).await.is_err());
-        }
-        assert!(
-            snapshot("boot", None, None, Some("old/native_worker:turn"), 1)
-                .await
-                .is_err()
-        );
         Ok(())
     }
 }

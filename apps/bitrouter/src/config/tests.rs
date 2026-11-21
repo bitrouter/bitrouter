@@ -82,20 +82,14 @@ fn request_checker_config_rejects_invalid_static_bindings() -> crate::gateway::e
         ("native: {revision: 'has spaces'}", "native revision"),
         (
             "endpoint: https://checker.example/check\n    contract_version: 1",
-            "HTTP request-check extensions are no longer supported",
+            "unknown field",
         ),
         (
             "native: {revision: v1}\n    endpoint: null",
-            "HTTP request-check extensions are no longer supported",
+            "unknown field",
         ),
-        (
-            "credential_env: TOKEN",
-            "HTTP request-check extensions are no longer supported",
-        ),
-        (
-            "contract_version: 1",
-            "HTTP request-check extensions are no longer supported",
-        ),
+        ("credential_env: TOKEN", "unknown field"),
+        ("contract_version: 1", "unknown field"),
         ("native: {revision: v1}\n    typo: true", "unknown field"),
     ];
     for (checker_fields, expected) in invalid {
@@ -1805,32 +1799,17 @@ fn mcp_upstream_protocol_opts_in_by_version_string() {
     );
 }
 
-/// `chat.commands` deserializes, and `description` is optional.
 #[test]
-fn chat_prompt_commands_deserialize() {
-    let cfg = parse(
-        r#"
-chat:
-  commands:
-    - name: review
-      description: review a diff
-      prompt: "Review this: $ARGUMENTS"
-    - name: ship
-      prompt: "Ship it"
-"#,
-    )
-    .expect("parse");
-    assert_eq!(cfg.chat.commands.len(), 2);
-    assert_eq!(cfg.chat.commands[0].name, "review");
-    assert_eq!(cfg.chat.commands[0].prompt, "Review this: $ARGUMENTS");
-    assert_eq!(cfg.chat.commands[1].description, "", "description defaults");
-}
-
-/// A config with no `chat:` block still loads — the whole section is optional.
-#[test]
-fn chat_is_optional() {
-    let cfg = parse("providers: {}\n").expect("parse");
-    assert!(cfg.chat.commands.is_empty());
+fn rejects_local_harness_configuration_as_unknown() {
+    for field in ["agent_api", "chat"] {
+        let error = parse(&format!("{field}: {{}}\n")).expect_err("unknown field");
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("unknown field `{field}`")),
+            "{error}"
+        );
+    }
 }
 
 #[test]

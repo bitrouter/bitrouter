@@ -1,10 +1,7 @@
-//! Controlled publication and recorded history for real gateway profile tests.
+//! Controlled publication and schema initialization for real gateway profile tests.
 
 use super::*;
-use crate::capture_fixture::{FixtureScope, PersistedHistory};
-use bitrouter::config::Config;
-use bitrouter::policy_lock::deterministic_yaml;
-use bitrouter::storage::capture::{CaptureDirection, CaptureEvent, CaptureKind};
+use bitrouter::policy_source::deterministic_yaml;
 use bitrouter_ai::policy::{Document, Policy, SpecVersion, Target};
 use bitrouter_ai::types::ReasoningEffort;
 use std::collections::BTreeMap;
@@ -23,8 +20,6 @@ server:
   skip_auth: true
 database:
   url: "{}"
-agent_api:
-  enabled: false
 providers:
   fixture:
     api_base: "{upstream}"
@@ -87,36 +82,11 @@ routers:
         )?;
     }
     let raw = serde_saphyr::to_string(&document)?;
-    let config: Config = bitrouter::config::parse_with(&raw, |_| None)?;
     fs::write(&fixture.config, &raw)?;
     fs::set_permissions(&fixture.config, fs::Permissions::from_mode(0o600))?;
     fixture.runtime.block_on(async {
-        let assembled = Box::pin(bitrouter::assemble::build_app_with_path(
-            &config, Some(&fixture.config),
-        )).await?;
-        for id in ["baseline", "full", "minimum", "restored", "changed"] {
-            let history = PersistedHistory::new(assembled.db.clone(), FixtureScope {
-                owner: "local".into(),
-                source: "fixture".into(),
-                controller_instance_id: Some("controller".into()),
-                route_scope_id: Some("local".into()),
-            }).await?;
-            assembled.gateway_requests.inventory()
-                .register_capture(history.connection_id(), "local", "controller").await?;
-            for (kind, method, call_id, payload) in [
-                (CaptureKind::Request, "session/new", 1, json!({"cwd":"/fixture"})),
-                (CaptureKind::Response, "session/new", 1, json!({"result":{"sessionId":id}})),
-                (CaptureKind::Request, "session/prompt", 2,
-                    json!({"sessionId":id,"prompt":[{"type":"text","text":"Make a small change."}]})),
-            ] {
-                history.append(id, CaptureEvent {
-                    direction: CaptureDirection::Client, kind, call_id: Some(call_id),
-                    method: method.into(), payload,
-                }).await?;
-            }
-        }
-        let db = assembled.db.clone();
-        drop(assembled);
+        let db = bitrouter::db::connect(&database_url(fixture)).await?;
+        bitrouter::db::run_migrations(&db).await?;
         db.close().await?;
         Ok::<_, anyhow::Error>(())
     })?;

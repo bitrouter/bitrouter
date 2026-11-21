@@ -153,7 +153,7 @@ mod extra_capture_contract {
     use crate::gateway::observability::decision::{
         EvalInvocation, PendingEvalDecision, PendingEvalDecisionStore,
     };
-    use crate::policy_lock::{PolicyRoutingSnapshot, PolicyRuntime};
+    use crate::policy_source::{PolicyRoutingSnapshot, PolicyRuntime};
     use crate::policy_table_router::{PolicyDecision, PolicyTableRouter};
     use bitrouter_ai::types::{GenerationParams, Message, Prompt, ProviderMetadata, Role};
 

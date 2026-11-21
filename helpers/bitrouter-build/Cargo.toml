@@ -1,0 +1,12 @@
+[package]
+name = "bitrouter-build"
+description = "Build-time source provenance for BitRouter executables"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde_json.workspace = true

@@ -464,15 +464,72 @@ pub struct PipelineRequest {
     pub inbound_protocol: Option<ApiProtocol>,
 }
 
+/// Only the gateway can allocate a ledger ID in this namespace.
+pub(crate) const GENERATED_REQUEST_PREFIX: &str = "brg_";
+
+#[derive(Debug)]
+pub(crate) struct AllocatedRequestId {
+    pub(crate) id: String,
+    delivery: std::sync::atomic::AtomicU64,
+}
+
+impl AllocatedRequestId {
+    pub(crate) fn new(id: String) -> Self {
+        Self {
+            id,
+            delivery: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    pub(crate) fn belongs_to(&self, attempt: u64) -> bool {
+        self.delivery.load(std::sync::atomic::Ordering::Relaxed) == attempt
+    }
+
+    /// Cloning a native PipelineRequest shares the allocation. Only its first
+    /// delivery may dispatch; repeated phases of that same delivery may proceed.
+    pub(crate) fn claim(&self, attempt: u64) -> bool {
+        use std::sync::atomic::Ordering::Relaxed;
+        match self.delivery.compare_exchange(0, attempt, Relaxed, Relaxed) {
+            Ok(_) => true,
+            Err(winner) => winner == attempt,
+        }
+    }
+}
+
+pub(crate) fn new_request_id() -> String {
+    format!("{GENERATED_REQUEST_PREFIX}{}", uuid::Uuid::new_v4())
+}
+
+pub(crate) fn validate_client_request_id(id: &str) -> crate::gateway::error::Result<()> {
+    if id.is_empty()
+        || id.len() > 128
+        || !id.bytes().all(|byte| byte.is_ascii_graphic())
+        || id.starts_with(GENERATED_REQUEST_PREFIX)
+    {
+        return Err(crate::gateway::error::BitrouterError::bad_request(
+            "request ID must contain 1–128 visible ASCII bytes outside the gateway-generated namespace",
+        ));
+    }
+    Ok(())
+}
+
+fn generated_identity() -> (String, http::Extensions) {
+    let id = new_request_id();
+    let mut extensions = http::Extensions::new();
+    extensions.insert(std::sync::Arc::new(AllocatedRequestId::new(id.clone())));
+    (id, extensions)
+}
+
 impl PipelineRequest {
     pub(crate) fn new_generate_content(
         caller: CallerContext,
         input: generate_content::Input,
     ) -> Self {
         let model = input.model().to_owned();
+        let (request_id, extensions) = generated_identity();
         Self {
-            request_id: uuid::Uuid::new_v4().to_string(),
-            extensions: http::Extensions::new(),
+            request_id,
+            extensions,
             original_model: model.clone(),
             model,
             caller,
@@ -486,9 +543,10 @@ impl PipelineRequest {
     /// Build a request with a fresh uuid request id.
     pub fn new(model: impl Into<String>, caller: CallerContext, prompt: Prompt) -> Self {
         let model = model.into();
+        let (request_id, extensions) = generated_identity();
         Self {
-            request_id: uuid::Uuid::new_v4().to_string(),
-            extensions: http::Extensions::new(),
+            request_id,
+            extensions,
             original_model: model.clone(),
             model,
             caller,
@@ -505,9 +563,10 @@ impl PipelineRequest {
         request: DecisionRequest,
     ) -> Self {
         let model = model.into();
+        let (request_id, extensions) = generated_identity();
         Self {
-            request_id: uuid::Uuid::new_v4().to_string(),
-            extensions: http::Extensions::new(),
+            request_id,
+            extensions,
             original_model: model.clone(),
             model,
             caller,

@@ -230,10 +230,6 @@ impl TenancyConfig {
                     .any(|credential| credential.scopes.contains(&ControlScope::Tenancy)),
             "tenancy requires an enabled control listener and explicit control:tenancy authority"
         );
-        ensure!(
-            !config.agent_api.enabled,
-            "tenancy does not expose the host coding-task API"
-        );
         for credential in &config.control.credentials {
             if credential.scopes.contains(&ControlScope::Tenancy) {
                 bitrouter_ai::tenancy::identity::PrincipalId::for_control_credential(
@@ -516,7 +512,6 @@ mod tests {
         assert!(crate::config::parse_resolved(&oversized_second).is_err());
         for suffix in [
             "database: {url: 'sqlite::memory:'}\n",
-            "agent_api: {enabled: true}\n",
             "database: {url: 'sqlite://a%2fb.db'}\n",
         ] {
             assert!(crate::config::parse_resolved(&format!("{document}{suffix}")).is_err());

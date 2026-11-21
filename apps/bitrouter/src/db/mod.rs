@@ -19,6 +19,7 @@ pub mod migration;
 #[cfg(test)]
 mod migration_atomicity;
 mod sqlite;
+mod sqlite_schema;
 pub(crate) mod store_format;
 
 use sea_orm::{ConnectOptions, ConnectionTrait, Database, DatabaseBackend, DatabaseConnection};
@@ -101,53 +102,11 @@ impl OwnedDatabase {
 }
 
 async fn pending_sqlite_migrations(db: &DatabaseConnection) -> anyhow::Result<bool> {
-    use anyhow::{Context, ensure};
-    use sea_orm::Statement;
-    ensure!(
+    anyhow::ensure!(
         db.get_database_backend() == DatabaseBackend::Sqlite,
         "owned migrations require SQLite"
     );
-    // Migrator::get_pending_migrations calls install(), which can write before
-    // a preflight. Read the bounded ledger directly without creating it.
-    // https://github.com/SeaQL/sea-orm/blob/1.1.20/sea-orm-migration/src/migrator.rs
-    ensure!(
-        db.query_one(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            "SELECT 1 FROM temp.sqlite_schema WHERE lower(name)='seaql_migrations' LIMIT 1"
-        ))
-        .await?
-        .is_none(),
-        "temporary migration ledger is unsupported"
-    );
-    let Some(table) = db
-        .query_one(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            "SELECT type FROM main.sqlite_schema WHERE lower(name)='seaql_migrations' LIMIT 1",
-        ))
-        .await?
-    else {
-        return Ok(true);
-    };
-    ensure!(
-        table.try_get::<String>("", "type")? == "table",
-        "invalid migration ledger"
-    );
-    let mut pending: std::collections::BTreeSet<_> = migration::Migrator::migrations()
-        .iter()
-        .map(|migration| migration.name().to_owned())
-        .collect();
-    let rows = db.query_all(Statement::from_string(DatabaseBackend::Sqlite, format!(
-        "SELECT CASE WHEN typeof(version)='text' AND length(CAST(version AS BLOB))<=256 THEN version ELSE NULL END AS version, CASE WHEN typeof(applied_at)='integer' THEN applied_at ELSE NULL END AS applied_at FROM main.seaql_migrations LIMIT {}", pending.len().checked_add(1).context("migration registry size")?
-    ))).await?;
-    for row in rows {
-        let version: String = row.try_get("", "version")?;
-        let _: i64 = row.try_get("", "applied_at")?;
-        ensure!(
-            pending.remove(&version),
-            "unknown or duplicate migration identity"
-        );
-    }
-    Ok(!pending.is_empty())
+    Ok(store_format::inspect(db).await? == store_format::State::Empty)
 }
 pub(crate) async fn connect_owned_tenancy(url: &str) -> anyhow::Result<OwnedDatabase> {
     let owner = crate::tenancy::ownership::acquire(url)?;
@@ -178,7 +137,7 @@ async fn connect_inner(
         sqlite::connect(&normalized, opts, owner)
             .await
             .map_err(|error| {
-                BitrouterError::internal(format!("connecting to SQLite database: {error}"))
+                BitrouterError::internal(format!("connecting to SQLite database: {error:#}"))
             })?
     } else {
         (
@@ -188,6 +147,16 @@ async fn connect_inner(
             false,
         )
     };
+    if db.get_database_backend() != DatabaseBackend::Sqlite {
+        let state = store_format::inspect(&db).await.map_err(|error| {
+            BitrouterError::bad_request(format!("selecting gateway server database: {error}"))
+        })?;
+        if state == store_format::State::Current {
+            current_schema::validate(&db).await.map_err(|error| {
+                BitrouterError::bad_request(format!("validating gateway server database: {error}"))
+            })?;
+        }
+    }
     if owner.is_none()
         && !readonly
         && crate::tenancy::ownership::has_installation(&db)

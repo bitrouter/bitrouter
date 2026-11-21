@@ -71,11 +71,6 @@ pub(in crate::tenancy) struct Candidate {
 }
 
 impl Candidate {
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(in crate::tenancy) fn learning_digest(&self) -> &str {
-        &self.digest
-    }
-
     pub fn new(receipt: ExecutionReceipt, disposition: Disposition) -> Result<Self> {
         Self::from_parts(receipt, disposition.into())
     }
@@ -165,11 +160,6 @@ impl Candidate {
             .context("original usage evidence")?;
         self.with_usage_document(evidence.document.clone())
     }
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(super) fn with_unavailable_usage_evidence(self) -> Result<Self> {
-        let document = super::usage_evidence::unavailable_at_recovery(&self.receipt);
-        self.with_usage_document(document)
-    }
     fn with_usage_document(
         mut self,
         document: bitrouter_ai::tenancy::usage_evidence::ExecutionUsageEvidence,
@@ -185,10 +175,6 @@ impl Candidate {
         self.digest = digest(&self.json, &self.private_json);
         self.usage_evidence = Some(evidence);
         Ok(self)
-    }
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(in crate::tenancy) fn has_auxiliary(&self) -> bool {
-        self.auxiliary.is_some()
     }
     pub fn auxiliary_unclean(&self) -> bool {
         self.auxiliary.as_ref().is_some_and(|aux| aux.unclean())
@@ -902,88 +888,4 @@ pub(in crate::tenancy) async fn inventory(
     installation: &InstallationId,
 ) -> Result<Inventory> {
     inventory::load(db, installation).await
-}
-
-#[cfg(all(feature = "core", feature = "harness"))]
-pub(in crate::tenancy) async fn recovery_lookup(
-    db: &impl ConnectionTrait,
-    installation: &InstallationId,
-    tenant: &TenantId,
-    id: &ExecutionId,
-    budget: &crate::tenancy::session::recovery::Budget,
-) -> Result<Option<Candidate>> {
-    ensure!(
-        db.get_database_backend() == DatabaseBackend::Sqlite,
-        "native recovery requires SQLite"
-    );
-    let mut invalid = point(installation, tenant, id);
-    invalid.expr(Expr::val(1)).and_where(Expr::cust(
-        "typeof(byte_count)!='integer' OR typeof(unknown_outcome)!='integer' OR unknown_outcome NOT IN (0,1) OR typeof(receipt_json)!='text' OR typeof(disposition_json)!='text'"
-    )).limit(1);
-    ensure!(
-        db.query_one(db.get_database_backend().build(&invalid))
-            .await?
-            .is_none(),
-        "invalid receipt recovery SQL types"
-    );
-    budget.charge(0, 1024)?;
-    // This first profile has no auxiliary recovery proof. Check presence without
-    // materializing O1/C1 evidence outside the shared operation byte budget.
-    let auxiliary = Query::select()
-        .expr(Expr::val(1))
-        .from(Alias::new("tenancy_receipt_auxiliary"))
-        .and_where(Expr::col(Alias::new("installation_id")).eq(installation.as_str()))
-        .and_where(Expr::col(Alias::new("tenant_id")).eq(tenant.as_str()))
-        .and_where(Expr::col(Alias::new("execution_id")).eq(id.as_str()))
-        .limit(1)
-        .to_owned();
-    ensure!(
-        db.query_one(db.get_database_backend().build(&auxiliary))
-            .await?
-            .is_none(),
-        "auxiliary receipt work has no stopped recovery proof"
-    );
-    let Some(candidate) = lookup_candidate_bounded(db, installation, tenant, id, &|rows, bytes| {
-        budget.charge(rows, bytes)
-    })
-    .await?
-    else {
-        return Ok(None);
-    };
-    let disposition: StoredDisposition = serde_json::from_str(&candidate.private_json)?;
-    ensure!(
-        disposition.auxiliary_digest.is_none(),
-        "auxiliary receipt link has no recovery proof"
-    );
-    Ok(Some(candidate))
-}
-
-/// The live original capture authority supplies the namespace; an imported
-/// descriptor or an opaque-link string can never invoke this reader by itself.
-#[cfg(all(feature = "core", feature = "harness"))]
-pub(in crate::tenancy) async fn block_candidate_in(
-    tx: &DatabaseTransaction,
-    binding: &crate::tenancy::capture::Binding,
-    id: &ExecutionId,
-    budget: &crate::storage::operation_budget::OperationBudget<'_>,
-) -> Result<Option<Candidate>> {
-    binding
-        .check()
-        .map_err(|failure| crate::storage::operation_budget::Error::Rejected(failure.0.code))?;
-    let (installation, tenant, _) = binding.authority().identity();
-    native_namespace_candidate_in(tx, installation, tenant, id, budget).await
-}
-
-#[cfg(all(feature = "core", feature = "harness"))]
-async fn native_namespace_candidate_in(
-    tx: &sea_orm::DatabaseTransaction,
-    installation: &InstallationId,
-    tenant: &TenantId,
-    id: &ExecutionId,
-    budget: &crate::storage::operation_budget::OperationBudget<'_>,
-) -> Result<Option<Candidate>> {
-    lookup_candidate_bounded(tx, installation, tenant, id, &|rows, bytes| {
-        Ok(budget.charge(rows, bytes)?)
-    })
-    .await
 }

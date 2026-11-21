@@ -6,3 +6,4 @@ futures_core
 http
 reqwest
 serde_json
+uuid

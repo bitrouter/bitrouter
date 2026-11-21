@@ -33,17 +33,6 @@
       ],
       "type": "object"
     },
-    "AcpRecordingConfig": {
-      "description": "Local ACP conversation content recording, independent of routing evidence.",
-      "properties": {
-        "enabled": {
-          "default": false,
-          "description": "Store observable session messages and tool results until explicitly deleted.\nNo content is recorded or sent to an evaluator by default.",
-          "type": "boolean"
-        }
-      },
-      "type": "object"
-    },
     "AcpTransport": {
       "description": "How to dial one upstream ACP agent.\n\nv1.0 ships stdio only — the spec lists stdio as the primary transport for\nagent processes spawned by an IDE / CLI client.",
       "oneOf": [
@@ -82,36 +71,6 @@
           "type": "object"
         }
       ]
-    },
-    "AgentApiConfig": {
-      "additionalProperties": false,
-      "description": "Privileged HTTP access to the BRO task service. The app validates a\nloopback listener, nonempty token environment variable, and workspace\nallowlist before binding; `server.skip_auth` never grants this authority.",
-      "properties": {
-        "enabled": {
-          "default": false,
-          "description": "Whether to bind the task HTTP listener.",
-          "type": "boolean"
-        },
-        "listen": {
-          "default": "127.0.0.1:4359",
-          "description": "Loopback host and port, distinct from inference and control.",
-          "type": "string"
-        },
-        "token_env": {
-          "default": "",
-          "description": "Environment variable containing the dedicated task bearer token.",
-          "type": "string"
-        },
-        "workspaces": {
-          "default": [],
-          "description": "Exact server-owned workspace paths admitted for task submission.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      },
-      "type": "object"
     },
     "ApiProtocol": {
       "description": "Wire protocol. Known values: `chat_completions`, `messages`, `responses`, `decisions`; any other string names an externally-registered (outbound-only) custom protocol.",
@@ -304,35 +263,6 @@
       },
       "type": "object"
     },
-    "ChatConfig": {
-      "description": "Retained native-model, onboarding-launch and headless prompt defaults.",
-      "properties": {
-        "agent": {
-          "default": null,
-          "description": "Saved harness for an explicit onboarding native launch; bare `bro` starts the daemon.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "commands": {
-          "description": "Prompt-expansion commands.\n\n`/name args` in a `bro run` or `bro acp prompt` input\nsends `prompt` with `$ARGUMENTS` replaced by everything typed after the\nname.\n\nThere is deliberately no key that *runs* anything. A command here\nproduces a prompt and nothing else, which is what lets the registry be\nopen — user-authored, unreviewed — while the registry of commands that\nreach BitRouter's own ports stays closed and guarded.",
-          "items": {
-            "$ref": "#/$defs/PromptCommandConfig"
-          },
-          "type": "array"
-        },
-        "model": {
-          "default": null,
-          "description": "Default daemon-routable model for native tasks and Threads.",
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
     "ChatTokenLimitField": {
       "description": "Chat Completions field used to carry the output-token budget.\n\nOpenAI-compatible providers are split between the legacy `max_tokens`\nspelling and the current `max_completion_tokens` spelling. The canonical\nprompt keeps one semantic token budget; this enum only records which wire\nspelling should be used when the prompt is rendered back to Chat\nCompletions.",
       "oneOf": [
@@ -365,7 +295,7 @@
           "type": "object"
         }
       ],
-      "description": "A request-check implementation explicitly linked by a custom host.\n\nThe existing `native.revision` configuration shape remains supported. Former\nHTTP declarations are rejected with a migration diagnostic, never ignored."
+      "description": "A request-check implementation explicitly linked by a custom host."
     },
     "ContinuationConfig": {
       "description": "Always-active durable provider continuation lifecycle settings.",
@@ -1486,29 +1416,6 @@
       ],
       "type": "object"
     },
-    "PromptCommandConfig": {
-      "description": "One user-authored command that expands to a prompt.",
-      "properties": {
-        "description": {
-          "default": "",
-          "description": "One line for `/commands`.",
-          "type": "string"
-        },
-        "name": {
-          "description": "What to type after the slash. May not be a name BitRouter answers —\nthat is rejected when the config is loaded, not resolved at runtime.",
-          "type": "string"
-        },
-        "prompt": {
-          "description": "The prompt to send. `$ARGUMENTS` is replaced by whatever was typed\nafter the name; a template that uses it twice gets it twice.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "name",
-        "prompt"
-      ],
-      "type": "object"
-    },
     "ProtocolList": {
       "anyOf": [
         {
@@ -2247,7 +2154,7 @@
         },
         "log_level": {
           "default": "info",
-          "description": "Log filter for the daemon, in `tracing-subscriber` `EnvFilter` syntax —\na bare level (`debug`) or a per-target list (`info,bitrouter=debug`).\n\n`RUST_LOG` overrides this when set, following the Rust convention. The\nfilter is resolved once at startup, so changing it needs a restart —\n`bro reload` will not pick it up. Applies to `bro serve`\n(and therefore `start`); other subcommands install their subscriber\nbefore any config is read and honour `RUST_LOG` only.",
+          "description": "Log filter for the daemon, in `tracing-subscriber` `EnvFilter` syntax —\na bare level (`debug`) or a per-target list (`info,bitrouter=debug`).\n\n`RUST_LOG` overrides this when set, following the Rust convention. The\nfilter is resolved once at startup, so changing it needs a restart —\n`bitrouter reload` will not pick it up. Applies to `bitrouter serve`\n(and therefore `start`); other subcommands install their subscriber\nbefore any config is read and honour `RUST_LOG` only.",
           "type": "string"
         },
         "require_known_pricing": {
@@ -2937,17 +2844,6 @@
   "additionalProperties": false,
   "description": "The top-level configuration.",
   "properties": {
-    "acp_recording": {
-      "$ref": "#/$defs/AcpRecordingConfig",
-      "default": {
-        "enabled": false
-      },
-      "description": "Opt-in local storage of observable ACP conversation content."
-    },
-    "agent_api": {
-      "$ref": "#/$defs/AgentApiConfig",
-      "description": "Opt-in privileged BRO coding task API, separate from inference and control."
-    },
     "agents": {
       "additionalProperties": {
         "$ref": "#/$defs/AcpAgentConfig"
@@ -2955,10 +2851,6 @@
       "default": {},
       "description": "Upstream ACP agents, keyed by agent id. Surfaced by the\n`bro agents` CLI (list / check / install). Empty by default.",
       "type": "object"
-    },
-    "chat": {
-      "$ref": "#/$defs/ChatConfig",
-      "description": "The interactive session's own configuration."
     },
     "checkers": {
       "additionalProperties": {
@@ -2994,7 +2886,7 @@
         }
       ],
       "default": null,
-      "description": "Typed decision backend for native context routing. Absent means the\nconservative compiler runs without remote semantic judgments."
+      "description": "Decision backend for model-routing classification. If omitted, model\nselection uses the available local classification."
     },
     "eval": {
       "$ref": "#/$defs/EvalConfig",

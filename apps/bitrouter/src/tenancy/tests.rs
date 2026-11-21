@@ -11,7 +11,7 @@ use chrono::Utc;
 
 use super::{Service, command::Command, model::Caller, store::StoredResponse};
 
-#[cfg(all(unix, feature = "core", feature = "harness"))]
+#[cfg(unix)]
 mod assembly_scope;
 mod authority;
 mod authority_ingress;
@@ -24,8 +24,7 @@ mod directory;
 mod eval;
 pub(in crate::tenancy) mod execution;
 mod http;
-#[cfg(not(feature = "core"))]
-mod no_core;
+mod learning_startup;
 mod resources;
 
 #[tokio::test]

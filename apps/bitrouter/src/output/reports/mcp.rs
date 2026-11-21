@@ -60,7 +60,7 @@ pub struct McpRegistryRow {
     pub description: String,
 }
 
-/// Result of legacy `bro mcp search <query>`.
+/// Result of legacy `bitrouter mcp search <query>`.
 #[derive(Serialize)]
 pub struct McpRegistryReport {
     pub servers: Vec<McpRegistryRow>,

@@ -213,7 +213,7 @@ policies:
     let source: bitrouter_ai::policy::Document = serde_saphyr::from_str(policy_text)?;
     tokio::fs::write(
         &policy_path,
-        bitrouter::policy_lock::deterministic_yaml(&source)?,
+        bitrouter::policy_source::deterministic_yaml(&source)?,
     )
     .await?;
 
@@ -388,11 +388,11 @@ routers:
         let path = self.home.path().join("policy.yaml");
         let expected = if path.exists() {
             let current: Document = serde_saphyr::from_str(&std::fs::read_to_string(&path)?)?;
-            Some(bitrouter::policy_lock::semantic_digest(&current)?)
+            Some(bitrouter::policy_source::semantic_digest(&current)?)
         } else {
             None
         };
-        bitrouter::policy_lock::write_atomic(&path, expected.as_deref(), &source)?;
+        bitrouter::policy_source::write_atomic(&path, expected.as_deref(), &source)?;
         Ok(())
     }
 

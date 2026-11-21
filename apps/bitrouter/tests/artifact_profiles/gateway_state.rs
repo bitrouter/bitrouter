@@ -1,10 +1,9 @@
 //! Explicit model-only publication and immutable request facts across artifacts.
 
 use super::*;
-use bitrouter::gateway::observability::inventory::INVENTORY_VERSION;
+use bitrouter::gateway::observability::inventory::GatewayInventory;
 use bitrouter::metering::entities::requests;
-use bitrouter::storage::evolution::{EvolutionStore, digest};
-use bitrouter::storage::session_identity::SessionIdentity;
+use bitrouter::storage::evolution::EvolutionStore;
 use bitrouter_ai::policy::Document;
 use sea_orm::{DatabaseConnection, EntityTrait};
 use serde_json::{Value, json};
@@ -15,9 +14,6 @@ use wiremock::{
 
 #[path = "gateway_seed.rs"]
 mod seed;
-
-#[path = "gateway_judge.rs"]
-mod judge;
 
 #[path = "gateway_trajectory.rs"]
 mod trajectory;
@@ -33,35 +29,27 @@ fn database_url(fixture: &Fixture) -> String {
     )
 }
 
-fn session(id: &str) -> SessionIdentity {
-    SessionIdentity {
-        owner: "local".into(),
-        source: "fixture".into(),
-        native_session_id: id.into(),
-    }
-}
-
 #[derive(Debug, PartialEq, Eq)]
 struct RequestFacts {
     metering: requests::Model,
-    inventory: (i64, Value),
+    inventory: Value,
     execution: Option<(i64, Value)>,
     intent: Option<(i64, Value)>,
 }
 
 async fn request_facts(db: &DatabaseConnection, request_id: &str) -> Result<RequestFacts> {
     let owner = EvolutionStore::new(db.clone(), "local")?;
-    let scope = digest(&(INVENTORY_VERSION, "local", "controller"))?;
-    let inventory = EvolutionStore::new(db.clone(), &format!("gateway:{scope}"))?;
     Ok(RequestFacts {
         metering: requests::Entity::find_by_id(request_id)
             .one(db)
             .await?
             .context("metering missing")?,
-        inventory: inventory
-            .get("gateway_request", request_id)
-            .await?
-            .context("inventory missing")?,
+        inventory: serde_json::to_value(
+            GatewayInventory::new(db.clone())
+                .request("local", request_id)
+                .await?
+                .context("inventory missing")?,
+        )?,
         execution: owner.get("execution", request_id).await?,
         intent: owner.get("route_intent", request_id).await?,
     })
@@ -76,94 +64,16 @@ fn snapshot(fixture: &Fixture, request_id: &str) -> Result<RequestFacts> {
     })
 }
 
-// Only this isolation negative creates Block state. Independent judge and
-// trajectory fixtures use the neutral shared seed and never call this helper.
-fn seed_unrelated_adopted_block(fixture: &Fixture) -> Result<Value> {
-    use bitrouter::gateway::routing::blocks::{
-        allocation::BanditConfig,
-        control::{BlockDefinition, BlockRule, BlockStatus, ControlState},
-        store::BlockPolicyStore,
-    };
-    fixture.runtime.block_on(async {
-        let raw = fs::read_to_string(&fixture.config)?;
-        let config = bitrouter::config::parse_with(&raw, |_| None)?;
-        let assembled = Box::pin(bitrouter::assemble::build_app_with_path(
-            &config,
-            Some(&fixture.config),
-        ))
-        .await?;
-        assembled
-            .evolution
-            .register(
-                "local",
-                BlockDefinition {
-                    block_id: "unrelated-current-block".into(),
-                    source: "fixture".into(),
-                    rationale: "Stock gateway isolation negative.".into(),
-                    rules: vec![BlockRule {
-                        selector: "bitrouter/coding".into(),
-                        fingerprint: None,
-                        baseline_route: "bitrouter/coding".into(),
-                        challenger_route: "bitrouter/candidate".into(),
-                    }],
-                    independence_rationale: "One independent block.".into(),
-                    dependencies: std::collections::BTreeMap::new(),
-                    measurement_contract: "fixture-measurement".into(),
-                    batch_sessions: 32,
-                    bandit: BanditConfig::default(),
-                },
-            )
-            .await?;
-        let store = EvolutionStore::new(assembled.db.clone(), "local")?;
-        let (revision, _): (_, ControlState) = store
-            .get("control", "owner")
-            .await?
-            .context("registered control missing")?;
-        store
-            .update::<ControlState, _>("control", "owner", revision, |state| {
-                let block = state
-                    .blocks
-                    .get_mut("unrelated-current-block")
-                    .context("registered Block missing")?;
-                block.parent_revision = Some(block.revision.clone());
-                block.revision = "controlled-isolation-adoption".into();
-                block.status = BlockStatus::Adopted;
-                block.plan = None;
-                state.generation += 1;
-                Ok(())
-            })
-            .await?;
-        let state = BlockPolicyStore::new(assembled.db.clone(), "local")?
-            .state()
-            .await?;
-        let block = state
-            .blocks
-            .get("unrelated-current-block")
-            .context("current Block")?;
-        block.definition.validate()?;
-        ensure!(block.status == BlockStatus::Adopted && !block.routing_config_digest.is_empty());
-        let result = serde_json::to_value(state)?;
-        let db = assembled.db.clone();
-        drop(assembled);
-        db.close().await?;
-        Ok(result)
-    })
-}
-
-fn check_isolated_block(fixture: &Fixture, original: &Value) -> Result<()> {
+fn check_gateway_ownership(fixture: &Fixture) -> Result<()> {
+    use sea_orm::{ConnectionTrait, DbBackend, Statement};
     fixture.runtime.block_on(async {
         let db = bitrouter::db::connect(&database_url(fixture)).await?;
+        ensure!(db.query_all(Statement::from_string(DbBackend::Sqlite,
+            "SELECT name FROM sqlite_schema WHERE type = 'table' AND (name GLOB 'bro_*' OR name GLOB 'acp_*')"
+        )).await?.is_empty(), "gateway created a local harness table");
         let store = EvolutionStore::new(db.clone(), "local")?;
-        let (_, state): (_, Value) = store
-            .get("control", "owner")
-            .await?
-            .context("isolation Block missing")?;
-        ensure!(state == *original, "gateway changed unrelated Block state");
-        for kind in ["enrollment", "route_intent", "judge_job"] {
-            ensure!(
-                store.list::<Value>(kind).await?.is_empty(),
-                "gateway created experimental {kind}"
-            );
+        for kind in ["control", "enrollment", "route_intent", "judge_job"] {
+            ensure!(store.list::<Value>(kind).await?.is_empty(), "gateway created experimental {kind}");
         }
         db.close().await?;
         Ok(())
@@ -181,7 +91,7 @@ fn policy_cli(fixture: &mut Fixture, binary: &Path, args: &[&str]) -> Result<Val
 }
 
 fn check_source(fixture: &mut Fixture, binary: &Path, source: &Document) -> Result<String> {
-    let digest = bitrouter::policy_lock::semantic_digest(source)?;
+    let digest = bitrouter::policy_source::semantic_digest(source)?;
     for (args, view) in [
         (vec!["show", "coding"], "active"),
         (vec!["show", "coding", "--disk"], "disk"),
@@ -271,7 +181,7 @@ fn dispatch(
     let deadline = Instant::now() + READY_TIMEOUT;
     let facts = loop {
         let facts = snapshot(fixture, id)?;
-        if facts.inventory.1["settlement"]["outcome"] == "completed" {
+        if facts.inventory["settlement"]["outcome"] == "completed" {
             break facts;
         }
         ensure!(
@@ -318,8 +228,8 @@ fn dispatch(
         facts.metering.estimated_charge_micro_usd
             == if expected_model == "cheap" { 14 } else { 28 }
     );
-    ensure!(facts.inventory.1["settlement"]["outcome"] == "completed");
-    let settlement = &facts.inventory.1["settlement"];
+    ensure!(facts.inventory["settlement"]["outcome"] == "completed");
+    let settlement = &facts.inventory["settlement"];
     ensure!(
         settlement["final_provider"] == "fixture" && settlement["final_model"] == expected_model
     );
@@ -328,23 +238,11 @@ fn dispatch(
         settlement["final_metered_cost_micro_usd"] == expected_cost
             && settlement["total_cost_micro_usd"] == expected_cost
     );
-    ensure!(facts.inventory.1["request_id"] == id);
-    if session_id != "missing-session" {
-        let identity = serde_json::to_value(session(session_id))?;
-        ensure!(facts.inventory.1["binding"]["identity"] == identity);
-        let execution = &facts
-            .execution
-            .as_ref()
-            .context("bound execution missing")?
-            .1;
-        ensure!(execution["request_id"] == id && execution["identity"] == identity);
-        ensure!(execution["attempt_id"] == facts.inventory.1["attempt_id"]);
-        ensure!(execution["settlement"] == *settlement);
-        ensure!(
-            execution["intent"].is_null(),
-            "canonical fallback acquired Block authority"
-        );
-    }
+    ensure!(facts.inventory["request_id"] == id);
+    ensure!(
+        facts.inventory["binding"].is_null() && facts.execution.is_none(),
+        "client-supplied session acquired gateway execution authority"
+    );
     Ok(facts)
 }
 
@@ -381,9 +279,6 @@ fn start(
     let pid = fixture.start(binary)?;
     let report = fixture.status(binary, artifact, artifact, pid)?;
     fixture.health(&report)?;
-    if artifact.features.is_empty() {
-        ensure!(!bitrouter::client::agent_local::socket_path(&fixture.socket).exists());
-    }
     Ok((pid, report.listen.context("listen address missing")?))
 }
 
@@ -431,15 +326,15 @@ fn exercise(fixture: &mut Fixture, full_binary: &Path, minimum_binary: &Path) ->
     seed::assert_no_blocks(fixture)?;
     let source_a = seed::source("strong")?;
     let source_b = seed::source("cheap")?;
-    let digest_a = bitrouter::policy_lock::semantic_digest(&source_a)?;
-    let digest_b = bitrouter::policy_lock::semantic_digest(&source_b)?;
+    let digest_a = bitrouter::policy_source::semantic_digest(&source_a)?;
+    let digest_b = bitrouter::policy_source::semantic_digest(&source_b)?;
     ensure!(digest_a != digest_b);
     let original_bytes = fs::read(fixture.directory.path().join("policy.yaml"))?;
     fs::write(
         fixture.directory.path().join("candidate.yaml"),
-        bitrouter::policy_lock::deterministic_yaml(&source_b)?,
+        bitrouter::policy_source::deterministic_yaml(&source_b)?,
     )?;
-    let unrelated = seed_unrelated_adopted_block(fixture)?;
+    check_gateway_ownership(fixture)?;
     let strong = ExpectedPolicy {
         model: "strong",
         effort: "high",
@@ -455,9 +350,9 @@ fn exercise(fixture: &mut Fixture, full_binary: &Path, minimum_binary: &Path) ->
     ] {
         let (pid, listen) = start(fixture, binary, artifact)?;
         check_source(fixture, binary, &source_a)?;
-        check_isolated_block(fixture, &unrelated)?;
+        check_gateway_ownership(fixture)?;
         replay_completed(fixture, &upstream, &listen, &completed)?;
-        // A candidate file and a valid adopted Block cannot publish a new source.
+        // Writing a candidate file alone cannot publish a new source.
         let id = format!("{session_id}-a");
         let facts = dispatch(fixture, &upstream, &listen, &id, session_id, true, &strong)?;
         completed.push((id, session_id.to_owned(), facts));
@@ -495,24 +390,24 @@ fn exercise(fixture: &mut Fixture, full_binary: &Path, minimum_binary: &Path) ->
                 &strong,
             )?;
             ensure!(
-                facts.inventory.1["binding"].is_null()
+                facts.inventory["binding"].is_null()
                     && facts.execution.is_none()
                     && facts.intent.is_none()
             );
             completed.push(("unresolved".into(), "missing-session".into(), facts));
         }
-        check_isolated_block(fixture, &unrelated)?;
+        check_gateway_ownership(fixture)?;
         ensure!(
             fs::read_to_string(&fixture.config)? == raw,
             "publication changed router definitions"
         );
         fixture.stop_resident(pid)?;
-        check_isolated_block(fixture, &unrelated)?;
+        check_gateway_ownership(fixture)?;
     }
     let (pid, listen) = start(fixture, full_binary, &full)?;
     check_source(fixture, full_binary, &source_a)?;
     replay_completed(fixture, &upstream, &listen, &completed)?;
-    check_isolated_block(fixture, &unrelated)?;
+    check_gateway_ownership(fixture)?;
     fixture.stop_resident(pid)?;
     for (id, _, facts) in completed {
         ensure!(

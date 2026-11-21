@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use crate::gateway::caller::CallerContext;
 use crate::gateway::error::{BitrouterError, Result};
-use crate::gateway::extensions::legacy::PluginId;
+use crate::gateway::extensions::plugin::PluginId;
 use crate::gateway::model::protocol::responses::{
     AssistantTurnCommitment, CausalPrefixPlan, StreamingAssistantTurnCommitment,
     assistant_turn_commitment, extend_causal_prefix,
@@ -298,6 +298,13 @@ pub struct PipelineContext {
 impl PipelineContext {
     /// Build a fresh context from an inbound request.
     pub fn new(req: PipelineRequest) -> Self {
+        let mut events = EventBus::new();
+        if let Some(claim) = req
+            .extensions
+            .get::<crate::gateway::metering::replay::ClientRequestIdClaim>()
+        {
+            events.emit(claim.clone());
+        }
         let ctx = Self {
             request_id: req.request_id,
             original_model: req.original_model,
@@ -329,7 +336,7 @@ impl PipelineContext {
             credential_authority: Arc::new(Mutex::new(None)),
             metadata: HashMap::new(),
             extensions: Extensions(req.extensions),
-            events: EventBus::new(),
+            events,
             outbound_trace_headers: Mutex::new(None),
         };
         super::provider_technical::register_context(&ctx);

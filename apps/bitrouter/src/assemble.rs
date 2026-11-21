@@ -94,16 +94,14 @@ use crate::continuation::{ContinuationKeySource, ContinuationRegistry, Continuat
 use crate::daemon::ObserveStatusPayload;
 use crate::daemon::{NoopObserveStatus, ObserveStatusProvider};
 use crate::eval::EvalService;
-#[cfg(feature = "core")]
+#[cfg(feature = "eval-publication")]
 use crate::eval::publisher::TrajectoryOutboxPublisher;
-#[cfg(feature = "core")]
+#[cfg(feature = "eval-publication")]
 use crate::eval::settlement::EvalSettlementRecorder;
 use crate::eval::store::EvalStore;
 use crate::gateway::observability::decision::PendingEvalDecisionStore;
 use crate::gateway::observability::prediction::PredictiveResponseObserver;
 use crate::gateway::observability::settlement::PolicySettlementRecorder;
-#[cfg(feature = "harness")]
-use crate::harness::acp::runtime::AcpRuntime;
 use crate::metering::tariff::CaptureTariffs;
 use crate::metering::{MeteringRecorder, MeteringStore, ModelPricing, PricingTable};
 use crate::policy::{PolicyHook, PolicyStore};
@@ -121,21 +119,14 @@ pub struct Assembled {
     /// The shared database connection.
     pub db: DatabaseConnection,
     pub(crate) tenancy: Option<crate::tenancy::Service>,
-    /// In-memory API-principal-scoped ACP route leases.
-    #[cfg(feature = "harness")]
-    pub acp_runtime: Arc<AcpRuntime>,
     /// The policy store wired into the language_model pipeline. Held by the
-    /// caller (the daemon) so `bro reload` / SIGHUP can call
+    /// caller (the daemon) so `bitrouter reload` / SIGHUP can call
     /// [`PolicyStore::reload`] alongside the routing-table reload — reload
     /// must not affect in-flight requests.
     pub policy_store: Arc<PolicyStore>,
     /// Live named routing policies loaded from current `policy.yaml` source. The model
     /// selector and daemon reloader share this last-known-good registry.
-    pub policy_runtime: Arc<crate::policy_lock::PolicyRuntime>,
-    /// Canonical checkpoint evolution. Mode is owner-scoped and disabled until
-    /// explicitly enabled; this handle shares the serving routing snapshots.
-    #[cfg(feature = "core")]
-    pub evolution: crate::core::evolution::runtime::EvolutionRuntime,
+    pub policy_runtime: Arc<crate::policy_source::PolicyRuntime>,
     /// Canonical gateway request tracking; capture registration shares its runtime epoch.
     pub gateway_requests: crate::gateway::observability::requests::GatewayRequestTracker,
     /// Generic eval exchange used by the local CLI and REST control plane.
@@ -147,7 +138,7 @@ pub struct Assembled {
     #[cfg(test)]
     pub(crate) response_observer: PredictiveResponseObserver,
     /// Durable publisher shared by request settlement and startup/shutdown drains.
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     pub trajectory_outbox_publisher: Option<TrajectoryOutboxPublisher>,
     /// Concrete handle on the routing table. The pipeline above also
     /// holds the same `Arc` (via `&dyn RoutingTable`), but reload code
@@ -212,14 +203,7 @@ pub(crate) async fn build_shared_app(
         shared.namespace == inputs.continuation.namespace(),
         "shared assembly namespace differs from its injected authority"
     );
-    assemble_app(
-        config,
-        None,
-        Default::default(),
-        Some(inputs),
-        AssemblyScope::Gateway,
-    )
-    .await
+    assemble_app(config, None, Default::default(), Some(inputs)).await
 }
 
 #[cfg(feature = "multi-instance")]
@@ -252,7 +236,7 @@ fn validate_shared_assembly(config: &Config, database: &DatabaseConnection) -> R
         "shared assembly does not support server tool execution"
     );
     anyhow::ensure!(
-        config.decision_model.is_none() && config.checkers.is_empty() && !config.agent_api.enabled,
+        config.decision_model.is_none() && config.checkers.is_empty(),
         "shared assembly requires published routing without local decision, extension or harness execution"
     );
     anyhow::ensure!(
@@ -447,10 +431,6 @@ fn validate_host_configuration_inner(config: &Config, resolve_telemetry: bool) -
         cfg!(feature = "mcp") || config.mcp_servers.is_empty(),
         "configured MCP servers require the mcp feature"
     );
-    anyhow::ensure!(
-        cfg!(feature = "harness") || !config.agent_api.enabled,
-        "agent_api.enabled requires the harness feature"
-    );
     if resolve_telemetry {
         validate_telemetry_availability(config)?;
     }
@@ -525,7 +505,7 @@ const RENAMED_ENV_VARS: &[(&str, &str)] = &[
 
 /// The `plugins.*` keys in `config` that this binary does not read, sorted.
 ///
-/// Pure so `bro config validate` can report the same set the daemon
+/// Pure so `bitrouter config validate` can report the same set the daemon
 /// warns about, without building an `App`.
 pub fn unknown_plugin_ids(config: &Config) -> Vec<String> {
     let mut unknown: Vec<String> = config
@@ -541,11 +521,11 @@ pub fn unknown_plugin_ids(config: &Config) -> Vec<String> {
 /// Everything this binary read but will not act on, as operator-facing lines.
 ///
 /// Collected in [`build_app_with_path`] so it covers every daemon start rather
-/// than only `bro config validate` — validation is opt-in and the daemon
+/// than only `bitrouter config validate` — validation is opt-in and the daemon
 /// always runs, which is the wrong way round for a failure this quiet. The
 /// caller emits them; see [`Assembled::ignored_config`] for why.
 ///
-/// Public because `bro config validate` reports the same set from a
+/// Public because `bitrouter config validate` reports the same set from a
 /// file it may never run against — see [`ignored_config_warnings`] for why the
 /// environment half is split off.
 pub fn ignored_config_file_warnings(config: &Config) -> Vec<String> {
@@ -567,7 +547,7 @@ pub fn ignored_config_file_warnings(config: &Config) -> Vec<String> {
 
 /// [`ignored_config_file_warnings`] plus the environment ones.
 ///
-/// The split is what `bro config validate` needs: it validates a *file*,
+/// The split is what `bitrouter config validate` needs: it validates a *file*,
 /// possibly one belonging to another machine, so reporting this process's
 /// environment there would be noise at best and misleading at worst. Every
 /// runtime surface wants both.
@@ -603,21 +583,13 @@ fn renamed_env_warnings(is_set: impl Fn(&str) -> bool) -> Vec<String> {
         .collect()
 }
 
-/// Code-owned product boundary, never selected by configuration or HTTP.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AssemblyScope {
-    Gateway,
-    #[cfg(all(feature = "core", feature = "harness"))]
-    BroHarness,
-}
-
 /// Assemble the gateway, storage and builtin inference hooks from a configuration.
 pub async fn build_app(config: &Config) -> Result<Assembled> {
     build_app_with_path(config, None).await
 }
 
 /// Like [`build_app`], but remembering the config's source path so the routing
-/// table's `reload()` (driven by `bro reload` / `SIGHUP`) can re-read it.
+/// table's `reload()` (driven by `bitrouter reload` / `SIGHUP`) can re-read it.
 pub async fn build_app_with_path(
     config: &Config,
     config_path: Option<&std::path::Path>,
@@ -635,15 +607,6 @@ pub async fn build_app_with_extensions(
     config_path: Option<&std::path::Path>,
     register: impl FnOnce(&mut crate::gateway::extensions::registry::ExtensionApi) -> Result<()>,
 ) -> Result<Assembled> {
-    build_scoped_app(config, config_path, register, AssemblyScope::Gateway).await
-}
-
-pub(crate) async fn build_scoped_app(
-    config: &Config,
-    config_path: Option<&std::path::Path>,
-    register: impl FnOnce(&mut crate::gateway::extensions::registry::ExtensionApi) -> Result<()>,
-    scope: AssemblyScope,
-) -> Result<Assembled> {
     let mut extensions = crate::gateway::extensions::registry::ExtensionApi::new();
     register(&mut extensions).context("registering extensions")?;
     let native = extensions
@@ -655,7 +618,6 @@ pub(crate) async fn build_scoped_app(
         native,
         #[cfg(feature = "multi-instance")]
         None,
-        scope,
     )
     .await
 }
@@ -668,7 +630,6 @@ async fn assemble_app(
         crate::gateway::extensions::registry::registration::Registration,
     >,
     #[cfg(feature = "multi-instance")] shared: Option<&SharedAssembly>,
-    scope: AssemblyScope,
 ) -> Result<Assembled> {
     #[cfg(feature = "multi-instance")]
     let is_shared = shared.is_some();
@@ -682,18 +643,8 @@ async fn assemble_app(
             ),
         "shared gateway requires the managed shared serving lifecycle"
     );
-    #[cfg(all(feature = "core", feature = "harness"))]
-    if scope == AssemblyScope::BroHarness {
-        anyhow::ensure!(
-            !is_shared,
-            "local BRO harness cannot use shared gateway authority"
-        );
-        validate_local_harness_listeners(config)?;
-    }
-    #[cfg(not(all(feature = "core", feature = "harness")))]
-    let _ = scope;
     let mut effective_config = config.clone();
-    crate::policy_lock::apply_defaults(&mut effective_config, config_path);
+    crate::policy_source::apply_defaults(&mut effective_config, config_path);
     let config = &effective_config;
     validate_host_configuration_inner(config, !is_shared)?;
     config.validate_router_config()?;
@@ -778,8 +729,6 @@ async fn assemble_app(
         }
     };
     let tenancy_enabled = tenancy_database.is_some();
-    #[cfg(feature = "harness")]
-    let acp_runtime = Arc::new(AcpRuntime::new());
     // Resolve dynamic authentication once and share the same registry with
     // continuation route matching and the HTTP executor. This lets mapped
     // Responses requests preflight the provider's stable credential authority
@@ -1207,7 +1156,7 @@ async fn assemble_app(
     let pending_eval_decisions = PendingEvalDecisionStore::default();
     let eval_store = EvalStore::new(db.clone()).with_storage_budget(metering_storage.clone());
     let eval_service = EvalService::new(eval_store.clone(), config.eval.clone());
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     let mut trajectory_outbox_publisher = None;
     let trajectory_services = if config.trajectory.enabled && !config.tenancy.enabled {
         let trajectory_store = TrajectoryStore::new(db.clone());
@@ -1235,7 +1184,7 @@ async fn assemble_app(
             );
         }
         let notify_outbox = {
-            #[cfg(feature = "core")]
+            #[cfg(feature = "eval-publication")]
             {
                 if is_shared {
                     None
@@ -1259,7 +1208,7 @@ async fn assemble_app(
                     Some(Arc::new(move || publisher.kick()) as Arc<dyn Fn() + Send + Sync>)
                 }
             }
-            #[cfg(not(feature = "core"))]
+            #[cfg(not(feature = "eval-publication"))]
             {
                 None
             }
@@ -1300,7 +1249,7 @@ async fn assemble_app(
     #[cfg(feature = "multi-instance")]
     let shared_policy_runtime = shared
         .map(|inputs| {
-            crate::policy_lock::PolicyRuntime::from_document(
+            crate::policy_source::PolicyRuntime::from_document(
                 config,
                 inputs.model_policy.clone(),
                 pending_eval_decisions.clone(),
@@ -1309,10 +1258,10 @@ async fn assemble_app(
         })
         .transpose()?;
     #[cfg(not(feature = "multi-instance"))]
-    let shared_policy_runtime: Option<Arc<crate::policy_lock::PolicyRuntime>> = None;
+    let shared_policy_runtime: Option<Arc<crate::policy_source::PolicyRuntime>> = None;
     let policy_runtime = match shared_policy_runtime {
         Some(runtime) => runtime,
-        None => crate::policy_lock::PolicyRuntime::new(
+        None => crate::policy_source::PolicyRuntime::new(
             config,
             config_path,
             policy_decision_recorder.clone(),
@@ -1323,28 +1272,6 @@ async fn assemble_app(
         .context("loading model Policy source")?,
     };
     let policy_runtime_for_selector = policy_runtime.clone();
-    #[cfg(feature = "core")]
-    let evolution = crate::core::evolution::runtime::EvolutionRuntime::new(
-        db.clone(),
-        routing_table.clone(),
-        policy_runtime.clone(),
-    )
-    .with_storage_budget(metering_storage.clone());
-    // Experimental adoption must never override a mature gateway's published
-    // source, including when its database retains unrelated local Block state.
-    let block_policies: Option<crate::gateway::routing::blocks::runtime::BlockPolicyRouter> =
-        match scope {
-            #[cfg(all(feature = "core", feature = "harness"))]
-            AssemblyScope::BroHarness if !is_shared => Some(
-                crate::gateway::routing::blocks::runtime::BlockPolicyRouter::new(
-                    db.clone(),
-                    routing_table.clone(),
-                    policy_runtime.clone(),
-                )
-                .with_storage_budget(metering_storage.clone()),
-            ),
-            _ => None,
-        };
     let canonical_binding = (!is_shared).then(|| {
         let binding = crate::gateway::observability::binding::CanonicalRequestBinding::new(
             db.clone(),
@@ -1373,7 +1300,7 @@ async fn assemble_app(
     let response_observer = PredictiveResponseObserver::new(pending_eval_decisions.clone());
     #[cfg(test)]
     let response_observer_for_tests = response_observer.clone();
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     let untracked_recorder = (!is_shared).then(|| {
         Arc::new(EvalSettlementRecorder::new(
             eval_service.store().clone(),
@@ -1382,14 +1309,6 @@ async fn assemble_app(
     });
     let db_for_hooks = db.clone();
     let db_for_mcp_auth = db.clone();
-    #[cfg(feature = "harness")]
-    let session_context = if is_shared {
-        // A replica-local ACP route lease is not shared gateway authority.
-        SessionContextHook::default()
-    } else {
-        SessionContextHook::new(Arc::clone(&acp_runtime))
-    };
-    #[cfg(not(feature = "harness"))]
     let session_context = SessionContextHook::default();
     let request_checks_for_pipeline = request_checks.clone();
     let app = App::builder()
@@ -1450,12 +1369,9 @@ async fn assemble_app(
             if let Some(runtime) = continuation_for_route {
                 lm.route_hook(runtime);
             }
-            lm.route_hook(crate::policy_lock::PredictiveSingleTargetRouteHook);
+            lm.route_hook(crate::policy_source::PredictiveSingleTargetRouteHook);
             if let Some(binding) = &canonical_binding {
                 lm.route_hook(binding.clone());
-            }
-            if let Some(policies) = &block_policies {
-                lm.route_hook(policies.clone());
             }
             // Tariffs are dispatch inputs in both modes. Shared accounting is
             // projected from the engine's immutable attempt facts, not requests.
@@ -1473,7 +1389,13 @@ async fn assemble_app(
             if let Some(runtime) = continuation_for_finalization {
                 lm.required_finalizer(runtime);
             }
-            // Server-tool declaration capture runs first and is pure
+            if !is_shared {
+                lm.pre_resolution_hook_for(
+                    crate::gateway::observability::requests::RequestIdOrigin,
+                    OperationScope::Both,
+                );
+            }
+            // Server-tool declaration capture is pure
             // observation: it parses any advisor / sub-agent / fusion
             // declaration (or the one the fusion alias injected) off the prompt
             // and stashes it, before auth, so the toolsets can read it
@@ -1510,10 +1432,10 @@ async fn assemble_app(
             // Candidate recipe selection may replace defaults and the policy,
             // but cannot replace the ingress router's frozen checker bindings.
             if !is_shared {
-                lm.router_preparation_hook(gateway_requests_for_hooks.clone());
-            }
-            if let Some(policies) = block_policies {
-                lm.router_preparation_hook(policies);
+                lm.router_preparation_hook_for(
+                    gateway_requests_for_hooks.clone(),
+                    OperationScope::Both,
+                );
             }
             if let Some(binding) = canonical_binding {
                 lm.router_preparation_hook(binding);
@@ -1534,7 +1456,7 @@ async fn assemble_app(
             }
             lm.observe_hook(response_observer);
             if !is_shared {
-                lm.observe_hook(gateway_requests_for_hooks.clone());
+                lm.observe_hook_for(gateway_requests_for_hooks.clone(), OperationScope::Both);
             }
             if let Some(costs) = &judge_costs {
                 lm.observe_hook(costs.clone());
@@ -1544,7 +1466,7 @@ async fn assemble_app(
                 lm.settlement_recorder_for(recorder, OperationScope::Both);
             }
             if !is_shared {
-                lm.settlement_recorder(gateway_requests_for_hooks);
+                lm.settlement_recorder_for(gateway_requests_for_hooks, OperationScope::Both);
             }
             if let Some(costs) = judge_costs {
                 lm.settlement_recorder(costs);
@@ -1561,7 +1483,7 @@ async fn assemble_app(
                     PolicySettlementRecorder::new(
                         pending_eval_decisions,
                         trajectory_for_settlement,
-                        #[cfg(feature = "core")]
+                        #[cfg(feature = "eval-publication")]
                         untracked_recorder,
                     ),
                     OperationScope::Both,
@@ -1623,16 +1545,6 @@ async fn assemble_app(
     // Start the authority actor only after every other fallible assembly step.
     // Failed startup must not leave a detached owner behind during a retry.
     let tenancy = match tenancy_database {
-        #[cfg(all(feature = "core", feature = "harness"))]
-        Some(database) if scope == AssemblyScope::BroHarness => Some(
-            crate::tenancy::Service::open_owned_bro_profile_observed(
-                database,
-                &config.tenancy,
-                &config.continuation,
-                receipt_observer,
-            )
-            .await?,
-        ),
         Some(database) if receipt_observer.enabled() => Some(
             crate::tenancy::Service::open_owned_profile_observed(
                 database,
@@ -1676,12 +1588,8 @@ async fn assemble_app(
         app,
         db,
         tenancy,
-        #[cfg(feature = "harness")]
-        acp_runtime,
         policy_store: policy_store_for_reload,
         policy_runtime,
-        #[cfg(feature = "core")]
-        evolution,
         gateway_requests,
         eval_service,
         continuation_registry,
@@ -1689,7 +1597,7 @@ async fn assemble_app(
         pending_eval_decisions: pending_eval_decisions_for_tests,
         #[cfg(test)]
         response_observer: response_observer_for_tests,
-        #[cfg(feature = "core")]
+        #[cfg(feature = "eval-publication")]
         trajectory_outbox_publisher,
         routing_table: routing_table_for_reload,
         upstream_executor: executor_for_reload,
@@ -1991,7 +1899,7 @@ fn resolve_byok_key(explicit: &Option<String>, env_var: &str, backend: &str) -> 
 /// Build the per-provider `AuthAppliers` registry. Each entry covers a
 /// provider whose credential flow needs more than the per-protocol
 /// `Transport::authorise` default — today: `bitrouter` (the official
-/// hosted gateway; OAuth from `bro cloud login` with a
+/// hosted gateway; OAuth from `bitrouter cloud login` with a
 /// `BITROUTER_API_KEY` fallback), GitHub Copilot (device-code OAuth +
 /// token exchange), Anthropic Platform API (`x-api-key`), the Claude
 /// Pro/Max subscription (`claude-code`, OAuth / live `~/.claude` session),
@@ -2231,49 +2139,6 @@ enum BearerPlan {
     StaticOnly,
 }
 
-/// Build the OTel exporter for **out-of-daemon** surfaces (`bro acp
-/// serve|prompt`). Same config resolution as the daemon path (the telemetry
-/// opt-in, the `otel:` block, env vars), including the live account-bearer
-/// plan. Returns `None` when nothing opts telemetry in; telemetry failures are
-/// surfaced as warnings, never as session failures.
-#[cfg(all(feature = "harness", any(feature = "otel-http", feature = "otel-grpc")))]
-pub(crate) async fn build_otel_exporter_standalone_with_credentials(
-    config: &Config,
-    cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
-) -> Option<Arc<OtelExporter>> {
-    let (otel_config, bearer_plan) = match build_otel_config(config, telemetry_install_id) {
-        Ok(Some(plan)) => plan,
-        Ok(None) => return None,
-        Err(e) => {
-            tracing::warn!("telemetry: invalid observe config, exporting disabled: {e:#}");
-            return None;
-        }
-    };
-    let bearer: Option<Arc<dyn crate::telemetry::bearer::TelemetryBearer>> = match bearer_plan {
-        BearerPlan::LiveSource { warn_if_unmet } => {
-            let source = cloud_credentials
-                .telemetry_bearer(&otel_config.endpoint)
-                .await;
-            if source.is_none() && warn_if_unmet {
-                tracing::warn!(
-                    "telemetry: attribution=account but no signed-in session is available — \
-                     exporting anonymously (sign in with `{} cloud login`)",
-                    invocation::name()
-                );
-            }
-            source
-        }
-        BearerPlan::StaticOnly => None,
-    };
-    match OtelExporter::new(otel_config, bearer) {
-        Ok(exporter) => Some(Arc::new(exporter)),
-        Err(e) => {
-            tracing::warn!("telemetry: failed to initialise OpenTelemetry: {e}");
-            None
-        }
-    }
-}
-
 /// Resolve optional attribution only after a selected exporter is available.
 #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
 fn telemetry_install_id() -> Option<String> {
@@ -2409,7 +2274,7 @@ enum TelemetryLevel {
 #[derive(Debug, Clone, Copy, serde::Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum TelemetryAttribution {
-    /// Account-attributed when a `bro cloud login` session (or an explicit
+    /// Account-attributed when a `bitrouter cloud login` session (or an explicit
     /// `bearer_token`) is available; anonymous otherwise. The default — signing
     /// in upgrades attribution automatically, with no config change.
     #[default]
@@ -3214,7 +3079,7 @@ mod trajectory_assembly_tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::{Config, build_app_with_path};
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     use bitrouter_ai::eval::EvalScope;
 
     async fn assemble_named_policy(
@@ -3271,10 +3136,10 @@ policies:
     tool_safe_tiers: [strong]
 "#,
         )?;
-        let digest = crate::policy_lock::semantic_digest(&document)?;
+        let digest = crate::policy_source::semantic_digest(&document)?;
         tokio::fs::write(
             home.path().join("policy.yaml"),
-            crate::policy_lock::deterministic_yaml(&document)?,
+            crate::policy_source::deterministic_yaml(&document)?,
         )
         .await?;
         let assembled = build_app_with_path(&config, Some(&config_path)).await?;
@@ -3306,14 +3171,14 @@ policies:
         let body: serde_json::Value = serde_json::from_slice(&requests[0].body)?;
         assert_eq!(body["model"], "economy-model");
         assert_eq!(body["messages"][0]["content"], "generic request");
-        #[cfg(feature = "core")]
+        #[cfg(feature = "eval-publication")]
         if let Some(publisher) = &assembled.trajectory_outbox_publisher {
             publisher.wait_for_idle().await;
         }
         Ok((assembled, digest))
     }
 
-    #[cfg(not(feature = "core"))]
+    #[cfg(not(feature = "eval-publication"))]
     #[tokio::test]
     async fn no_core_cleans_untracked_observation_without_eval_writes() -> anyhow::Result<()> {
         use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
@@ -3331,7 +3196,7 @@ policies:
         Ok(())
     }
 
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     #[tokio::test]
     async fn disabled_trajectory_preserves_named_policy_request_eval() -> anyhow::Result<()> {
         let (assembled, digest) = assemble_named_policy(false).await?;
@@ -3367,7 +3232,7 @@ policies:
         Ok(())
     }
 
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     #[tokio::test]
     async fn unguarded_policy_preserves_request_eval_when_trajectory_is_enabled()
     -> anyhow::Result<()> {
@@ -3407,7 +3272,7 @@ policies:
             build_app_with_path(&config, Some(&disabled_home.path().join("bitrouter.yaml")))
                 .await?;
 
-        #[cfg(feature = "core")]
+        #[cfg(feature = "eval-publication")]
         assert!(disabled.trajectory_outbox_publisher.is_none());
         drop(disabled);
         assert!(!disabled_home.path().join("correlation.key").exists());
@@ -3418,7 +3283,7 @@ policies:
         let enabled =
             build_app_with_path(&config, Some(&enabled_home.path().join("bitrouter.yaml"))).await?;
 
-        #[cfg(feature = "core")]
+        #[cfg(feature = "eval-publication")]
         assert_eq!(
             enabled
                 .trajectory_outbox_publisher
@@ -3551,23 +3416,4 @@ policies:
         );
         Ok(())
     }
-}
-
-#[cfg(all(feature = "core", feature = "harness"))]
-fn validate_local_harness_listeners(config: &Config) -> Result<()> {
-    for address in std::iter::once(config.server.listen.as_str()).chain(
-        config
-            .control
-            .enabled
-            .then_some(config.control.listen.as_str()),
-    ) {
-        let address: std::net::SocketAddr = address
-            .parse()
-            .context("local BRO harness requires explicit loopback listener addresses")?;
-        anyhow::ensure!(
-            address.ip().is_loopback(),
-            "local BRO harness requires loopback listeners"
-        );
-    }
-    Ok(())
 }

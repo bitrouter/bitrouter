@@ -236,28 +236,6 @@ fn configured_unknown_limits_and_overflow_are_checked_without_partial_reservatio
     Ok(())
 }
 
-#[cfg(all(feature = "core", feature = "harness"))]
-#[test]
-fn maintenance_repair_ignores_lowered_ordinary_budgets_but_keeps_physical_custody() -> Result<()> {
-    let mut state = Accounting::default();
-    state
-        .initialize(
-            Inventory {
-                unknown_count: u64::MAX,
-                live_bytes: u64::MAX,
-                ..Default::default()
-            },
-            2 * ROW_OVERHEAD + 9,
-        )
-        .map_err(failure)?;
-    let charge = state.reserve_repair(9, 2, 1).map_err(failure)?;
-    ensure!(charge == state.free && state.totals.uncovered == 1 && state.totals.live == 2);
-    ensure!(state.reserve_physical_write(1, true).is_err());
-    let before = state.totals;
-    ensure!(state.reserve_repair(u64::MAX, 1, 1).is_err() && state.totals == before);
-    Ok(())
-}
-
 #[test]
 fn archive_watermark_precedes_admission_refusal_and_stops_below_three_quarters() {
     let mut accounting = Accounting::default();

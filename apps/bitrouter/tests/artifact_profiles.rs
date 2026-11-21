@@ -3,28 +3,14 @@
 //! Set BITROUTER_TEST_FULL_BINARY and BITROUTER_TEST_GATEWAY_BINARY to absolute
 //! paths before explicitly selecting this ignored test. The latter must have
 //! no application features. This test never builds or substitutes an artifact.
-//! The current-data transition and historical-dataset refusal tests also require
-//! BITROUTER_TEST_HARNESS_BINARY built with --no-default-features --features harness.
-//! Gateway transitions use a core-enabled test harness for publication fixtures
-//! and the original judge dispatch. Serving and replay HTTP requests use only
-//! the two supplied executables.
 
 #![cfg(unix)]
 
 #[path = "artifact_profiles/persistence.rs"]
 mod persistence;
 
-#[cfg(feature = "core")]
 #[path = "artifact_profiles/gateway_state.rs"]
 mod gateway_state;
-
-// Reuse the storage-only capture fixture without enabling a recorder or
-// widening a production API just to prepare persisted compatibility data.
-#[cfg(feature = "core")]
-use bitrouter::storage;
-#[cfg(feature = "core")]
-#[path = "../src/acp_trajectory/fixtures.rs"]
-mod capture_fixture;
 
 use std::collections::BTreeSet;
 use std::fs::{self, File};
@@ -241,9 +227,7 @@ impl Fixture {
     }
 
     fn run(&mut self, command: Command) -> Result<CliOutput> {
-        let may_launch = command
-            .get_args()
-            .any(|arg| arg == "restart" || arg == "__daemon-handoff");
+        let may_launch = command.get_args().any(|arg| arg == "restart");
         let index = self.spawn(command, false)?;
         self.unsettled_launch |= may_launch;
         let deadline = Instant::now() + COMMAND_TIMEOUT;
@@ -320,7 +304,7 @@ impl Fixture {
             let reservation = TcpListener::bind("127.0.0.1:0")?;
             let listen = reservation.local_addr()?;
             let raw = format!(
-                "inherit_defaults: false\nregistry:\n  enabled: false\nserver:\n  listen: '{listen}'\n  control_socket: control.sock\n  skip_auth: true\ndatabase:\n  url: 'sqlite://profiles.db?mode=rwc'\nagent_api:\n  enabled: false\n"
+                "inherit_defaults: false\nregistry:\n  enabled: false\nserver:\n  listen: '{listen}'\n  control_socket: control.sock\n  skip_auth: true\ndatabase:\n  url: 'sqlite://profiles.db?mode=rwc'\n"
             );
             fs::write(&self.config, &raw)?;
             fs::set_permissions(&self.config, fs::Permissions::from_mode(0o600))?;
@@ -379,26 +363,6 @@ impl Fixture {
         );
         self.observed_pids.insert(pid);
         Ok(report)
-    }
-
-    fn hello(&mut self, artifact: &ArtifactIdentity) -> Result<String> {
-        let reply = self.control(&DaemonCommand::HandoffHello)?;
-        let DaemonResponse::HandoffHello {
-            protocol: 2,
-            version,
-            build_id: _,
-            instance_id,
-            cli_owned: true,
-            artifact: Some(reported),
-        } = &reply
-        else {
-            bail!("missing protocol-2 artifact/ownership evidence: {reply:?}");
-        };
-        ensure!(
-            reported == artifact && version == &artifact.version && !instance_id.is_empty(),
-            "incorrect handshake identity: {reply:?}"
-        );
-        Ok(instance_id.clone())
     }
 
     fn health(&self, report: &StatusReport) -> Result<()> {
@@ -558,9 +522,9 @@ fn exercise(fixture: &mut Fixture, full_binary: &Path, gateway_binary: &Path) ->
         "gateway must have no application features: {gateway:?}"
     );
     ensure!(
-        full.features.iter().any(|feature| feature == "core")
-            && full.features.iter().any(|feature| feature == "harness"),
-        "full native blocker requires core+harness: {full:?}"
+        full.features
+            .iter()
+            .any(|feature| feature == "eval-publication")
     );
     for artifact in [&full, &gateway] {
         ensure!(
@@ -594,83 +558,30 @@ fn exercise(fixture: &mut Fixture, full_binary: &Path, gateway_binary: &Path) ->
     );
     ensure!(
         full.features != gateway.features,
-        "distinct capabilities must have distinct build fingerprints: {full:?}; {gateway:?}"
+        "profiles must select different capabilities: {full:?}; {gateway:?}"
     );
 
     // Preserve this exact private configuration through both residents and
     // the explicit profile replacement.
     let (raw, full_pid) = fixture.configure_and_start_full(full_binary)?;
-    let full_instance = fixture.hello(&full)?;
     let report = fixture.status(gateway_binary, &gateway, &full, full_pid)?;
     fixture.health(&report)?;
-    ensure!(
-        matches!(
-            fixture.control(&DaemonCommand::Status)?,
-            DaemonResponse::Status { handoff_activity: Some(activity), .. }
-                if activity.operations > 0
-        ),
-        "full must retain its native lifetime admission: {report:?}"
-    );
-
-    let mut command = fixture.selected_command(gateway_binary, "__daemon-handoff");
-    command.arg("--socket").arg(&fixture.socket);
-    fixture.run(command)?.rejected("distribution differs")?;
-    fixture.status(gateway_binary, &gateway, &full, full_pid)?;
-    ensure!(
-        fixture.hello(&full)? == full_instance,
-        "automatic handoff replaced full"
-    );
-
-    fixture
-        .run(fixture.selected_command(gateway_binary, "restart"))?
-        .rejected("daemon operations are in progress")?;
-    let report = fixture.status(gateway_binary, &gateway, &full, full_pid)?;
-    fixture.health(&report)?;
-    ensure!(
-        fixture.hello(&full)? == full_instance,
-        "busy restart replaced full"
-    );
 
     let trace = fixture.directory.path().join("must-not-create.jsonl");
     let mut command = fixture.selected_command(gateway_binary, "restart");
     command.env("BITROUTER_WORKFLOW_TRACE_JSONL", &trace);
     let rejected = fixture.run(command)?;
-    rejected.rejected("core feature")?;
     rejected.rejected("BITROUTER_WORKFLOW_TRACE_JSONL")?;
     fixture.status(gateway_binary, &gateway, &full, full_pid)?;
     ensure!(
         !trace.exists(),
         "unsupported trace activation created a file"
     );
-    ensure!(
-        fixture.hello(&full)? == full_instance,
-        "feature preflight stopped full"
-    );
 
     fixture.stop_resident(full_pid)?;
     let gateway_pid = fixture.start(gateway_binary)?;
-    let gateway_instance = fixture.hello(&gateway)?;
     let report = fixture.status(full_binary, &full, &gateway, gateway_pid)?;
     fixture.health(&report)?;
-    ensure!(
-        matches!(fixture.control(&DaemonCommand::Status)?, DaemonResponse::Status { handoff_activity: Some(activity), .. } if
-            activity.operations == 0
-                && activity.supervised_runs == Some(0)
-                && activity.route_leases == 0
-                && activity.acp_recordings == Some(0)
-                && !activity.drain_in_progress),
-        "gateway is not provably idle: {report:?}"
-    );
-
-    let mut command = fixture.selected_command(full_binary, "__daemon-handoff");
-    command.arg("--socket").arg(&fixture.socket);
-    fixture.run(command)?.rejected("distribution differs")?;
-    fixture.status(full_binary, &full, &gateway, gateway_pid)?;
-    ensure!(
-        fixture.hello(&gateway)? == gateway_instance,
-        "automatic handoff replaced gateway"
-    );
-
     // Explicit restart also applies a saved endpoint change. A live occupant
     // of the candidate endpoint must be rejected before stopping the resident.
     let old_socket = fixture.socket.clone();
@@ -683,7 +594,6 @@ fn exercise(fixture: &mut Fixture, full_binary: &Path, gateway_binary: &Path) ->
         .run(fixture.selected_command(full_binary, "restart"))?
         .rejected("replacement control endpoint is already in use")?;
     fixture.status(full_binary, &full, &gateway, gateway_pid)?;
-    ensure!(fixture.hello(&gateway)? == gateway_instance);
     drop(occupied);
     fs::remove_file(&replacement_socket)?;
     fixture.socket = replacement_socket;
@@ -708,10 +618,6 @@ fn exercise(fixture: &mut Fixture, full_binary: &Path, gateway_binary: &Path) ->
     ensure!(!old_socket.exists(), "restart retained old control socket");
     let report = fixture.status(full_binary, &full, &full, replacement_pid)?;
     fixture.health(&report)?;
-    ensure!(
-        fixture.hello(&full)? != gateway_instance,
-        "replacement retained old instance identity"
-    );
     fixture.status(gateway_binary, &gateway, &full, replacement_pid)?;
     ensure!(
         fs::read_to_string(&fixture.config)? == replacement_raw,

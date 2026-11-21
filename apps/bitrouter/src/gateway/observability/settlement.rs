@@ -1,11 +1,11 @@
 //! Gateway-owned terminal evidence, with an optional untracked-request consumer.
 
-#[cfg(feature = "core")]
+#[cfg(feature = "eval-publication")]
 use std::sync::Arc;
 
 use async_trait::async_trait;
 
-#[cfg(feature = "core")]
+#[cfg(feature = "eval-publication")]
 use super::decision::CapturedEvalDecision;
 use super::decision::{EvalInvocation, PendingEvalDecision, PendingEvalDecisionStore};
 use crate::gateway::error::{BitrouterError, Result};
@@ -17,7 +17,7 @@ use crate::trajectory::settlement::{
 pub(crate) struct PolicySettlementRecorder {
     pending: PendingEvalDecisionStore,
     trajectory: Option<TrajectorySettlementRecorder>,
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     untracked: Option<Arc<dyn SettlementRecorder>>,
 }
 
@@ -25,12 +25,12 @@ impl PolicySettlementRecorder {
     pub(crate) fn new(
         pending: PendingEvalDecisionStore,
         trajectory: Option<TrajectorySettlementRecorder>,
-        #[cfg(feature = "core")] untracked: Option<Arc<dyn SettlementRecorder>>,
+        #[cfg(feature = "eval-publication")] untracked: Option<Arc<dyn SettlementRecorder>>,
     ) -> Self {
         Self {
             pending,
             trajectory,
-            #[cfg(feature = "core")]
+            #[cfg(feature = "eval-publication")]
             untracked,
         }
     }
@@ -39,7 +39,7 @@ impl PolicySettlementRecorder {
 #[async_trait]
 impl SettlementRecorder for PolicySettlementRecorder {
     async fn record(&self, context: &mut SettlementContext) -> Result<()> {
-        if context.has_event::<crate::gateway::metering::replay::CanonicalRequestReplayRejected>() {
+        if crate::gateway::metering::replay::unadmitted(context) {
             return Ok(());
         }
         let invocation = context.get_event::<EvalInvocation>().cloned();
@@ -67,7 +67,7 @@ impl SettlementRecorder for PolicySettlementRecorder {
                 }
             }
         }
-        #[cfg(feature = "core")]
+        #[cfg(feature = "eval-publication")]
         if let Some(consumer) = &self.untracked {
             if let Some(invocation) = &invocation {
                 // Preserve this lookup even if its cache entry expires or is evicted

@@ -36,7 +36,7 @@ use sha2::{Digest, Sha256};
 pub const REGISTRY_BASE_URL: &str = "https://registry.modelcontextprotocol.io";
 
 /// How long any single registry request may take before the CLI gives up.
-/// Discovery is a convenience; a slow registry must not hang `bro mcp`.
+/// Discovery is a convenience; a slow registry must not hang `bitrouter mcp`.
 const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Page size for `/v0.1/servers` pagination (the registry's maximum).
@@ -1834,7 +1834,7 @@ mod tests {
             let c = client(&server, &cache);
             let err = c.latest("no/such").await.unwrap_err();
             let msg = format!("{err:#}");
-            assert!(msg.contains("bro mcp search"), "{msg}");
+            assert!(msg.contains("bitrouter mcp search"), "{msg}");
             let _ = std::fs::remove_dir_all(&cache);
         }
 
@@ -1863,7 +1863,7 @@ mod tests {
                 .await;
             let c = client(&removed, &cache);
             let err = c.latest("no/such").await.unwrap_err();
-            assert!(format!("{err:#}").contains("bro mcp search"));
+            assert!(format!("{err:#}").contains("bitrouter mcp search"));
             let _ = std::fs::remove_dir_all(&cache);
         }
 

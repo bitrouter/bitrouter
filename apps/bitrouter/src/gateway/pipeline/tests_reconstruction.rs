@@ -173,9 +173,17 @@ impl Executor for RebuildExecutor {
         ctx: &PipelineContext,
     ) -> Result<ExecutionResult> {
         self.generations.lock().await.push(prompt.clone());
-        MockExecutor::always_text("done")
+        let mut execution = MockExecutor::always_text("done")
             .execute(target, prompt, ctx)
-            .await
+            .await?;
+        if let Some(usage) = execution
+            .result
+            .generation_mut()
+            .and_then(|result| result.usage.as_mut())
+        {
+            usage.origin = bitrouter_ai::types::UsageOrigin::ProviderReported;
+        }
+        Ok(execution)
     }
     async fn execute_stream(
         &self,
@@ -490,7 +498,12 @@ impl crate::gateway::assembly::PromptTransform for FrozenTransform {
 }
 
 #[tokio::test]
-async fn app_transform_validation_cannot_be_bypassed_by_an_embedding_control() -> Result<()> {
+async fn app_transform_validation_cannot_be_bypassed_by_an_embedding_control() -> anyhow::Result<()>
+{
+    use crate::gateway::observability::requests::{GatewayRequestTracker, RequestIdOrigin};
+    use crate::metering::{MeteringRecorder, MeteringStore, ModelPricing, PricingTable};
+    use sea_orm::EntityTrait;
+
     for (accepts, fail_gate) in [(true, usize::MAX), (false, usize::MAX), (true, 1)] {
         let applied = Arc::new(AtomicUsize::new(0));
         let validated = Arc::new(AtomicUsize::new(0));
@@ -498,6 +511,22 @@ async fn app_transform_validation_cannot_be_bypassed_by_an_embedding_control() -
         let mut control = RebuildControl::new(None, false);
         control.fail_gate = fail_gate;
         let control = Arc::new(control);
+        let db = crate::db::connect("sqlite::memory:").await?;
+        crate::db::run_migrations(&db).await?;
+        let mut prices = PricingTable::new();
+        let rated_target = target("preferred-provider");
+        prices.configure_endpoint(
+            &rated_target.provider_name,
+            None,
+            rated_target.effective_api_base(),
+        );
+        prices.insert(
+            "preferred-provider",
+            "strong-model",
+            ModelPricing::new(2.0, 3.0),
+        );
+        let recorder = MeteringRecorder::new(MeteringStore::new(db.clone()), Arc::new(prices));
+        let tracker = GatewayRequestTracker::new(db.clone());
         let app = crate::gateway::assembly::App::builder()
             .prompt_transform(Arc::new(FrozenTransform {
                 applied: applied.clone(),
@@ -508,6 +537,10 @@ async fn app_transform_validation_cannot_be_bypassed_by_an_embedding_control() -
                 builder
                     .routing_table(Arc::new(RebuildTable(Arc::new(AtomicUsize::new(0)))))
                     .executor(executor.clone())
+                    .pre_resolution_hook(RequestIdOrigin)
+                    .router_preparation_hook(tracker)
+                    .route_hook(recorder.tariff_capture(false))
+                    .settlement_recorder(recorder)
                     .request_checker_runner(Arc::new(HistoryChecker {
                         calls: Arc::new(AtomicUsize::new(0)),
                         require_approval: false,
@@ -542,6 +575,16 @@ async fn app_transform_validation_cannot_be_bypassed_by_an_embedding_control() -
         );
         if allowed {
             result?;
+            let rows = crate::metering::entities::requests::Entity::find()
+                .all(&db)
+                .await?;
+            assert_eq!(rows.len(), 1);
+            assert_eq!((rows[0].prompt_tokens, rows[0].completion_tokens), (10, 5));
+            assert_eq!(
+                rows[0].estimated_charge_micro_usd, 35,
+                "{:?}",
+                rows[0].charge_evidence_json
+            );
         } else {
             assert!(result.is_err());
         }

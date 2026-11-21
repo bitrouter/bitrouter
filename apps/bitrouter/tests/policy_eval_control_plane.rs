@@ -75,7 +75,7 @@ async fn gateway_sdk_exchange_preserves_current_versions_and_refuses_tenant_prof
         assert_eq!(frozen.entries.len(), 1);
         assert_eq!(client.eval_snapshot(&frozen.evidence_root).await?, frozen);
         let exported =
-            bitrouter::eval::compiler::EvalEvidenceSnapshot::load(&store, &frozen.evidence_root)
+            bitrouter::eval::export::EvalEvidenceSnapshot::load(&store, &frozen.evidence_root)
                 .await?;
         assert_eq!(
             exported.records[0].subject.identity,
@@ -153,7 +153,7 @@ async fn generic_results_only_freeze_their_own_immutable_subject() -> anyhow::Re
     let frozen = store.freeze_snapshot("2026-11-18T00:02:00Z").await?;
     assert_eq!(frozen.entries.len(), 1);
     let export =
-        bitrouter::eval::compiler::EvalEvidenceSnapshot::from_manifest(&store, frozen).await?;
+        bitrouter::eval::export::EvalEvidenceSnapshot::from_manifest(&store, frozen).await?;
     assert_eq!(export.records[0].subject, input);
     db.close().await?;
     Ok(())

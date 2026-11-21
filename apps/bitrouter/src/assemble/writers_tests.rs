@@ -7,7 +7,7 @@ use anyhow::{Context, Result, ensure};
 use bitrouter_ai::types::{GenerationParams, Message, ModelOperation, Prompt, Role, UsageOrigin};
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
-use super::{Assembled, AssemblyScope};
+use super::Assembled;
 use crate::gateway::caller::CallerContext;
 use crate::gateway::pipeline::context::PipelineContext;
 use crate::gateway::pipeline::execution::Pipeline;
@@ -70,7 +70,7 @@ fn hook_types(pipeline: &Pipeline) -> Vec<TypeId> {
     ids
 }
 
-fn assert_writer_mode(pipeline: &Pipeline, shared: bool, scope: AssemblyScope) {
+fn assert_writer_mode(pipeline: &Pipeline, shared: bool) {
     let ids = hook_types(pipeline);
     for local in [
         TypeId::of::<super::MeteringRecorder>(),
@@ -81,18 +81,6 @@ fn assert_writer_mode(pipeline: &Pipeline, shared: bool, scope: AssemblyScope) {
     ] {
         assert_eq!(ids.contains(&local), !shared);
     }
-    let block_expected = match scope {
-        AssemblyScope::Gateway => false,
-        #[cfg(all(feature = "core", feature = "harness"))]
-        AssemblyScope::BroHarness => !shared,
-    };
-    assert_eq!(
-        ids.contains(&TypeId::of::<
-            crate::gateway::routing::blocks::runtime::BlockPolicyRouter,
-        >()),
-        block_expected,
-        "Block routing must follow the actual host assembly scope"
-    );
     assert_eq!(pipeline.native_cost_source.is_some(), !shared);
     assert_eq!(pipeline.native_cost_estimator.is_some(), !shared);
     for operation in [ModelOperation::Generation, ModelOperation::Decisions] {
@@ -136,32 +124,16 @@ async fn record(assembled: &Assembled, context: &mut PipelineContext) -> Result<
 
 #[tokio::test]
 async fn local_assembly_keeps_durable_hooks_and_metering() -> Result<()> {
-    exercise_local_assembly(AssemblyScope::Gateway).await
-}
-
-#[cfg(all(feature = "core", feature = "harness"))]
-#[tokio::test]
-async fn bro_assembly_keeps_block_hook_durable_writers_and_metering() -> Result<()> {
-    exercise_local_assembly(AssemblyScope::BroHarness).await
-}
-
-async fn exercise_local_assembly(scope: AssemblyScope) -> Result<()> {
     let home = tempfile::tempdir()?;
     let config = crate::config::parse_with(
         "inherit_defaults: false\nregistry:\n  enabled: false\nserver:\n  listen: '127.0.0.1:0'\ndatabase:\n  url: 'sqlite::memory:'\n",
         |_| None,
     )?;
     let config_path = home.path().join("bitrouter.yaml");
-    let assembled = match scope {
-        AssemblyScope::Gateway => super::build_app_with_path(&config, Some(&config_path)).await?,
-        #[cfg(all(feature = "core", feature = "harness"))]
-        AssemblyScope::BroHarness => {
-            super::build_scoped_app(&config, Some(&config_path), |_| Ok(()), scope).await?
-        }
-    };
+    let assembled = super::build_app_with_path(&config, Some(&config_path)).await?;
     let result = async {
         let pipeline = assembled.app.language_model().context("pipeline missing")?;
-        assert_writer_mode(pipeline, false, scope);
+        assert_writer_mode(pipeline, false);
         let mut request = context("local-writer-positive", "vendor:model");
         record(&assembled, &mut request).await?;
         let row = assembled
@@ -202,6 +174,7 @@ mod shared {
     use crate::gateway::shared::telemetry::Telemetry;
     use futures::FutureExt as _;
     use sea_orm::{ConnectOptions, Database, DatabaseConnection};
+    use sea_orm_migration::SchemaManager;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::{panic::AssertUnwindSafe, sync::Arc, time::Duration};
     use tokio::time::Instant;
@@ -306,7 +279,19 @@ routers:
         )?)
     }
 
-    async fn counts(db: &DatabaseConnection) -> Result<Vec<i64>> {
+    async fn local_writer_counts(db: &DatabaseConnection) -> Result<Vec<i64>> {
+        let schema = SchemaManager::new(db);
+        for table in [
+            "acp_capture_connections",
+            "acp_canonical_sessions",
+            "acp_capture_events",
+        ] {
+            ensure!(
+                !schema.has_table(table).await?,
+                "historical ACP table {table} exists in the current gateway schema"
+            );
+        }
+
         let mut counts = Vec::new();
         for table in [
             "requests",
@@ -320,9 +305,6 @@ routers:
             "eval_admission_events",
             "eval_snapshots",
             "checkpoint_evolution",
-            "acp_capture_connections",
-            "acp_canonical_sessions",
-            "acp_capture_events",
         ] {
             let row = db
                 .query_one(Statement::from_string(
@@ -330,7 +312,7 @@ routers:
                     format!("SELECT COUNT(*) AS count FROM {table}"),
                 ))
                 .await?
-                .context("legacy table count missing")?;
+                .with_context(|| format!("local writer table {table} count missing"))?;
             counts.push(row.try_get("", "count")?);
         }
         Ok(counts)
@@ -338,12 +320,10 @@ routers:
 
     async fn exercise(assembled: &Assembled, config: &Config) -> Result<()> {
         let pipeline = assembled.app.language_model().context("pipeline missing")?;
-        assert_writer_mode(pipeline, true, AssemblyScope::Gateway);
+        assert_writer_mode(pipeline, true);
         ensure!(pipeline.settlement_recorders.len() == 1);
         ensure!(pipeline.settlement_recorders[0].type_id == TypeId::of::<DiscardPending>());
         ensure!(pipeline.pre_resolution_hooks[0].type_id == TypeId::of::<RequestScope>());
-        #[cfg(feature = "core")]
-        ensure!(assembled.trajectory_outbox_publisher.is_none());
         // Named policy selection still runs against its published document. No
         // SharedAdmission is forged here; receiver/guard integration has its own fixture.
         let mut ctx = context("shared-writer-fixture", "vendor:model");
@@ -571,8 +551,8 @@ routers:
 
     async fn unchanged(db: &DatabaseConnection, baseline: &[i64]) -> Result<()> {
         ensure!(
-            counts(db).await?.as_slice() == baseline,
-            "shared assembly wrote a legacy durable table"
+            local_writer_counts(db).await?.as_slice() == baseline,
+            "shared assembly wrote a local durable table"
         );
         Ok(())
     }
@@ -580,7 +560,7 @@ routers:
     async fn campaign(db: &DatabaseConnection, telemetry: &Arc<Telemetry>) -> Result<()> {
         crate::db::run_migrations(db).await?;
         let capability = SharedContinuationDb::fixture(db.clone()).await?;
-        let baseline = counts(db).await?;
+        let baseline = local_writer_counts(db).await?;
         ensure!(baseline.iter().all(|count| *count == 0));
         for trajectory in [false, true] {
             let (assembled, config) = build_fixture(&capability, telemetry, trajectory).await?;

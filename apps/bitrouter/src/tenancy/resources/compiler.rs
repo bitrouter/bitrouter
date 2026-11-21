@@ -61,15 +61,10 @@ pub(super) fn prepare_route(import: &Import, policy: Option<&Artifact>) -> Resul
     prepare_current_route(import, policy)
 }
 
-pub(super) fn prepare_bro_capture_route(
+pub(super) fn prepare_current_route(
     import: &Import,
     policy: Option<&Artifact>,
 ) -> Result<RouteEnvelope> {
-    import.definition.require_bro_capture()?;
-    prepare_current_route(import, policy)
-}
-
-fn prepare_current_route(import: &Import, policy: Option<&Artifact>) -> Result<RouteEnvelope> {
     let (routing, selector, policy_ref, credentials, exploration, block) = match &import.definition
     {
         Definition::Route {
@@ -134,7 +129,7 @@ fn prepare_current_route(import: &Import, policy: Option<&Artifact>) -> Result<R
                 anyhow::bail!("policy definition required");
             };
             ensure!(selected == name, "selected policy name mismatch");
-            crate::policy_lock::validate_for_config(&config, document)
+            crate::policy_source::validate_for_config(&config, document)
                 .map_err(|_| anyhow::anyhow!("policy routing validation failed"))?;
             let definition = document
                 .policies
@@ -149,7 +144,7 @@ fn prepare_current_route(import: &Import, policy: Option<&Artifact>) -> Result<R
             // Construction qualifies the immutable in-memory policy path without
             // introducing a shared backend or any policy-file access.
             if !config.trajectory.enabled {
-                crate::policy_lock::PolicyRuntime::from_document(
+                crate::policy_source::PolicyRuntime::from_document(
                     &config,
                     Some(document.clone()),
                     Default::default(),

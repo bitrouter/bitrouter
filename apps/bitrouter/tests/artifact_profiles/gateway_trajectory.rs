@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::persistence::table_rows;
-use bitrouter::policy_lock::deterministic_yaml;
+use bitrouter::policy_source::deterministic_yaml;
 use bitrouter::trajectory::health::reduce;
 use bitrouter::trajectory::types::{TrajectoryEvent, TrajectoryEventKind, TrajectorySnapshot};
 use bitrouter_ai::policy::{Document, Policy, SpecVersion, Target};
@@ -62,7 +62,7 @@ fn trajectory_facts(fixture: &Fixture) -> Result<TrajectoryFacts> {
 
 fn execute_sql(fixture: &Fixture, sql: &str) -> Result<()> {
     fixture.runtime.block_on(async {
-        let db = bitrouter::db::connect(&database_url(fixture)).await?;
+        let db = sea_orm::Database::connect(database_url(fixture)).await?;
         db.execute(Statement::from_string(DbBackend::Sqlite, sql.to_owned()))
             .await?;
         db.close().await?;
@@ -112,12 +112,7 @@ fn configuration(fixture: &Fixture, upstream: &str) -> Result<()> {
         fixture.directory.path().join("policy.yaml"),
         deterministic_yaml(&source)?,
     )?;
-    // Let the full gateway commit a real terminal fact/outbox while its separate
-    // consumer fails. No synthetic settlement or delivery receipt is inserted.
-    execute_sql(
-        fixture,
-        "CREATE TRIGGER fixture_reject_eval BEFORE INSERT ON eval_subjects BEGIN SELECT RAISE(FAIL, 'fixture consumer unavailable'); END",
-    )
+    Ok(())
 }
 
 /// An explicit observer owns correlation. Gateway model selection cannot start
@@ -130,7 +125,7 @@ fn track_request(fixture: &Fixture, id: &str, messages: &[Value]) -> Result<()> 
     use bitrouter_ai::types::ApiProtocol;
 
     fixture.runtime.block_on(async {
-        let db = bitrouter::db::connect(&database_url(fixture)).await?;
+        let db = sea_orm::Database::connect(database_url(fixture)).await?;
         let key = bitrouter::paths::get_or_create_correlation_key(fixture.directory.path())?;
         let runtime =
             TrajectoryRuntime::new(TrajectoryStore::new(db.clone()), Canonicalizer::new(key));
@@ -195,7 +190,7 @@ fn infer(
             }),
             "model selection changed conversation context: {sent}"
         );
-        let db = bitrouter::db::connect(&database_url(fixture)).await?;
+        let db = sea_orm::Database::connect(database_url(fixture)).await?;
         let metered = requests::Entity::find_by_id(id)
             .one(&db)
             .await?
@@ -239,6 +234,12 @@ fn exercise_trajectory(fixture: &mut Fixture, full: &Path, minimum: &Path) -> Re
     seed::assert_no_blocks(fixture)?;
     let source_bytes = fs::read(fixture.directory.path().join("policy.yaml"))?;
     let (pid, listen) = start(fixture, full, &full_identity)?;
+    // Let the full gateway commit a real terminal fact/outbox while its separate
+    // consumer fails. No synthetic settlement or delivery receipt is inserted.
+    execute_sql(
+        fixture,
+        "CREATE TRIGGER fixture_reject_eval BEFORE INSERT ON eval_subjects BEGIN SELECT RAISE(FAIL, 'fixture consumer unavailable'); END",
+    )?;
     let mut messages = vec![json!({"role":"user","content":"Make a small change."})];
     infer(
         fixture,
@@ -248,7 +249,10 @@ fn exercise_trajectory(fixture: &mut Fixture, full: &Path, minimum: &Path) -> Re
         &messages,
         "cheap",
     )?;
+    // Shutdown drains pending publications. Keep the consumer unavailable through
+    // that drain, then restore the exact catalog before opening the next profile.
     fixture.stop_resident(pid)?;
+    execute_sql(fixture, "DROP TRIGGER fixture_reject_eval")?;
     let original = trajectory_facts(fixture)?;
     ensure!(original.records["trajectory_episodes"].len() == 1);
     ensure!(
@@ -258,11 +262,12 @@ fn exercise_trajectory(fixture: &mut Fixture, full: &Path, minimum: &Path) -> Re
     ensure!(
         original.outbox.len() == 1
             && original.outbox[0].attempts > 0
-            && original.outbox[0].delivered_at.is_none()
+            && original.outbox[0].delivered_at.is_none(),
+        "expected one pending delivery after shutdown: {:?}",
+        original.outbox
     );
     ensure!(original.evaluation.values().all(Vec::is_empty));
     let key = fs::read(fixture.directory.path().join("correlation.key"))?;
-    execute_sql(fixture, "DROP TRIGGER fixture_reject_eval")?;
 
     let (pid, listen) = start(fixture, minimum, &minimum_identity)?;
     ensure!(

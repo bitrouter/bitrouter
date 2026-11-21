@@ -265,7 +265,7 @@ pub async fn execute(command: Command, output: &Output) -> Result<()> {
             activation: None,
             running: bitrouter_ai::control::reload::RunningConfigState::Unknown,
             restart_required: None,
-            hint: "Configured entries only. Use bro mcp check to connect and discover tools.",
+            hint: "Configured entries only. Use bitrouter mcp check to connect and discover tools.",
         })?;
         return Ok(());
     }
@@ -331,7 +331,7 @@ async fn publish(
 ) -> Result<ConfigReport> {
     let updated = snapshot.candidate(name, replacement, add)?;
     let validated = document::validate_candidate(&updated)?;
-    crate::policy_lock::load_for_config(&validated, Some(&snapshot.path))
+    crate::policy_source::load_for_config(&validated, Some(&snapshot.path))
         .await
         .map_err(|_| bad("candidate references invalid policy configuration (values omitted)"))?;
     let source = snapshot.path.clone();
@@ -342,6 +342,6 @@ async fn publish(
         activation: Some(ConfigActivation::SavedOnly),
         running: bitrouter_ai::control::reload::RunningConfigState::Unknown,
         restart_required: Some(true),
-        hint: "Saved only. Use bro status for target-owned state; explicitly restart after active work finishes. Route reload does not update native MCP bindings.",
+        hint: "Saved only. Use bitrouter status for target-owned state; explicitly restart after active work finishes. Route reload does not update native MCP bindings.",
     })
 }

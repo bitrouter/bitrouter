@@ -194,46 +194,6 @@ impl ToolResultLimitsExt for ToolResultLimits {
     }
 }
 
-#[cfg(feature = "core")]
-pub(crate) fn tool_result_limits(
-    input_bytes: u64,
-    output_bytes: u64,
-) -> Result<ToolResultLimits, CoreError> {
-    use crate::managed_contract::protocol::{ClientMessage, Command, ToolOutcome};
-    let result = ToolResult {
-        invocation_id: "x".repeat(128),
-        attempt_id: "x".repeat(128),
-        status: ToolOutcome::EffectUnknown,
-        output: String::new(),
-        evidence: Vec::new(),
-        workspace_revision: None,
-    };
-    let result_bytes = serialized_bytes(&result)?;
-    let envelope = ClientMessage {
-        version: VERSION,
-        session_id: "x".repeat(128),
-        execution_epoch: u64::MAX,
-        operation_id: "x".repeat(128),
-        expected_state_revision: Some(u64::MAX),
-        command: Command::ToolResult(result),
-    };
-    // tool.result and tool.status have equal-length tags and identical
-    // envelopes. Reserve the largest envelope even for in-process callers.
-    let overhead = serialized_bytes(&envelope)?.saturating_sub(result_bytes);
-    let payload_bytes = input_bytes.saturating_sub(overhead);
-    if output_bytes == 0 || payload_bytes < result_bytes {
-        return Err(CoreError::rejected(
-            ErrorCode::LimitExceeded,
-            "tool control input cannot fit a result envelope",
-        ));
-    }
-    Ok(ToolResultLimits {
-        output_bytes,
-        payload_bytes,
-        artifact_bytes: None,
-    })
-}
-
 fn validate_tool_artifacts(
     limits: &ToolResultLimits,
     references: &[ArtifactRef],

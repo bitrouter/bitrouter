@@ -7,8 +7,8 @@ use std::error::Error;
 use std::path::Path;
 use std::process::Command;
 
-use build_artifact::{BuildMetadata, FeatureSelection, source_revision};
-use sha2::{Digest, Sha256};
+use bitrouter_build::source_revision;
+use build_artifact::{BuildMetadata, FeatureSelection};
 
 const MANIFEST: &str = include_str!("../Cargo.toml");
 
@@ -25,15 +25,15 @@ fn canonical_aliases_expand_transitive_features_and_keep_exact_custom_sets()
 -> Result<(), Box<dyn Error>> {
     for (roots, expected) in [
         (vec!["otel"], vec!["otel-http"]),
-        (vec!["harness"], vec!["harness", "mcp"]),
+        (vec!["eval-publication"], vec!["eval-publication"]),
         (vec!["server-tools"], vec!["mcp", "server-tools"]),
         (
             vec!["otel", "otel-http", "otel-grpc"],
             vec!["otel-grpc", "otel-http"],
         ),
         (
-            vec!["harness", "core", "mcp", "harness"],
-            vec!["core", "harness", "mcp"],
+            vec!["eval-publication", "server-tools", "mcp", "mcp"],
+            vec!["eval-publication", "mcp", "server-tools"],
         ),
     ] {
         let selected = selection(MANIFEST, &roots)?;
@@ -145,14 +145,11 @@ fn shared_gateway_has_exact_capabilities_and_a_distinct_wire_identity() -> Resul
                 .render()
                 .contains("DistributionProfile::GatewayShared")
         );
-        assert_ne!(
-            fingerprint(&built, b"same sources")?,
-            fingerprint(&metadata(&[])?, b"same sources")?
-        );
+        assert_ne!(built.artifact_json(), metadata(&[])?.artifact_json());
     }
     for roots in [
         vec!["db-postgres"],
-        vec!["multi-instance", "core"],
+        vec!["multi-instance", "eval-publication"],
         vec!["multi-instance", "otel"],
         vec!["multi-instance", "db-mysql"],
         vec!["multi-instance", "default"],
@@ -190,38 +187,8 @@ fn dependency_edges_preserve_implicit_features_without_inventing_local_capabilit
     Ok(())
 }
 
-fn fingerprint(metadata: &BuildMetadata, sources: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
-    let mut hash = Sha256::new();
-    hash.update(sources);
-    metadata.extend_handoff_hash(&mut hash)?;
-    Ok(hash.finalize().to_vec())
-}
-
 #[test]
-fn handoff_identity_retains_source_inputs_and_distinguishes_build_metadata()
--> Result<(), Box<dyn Error>> {
-    let sources = b"existing handoff and migration sources";
-    let mut full = metadata(&["default"])?;
-    let original = fingerprint(&full, sources)?;
-    assert_ne!(original, fingerprint(&metadata(&[])?, sources)?);
-    assert_ne!(original, fingerprint(&full, b"changed migration sources")?);
-    full.target = "aarch64-apple-darwin".to_owned();
-    assert_ne!(original, fingerprint(&full, sources)?);
-    let mut full = metadata(&["default"])?;
-    full.source_revision = Some("abcdef0123456789abcdef0123456789abcdef01".to_owned());
-    assert_ne!(original, fingerprint(&full, sources)?);
-    full.source_revision = None;
-    assert_ne!(original, fingerprint(&full, sources)?);
-    assert_eq!(
-        fingerprint(&metadata(&["otel"])?, sources)?,
-        fingerprint(&metadata(&["otel-http"])?, sources)?
-    );
-    Ok(())
-}
-
-#[test]
-fn generated_identity_agrees_with_compiled_capabilities_and_legacy_handoff_id()
--> Result<(), Box<dyn Error>> {
+fn generated_identity_agrees_with_compiled_capabilities() -> Result<(), Box<dyn Error>> {
     let identity = bitrouter::artifact::current();
     assert_eq!(identity, bitrouter::artifact::current());
     assert_eq!(identity.version, bitrouter::VERSION);
@@ -229,8 +196,7 @@ fn generated_identity_agrees_with_compiled_capabilities_and_legacy_handoff_id()
     assert!(!identity.target.contains(['/', '\\']));
     assert!(identity.features.windows(2).all(|pair| pair[0] < pair[1]));
     for (name, enabled) in [
-        ("core", cfg!(feature = "core")),
-        ("harness", cfg!(feature = "harness")),
+        ("eval-publication", cfg!(feature = "eval-publication")),
         ("mcp", cfg!(feature = "mcp")),
         ("server-tools", cfg!(feature = "server-tools")),
         ("guardrails", cfg!(feature = "guardrails")),

@@ -338,7 +338,7 @@ async fn partial_projection_variant(first: &Store, second: &Store, variant: &str
         context::PipelineContext, routing::ModelSelector, types::PipelineRequest,
     };
     use crate::gateway::shared::capture::Requirements;
-    use crate::policy_lock::{PolicyRuntime, semantic_digest};
+    use crate::policy_source::{PolicyRuntime, semantic_digest};
     use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
     let fixture = Fixture::new(first, 2).await?;
