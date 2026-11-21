@@ -38,8 +38,6 @@ pub(in crate::tenancy) struct Totals {
     pub unknown: u64,
     pub uncovered: u64,
     pub live: u64,
-    pub repair_reserved: u64,
-    pub repair_live: u64,
 }
 
 pub(in crate::tenancy) struct Accounting {
@@ -292,14 +290,9 @@ impl Accounting {
     #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
     pub fn observed(&self, active: u64) -> Option<(u64, u64, u64, u64)> {
         let total = self.totals;
-        let executions = total.live.checked_sub(total.repair_live)?;
         if total.uncovered > total.live
-            || executions > active
-            || executions
-                .checked_mul(RESERVATION)?
-                .checked_add(total.repair_reserved)?
-                != total.reserved
-            || total.repair_live.checked_mul(ROW_OVERHEAD)? > total.repair_reserved
+            || total.live > active
+            || total.live.checked_mul(RESERVATION)? != total.reserved
         {
             return None;
         }
