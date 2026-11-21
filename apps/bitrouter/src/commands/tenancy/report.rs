@@ -1,7 +1,7 @@
 //! CLI projections and redacted recovery diagnostics for the HTTP adapter.
 
-use bitrouter::gateway::error::BitrouterError;
-use bitrouter::output::{CliReport, human::Human};
+use crate::gateway::error::BitrouterError;
+use crate::output::{CliReport, human::Human};
 use bitrouter_ai::tenancy::{
     configuration::{ActiveRevision, ConfigurationRevision},
     identity::{InstallationId, OperationId},

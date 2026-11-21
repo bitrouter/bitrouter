@@ -1,0 +1,253 @@
+//! Minimum builds reject unavailable execution and retired syntax before effects.
+
+use std::path::Path;
+use std::time::Duration;
+
+use anyhow::{Context, Result, ensure};
+
+fn command(directory: &Path) -> anyhow::Result<tokio::process::Command> {
+    let mut command = tokio::process::Command::new(crate::tests::binary()?);
+    command
+        .current_dir(directory)
+        .env_clear()
+        .env("HOME", directory)
+        .env("USERPROFILE", directory)
+        .env("BITROUTER_HOME", directory.join("runtime"))
+        .kill_on_drop(true);
+    Ok(command)
+}
+
+async fn rejection(command: &mut tokio::process::Command) -> Result<String> {
+    let output = tokio::time::timeout(Duration::from_secs(20), command.output())
+        .await
+        .context("unavailable operation did not return")??;
+    ensure!(
+        output.status.code() == Some(1),
+        "unexpected execution rejection: {}",
+        output.status
+    );
+    let envelope: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .with_context(|| format!("CLI stderr: {}", String::from_utf8_lossy(&output.stderr)))?;
+    let message = envelope["error"]["message"]
+        .as_str()
+        .context("missing CLI error message")?;
+    ensure!(
+        message.contains("BITROUTER_WORKFLOW_TRACE_JSONL"),
+        "{message}"
+    );
+    Ok(message.to_owned())
+}
+
+#[tokio::test]
+async fn experimental_commands_reject_before_input_or_storage_access() -> Result<()> {
+    let cases: &[&[&str]] = &[
+        &["acp", "evolution", "--config", "missing.yaml", "status"],
+        &[
+            "acp",
+            "evolution",
+            "--config",
+            "missing.yaml",
+            "register",
+            "missing.json",
+        ],
+        &[
+            "acp",
+            "checkpoints",
+            "--agent",
+            "fixture",
+            "session",
+            "--config",
+            "missing.yaml",
+            "judge",
+            "checkpoint",
+            "--model",
+            "fixture",
+        ],
+        &[
+            "acp",
+            "checkpoints",
+            "--agent",
+            "fixture",
+            "session",
+            "--config",
+            "missing.yaml",
+            "judge-job",
+            "job",
+            "--resume",
+        ],
+        &[
+            "acp",
+            "checkpoints",
+            "--agent",
+            "fixture",
+            "session",
+            "--config",
+            "missing.yaml",
+            "rubric",
+            "submit",
+            "missing.json",
+        ],
+        &[
+            "workflow-state",
+            "classifier-bakeoff",
+            "--fixtures",
+            "missing",
+            "--output",
+            "report.json",
+        ],
+    ];
+    for arguments in cases {
+        parser_rejection(arguments, "unrecognized subcommand").await?;
+    }
+    Ok(())
+}
+
+async fn parser_rejection(arguments: &[&str], diagnostic: &str) -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let output = tokio::time::timeout(
+        Duration::from_secs(20),
+        command(directory.path())?.args(arguments).output(),
+    )
+    .await
+    .context("invalid command did not return")??;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    ensure!(output.status.code() == Some(2), "{arguments:?}: {stderr}");
+    ensure!(
+        output.stdout.is_empty(),
+        "parser rejection emitted application output"
+    );
+    ensure!(stderr.contains(diagnostic), "{arguments:?}: {stderr}");
+    ensure!(
+        std::fs::read_dir(directory.path())?.count() == 0,
+        "{arguments:?} created state before rejecting invalid syntax"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn retired_learning_commands_fail_parsing_without_side_effects() -> Result<()> {
+    for arguments in [
+        vec!["optimize", "run", "--config", "missing.yaml"],
+        vec!["optimize", "status", "--config", "missing.yaml"],
+        vec![
+            "policy",
+            "compile",
+            "--config",
+            "missing.yaml",
+            "--output",
+            "candidate.yaml",
+        ],
+        vec!["policy", "verify", "--evidence", "--config", "missing.yaml"],
+        vec!["policy", "evolve", "--apply", "--config", "missing.yaml"],
+    ] {
+        parser_rejection(&arguments, "unrecognized subcommand").await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn policy_publish_requires_cas_before_input_or_storage_access() -> Result<()> {
+    parser_rejection(
+        &[
+            "policy",
+            "publish",
+            "missing.yaml",
+            "--config",
+            "missing.yaml",
+        ],
+        "--expected-digest",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn workflow_trace_activation_rejects_before_launcher_side_effects() -> Result<()> {
+    for action in ["serve", "start", "restart"] {
+        for explicit_config in [false, true] {
+            let directory = tempfile::tempdir()?;
+            let path = directory.path().join("bitrouter.yaml");
+            let trace = directory.path().join("workflow.jsonl");
+            let mut command = command(directory.path())?;
+            command
+                .arg(action)
+                .env("BITROUTER_WORKFLOW_TRACE_JSONL", &trace);
+            if !explicit_config {
+                // BITROUTER_HOME selects an explicit configuration directory; omit
+                // it to exercise the existing zero-config path under the test HOME.
+                command.env_remove("BITROUTER_HOME");
+            }
+            if explicit_config {
+                std::fs::write(
+                    &path,
+                    "inherit_defaults: false\nserver:\n  listen: '127.0.0.1:0'\ndatabase:\n  url: 'sqlite://must-not-create.db?mode=rwc'\n",
+                )?;
+                command.arg("--config").arg(&path);
+            }
+            let diagnostic = rejection(&mut command).await?;
+            ensure!(diagnostic.contains("BITROUTER_WORKFLOW_TRACE_JSONL"));
+            ensure!(!trace.exists());
+            ensure!(!directory.path().join("runtime").exists());
+            ensure!(std::fs::read_dir(directory.path())?.count() == usize::from(explicit_config));
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn unsupported_trace_restart_leaves_the_resident_daemon_running() -> Result<()> {
+    use crate::daemon::{self, DaemonCommand, DaemonResponse};
+
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("bitrouter.yaml");
+    let raw = "inherit_defaults: false\nregistry:\n  enabled: false\nserver:\n  listen: '127.0.0.1:0'\ndatabase:\n  url: 'sqlite://daemon.db?mode=rwc'\n";
+    std::fs::write(&path, raw)?;
+    let config = crate::config::parse_with(raw, |_| None)?;
+    let source = crate::paths::ConfigSource::File(path.clone());
+    let socket = daemon::socket_path_for(&source, &config);
+    let mut resident = command(directory.path())?
+        .args(["serve", "--config"])
+        .arg(&path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()?;
+    let resident_pid = tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            ensure!(
+                resident.try_wait()?.is_none(),
+                "resident exited before readiness"
+            );
+            if let Ok(DaemonResponse::Status { pid, .. }) =
+                daemon::send_command(&socket, &DaemonCommand::Status).await
+            {
+                return Ok::<_, anyhow::Error>(pid);
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .context("resident control endpoint never became ready")??;
+
+    let trace = directory.path().join("workflow.jsonl");
+    rejection(
+        command(directory.path())?
+            .args(["restart", "--config"])
+            .arg(&path)
+            .env("BITROUTER_WORKFLOW_TRACE_JSONL", &trace),
+    )
+    .await?;
+    ensure!(
+        resident.try_wait()?.is_none(),
+        "restart stopped the resident"
+    );
+    let status = daemon::send_command(&socket, &DaemonCommand::Status).await?;
+    ensure!(matches!(status, DaemonResponse::Status { pid, .. } if pid == resident_pid));
+    ensure!(!trace.exists());
+
+    let response = daemon::send_command(&socket, &DaemonCommand::Stop).await?;
+    ensure!(matches!(response, DaemonResponse::Ok));
+    let status = tokio::time::timeout(Duration::from_secs(20), resident.wait())
+        .await
+        .context("test-owned daemon did not shut down")??;
+    ensure!(status.success());
+    Ok(())
+}

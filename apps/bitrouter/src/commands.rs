@@ -5,12 +5,17 @@
 use anyhow::{Context, Result};
 
 use crate::config::Config;
+#[cfg(test)]
 use crate::config::routing_table::ConfigRoutingTable;
+#[cfg(test)]
 use crate::gateway::caller::CallerContext;
+#[cfg(test)]
 use crate::gateway::pipeline::routing::{RoutingPrefs, RoutingTable};
+#[cfg(test)]
 use bitrouter_ai::routing::ModelInfo;
 
 use crate::auth::{NewApiKey, db as auth_db, generate};
+#[cfg(test)]
 use crate::daemon::RouteHop;
 
 /// The starter `bitrouter.yaml` written by `bro init`. Mirrors
@@ -112,32 +117,6 @@ providers:
 inherit_defaults: true
 "#;
 
-/// Outcome of a [`write_starter_config`] scaffold write.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScaffoldOutcome {
-    /// The starter `bitrouter.yaml` was written.
-    Wrote,
-    /// A file already existed and `force` was not set — left untouched.
-    Skipped,
-}
-
-/// `bro init` — write the starter `bitrouter.yaml` to `path`. Without
-/// `force`, an existing file is left untouched (returns
-/// [`ScaffoldOutcome::Skipped`]) so the onboarding wizard's `--yes` run never
-/// clobbers a config the user already tuned; with `force` it overwrites. This
-/// is the single sanctioned `bitrouter.yaml` write — nothing else in the tree
-/// serializes a `Config`.
-pub async fn write_starter_config(path: &std::path::Path, force: bool) -> Result<ScaffoldOutcome> {
-    if !force && tokio::fs::try_exists(path).await.unwrap_or(false) {
-        return Ok(ScaffoldOutcome::Skipped);
-    }
-    tokio::fs::write(path, STARTER_CONFIG)
-        .await
-        .with_context(|| format!("writing {}", path.display()))?;
-    Ok(ScaffoldOutcome::Wrote)
-}
-
-/// The outcome of `bitrouter key generate` — the plaintext secret is shown to
 /// the user **once** and never persisted (only its SHA-256 hash is stored).
 pub struct GeneratedKey {
     /// The api key id.
@@ -205,6 +184,7 @@ pub async fn key_sign(
 /// connect, 5s total) and failures leave the provider with no models rather
 /// than bubbling an error, but a caller on a hot path should prefer the
 /// daemon: see `crate::actions::models`.
+#[cfg(test)]
 pub async fn list_models(config: &Config) -> Result<Vec<ModelInfo>> {
     config.validate_router_config()?;
     let mut resolved = resolve_static(config.clone());
@@ -244,6 +224,7 @@ pub fn resolve_static(mut config: Config) -> Config {
 
 /// `bitrouter route <model>` — resolve a model name through the routing table,
 /// **standalone** (no running daemon needed). Returns the fallback chain.
+#[cfg(test)]
 pub async fn resolve_route(config: &Config, model: &str) -> Result<Vec<RouteHop>> {
     let table = ConfigRoutingTable::from_config(resolve_discovered(config.clone()).await);
     let chain = table
@@ -504,10 +485,6 @@ pub struct ProviderLoginOptions {
     pub api_key: Option<String>,
 }
 
-pub async fn login_provider(provider_id: &str, label: &str) -> Result<LoginOutcome> {
-    login_provider_with_options(provider_id, label, ProviderLoginOptions::default()).await
-}
-
 pub async fn login_provider_with_options(
     provider_id: &str,
     label: &str,
@@ -718,9 +695,7 @@ async fn run_claude_code_session()
     use crate::gateway::providers::auth::credentials::Credential;
     use crate::providers::import::claude_code::ClaudeCodeStore;
 
-    // Adopt a legacy #590 marker stored under `anthropic` before checking the
-    // live session, so a returning user's existing sign-in is recognised under
-    // the new `claude-code` provider.
+    // Resolve the stored Claude Code session identity before inspecting live sign-in.
     crate::claude_code::migrate_legacy_anthropic_marker_default();
 
     let store = ClaudeCodeStore::system().ok_or_else(|| {
@@ -1025,51 +1000,6 @@ pub async fn logout_provider(provider_id: &str) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn init_writes_skip_auth_true_config() {
-        let dir = std::env::temp_dir().join(format!(
-            "brinit-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        tokio::fs::create_dir_all(&dir).await.unwrap();
-        let path = dir.join("bitrouter.yaml");
-        assert_eq!(
-            write_starter_config(&path, false).await.unwrap(),
-            ScaffoldOutcome::Wrote
-        );
-        let written = tokio::fs::read_to_string(&path).await.unwrap();
-        assert!(written.contains("skip_auth: true"));
-        // and it parses back into a valid Config
-        let cfg = crate::config::parse_with(&written, |_| Some("x".to_string())).unwrap();
-        assert!(cfg.server.skip_auth);
-        // Without --force, an existing file is left untouched (Skipped) — the
-        // wizard's `--yes` run must never clobber a tuned config.
-        tokio::fs::write(&path, "# hand-edited\n").await.unwrap();
-        assert_eq!(
-            write_starter_config(&path, false).await.unwrap(),
-            ScaffoldOutcome::Skipped
-        );
-        assert_eq!(
-            tokio::fs::read_to_string(&path).await.unwrap(),
-            "# hand-edited\n"
-        );
-        // With --force it overwrites.
-        assert_eq!(
-            write_starter_config(&path, true).await.unwrap(),
-            ScaffoldOutcome::Wrote
-        );
-        assert!(
-            tokio::fs::read_to_string(&path)
-                .await
-                .unwrap()
-                .contains("skip_auth: true")
-        );
-        let _ = tokio::fs::remove_dir_all(&dir).await;
-    }
 
     #[tokio::test]
     async fn key_sign_produces_brvk_secret_and_persists_only_hash() {

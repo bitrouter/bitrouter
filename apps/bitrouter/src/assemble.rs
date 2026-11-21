@@ -1,8 +1,6 @@
 //! Assembly: turn a parsed [`Config`] into a running [`App`].
 //!
-//! This is the home of v0's `load_builtin_plugins` logic — it lives in the
-//! `apps/bitrouter` **lib** (above the SDK and the plugins), wiring the builtin
-//! hooks onto the `language_model` pipeline from config.
+//! Wires the configured gateway hooks and host-owned runtime services.
 
 #[cfg(feature = "multi-instance")]
 mod shared_writers;
@@ -117,48 +115,46 @@ pub struct Assembled {
     /// The fully wired application.
     pub app: App,
     /// The shared database connection.
-    pub db: DatabaseConnection,
+    pub(crate) db: DatabaseConnection,
     pub(crate) tenancy: Option<crate::tenancy::Service>,
     /// The policy store wired into the language_model pipeline. Held by the
     /// caller (the daemon) so `bitrouter reload` / SIGHUP can call
     /// [`PolicyStore::reload`] alongside the routing-table reload — reload
     /// must not affect in-flight requests.
-    pub policy_store: Arc<PolicyStore>,
+    pub(crate) policy_store: Arc<PolicyStore>,
     /// Live named routing policies loaded from current `policy.yaml` source. The model
     /// selector and daemon reloader share this last-known-good registry.
-    pub policy_runtime: Arc<crate::policy_source::PolicyRuntime>,
-    /// Canonical gateway request tracking; capture registration shares its runtime epoch.
-    pub gateway_requests: crate::gateway::observability::requests::GatewayRequestTracker,
+    pub(crate) policy_runtime: Arc<crate::policy_source::PolicyRuntime>,
     /// Generic eval exchange used by the local CLI and REST control plane.
-    pub eval_service: EvalService,
+    pub(crate) eval_service: EvalService,
     /// Always-active encrypted provider continuation registry.
-    pub continuation_registry: ContinuationRegistry,
+    pub(crate) continuation_registry: ContinuationRegistry,
     #[cfg(test)]
     pub(crate) pending_eval_decisions: PendingEvalDecisionStore,
     #[cfg(test)]
     pub(crate) response_observer: PredictiveResponseObserver,
     /// Durable publisher shared by request settlement and startup/shutdown drains.
     #[cfg(feature = "eval-publication")]
-    pub trajectory_outbox_publisher: Option<TrajectoryOutboxPublisher>,
+    pub(crate) trajectory_outbox_publisher: Option<TrajectoryOutboxPublisher>,
     /// Concrete handle on the routing table. The pipeline above also
     /// holds the same `Arc` (via `&dyn RoutingTable`), but reload code
     /// needs the concrete type to call
     /// [`ConfigRoutingTable::replace_config`] when there's no source
     /// file to re-read from (zero-config mode).
-    pub routing_table: Arc<ConfigRoutingTable>,
+    pub(crate) routing_table: Arc<ConfigRoutingTable>,
     /// Concrete upstream HTTP executor. The pipeline also holds this as a trait
     /// object, but reload needs the concrete handle to replace timeout clients.
-    pub upstream_executor: Arc<HttpExecutor>,
+    pub(crate) upstream_executor: Arc<HttpExecutor>,
     /// Snapshot provider for `bro observe status`. When the OTel
     /// exporter is wired, this reports its live state; when not, it
     /// reports `compiled_in` truthfully and everything else blank.
-    pub observe: Arc<dyn ObserveStatusProvider>,
+    pub(crate) observe: Arc<dyn ObserveStatusProvider>,
     /// Live OTel exporter handle, when one is wired. Held so the binary
     /// can hand it to the `tracing-opentelemetry` bridge layer at
     /// subscriber-init time (the bridge captures its tracer eagerly).
     /// `None` when OTel is disabled in config.
     #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
-    pub otel_exporter: Option<Arc<OtelExporter>>,
+    pub(crate) otel_exporter: Option<Arc<OtelExporter>>,
     /// Captured `OtelExporter::new` failure message, when one occurred.
     /// Surfaced as a `tracing::error!` line by the binary after the full
     /// subscriber is installed — `OtelExporter::new` itself runs before
@@ -180,12 +176,12 @@ pub struct Assembled {
 /// The coordinator owns migrations, publication and process lifecycle.
 #[cfg(feature = "multi-instance")]
 pub(crate) struct SharedAssembly {
-    pub continuation: crate::gateway::shared::continuation::SharedContinuationDb,
-    pub telemetry: Arc<crate::gateway::shared::telemetry::Telemetry>,
-    pub auth_appliers: AuthAppliers,
-    pub correlation_key: crate::trajectory::canonical::CorrelationKey,
-    pub policies: Vec<crate::policy::Policy>,
-    pub model_policy: Option<bitrouter_ai::policy::Document>,
+    pub(crate) continuation: crate::gateway::shared::continuation::SharedContinuationDb,
+    pub(crate) telemetry: Arc<crate::gateway::shared::telemetry::Telemetry>,
+    pub(crate) auth_appliers: AuthAppliers,
+    pub(crate) correlation_key: crate::trajectory::canonical::CorrelationKey,
+    pub(crate) policies: Vec<crate::policy::Policy>,
+    pub(crate) model_policy: Option<bitrouter_ai::policy::Document>,
 }
 
 #[cfg(feature = "multi-instance")]
@@ -385,19 +381,14 @@ pub(crate) fn otel_status(exporter: &OtelExporter) -> ObserveStatusPayload {
 /// Adding a reader without adding it here fails that test — the list cannot
 /// silently drift, which matters because a *missing* id is worse than no guard
 /// at all: the daemon would warn, on every start, about a plugin it reads.
-///
-/// It shipped wrong exactly once, for exactly that reason: `bitrouter-policy`
-/// is read through a line-wrapped `config` / `.plugins` / `.get(…)` chain that
-/// a single-line grep did not see. Hence the scan.
-pub const KNOWN_PLUGIN_IDS: &[&str] = &["bitrouter-policy", "bitrouter-telemetry"];
+
+pub(crate) const KNOWN_PLUGIN_IDS: &[&str] = &["bitrouter-policy", "bitrouter-telemetry"];
 
 /// Reject removed built-in configuration before activating the default host.
 ///
-/// Presence, not content, is the migration fence: even null/empty legacy config
-/// must be explicitly removed after the operator has reviewed protection scope.
-/// This belongs to the product host, not the SDK parser: trusted custom hosts
-/// may still explicitly install the compatibility guardrails plugin.
-pub fn validate_host_configuration(config: &Config) -> Result<()> {
+/// Every configured key must describe an available host capability, including
+/// empty and null values. Request checks require explicit router bindings.
+pub(crate) fn validate_host_configuration(config: &Config) -> Result<()> {
     validate_host_configuration_inner(config, true)
 }
 
@@ -436,9 +427,8 @@ fn validate_host_configuration_inner(config: &Config, resolve_telemetry: bool) -
     }
     anyhow::ensure!(
         !config.plugins.contains_key("bitrouter-guardrails"),
-        "plugins.bitrouter-guardrails requires migration: the default bro no longer \
-         includes the guardrails matcher. Compile the regex extension into a custom host, \
-         register it through crate::gateway::extensions::registry::ExtensionApi, and bind it through \
+        "plugins.bitrouter-guardrails is unsupported. Compile the regex extension into a custom host, \
+         register it through bitrouter::gateway::extensions::registry::ExtensionApi, and bind it through \
          routers.<id>.checks.request. The request-check capability checks input \
          only and does not replace global or output block/redact protection. Review \
          every protected entry point and output requirement before explicitly removing \
@@ -507,7 +497,7 @@ const RENAMED_ENV_VARS: &[(&str, &str)] = &[
 ///
 /// Pure so `bitrouter config validate` can report the same set the daemon
 /// warns about, without building an `App`.
-pub fn unknown_plugin_ids(config: &Config) -> Vec<String> {
+pub(crate) fn unknown_plugin_ids(config: &Config) -> Vec<String> {
     let mut unknown: Vec<String> = config
         .plugins
         .keys()
@@ -520,15 +510,15 @@ pub fn unknown_plugin_ids(config: &Config) -> Vec<String> {
 
 /// Everything this binary read but will not act on, as operator-facing lines.
 ///
-/// Collected in [`build_app_with_path`] so it covers every daemon start rather
+/// Collected during assembly so it covers every daemon start rather
 /// than only `bitrouter config validate` — validation is opt-in and the daemon
 /// always runs, which is the wrong way round for a failure this quiet. The
 /// caller emits them; see [`Assembled::ignored_config`] for why.
 ///
-/// Public because `bitrouter config validate` reports the same set from a
+/// `bitrouter config validate` reports the same set from a
 /// file it may never run against — see [`ignored_config_warnings`] for why the
 /// environment half is split off.
-pub fn ignored_config_file_warnings(config: &Config) -> Vec<String> {
+pub(crate) fn ignored_config_file_warnings(config: &Config) -> Vec<String> {
     let known = KNOWN_PLUGIN_IDS.join(", ");
     unknown_plugin_ids(config)
         .into_iter()
@@ -552,10 +542,9 @@ pub fn ignored_config_file_warnings(config: &Config) -> Vec<String> {
 /// environment there would be noise at best and misleading at worst. Every
 /// runtime surface wants both.
 ///
-/// Public because standalone ACP surfaces never build an `App`. They report
-/// these warnings directly, whether or not an exporter is compiled in; a guard
-/// covering only daemon assembly would leave their configuration mistakes silent.
-pub fn ignored_config_warnings(config: &Config) -> Vec<String> {
+/// Command entry points also report these warnings before assembly, whether
+/// or not an exporter is compiled in.
+pub(crate) fn ignored_config_warnings(config: &Config) -> Vec<String> {
     ignored_config_file_warnings(config)
         .into_iter()
         .chain(renamed_env_warnings(|name| {
@@ -584,13 +573,15 @@ fn renamed_env_warnings(is_set: impl Fn(&str) -> bool) -> Vec<String> {
 }
 
 /// Assemble the gateway, storage and builtin inference hooks from a configuration.
-pub async fn build_app(config: &Config) -> Result<Assembled> {
+#[cfg(test)]
+pub(crate) async fn build_app(config: &Config) -> Result<Assembled> {
     build_app_with_path(config, None).await
 }
 
 /// Like [`build_app`], but remembering the config's source path so the routing
 /// table's `reload()` (driven by `bitrouter reload` / `SIGHUP`) can re-read it.
-pub async fn build_app_with_path(
+#[cfg(test)]
+pub(crate) async fn build_app_with_path(
     config: &Config,
     config_path: Option<&std::path::Path>,
 ) -> Result<Assembled> {
@@ -856,7 +847,7 @@ async fn assemble_app(
     let continuation_for_finalization = continuation_runtime;
     // Upstream timeouts: the `upstream.timeouts` block layered over the
     // built-in defaults, plus a per-provider override for any provider whose
-    // resolved timeouts differ (v0 #394 fixed these; now they're configurable).
+    // resolved timeouts differ.
     // Read from the user's `config` — per-provider timeouts are a user-only
     // field, never set by the registry/builtin-defaults merge.
     let (global_timeouts, provider_timeouts) = resolved_upstream_timeouts(config);
@@ -1285,7 +1276,6 @@ async fn assemble_app(
     });
     let gateway_requests =
         crate::gateway::observability::requests::GatewayRequestTracker::new(db.clone());
-    // The host's local control inventory is cloned from this same tracker.
     let gateway_requests = match &metering_storage {
         Some(storage) => gateway_requests.with_storage_budget(storage.clone()),
         None => gateway_requests,
@@ -1461,7 +1451,7 @@ async fn assemble_app(
             if let Some(costs) = &judge_costs {
                 lm.observe_hook(costs.clone());
             }
-            // Only local serving owns these legacy durable gateway writers.
+            // Local serving owns these durable gateway writers.
             if let Some(recorder) = metering_recorder {
                 lm.settlement_recorder_for(recorder, OperationScope::Both);
             }
@@ -1522,9 +1512,7 @@ async fn assemble_app(
     let app = app.prompt_transform(Arc::new(crate::codex_router::CodexRouter::new(Arc::clone(
         &routing_table_for_reload,
     ))) as Arc<dyn PromptTransform>);
-    // Apply the optional MCP pipeline configuration in a second builder step
-    // so the language_model configuration above stays the same shape it has
-    // had since v0.
+    // Assemble the optional MCP routing pipeline after the model pipeline.
     let app = match (mcp_routing, mcp_executor) {
         (Some(table), Some(exec)) => {
             let app = app.mcp(move |m| {
@@ -1579,7 +1567,7 @@ async fn assemble_app(
     };
     let continuation_registry = match &tenancy {
         Some(service) => service.continuation_registry().clone(),
-        None => continuation_registry.context("Legacy continuation registry unavailable")?,
+        None => continuation_registry.context("Local continuation registry unavailable")?,
     };
     if !is_shared && !tenancy_enabled {
         continuation_registry.start_reconciler();
@@ -1590,7 +1578,6 @@ async fn assemble_app(
         tenancy,
         policy_store: policy_store_for_reload,
         policy_runtime,
-        gateway_requests,
         eval_service,
         continuation_registry,
         #[cfg(test)]
@@ -1636,7 +1623,7 @@ fn build_fusion_alias(config: &Config) -> Result<Option<Arc<dyn PromptTransform>
 /// integration tests assemble explicit configs through it. Lives in the app
 /// layer because the SDK routing table receives a resolved configuration
 /// and does not own application catalog fetching or persistence.
-pub async fn merge_registry_into(config: &mut Config) {
+pub(crate) async fn merge_registry_into(config: &mut Config) {
     if !config.inherit_defaults || !config.registry.enabled {
         return;
     }
@@ -2126,7 +2113,7 @@ impl MetricsRenderer for EmptyMetricsRenderer {
 /// Only the first-party telemetry opt-in (`attribution: auto`/`account` with no
 /// explicit token) wants a live source. Every other exporter path — an explicit
 /// static `bearer_token`, `attribution: anonymous`, or the generic `otel` /
-/// legacy / env opt-ins — uses the static header path (`StaticOnly`) and never
+/// environment opt-ins — uses the static header path (`StaticOnly`) and never
 /// reads the credential store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BearerPlan {
@@ -2208,7 +2195,7 @@ fn build_otel_config(
 
     // 1. New nested `otel: { … }` block. A malformed block is a hard error:
     //    the operator explicitly opted in, so silently falling back to the
-    //    legacy shim / env-only path would hide their mistake and start the
+    //    environment-only path would hide their mistake and start the
     //    exporter with a config they never asked for.
     if let Some(otel_value) = telemetry.and_then(|c| c.get("otel")) {
         let cfg = serde_json::from_value::<OtelConfig>(otel_value.clone())
@@ -2218,12 +2205,6 @@ fn build_otel_config(
     }
 
     // 2. Env-var-only opt-in.
-    //
-    // The v0 flat `otlp_endpoint` shim used to sit here, marked for removal in
-    // v1.1. It went with the key rename instead, and not to save a release:
-    // keeping it would have meant carrying a **v0** compatibility path under a
-    // key name v0 never had. `plugins.bitrouter-telemetry.otlp_endpoint` has
-    // never existed in a released config, so there was nothing to preserve.
     if std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").is_ok() {
         require_otel_transport("OTEL_EXPORTER_OTLP_ENDPOINT")?;
         return Ok(Some((OtelConfig::default(), BearerPlan::StaticOnly)));
@@ -2258,7 +2239,7 @@ fn telemetry_bearer_plan(attribution: TelemetryAttribution, has_explicit: bool) 
 
 /// BitRouter's first-party telemetry endpoint. A neutral, overridable default
 /// used when the telemetry opt-in is enabled without an explicit `endpoint`.
-pub const DEFAULT_TELEMETRY_ENDPOINT: &str = "https://telemetry.bitrouter.ai";
+pub(crate) const DEFAULT_TELEMETRY_ENDPOINT: &str = "https://telemetry.bitrouter.ai";
 
 /// Capture level for the telemetry opt-in. `Metadata` exports spans without
 /// message bodies; `Full` additionally includes request + response content.
@@ -2769,11 +2750,8 @@ mod otel_config_tests {
     }
 
     #[test]
-    fn the_v0_otlp_endpoint_shim_is_gone() {
-        // Removed with the key rename: it existed to keep a **v0** YAML
-        // building, and v0 never had `plugins.bitrouter-telemetry`. An
-        // `otlp_endpoint` under the new key is therefore a config that has
-        // never worked, and it must not quietly half-work.
+    fn unsupported_flat_otlp_endpoint_does_not_enable_export() {
+        // Only the nested `otel` configuration can explicitly enable export.
         let config = config_with_telemetry(serde_json::json!({
             "otlp_endpoint": "http://legacy:4318"
         }));
@@ -2902,9 +2880,7 @@ mod otel_config_tests {
 
     #[test]
     fn a_dead_sub_key_under_the_new_id_is_reported() {
-        // The natural migration: the id-level warning says "rename", the
-        // operator renames, and their v0 `otlp_endpoint` comes along with it.
-        // Id-level checking alone sees a known id and says nothing.
+        // A recognized plugin id still requires a warning for unsupported subkeys.
         let config = config_with_telemetry(serde_json::json!({
             "otlp_endpoint": "http://legacy:4318"
         }));

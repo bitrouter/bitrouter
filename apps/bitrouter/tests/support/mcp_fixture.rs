@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use bitrouter::config::mcp::McpTransport;
+use crate::config::mcp::McpTransport;
 use serde_json::Value;
 
 use super::example_binary;

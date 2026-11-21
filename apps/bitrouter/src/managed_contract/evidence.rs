@@ -512,7 +512,7 @@ pub enum FullHistoryReason {
     TargetChanged,
     /// The requested reasoning effort changed.
     EffortChanged,
-    /// The artifact no longer describes the exact ordered history prefix.
+    /// The artifact does not match the exact ordered history prefix.
     PrefixChanged,
 }
 

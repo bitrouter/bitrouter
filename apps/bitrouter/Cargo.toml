@@ -176,33 +176,10 @@ prost.workspace = true
 # while the test controls its size, input bytes, output, and child lifetime.
 portable-pty = "0.9"
 
-[[test]]
-name = "observe_hierarchy"
-required-features = ["otel-http"]
-
-[[test]]
-name = "telemetry_ingress_log_target"
-required-features = ["otel-http"]
-
-[[test]]
-name = "telemetry_grpc_transport"
-required-features = ["otel-grpc"]
-
 [[bench]]
 name = "observe_overhead"
 harness = false
 required-features = ["otel-http"]
-
-[[test]]
-name = "policy_eval_control_plane"
-
-[[example]]
-name = "legacy_guardrails"
-required-features = ["guardrails"]
-
-[[test]]
-name = "harness_mcp_check"
-required-features = ["mcp"]
 
 [[example]]
 name = "native_regex_checker"

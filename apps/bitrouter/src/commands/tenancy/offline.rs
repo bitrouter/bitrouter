@@ -1,6 +1,6 @@
 //! Explicit local path adapter; never resolves an HTTP or host configuration.
+use crate::{gateway::error::BitrouterError, output::Output};
 use anyhow::Result;
-use bitrouter::{gateway::error::BitrouterError, output::Output};
 use clap::{Args, Subcommand};
 use std::path::PathBuf;
 
@@ -19,8 +19,8 @@ pub(crate) struct Working {
     validation_page_rows: usize,
 }
 impl Working {
-    fn options(&self) -> bitrouter::offline::large::Options {
-        bitrouter::offline::large::Options {
+    fn options(&self) -> crate::offline::large::Options {
+        crate::offline::large::Options {
             working_bytes: self.working_bytes,
             scratch_directory: self.scratch_directory.clone(),
             min_free_bytes: self.scratch_free_bytes,
@@ -79,14 +79,14 @@ pub(super) async fn run(action: &Action, context: Option<&str>, output: &Output)
             bundle,
             working,
         } => output.emit(
-            &bitrouter::offline::snapshot_with_options(database, bundle, working.options()).await?,
+            &crate::offline::snapshot_with_options(database, bundle, working.options()).await?,
         )?,
         Action::Verify {
             bundle,
             evidence_digest,
             working,
         } => output.emit(
-            &bitrouter::offline::verify_with_options(bundle, evidence_digest, working.options())
+            &crate::offline::verify_with_options(bundle, evidence_digest, working.options())
                 .await?,
         )?,
         Action::Restore {
@@ -98,7 +98,7 @@ pub(super) async fn run(action: &Action, context: Option<&str>, output: &Output)
             working,
         } => {
             output.emit(
-                &bitrouter::offline::restore_with_options(
+                &crate::offline::restore_with_options(
                     bundle,
                     evidence_digest,
                     database,

@@ -1,46 +1,8 @@
-//! [`App`] and [`AppBuilder`] — the top-level entry point.
+//! A configured gateway application and its private assembly machinery.
 //!
-//! An [`App`] holds one pipeline per enabled protocol
-//! ([`crate::gateway::pipeline::execution::Pipeline`], [`crate::gateway::mcp::Pipeline`]) plus the
-//! injected infrastructure (metrics store, metrics renderer, the aggregated
-//! migration set).
-//!
-//! [`AppBuilder`] configures each protocol through its own sub-builder closure
-//! ([`language_model`](AppBuilder::language_model), [`mcp`](AppBuilder::mcp)).
-//! A pipeline is built only for protocols that have something configured.
-//!
-//! # Legacy custom-host assembly
-//!
-//! [`Plugin`] and [`AppBuilder::plugin`] retain the legacy convenience for
-//! trusted custom hosts to install hooks and SQL [`crate::gateway::extensions::plugin::MigrationItem`]s.
-//! These APIs assemble a host; they are not the restricted extension author API.
-//! New request-check extensions register a callback through
-//! [`crate::gateway::extensions::registry::ExtensionApi::request_check`], using
-//! `bitrouter::assemble::build_app_with_extensions` in the product host crate.
-//! Router bindings determine which registered checks process requests.
-//!
-//! The current alpha SDK retains the legacy API without changing its global
-//! hook or migration behavior. Removal requires an explicitly announced breaking
-//! SDK release with migration notes; no removal date is scheduled. Individual
-//! hooks and migration facilities remain available for custom-host assembly.
-//!
-//! ```no_run
-//! use std::sync::Arc;
-//! use bitrouter::gateway::assembly::App;
-//! use bitrouter::gateway::pipeline::executor::HttpExecutor;
-//! use bitrouter::gateway::pipeline::routing::StaticRoutingTable;
-//!
-//! # fn run() -> bitrouter::gateway::error::Result<()> {
-//! let executor = Arc::new(HttpExecutor::with_defaults()?);
-//! let app = App::builder()
-//!     .skip_auth(true)
-//!     .language_model(|lm| {
-//!         lm.routing_table(Arc::new(StaticRoutingTable::new()))
-//!           .executor(executor);
-//!     })
-//!     .build()?;
-//! # let _ = app; Ok(()) }
-//! ```
+//! Embedding hosts use [`crate::assemble::build_app_with_extensions`] and serve
+//! the resulting application with its HTTP lifecycle methods. Typed request
+//! checks register through [`crate::gateway::extensions::registry::ExtensionApi`].
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -54,32 +16,9 @@ use bitrouter_ai::types::{Prompt, StreamPart};
 
 use crate::gateway::pipeline::types::{PipelineRequest, PipelineResponse};
 
-use crate::gateway::extensions::plugin::{MigrationItem, PluginId};
 use crate::gateway::observability::metrics::MetricsRenderer;
 use crate::gateway::pipeline::builder::PipelineBuilder;
 use crate::gateway::{mcp, pipeline as language_model};
-
-/// Legacy custom-host assembly convenience for registering hooks and migrations.
-///
-/// Retained for the current alpha SDK API; removal requires an explicitly
-/// announced breaking SDK release with migration notes. New request-check
-/// extensions use [`crate::gateway::extensions::registry::ExtensionApi`] instead. This trait can
-/// install global hooks and migrations and is not equivalent to router-bound
-/// capability registration. Hooks remain individually registerable by hosts.
-pub trait Plugin {
-    /// The plugin's identity (for config mapping and logs).
-    fn id(&self) -> &PluginId;
-
-    /// Database migrations carried by this legacy host package. Empty = no database.
-    /// Migration ownership stays with the custom host; the restricted extension
-    /// API does not expose this facility.
-    fn migrations(&self) -> Vec<MigrationItem> {
-        Vec::new()
-    }
-
-    /// Install this plugin's hooks into the builder.
-    fn install(&self, app: &mut AppBuilder);
-}
 
 /// An ingress-time rewrite of a parsed request [`Prompt`],
 /// applied by the HTTP server after protocol parsing and before the request
@@ -90,7 +29,7 @@ pub trait Plugin {
 /// read-only downstream. The `bitrouter/fusion` model alias is the first
 /// consumer: it rewrites the alias model to a real one and attaches the Fusion
 /// declaration. Transforms run in registration order.
-pub trait PromptTransform: Send + Sync {
+pub(crate) trait PromptTransform: Send + Sync {
     /// Rewrite the prompt in place. A transform that does not apply to this
     /// request leaves it untouched.
     fn apply(&self, prompt: &mut bitrouter_ai::types::Prompt);
@@ -121,7 +60,7 @@ pub trait PromptTransform: Send + Sync {
 }
 
 /// A fully assembled application: one pipeline per enabled protocol, plus the
-/// injected infrastructure and the collected migration set.
+/// injected infrastructure.
 pub struct App {
     /// Installed only by successful product assembly; never an embedding setter.
     tenancy: Option<crate::tenancy::Service>,
@@ -131,7 +70,6 @@ pub struct App {
     /// Optional Prometheus-style metrics renderer; if set, the HTTP server
     /// exposes `GET /metrics` against it.
     metrics_renderer: Option<Arc<dyn MetricsRenderer>>,
-    migrations: Vec<MigrationItem>,
     skip_auth: bool,
     mcp_aggregate_route: Option<String>,
     /// Ingress-time prompt transforms, applied by the HTTP server in order.
@@ -169,7 +107,9 @@ impl App {
     }
 
     /// Typed decision backend injected by the host, independent of generation.
-    pub fn decision_model(&self) -> Option<&crate::gateway::model::decision::DecisionRuntime> {
+    pub(crate) fn decision_model(
+        &self,
+    ) -> Option<&crate::gateway::model::decision::DecisionRuntime> {
         if self.tenancy.is_some() {
             // A host-global decision backend has no owned child-execution proof.
             return None;
@@ -178,7 +118,7 @@ impl App {
     }
 
     /// Start configuring an application.
-    pub fn builder() -> AppBuilder {
+    pub(crate) fn builder() -> AppBuilder {
         AppBuilder::new()
     }
 
@@ -190,7 +130,7 @@ impl App {
     /// therefore cannot infer an HTTP client identity. The SDK's optional
     /// request-scoped server-tool loop is skipped: the embedding agent owns its
     /// own tool calls and must execute each one exactly once.
-    pub async fn execute_native(
+    pub(crate) async fn execute_native(
         &self,
         prompt: Prompt,
         caller: CallerContext,
@@ -221,7 +161,7 @@ impl App {
     /// Execute a managed native turn with durable admission before each
     /// provider attempt. Ordinary HTTP and native requests share preparation,
     /// selection, execution and settlement; core-owned tools stay client-owned.
-    pub async fn execute_native_controlled(
+    pub(crate) async fn execute_native_controlled(
         &self,
         prompt: Prompt,
         caller: CallerContext,
@@ -234,7 +174,7 @@ impl App {
     /// Controlled native execution with host-authenticated ingress headers.
     /// The host retains these credentials in memory, outside durable agent state.
     /// Normal pipeline authentication and policy checks still run on every turn.
-    pub async fn execute_native_controlled_with_headers(
+    pub(crate) async fn execute_native_controlled_with_headers(
         &self,
         prompt: Prompt,
         caller: CallerContext,
@@ -321,7 +261,7 @@ impl App {
 
     /// Read already persisted, caller-scoped request costs without executing or
     /// charging another request. An unconfigured source is explicitly unknown.
-    pub async fn native_cost_observations(
+    pub(crate) async fn native_cost_observations(
         &self,
         caller: &CallerContext,
         request_ids: &[String],
@@ -362,7 +302,7 @@ impl App {
     /// Stream one native agent turn through the same routed and settled path.
     /// The embedding agent owns client tool calls, so SDK server tools are
     /// excluded just as they are for `execute_native`.
-    pub async fn execute_native_stream(
+    pub(crate) async fn execute_native_stream(
         &self,
         mut prompt: Prompt,
         caller: CallerContext,
@@ -392,44 +332,39 @@ impl App {
     }
 
     /// The `language_model` pipeline, if that protocol was configured.
-    pub fn language_model(&self) -> Option<&Arc<language_model::execution::Pipeline>> {
+    pub(crate) fn language_model(&self) -> Option<&Arc<language_model::execution::Pipeline>> {
         self.language_model.as_ref()
     }
 
-    /// The `mcp` (Model Context Protocol) pipeline, if configured. v1.0 ships
-    /// it as pure-routing; the HTTP server mounts `POST /mcp/{name}` against
+    /// The `mcp` (Model Context Protocol) routing pipeline, if configured.
+    /// The HTTP server mounts `POST /mcp/{name}` against
     /// it.
-    pub fn mcp(&self) -> Option<&Arc<mcp::Pipeline>> {
+    pub(crate) fn mcp(&self) -> Option<&Arc<mcp::Pipeline>> {
         self.mcp.as_ref()
-    }
-
-    /// The collected migration set (sorted by version).
-    pub fn migrations(&self) -> &[MigrationItem] {
-        &self.migrations
     }
 
     /// Whether `server.skip_auth` is on — when true, credential-less requests
     /// are admitted with a synthesised local caller.
-    pub fn skip_auth(&self) -> bool {
+    pub(crate) fn skip_auth(&self) -> bool {
         self.skip_auth
     }
 
     /// The Prometheus-style metrics renderer, if one was wired into the app.
     /// The HTTP server's `GET /metrics` route reads this.
-    pub fn metrics_renderer(&self) -> Option<&Arc<dyn MetricsRenderer>> {
+    pub(crate) fn metrics_renderer(&self) -> Option<&Arc<dyn MetricsRenderer>> {
         self.metrics_renderer.as_ref()
     }
 
     /// The ingress-time prompt transforms wired into the app, applied by the
     /// HTTP server in registration order before a request enters the pipeline.
-    pub fn prompt_transforms(&self) -> &[Arc<dyn PromptTransform>] {
+    pub(crate) fn prompt_transforms(&self) -> &[Arc<dyn PromptTransform>] {
         &self.prompt_transforms
     }
 
     /// HTTP path for the MCP aggregate route, when configured (`POST <path>`
     /// fans out across every `aggregate: true` MCP server). `None` means
     /// only per-server routes (`POST /mcp/{server}`) are mounted.
-    pub fn mcp_aggregate_route(&self) -> Option<&str> {
+    pub(crate) fn mcp_aggregate_route(&self) -> Option<&str> {
         self.mcp_aggregate_route.as_deref()
     }
 }
@@ -590,16 +525,13 @@ pub(crate) fn prepare_model_prompt(
     (prompt, original_model)
 }
 
-/// Configures an [`App`] for a trusted host. Each protocol has its own
-/// sub-builder; [`Self::plugin`] retains the legacy host packaging convenience.
-/// New request-check extension authors use the restricted `ExtensionApi` in the
-/// `bitrouter` host crate rather than receive this builder.
-pub struct AppBuilder {
+/// Private assembly of configured protocol pipelines. Extension authors register
+/// typed callbacks through `ExtensionApi`; the host owns this builder.
+pub(crate) struct AppBuilder {
     language_model: PipelineBuilder,
     decision_model: Option<crate::gateway::model::decision::DecisionRuntime>,
     mcp: mcp::PipelineBuilder,
     metrics_renderer: Option<Arc<dyn MetricsRenderer>>,
-    migrations: Vec<MigrationItem>,
     skip_auth: bool,
     mcp_aggregate_route: Option<String>,
     prompt_transforms: Vec<Arc<dyn PromptTransform>>,
@@ -607,13 +539,12 @@ pub struct AppBuilder {
 
 impl AppBuilder {
     /// A fresh, empty builder.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             language_model: PipelineBuilder::new(),
             decision_model: None,
             mcp: mcp::PipelineBuilder::new(),
             metrics_renderer: None,
-            migrations: Vec::new(),
             skip_auth: false,
             mcp_aggregate_route: None,
             prompt_transforms: Vec::new(),
@@ -624,7 +555,7 @@ impl AppBuilder {
     /// `App::serve` mounts a `POST <path>` handler that fans out across every
     /// `aggregate: true` MCP server. Has no effect unless the MCP pipeline is
     /// also configured.
-    pub fn mcp_aggregate_route(mut self, path: impl Into<String>) -> Self {
+    pub(crate) fn mcp_aggregate_route(mut self, path: impl Into<String>) -> Self {
         self.mcp_aggregate_route = Some(path.into());
         self
     }
@@ -632,13 +563,13 @@ impl AppBuilder {
     /// Set the SDK-level `skip_auth` flag (code default `false`). When `true`,
     /// the server admits credential-less requests with a synthesised local
     /// caller; `AuthHook` still validates any credential that *is* presented.
-    pub fn skip_auth(mut self, skip_auth: bool) -> Self {
+    pub(crate) fn skip_auth(mut self, skip_auth: bool) -> Self {
         self.skip_auth = skip_auth;
         self
     }
 
     /// Configure the `language_model` protocol pipeline.
-    pub fn language_model<F>(mut self, configure: F) -> Self
+    pub(crate) fn language_model<F>(mut self, configure: F) -> Self
     where
         F: FnOnce(&mut PipelineBuilder),
     {
@@ -647,7 +578,7 @@ impl AppBuilder {
     }
 
     /// Install a typed decision backend for harness-owned semantic decisions.
-    pub fn decision_model(
+    pub(crate) fn decision_model(
         mut self,
         runtime: crate::gateway::model::decision::DecisionRuntime,
     ) -> Self {
@@ -655,10 +586,10 @@ impl AppBuilder {
         self
     }
 
-    /// Configure the `mcp` (Model Context Protocol) protocol pipeline. v1.0
-    /// MCP is pure-routing (no settlement); the HTTP server mounts
+    /// Configure the `mcp` (Model Context Protocol) routing pipeline
+    /// without settlement; the HTTP server mounts
     /// `POST /mcp/{name}` against the built pipeline.
-    pub fn mcp<F>(mut self, configure: F) -> Self
+    pub(crate) fn mcp<F>(mut self, configure: F) -> Self
     where
         F: FnOnce(&mut mcp::PipelineBuilder),
     {
@@ -667,11 +598,9 @@ impl AppBuilder {
     }
 
     /// Wire a Prometheus-style metrics renderer. When set, the HTTP server
-    /// exposes `GET /metrics` against it. Typically the same in-process
-    /// accumulator you registered as an `ObserveHook`; the OSS binary has no
-    /// such accumulator any more (it pushes over OTLP) and mounts a stub
-    /// renderer that serves a migration banner instead.
-    pub fn metrics_renderer(mut self, renderer: Arc<dyn MetricsRenderer>) -> Self {
+    /// exposes `GET /metrics` against it. The stock host exports over OTLP
+    /// and installs a renderer that explains where metrics are available.
+    pub(crate) fn metrics_renderer(mut self, renderer: Arc<dyn MetricsRenderer>) -> Self {
         self.metrics_renderer = Some(renderer);
         self
     }
@@ -680,40 +609,15 @@ impl AppBuilder {
     /// (and any others, in registration order) after protocol parsing, before
     /// the request enters the pipeline. Used to wire model aliases such as
     /// `bitrouter/fusion`.
-    pub fn prompt_transform(mut self, transform: Arc<dyn PromptTransform>) -> Self {
+    pub(crate) fn prompt_transform(mut self, transform: Arc<dyn PromptTransform>) -> Self {
         self.prompt_transforms.push(transform);
         self
-    }
-
-    /// Install a legacy [`Plugin`] host package, including its migrations.
-    ///
-    /// Retains global hook registration semantics in the current alpha SDK.
-    /// New request-check extensions use [`crate::gateway::extensions::registry::ExtensionApi`];
-    /// this method does not apply router bindings to legacy hooks. Removal
-    /// requires an explicitly announced breaking SDK release with migration
-    /// notes.
-    pub fn plugin(mut self, plugin: impl Plugin) -> Self {
-        self.migrations.extend(plugin.migrations());
-        plugin.install(&mut self);
-        self
-    }
-
-    /// Mutable access to the `language_model` sub-builder — the entry point a
-    /// `Plugin::install` implementation uses.
-    pub fn language_model_builder(&mut self) -> &mut PipelineBuilder {
-        &mut self.language_model
-    }
-
-    /// Add migrations directly (used by `Plugin::install` when it wants to add
-    /// migrations beyond what `Plugin::migrations` declared).
-    pub fn add_migrations(&mut self, migrations: impl IntoIterator<Item = MigrationItem>) {
-        self.migrations.extend(migrations);
     }
 
     /// Finalise into an [`App`]. Builds a pipeline for each protocol that was
     /// configured (the `language_model` pipeline needs at least a routing table
     /// and an executor).
-    pub fn build(mut self) -> Result<App> {
+    pub(crate) fn build(mut self) -> Result<App> {
         if let Some(runtime) = &self.decision_model {
             if runtime.model.trim().is_empty() {
                 return Err(crate::gateway::error::BitrouterError::bad_request(
@@ -742,8 +646,6 @@ impl AppBuilder {
             None
         };
 
-        self.migrations.sort_by_key(|m| m.version);
-
         // The aggregate route only makes sense alongside an MCP pipeline —
         // drop it silently if no MCP pipeline was configured (keeps
         // `mcp_aggregate_route(...)` from accidentally mounting a 404-only
@@ -760,7 +662,6 @@ impl AppBuilder {
             decision_model: self.decision_model,
             mcp,
             metrics_renderer: self.metrics_renderer,
-            migrations: self.migrations,
             skip_auth: self.skip_auth,
             mcp_aggregate_route,
             prompt_transforms: self.prompt_transforms,

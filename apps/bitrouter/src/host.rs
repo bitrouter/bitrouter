@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 /// Explicit stock CLI bootstrap, without daemon or local-home discovery.
 #[cfg(feature = "multi-instance")]
-pub async fn initialize_shared(
+pub(crate) async fn initialize_shared(
     config: &std::path::Path,
     plan: &std::path::Path,
     operator_id: &str,
@@ -169,9 +169,10 @@ pub(crate) fn init_serve_tracing_subscriber(
 /// run one host per process. Configuration, management, reload and shutdown use
 /// the same path as `bitrouter serve`. Detached launch/restart is the caller's job.
 pub async fn serve_with_extensions(
-    source: &crate::paths::ConfigSource,
+    config_path: &std::path::Path,
     register: impl FnOnce(&mut crate::gateway::extensions::registry::ExtensionApi) -> Result<()>,
 ) -> Result<()> {
+    let source = &crate::paths::resolve_config(Some(config_path))?;
     crate::paths::check_gateway_home(source.home())?;
     let selected = crate::config::shared_process::select(source).await?;
     #[cfg(not(feature = "multi-instance"))]
@@ -190,7 +191,10 @@ pub async fn serve_with_extensions(
 }
 
 /// Run the bundled CLI host with graceful shutdown of accepted requests.
-pub async fn serve_cli(source: &crate::paths::ConfigSource, managed_child: bool) -> Result<()> {
+pub(crate) async fn serve_cli(
+    source: &crate::paths::ConfigSource,
+    managed_child: bool,
+) -> Result<()> {
     crate::paths::check_gateway_home(source.home())?;
     let selected = crate::config::shared_process::select(source).await?;
     #[cfg(not(feature = "multi-instance"))]
@@ -213,7 +217,9 @@ pub async fn serve_cli(source: &crate::paths::ConfigSource, managed_child: bool)
 /// Reject cold shared startup before a local launcher creates files or children.
 /// A verified running local owner can be reused without parsing saved edits.
 /// Shared services use foreground serve.
-pub async fn validate_local_daemon_source(source: &crate::paths::ConfigSource) -> Result<()> {
+pub(crate) async fn validate_local_daemon_source(
+    source: &crate::paths::ConfigSource,
+) -> Result<()> {
     crate::paths::check_gateway_home(source.home())?;
     let selected = crate::config::shared_process::select(source).await?;
     match selected {
@@ -242,7 +248,7 @@ fn check_local_database_home(
 
 /// Reject unavailable environment-driven startup work before a launcher changes
 /// local files or stops a resident daemon. Foreground hosts use the same check.
-pub fn validate_startup_features() -> Result<()> {
+pub(crate) fn validate_startup_features() -> Result<()> {
     if std::env::var_os(crate::config::WORKFLOW_TRACE_JSONL_ENV)
         .is_some_and(|value| !value.is_empty())
     {
@@ -289,7 +295,7 @@ async fn serve_with_options(
     // Fetch + merge the public provider registry before assembly, so the daemon
     // routes every credentialed provider's registered models. Best-effort and
     // cache-backed; a no-op when disabled or unreachable with no cache.
-    crate::merge_registry_into(&mut cfg).await;
+    crate::assemble::merge_registry_into(&mut cfg).await;
     announce_zero_config(source, &cfg);
     maybe_announce_telemetry(home);
     let listen = cfg.server.listen.clone();
@@ -328,7 +334,7 @@ async fn serve_with_options(
     // listener conflicts and locator/PID publication failures.
     let mut pid_guard = None;
     let result = async {
-        // The OTel exporter was just constructed (inside `build_app_with_path`).
+        // Assembly has constructed the OTel exporter.
         // Hand its SDK tracer to the `tracing-opentelemetry` bridge layer now
         // — the bridge captures its tracer at construction, so this can only
         // happen after the exporter exists.

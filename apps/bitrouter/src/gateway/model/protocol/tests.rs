@@ -2105,10 +2105,8 @@ fn builtin_adapters_advertise_response_format_support() -> crate::gateway::model
 
 #[test]
 fn messages_no_beta_header_is_emitted() {
-    // The deprecated `anthropic-beta: structured-outputs-2025-11-13` header
-    // is no longer required by the Anthropic GA endpoint and is actively
-    // rejected by Vertex AI (vercel/ai#10981). The Anthropic transport must
-    // not introduce it as a side effect of structured outputs.
+    // Structured outputs must not inject an anthropic-beta header: the GA
+    // endpoint accepts them without it, and Vertex AI rejects this header.
     use crate::gateway::model::protocol::Transport;
     use crate::gateway::model::target::ModelTarget;
     let transport = crate::gateway::model::protocol::messages::MessagesTransport;
@@ -7086,9 +7084,7 @@ fn responses_render_response_reproduces_server_tool_item()
 /// `image_generation_call` and `computer_call` output items are parsed as
 /// provider-executed tool calls (no echoed input, matching the AI SDK), and they
 /// round-trip: `render_response` reproduces each as its native `<name>_call`
-/// item keyed by `id`. (`local_shell_call` / `mcp_call` now parse too — exercised
-/// by their dedicated round-trip tests — so this test no longer asserts they are
-/// dropped.)
+/// item keyed by `id`.
 #[test]
 fn responses_parses_and_reproduces_image_and_computer_calls()
 -> crate::gateway::model::error::Result<()> {
@@ -8213,8 +8209,8 @@ fn messages_streams_and_reencodes_source() {
     );
 }
 
-/// Streaming, Responses SHOULD-FIX: a `response.output_text.annotation.added`
-/// event decodes to a `StreamPart::Source` (no longer dropped by the catch-all),
+/// A `response.output_text.annotation.added` event decodes to a
+/// `StreamPart::Source`,
 /// and the Responses encoder re-emits it as the same annotation event — a live
 /// streamed-citation round-trip on the Responses wire.
 #[test]

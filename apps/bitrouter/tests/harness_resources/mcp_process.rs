@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use bitrouter::config::mcp::{McpServerConfig, McpTransport};
-use bitrouter::gateway::mcp::client::BoundedMcpClient;
+use crate::config::mcp::{McpServerConfig, McpTransport};
+use crate::gateway::mcp::client::BoundedMcpClient;
 use rmcp::model::{CallToolRequestParams, ProtocolVersion};
 use tokio_util::sync::CancellationToken;
 
