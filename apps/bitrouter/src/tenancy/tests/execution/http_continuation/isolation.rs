@@ -15,9 +15,13 @@ fn route_record(reference: &ResourceRef, slot: &ResourceRef, url: &str) -> Value
 #[tokio::test]
 async fn another_installation_cannot_resume_with_equal_names_and_wrapping_key() -> Result<()> {
     let mut provider = Server::start().await?;
-    let first = ready(&provider).await?;
-    let second = ready(&provider).await?;
+    let first_fixture = Fixture::new().await?;
+    let mut second_fixture = Fixture::new().await?;
+    second_fixture.wrapping_key = first_fixture.wrapping_key;
+    let first = ready_with_fixture(&provider, first_fixture).await?;
+    let second = ready_with_fixture(&provider, second_fixture).await?;
     let outcome: Result<()> = async {
+        ensure!(first.fixture.wrapping_key == second.fixture.wrapping_key);
         ensure!(first.fixture.installation != second.fixture.installation);
         ensure!(first.fixture.tenant == second.fixture.tenant);
         ensure!(first.fixture.principal == second.fixture.principal);

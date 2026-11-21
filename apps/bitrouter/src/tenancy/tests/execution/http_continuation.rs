@@ -181,7 +181,11 @@ struct Ready {
     revision: bitrouter_ai::tenancy::configuration::ConfigurationRevision,
 }
 async fn ready(server: &Server) -> Result<Ready> {
-    let (fixture, route, _) = provision_protocol(&server.url, "responses").await?;
+    ready_with_fixture(server, Fixture::new().await?).await
+}
+async fn ready_with_fixture(server: &Server, fixture: Fixture) -> Result<Ready> {
+    let (fixture, route, _) =
+        provision_protocol_with_fixture(fixture, &server.url, "responses", &mut |_| {}).await?;
     let revision = draft(&fixture, &route, "http-continuation-draft", 32).await?;
     let issued = fixture.issue("http-continuation-user").await?;
     fixture
