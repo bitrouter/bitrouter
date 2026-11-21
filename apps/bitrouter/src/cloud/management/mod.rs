@@ -1,7 +1,7 @@
 //! Typed HTTP client for the BitRouter Cloud `/v1/*` management surface.
 //!
 //! The surface — `keys`, `usage`, `billing`, `policies`, `budgets`,
-//! `presets`, `byok`, `oauth_clients` — is the same one the web console
+//! `presets`, `byok` — is the same one the web console
 //! consumes. It accepts either a `brk_` API key or an OAuth access token.
 //! The client resolves a fresh, origin-confined bearer from the shared hosted
 //! account manager for each request.
@@ -31,7 +31,6 @@
 //! - [`budgets`] ✱ — `…/budgets*` (typed sugar)
 //! - [`presets`] ✱ — `…/presets*` (typed sugar)
 //! - [`byok`] — `/v1/byok/keys*`
-//! - [`oauth_clients`] ✱ — `…/oauth/clients*`
 //!
 //! ## Errors
 //!
@@ -59,7 +58,6 @@ pub mod byok;
 pub mod error;
 pub mod keys;
 pub mod namespaces;
-pub mod oauth_clients;
 pub mod policies;
 pub mod presets;
 pub mod types;

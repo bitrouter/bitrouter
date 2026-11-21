@@ -34,6 +34,30 @@ impl daemon::DaemonReloader for RoutingTableReloader {
 }
 use crate::config;
 
+async fn run_control(
+    socket: std::path::PathBuf,
+    app: Arc<App>,
+    listen: String,
+    reloader: Arc<dyn daemon::DaemonReloader>,
+    observe: Arc<dyn daemon::ObserveStatusProvider>,
+    metering: MeteringStore,
+) -> anyhow::Result<()> {
+    let bound = daemon::bind_control_socket(&socket).await?;
+    daemon::run_bound_control_socket(
+        bound,
+        app,
+        listen,
+        reloader,
+        observe,
+        metering,
+        daemon::LocalControlOptions {
+            administration: None,
+            cli_owned: false,
+        },
+    )
+    .await
+}
+
 #[tokio::test]
 async fn serving_gateway_rejects_legacy_recording_and_evolution_over_ipc() -> anyhow::Result<()> {
     let dir = tempdir("coverage");
@@ -52,15 +76,13 @@ async fn serving_gateway_rejects_legacy_recording_and_evolution_over_ipc() -> an
         .count(&assembled.db)
         .await?;
     let socket = dir.join("bitrouter.sock");
-    let server = tokio::spawn(daemon::run_control_socket_with_acp_runtime(
+    let server = tokio::spawn(run_control(
         socket.clone(),
         Arc::new(assembled.app),
         "127.0.0.1:1234".into(),
         Arc::new(NoopReloader),
         Arc::new(NoopObserveStatus { compiled_in: false }),
-        daemon::AcpControlPlane {
-            metering: MeteringStore::new(assembled.db.clone()),
-        },
+        MeteringStore::new(assembled.db.clone()),
     ));
     wait_until_ready(&socket).await;
     for operation in [
@@ -233,7 +255,7 @@ async fn status_route_and_stop_roundtrip_over_the_control_socket() {
     let app = Arc::new(assembled.app);
 
     let socket = dir.join("bitrouter.sock");
-    let server = tokio::spawn(daemon::run_control_socket(
+    let server = tokio::spawn(run_control(
         socket.clone(),
         app.clone(),
         "127.0.0.1:1234".to_string(),
@@ -311,7 +333,7 @@ async fn probe_status_reports_ready_when_daemon_is_up() {
     let app = Arc::new(assembled.app);
 
     let socket = dir.join("bitrouter.sock");
-    let server = tokio::spawn(daemon::run_control_socket(
+    let server = tokio::spawn(run_control(
         socket.clone(),
         app.clone(),
         "127.0.0.1:1234".to_string(),
@@ -356,7 +378,7 @@ async fn reload_re_reads_the_config_file() {
     let app = Arc::new(assembled.app);
 
     let socket = dir.join("bitrouter.sock");
-    let server = tokio::spawn(daemon::run_control_socket(
+    let server = tokio::spawn(run_control(
         socket.clone(),
         app.clone(),
         "127.0.0.1:0".to_string(),
@@ -492,7 +514,7 @@ async fn route_for_unknown_model_returns_a_clean_error() {
     let app = Arc::new(assembled.app);
 
     let socket = dir.join("bitrouter.sock");
-    let server = tokio::spawn(daemon::run_control_socket(
+    let server = tokio::spawn(run_control(
         socket.clone(),
         app.clone(),
         "127.0.0.1:0".to_string(),
@@ -532,7 +554,7 @@ async fn concurrent_clients_are_all_served() {
     let app = Arc::new(assembled.app);
 
     let socket = dir.join("bitrouter.sock");
-    let server = tokio::spawn(daemon::run_control_socket(
+    let server = tokio::spawn(run_control(
         socket.clone(),
         app.clone(),
         "127.0.0.1:0".to_string(),
@@ -573,7 +595,7 @@ async fn malformed_input_does_not_take_the_server_down() {
     let app = Arc::new(assembled.app);
 
     let socket = dir.join("bitrouter.sock");
-    let server = tokio::spawn(daemon::run_control_socket(
+    let server = tokio::spawn(run_control(
         socket.clone(),
         app.clone(),
         "127.0.0.1:0".to_string(),
@@ -622,7 +644,7 @@ async fn reload_returns_error_when_the_config_is_broken() {
     let app = Arc::new(assembled.app);
 
     let socket = dir.join("bitrouter.sock");
-    let server = tokio::spawn(daemon::run_control_socket(
+    let server = tokio::spawn(run_control(
         socket.clone(),
         app.clone(),
         "127.0.0.1:0".to_string(),
@@ -677,7 +699,7 @@ async fn socket_file_has_owner_only_permissions() {
     let app = Arc::new(assembled.app);
 
     let socket = dir.join("bitrouter.sock");
-    let server = tokio::spawn(daemon::run_control_socket(
+    let server = tokio::spawn(run_control(
         socket.clone(),
         app.clone(),
         "127.0.0.1:0".to_string(),
@@ -808,15 +830,13 @@ async fn acp_session_spend_roundtrips_over_the_control_socket() {
     let metering = MeteringStore::new(assembled.db.clone());
     let app = Arc::new(assembled.app);
     let socket = dir.join("bitrouter.sock");
-    let server = tokio::spawn(daemon::run_control_socket_with_acp_runtime(
+    let server = tokio::spawn(run_control(
         socket.clone(),
         app,
         "127.0.0.1:1234".to_string(),
         Arc::new(NoopReloader),
         Arc::new(NoopObserveStatus { compiled_in: false }),
-        daemon::AcpControlPlane {
-            metering: metering.clone(),
-        },
+        metering.clone(),
     ));
     wait_until_ready(&socket).await;
 

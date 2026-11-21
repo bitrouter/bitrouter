@@ -80,6 +80,7 @@ impl Output {
     }
 
     /// Render to a buffer with an empty palette — the testable seam.
+    #[cfg(test)]
     pub fn render_to_vec(&self, r: &dyn CliReport) -> Vec<u8> {
         let mut v = Vec::new();
         self.write(&mut v, Theme::none(), r)

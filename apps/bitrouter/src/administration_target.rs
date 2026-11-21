@@ -1,9 +1,9 @@
-//! Typed local-or-remote inspection ports.
+//! Local-or-remote operator inspection.
 //!
 //! A remote context names the complete target.  This module resolves that
 //! choice before a caller can load a local config, socket, database, or
 //! provider environment, then exposes the same read operations to the CLI and
-//! operations dashboard.
+//! HTTP control adapters.
 
 use crate::actions::administration::{ObserveReportRuntime, PolicyReportRuntime};
 use std::path::{Path, PathBuf};
@@ -22,8 +22,8 @@ use crate::daemon::{
     self, DaemonCommand, DaemonInspection, DaemonInspectionReport, DaemonResponse,
 };
 use crate::paths::ConfigSource;
+use bitrouter_ai::control::reload::OperationReport;
 use bitrouter_ai::control::reload::ReloadState;
-use bitrouter_ai::control::reload::{OperationReport, ReloadInput};
 use bitrouter_ai::control::requests::RequestsReport;
 use {crate::actions::requests::RequestsAction, bitrouter_ai::control::requests::RequestFilters};
 use {
@@ -38,23 +38,12 @@ use {
 /// Result of an explicit reload submitted through a selected target.
 ///
 /// A local control socket completes synchronously and can only return the
-/// coordinator's current state. Remote control retains an exact operation
+/// success acknowledgment. Remote control retains an exact operation
 /// receipt by request id, including a still-running operation after bounded
 /// client polling.
 pub enum ReloadSubmission {
-    Local(ReloadState),
+    Local,
     Remote(OperationReport),
-}
-
-/// The currently advertised control grants relevant to the dashboard.
-///
-/// Server-side authorization remains authoritative when an action is sent. The
-/// UI uses this snapshot only to avoid presenting a reload trigger to a
-/// credential that discovery says cannot submit one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ControlAuthority {
-    pub read: bool,
-    pub reload: bool,
 }
 
 /// One selected target for a passive administration action.
@@ -65,7 +54,6 @@ pub enum InspectionTarget {
         socket: PathBuf,
     },
     Remote {
-        name: String,
         client: Arc<crate::client::control::HttpControlClient>,
     },
 }
@@ -80,10 +68,9 @@ impl InspectionTarget {
         socket: Option<&Path>,
     ) -> Result<Self> {
         match remote {
-            Some((name, context)) => {
+            Some((_, context)) => {
                 reject_remote_local_flags(config, socket)?;
                 Ok(Self::Remote {
-                    name,
                     client: Arc::new(context.client()?),
                 })
             }
@@ -115,25 +102,6 @@ impl InspectionTarget {
                 Ok(Self::Local { source, socket })
             }
         }
-    }
-
-    pub fn label(&self) -> String {
-        match self {
-            Self::Local { .. } => "local".to_string(),
-            Self::Remote { name, .. } => format!("remote:{name}"),
-        }
-    }
-
-    /// Local ACP sessions are deliberately absent from a remote inspection
-    /// target.  The catalog itself remains readable through [`Self::agents`].
-    pub fn allows_agent_launch(&self) -> bool {
-        matches!(self, Self::Local { .. })
-    }
-
-    /// The dashboard uses this only to choose the explicitly initiated reload
-    /// protocol. It does not widen the local socket protocol.
-    pub fn is_remote(&self) -> bool {
-        matches!(self, Self::Remote { .. })
     }
 
     pub fn local_source(&self) -> Option<&ConfigSource> {
@@ -263,29 +231,13 @@ impl InspectionTarget {
         }
     }
 
-    /// Read the control discovery grants cached by the remote client. Local
-    /// IPC is operator-local, so it has both capabilities when its daemon
-    /// supports the corresponding command.
-    pub async fn control_authority(&self) -> Result<ControlAuthority> {
-        match self {
-            Self::Local { .. } => Ok(ControlAuthority {
-                read: true,
-                reload: true,
-            }),
-            Self::Remote { client, .. } => Ok(ControlAuthority {
-                read: client.can_action("status").await?,
-                reload: client.can_action("reload").await?,
-            }),
-        }
-    }
-
     pub async fn reload(&self) -> Result<ReloadSubmission> {
         match self {
             Self::Local { socket, .. } => {
                 match daemon::send_command(socket, &DaemonCommand::Reload { env: Vec::new() })
                     .await?
                 {
-                    DaemonResponse::Ok => Ok(ReloadSubmission::Local(self.reload_state().await?)),
+                    DaemonResponse::Ok => Ok(ReloadSubmission::Local),
                     DaemonResponse::Error { message } => Err(anyhow::anyhow!(message)),
                     other => Err(anyhow::anyhow!(
                         "unexpected daemon reload response: {other:?}"
@@ -293,18 +245,6 @@ impl InspectionTarget {
                 }
             }
             Self::Remote { client, .. } => Ok(ReloadSubmission::Remote(client.reload().await?)),
-        }
-    }
-
-    /// Submit an already fenced remote reload request. Keeping this separate
-    /// from [`Self::reload`] lets the dashboard retain the generated request
-    /// and instance identifiers if the HTTP response is interrupted.
-    pub async fn submit_remote_reload(&self, input: &ReloadInput) -> Result<OperationReport> {
-        match self {
-            Self::Local { .. } => anyhow::bail!(
-                "local reloads use the control socket and do not accept remote reload inputs"
-            ),
-            Self::Remote { client, .. } => client.submit_reload(input).await,
         }
     }
 

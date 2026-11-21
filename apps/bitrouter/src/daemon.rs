@@ -98,11 +98,12 @@ pub trait DaemonReloader: Send + Sync {
     }
 }
 
-/// A reloader that does nothing — useful for tests / minimal embeddings of the
-/// daemon control surface that don't have anything to reload.
+/// Test reloader for socket cases that do not change routing configuration.
+#[cfg(test)]
 pub struct NoopReloader;
 
 #[async_trait::async_trait]
+#[cfg(test)]
 impl DaemonReloader for NoopReloader {
     async fn reload(&self) -> anyhow::Result<()> {
         Ok(())
@@ -148,8 +149,6 @@ pub enum DaemonCommand {
     ReloadState,
     /// Report daemon status.
     Status,
-    /// Read live owner-local agent instances without opening any connection.
-    ConnectedAgents { after: Option<String>, limit: usize },
     /// List every model the live routing table can route, each with the
     /// providers that can serve it.
     ///
@@ -277,9 +276,6 @@ pub struct RouteHop {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "resp", rename_all = "snake_case")]
 pub enum DaemonResponse {
-    ConnectedAgents {
-        report: Box<crate::connected_agents::Report>,
-    },
     /// The command succeeded with no payload.
     Ok,
     Status {
@@ -625,88 +621,6 @@ pub async fn probe_status(socket: &Path) -> Result<Option<ReadyInfo>> {
 
 // ===== server side =====
 
-/// Run the control listener until a `Stop` command is received (then it
-/// returns) — run this alongside `App::serve` under a `tokio::select!`.
-///
-/// `listen` is the HTTP address (reported in `Status`); the endpoint is bound
-/// at `socket_path` (a Unix socket file, or a named pipe derived from the path
-/// on Windows) and torn down on return.
-pub async fn run_control_socket(
-    socket_path: PathBuf,
-    app: Arc<App>,
-    listen: String,
-    reloader: Arc<dyn DaemonReloader>,
-    observe: Arc<dyn ObserveStatusProvider>,
-    metering: MeteringStore,
-) -> Result<()> {
-    run_control_socket_with_acp_runtime(
-        socket_path,
-        app,
-        listen,
-        reloader,
-        observe,
-        AcpControlPlane { metering },
-    )
-    .await
-}
-
-/// Settled metering state used by the local control socket.
-#[derive(Clone)]
-pub struct AcpControlPlane {
-    /// Settled-request store behind session-attributed spend.
-    pub metering: MeteringStore,
-}
-
-pub async fn run_control_socket_with_acp_runtime(
-    socket_path: PathBuf,
-    app: Arc<App>,
-    listen: String,
-    reloader: Arc<dyn DaemonReloader>,
-    observe: Arc<dyn ObserveStatusProvider>,
-    acp: AcpControlPlane,
-) -> Result<()> {
-    run_control_socket_with_acp_runtime_and_administration(
-        socket_path,
-        app,
-        listen,
-        reloader,
-        observe,
-        acp,
-        None,
-    )
-    .await
-}
-
-/// Run the local control socket with optional live administration ports.
-///
-/// Existing embeddings retain the historical control-socket surface through
-/// [`run_control_socket_with_acp_runtime`].  The app assembly injects these
-/// ports only after it has constructed the running routing and policy state.
-pub async fn run_control_socket_with_acp_runtime_and_administration(
-    socket_path: PathBuf,
-    app: Arc<App>,
-    listen: String,
-    reloader: Arc<dyn DaemonReloader>,
-    observe: Arc<dyn ObserveStatusProvider>,
-    acp: AcpControlPlane,
-    administration: Option<Administration>,
-) -> Result<()> {
-    let listener = bind_control_socket(&socket_path).await?;
-    run_bound_control_socket(
-        listener,
-        app,
-        listen,
-        reloader,
-        observe,
-        acp.metering,
-        LocalControlOptions {
-            administration,
-            cli_owned: false,
-        },
-    )
-    .await
-}
-
 /// Optional owner-scoped services shared with the HTTP listener.
 pub struct LocalControlOptions {
     pub administration: Option<Administration>,
@@ -914,9 +828,6 @@ async fn dispatch(
         DaemonCommand::EvolutionHello => DaemonResponse::EvolutionHello {
             version: EVOLUTION_CONTROL_VERSION,
             server_instance_id: services.server_instance_id.clone(),
-        },
-        DaemonCommand::ConnectedAgents { .. } => DaemonResponse::Error {
-            message: "local agent inspection belongs to BRO".into(),
         },
         DaemonCommand::AcpControllerCleanup { .. }
         | DaemonCommand::AcpRouteList { .. }
@@ -1203,10 +1114,8 @@ where
 
 // ===== client side =====
 
-/// Connect to a running daemon's control endpoint and hand back the raw
-/// stream. Used by [`send_command`] and by integration tests that need to
-/// push bytes the normal client wouldn't (e.g. malformed input). Fails
-/// clearly if no daemon is listening.
+/// Raw test connection for malformed input and transport assertions.
+#[cfg(test)]
 pub async fn connect_control(socket_path: &Path) -> Result<impl AsyncRead + AsyncWrite + Unpin> {
     transport::connect(socket_path).await
 }
@@ -1585,13 +1494,6 @@ pub fn process_is_alive(pid: u32) -> bool {
 }
 
 // ===== PID file =====
-
-/// Write the current process id to `path`.
-pub async fn write_pid_file(path: &Path) -> Result<()> {
-    tokio::fs::write(path, std::process::id().to_string())
-        .await
-        .with_context(|| format!("writing pid file {}", path.display()))
-}
 
 /// Read a process id from a PID file, if it exists and is well-formed.
 pub async fn read_pid_file(path: &Path) -> Option<u32> {

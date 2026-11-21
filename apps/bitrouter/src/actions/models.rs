@@ -1,15 +1,5 @@
-//! The `list_models` action: *what can BitRouter route, and who can serve it?*
-//!
-//! One report type is shared by `bitrouter models`, Code sessions, and typed remote
-//! control so all retained surfaces preserve the same JSON shape.
-//!
-//! The element type is the shared [`ModelInfo`](bitrouter_ai::routing::ModelInfo)
-//! contract used by service clients.
-//! The copy this crate used to keep held a single `provider: String` and was
-//! filled with `providers.first()`, so every model served by more than one
-//! provider lost its fallback chain on the way to an agent: it asked what could
-//! serve a model and was told one answer where there were three. The wire has
-//! always carried the whole list.
+//! Model inspection for the operator CLI and HTTP control surface.
+//! Reports retain every provider in each model's fallback chain.
 
 use crate::actions::administration::PolicyReportRuntime;
 use std::collections::BTreeSet;
@@ -26,22 +16,10 @@ use crate::config::routing_table::ConfigRoutingTable;
 use crate::gateway::caller::CallerContext;
 use crate::gateway::pipeline::routing::RoutingTable;
 
-use super::ToolError;
-
 #[derive(Clone, Copy)]
 pub(crate) enum PolicyReadiness<'a> {
     Known(&'a bitrouter_ai::control::administration::PolicyReport),
     Invalid,
-}
-
-/// The `list_models` port shared by local consumers.
-///
-/// Filtering is deliberately absent: an implementation returns the whole
-/// catalog and adapters narrow it with [`ModelsReport::filtered`].
-#[async_trait::async_trait]
-pub trait ModelsQuery: Send + Sync {
-    /// Every routable model, or a `ToolError` when the lookup itself failed.
-    async fn list_models(&self) -> Result<ModelsReport, ToolError>;
 }
 
 use std::path::{Path, PathBuf};
@@ -304,20 +282,6 @@ fn endpoint_live(socket: &Path) -> bool {
     daemon::endpoint_in_use(socket)
 }
 
-#[async_trait::async_trait]
-impl ModelsQuery for RoutableModels {
-    /// `caller` is ignored, and that is a property of this deployment rather
-    /// than an oversight: the control socket is a single-machine channel and
-    /// the config is this machine's, so there is only one catalog to report.
-    /// The parameter stays on the port because the cloud implementation of the
-    /// same action does forward it, listing each caller's own catalog.
-    async fn list_models(&self) -> Result<ModelsReport, ToolError> {
-        self.report()
-            .await
-            .map_err(|e| ToolError::new(e.to_string()))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -349,58 +313,37 @@ providers:
         (dir, ConfigSource::File(config))
     }
 
-    /// A model two providers can serve must list both on the direct path and
-    /// through the injected port, and the two must be the same bytes.
     #[tokio::test]
-    async fn both_surfaces_keep_every_provider_of_a_model() {
+    async fn report_keeps_every_provider_of_a_model() -> anyhow::Result<()> {
         let (dir, source) = two_provider_config();
-        // No daemon: `socket` names a path nothing is listening on, which is
-        // also the point of the next assertion.
         let models = RoutableModels::new(source, Some(dir.path().join("nothing.sock")));
-
-        let cli = models.report().await.expect("cli surface");
-        let port = ModelsQuery::list_models(&models)
-            .await
-            .expect("port surface");
-
-        for (surface, report) in [("cli", &cli), ("port", &port)] {
-            let gpt5 = report
-                .models
-                .iter()
-                .find(|m| m.id == "gpt-5")
-                .unwrap_or_else(|| panic!("{surface} surface lost gpt-5"));
-            assert_eq!(
-                gpt5.providers,
-                vec!["azure".to_string(), "openai".to_string()],
-                "{surface} surface dropped a provider from the fallback chain"
-            );
-            // A single-provider model is unaffected — the chain is reported as
-            // it is, not padded.
-            let o4 = report
-                .models
-                .iter()
-                .find(|m| m.id == "o4-mini")
-                .unwrap_or_else(|| panic!("{surface} surface lost o4-mini"));
-            assert_eq!(o4.providers, vec!["openai".to_string()]);
-        }
+        let report = models.report().await?;
+        let gpt5 = report
+            .models
+            .iter()
+            .find(|m| m.id == "gpt-5")
+            .ok_or_else(|| anyhow::anyhow!("report lost gpt-5"))?;
         assert_eq!(
-            serde_json::to_value(&cli).expect("cli json"),
-            serde_json::to_value(&port).expect("port json"),
-            "the two surfaces of one action must be the same bytes"
+            gpt5.providers,
+            vec!["azure".to_string(), "openai".to_string()]
         );
+        let o4 = report
+            .models
+            .iter()
+            .find(|m| m.id == "o4-mini")
+            .ok_or_else(|| anyhow::anyhow!("report lost o4-mini"))?;
+        assert_eq!(o4.providers, vec!["openai".to_string()]);
+        Ok(())
     }
 
-    /// The injected port answers with no daemon running and reports which view
-    /// it used, so an agent is not left guessing.
+    /// A stopped daemon leaves the configuration view available.
     #[tokio::test]
-    async fn the_port_answers_with_no_daemon_running() {
+    async fn report_answers_with_no_daemon_running() {
         let (dir, source) = two_provider_config();
-        let report = ModelsQuery::list_models(&RoutableModels::new(
-            source,
-            Some(dir.path().join("nothing.sock")),
-        ))
-        .await
-        .expect("a stopped daemon must not fail list_models");
+        let report = RoutableModels::new(source, Some(dir.path().join("nothing.sock")))
+            .report()
+            .await
+            .expect("a stopped daemon must not fail list_models");
         assert_eq!(
             report.resolved_via,
             bitrouter_ai::control::models::ModelsSource::Config

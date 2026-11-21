@@ -6,9 +6,7 @@
 
 pub mod admin;
 pub mod administration;
-pub mod agents;
 pub mod artifact;
-pub mod commands;
 pub mod config;
 pub mod daemon;
 pub mod eval;
@@ -19,7 +17,6 @@ pub mod policy;
 pub mod requests;
 pub mod routing;
 pub mod shared;
-pub mod skills;
 pub mod tools;
 pub mod trajectory;
 pub mod update;

@@ -66,19 +66,18 @@ impl RunningFixture {
             policy: assembled.policy_runtime.clone(),
             observe: assembled.observe.clone(),
         };
-        let task = tokio::spawn(
-            daemon::run_control_socket_with_acp_runtime_and_administration(
-                socket.clone(),
-                Arc::new(assembled.app),
-                "127.0.0.1:14356".into(),
-                reloader.clone(),
-                assembled.observe,
-                daemon::AcpControlPlane {
-                    metering: crate::metering::MeteringStore::new(assembled.db),
-                },
-                Some(administration),
-            ),
-        );
+        let task = tokio::spawn(daemon::run_bound_control_socket(
+            daemon::bind_control_socket(&socket).await?,
+            Arc::new(assembled.app),
+            "127.0.0.1:14356".into(),
+            reloader.clone(),
+            assembled.observe,
+            crate::metering::MeteringStore::new(assembled.db),
+            daemon::LocalControlOptions {
+                administration: Some(administration),
+                cli_owned: false,
+            },
+        ));
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 if matches!(
