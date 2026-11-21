@@ -40,12 +40,20 @@ async fn mature_import_rejects_policy_free_experiments_before_any_write() -> Res
     for (field, value) in fields {
         let mut route = route("tenant", "subject", "model")?;
         route["definition"][&field] = value;
+        let decoding = serde_json::from_value::<Definition>(route["definition"].clone())
+            .err()
+            .context("unknown route field decoded")?;
+        ensure!(
+            decoding
+                .to_string()
+                .contains(&format!("unknown field `{field}`"))
+        );
         let error = import(&resources, &db, vec![credential("tenant")?, route])
             .await
             .err()
             .context("unknown route field accepted")?;
         ensure!(
-            format!("{error:#}").contains(&format!("unknown field `{field}`")),
+            error.to_string() == "invalid resource manifest",
             "{error:#}"
         );
         assert!(storage::references(&db).await?.is_empty());

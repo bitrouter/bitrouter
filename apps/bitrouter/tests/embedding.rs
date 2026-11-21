@@ -124,7 +124,7 @@ mod shutdown {
                 "database": {"url": "sqlite::memory:"},
                 "providers": {"fixture": {
                     "api_base": upstream.uri(), "api_key": "fixture-key",
-                    "api_protocol": "chat_completions", "models": [{"id": "fixture"}]
+                    "api_protocol": [{"*": "chat_completions"}], "models": [{"id": "fixture"}]
                 }},
                 "plugins": {"bitrouter-telemetry": {"otel": {
                     "endpoint": endpoint,

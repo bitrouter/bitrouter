@@ -1016,7 +1016,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn owned_stream_without_tenant_registration_keeps_inline_preparation()
+    async fn owned_stream_without_tenant_registration_drains_cancelled_preparation()
     -> anyhow::Result<()> {
         let started = Arc::new(Notify::new());
         let recorded = Arc::new(AtomicUsize::new(0));
@@ -1034,10 +1034,13 @@ mod tests {
         let handler =
             tokio::spawn(async move { pipeline.execute_stream_prepared(request()).await });
         tokio::time::timeout(Duration::from_secs(3), started.notified()).await?;
-        ensure!(owner.pending().executions == 0);
+        ensure!(owner.pending().executions == 1);
         handler.abort();
         ensure!(handler.await.is_err());
-        ensure!(recorded.load(Ordering::SeqCst) == 0);
+        owner.close_sources();
+        tokio::time::timeout(Duration::from_secs(3), owner.drain()).await??;
+        ensure!(owner.pending().executions == 0);
+        ensure!(recorded.load(Ordering::SeqCst) == 1);
         Ok(())
     }
 

@@ -942,7 +942,8 @@ impl Pipeline {
         if let Some(owner) = self.owned_tasks() {
             owner.spawn_execution(work);
         } else {
-            self.detached_executions.spawn(work);
+            self.detached_executions
+                .spawn(super::tasks::with_telemetry_context(work));
         }
         prepared_rx.await.map_err(|error| {
             BitrouterError::internal(format!(
@@ -1299,7 +1300,8 @@ impl Pipeline {
         if let Some(owner) = self.owned_tasks() {
             owner.spawn_execution(work);
         } else {
-            self.detached_executions.spawn(work);
+            self.detached_executions
+                .spawn(super::tasks::with_telemetry_context(work));
         }
         prepared_rx.await.map_err(|error| {
             BitrouterError::internal(format!(

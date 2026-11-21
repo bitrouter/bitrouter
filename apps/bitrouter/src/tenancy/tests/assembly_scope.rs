@@ -225,7 +225,7 @@ async fn owned_scope_assembly_child() -> Result<()> {
             .err()
             .with_context(|| format!("resource compiler accepted {field}"))?;
         ensure!(
-            format!("{error:#}").contains(&format!("unknown field `{field}`")),
+            error.to_string() == "invalid resource manifest",
             "{error:#}"
         );
         experimental.push((field, bytes));
@@ -243,8 +243,8 @@ async fn owned_scope_assembly_child() -> Result<()> {
             .await
             .err()
             .with_context(|| format!("gateway accepted experimental import field {field}"))?;
-        // Startup masks private resource errors. The direct check above already
-        // proved that each fixture decodes and reaches the product boundary.
+        // Both compiler ingress and startup redact private resource errors.
+        // The valid manifest below proves the injected field causes refusal.
         ensure!(
             format!("{error:#}").contains("native continuation key initialization failed"),
             "{error:#}"
