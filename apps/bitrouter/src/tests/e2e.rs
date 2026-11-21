@@ -656,12 +656,8 @@ async fn e2e_http_server_chat_completions_end_to_end() {
     let health = server.get("/health").await;
     health.assert_status_ok();
 
-    // Metrics are pushed through the configured OTLP exporter; `/metrics`
-    // via OTLP. The route remains bound (so existing scraper config does not
-    // 404 on upgrade) and renders a deprecation banner steering operators
-    // toward OTLP push. Live emission is exercised separately via
-    // `scripts/test_observability.sh` against a real OTel collector — this
-    // e2e test has no OTLP mock and is not the place to assert it.
+    // Metrics use OTLP exporters. The HTTP endpoint points operators to that
+    // transport; exporter tests cover actual emission to a collector.
     let metrics = server.get("/metrics").await;
     metrics.assert_status_ok();
     let ct = metrics.header("content-type");
