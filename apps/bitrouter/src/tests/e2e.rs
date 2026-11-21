@@ -1355,10 +1355,7 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
                     }
                 }]);
             }
-            Ok(McpResponse {
-                request_id: request.request_id.clone(),
-                result,
-            })
+            Ok(McpResponse { result })
         }
     }
 
@@ -2046,7 +2043,7 @@ async fn e2e_mcp_aggregate_and_sse_endpoints() {
         async fn execute(
             &self,
             target: &McpTarget,
-            request: &McpRequest,
+            _request: &McpRequest,
         ) -> crate::gateway::error::Result<McpResponse> {
             let server = match target {
                 McpTarget::Direct { server_name, .. } => server_name.clone(),
@@ -2056,7 +2053,6 @@ async fn e2e_mcp_aggregate_and_sse_endpoints() {
                 { "name": "search", "description": format!("from {server}") },
             ]);
             Ok(McpResponse {
-                request_id: request.request_id.clone(),
                 result: serde_json::json!({ "tools": tools }),
             })
         }

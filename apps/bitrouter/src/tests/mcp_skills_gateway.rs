@@ -178,7 +178,7 @@ async fn current_connection_declarations_gate_methods_without_upstream_requests(
 }
 
 #[tokio::test]
-async fn reconnect_uses_new_declaration_and_resources_stay_independent() -> TestResult {
+async fn fresh_connection_uses_new_declaration_and_resources_stay_independent() -> TestResult {
     let fixture = Fixture::new(capabilities(true))?;
     let executor = RmcpExecutor::new().with_protocol_version(ProtocolVersion::V_2026_07_28);
     let target = fixture.target("origin");
@@ -191,7 +191,8 @@ async fn reconnect_uses_new_declaration_and_resources_stay_independent() -> Test
     let mut config = fixture.configuration()?;
     config["capabilities"] = json!({"resources":{}});
     fixture.write(config)?;
-    assert!(executor.evict("origin").await);
+    drop(executor);
+    let executor = RmcpExecutor::new().with_protocol_version(ProtocolVersion::V_2026_07_28);
     let prior = fixture.requests()?.len();
     assert!(
         executor

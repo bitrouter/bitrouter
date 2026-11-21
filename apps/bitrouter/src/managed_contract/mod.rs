@@ -1,10 +1,6 @@
-//! Application-owned scheduling, checkpoint and provider-attempt contracts.
+//! Application-owned provider-attempt and private adapter contracts.
 
-pub mod checkpoint;
 pub mod evidence;
-pub mod protocol;
-
-pub mod skills;
 
 /// Application-owned harness records.
 pub mod harness;

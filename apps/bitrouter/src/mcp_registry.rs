@@ -1,20 +1,5 @@
-//! MCP registry client — discovery over the official MCP Registry
+//! MCP registry search — discovery over the official MCP Registry
 //! (<https://registry.modelcontextprotocol.io>, unauthenticated v0.1 REST API).
-//!
-//! Mirrors the ACP integration (`crate::agent_registry`, when harness is enabled): a thin client that
-//! classifies install support and emits config stubs, while `mcp_servers:` in
-//! `bitrouter.yaml` remains the sole source of truth for what can launch.
-//!
-//! Install-support preference order (per the registry's own publication
-//! model):
-//!
-//! 1. `remotes[streamable-http]` — **zero-install remote entry** (nothing
-//!    executes locally; preferred when present).
-//! 2. `packages[npm|pypi]` + stdio — auto-stub: `npx -y <id>@<version>` /
-//!    `uvx <id>@<version>`.
-//! 3. `packages[oci|mcpb|…]` — manual tier: listed, never auto-stubbed
-//!    (no runner mapping; `mcpb` carries a `fileSha256` a future `--run`
-//!    flow could verify).
 //!
 //! The registry is in **preview** — parsing is lenient (unknown fields are
 //! ignored), only `status == "active"` + `isLatest` entries are surfaced, and
@@ -27,7 +12,6 @@
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::commands::invocation;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
@@ -90,19 +74,10 @@ pub struct RegistryServer {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub repository: Option<Repository>,
     #[serde(default)]
     pub remotes: Vec<Remote>,
     #[serde(default)]
     pub packages: Vec<Package>,
-}
-
-/// Source repository pointer, used for attribution and manual-install hints.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Repository {
-    #[serde(default)]
-    pub url: Option<String>,
 }
 
 /// A remote (hosted) transport entry.
@@ -112,26 +87,6 @@ pub struct Remote {
     #[serde(rename = "type")]
     pub kind: String,
     pub url: String,
-    #[serde(default)]
-    pub headers: Vec<KeyValue>,
-}
-
-/// Shared shape for `environmentVariables` and remote `headers` (the
-/// schema's `KeyValueInput`): a named input with an optional fixed value,
-/// default, and requirement marker.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KeyValue {
-    pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub value: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    #[serde(rename = "isRequired", default)]
-    pub is_required: bool,
-    #[serde(rename = "isSecret", default)]
-    pub is_secret: bool,
 }
 
 /// A package (locally executed) distribution entry.
@@ -145,63 +100,13 @@ pub struct Package {
     pub version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transport: Option<PackageTransport>,
-    #[serde(rename = "runtimeArguments", default)]
-    pub runtime_arguments: Vec<Argument>,
-    #[serde(rename = "packageArguments", default)]
-    pub package_arguments: Vec<Argument>,
-    #[serde(rename = "environmentVariables", default)]
-    pub environment_variables: Vec<KeyValue>,
 }
 
-/// The package's transport descriptor; only stdio packages are stub-able.
+/// The package's transport descriptor for runner support classification.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PackageTransport {
     #[serde(rename = "type")]
     pub kind: String,
-}
-
-/// One `runtimeArguments` / `packageArguments` entry, modelled flat (the
-/// schema's `positional` and `named` variants share the input fields).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Argument {
-    /// `positional` | `named`.
-    #[serde(rename = "type", default)]
-    pub kind: Option<String>,
-    /// Flag name for named arguments (e.g. `--port`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// Verbatim value (may carry `{var}` templates).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub value: Option<String>,
-    /// Default value supplied by the registry when no fixed value is set.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default: Option<String>,
-    /// Placeholder id for user-supplied positional arguments.
-    #[serde(rename = "valueHint", default, skip_serializing_if = "Option::is_none")]
-    pub value_hint: Option<String>,
-}
-
-impl Argument {
-    /// The command-line fragment this argument renders to. Positional
-    /// arguments with only a `valueHint` render as a `<hint>` placeholder the
-    /// user must replace when reviewing the stub.
-    fn cli_fragment(&self) -> Option<String> {
-        let value = self.value.as_ref().or(self.default.as_ref());
-        match self.kind.as_deref() {
-            Some("named") => {
-                let name = self.name.as_ref()?;
-                Some(match value {
-                    Some(v) => format!("{name}={}", template_to_env_refs(v)),
-                    None => name.clone(),
-                })
-            }
-            // Positional (and drift-tolerant fallback for unknown kinds):
-            // verbatim value, else a `<valueHint>` placeholder.
-            _ => value
-                .map(|v| template_to_env_refs(v))
-                .or_else(|| self.value_hint.as_ref().map(|h| format!("<{h}>"))),
-        }
-    }
 }
 
 // ===== install support classification =====
@@ -211,9 +116,9 @@ impl Argument {
 pub enum InstallSupport {
     /// A `streamable-http` remote exists — zero-install config entry.
     Remote,
-    /// An npm/pypi stdio package that the library can represent as a stub.
+    /// A pinned npm/pypi stdio package supported by a known runner.
     Stub(&'static str),
-    /// oci/mcpb/… packages only — listed but not auto-stubbed.
+    /// Packages that require manual installation.
     Manual,
     /// Neither remotes nor packages.
     None,
@@ -265,185 +170,6 @@ impl RegistryServer {
     }
 }
 
-/// A concrete configuration target derived from a registry entry.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Invocation {
-    /// Zero-install remote entry: an HTTP transport with static headers.
-    Remote {
-        url: String,
-        headers: Vec<KeyValueStub>,
-    },
-    /// A stdio invocation via a package runner.
-    Stdio {
-        command: &'static str,
-        args: Vec<String>,
-        env: Vec<KeyValueStub>,
-    },
-}
-
-/// One env var / header line in a stub. `active` lines land in the YAML
-/// mapping; inactive ones are emitted as comments (optional inputs with no
-/// default — listing them documents the knob without forcing a value).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct KeyValueStub {
-    pub name: String,
-    pub value: String,
-    pub active: bool,
-    /// `required` / `secret` / description, joined for the trailing comment.
-    pub comment: Option<String>,
-}
-
-impl RegistryServer {
-    /// The invocation for this server, honouring the install-support
-    /// preference order. Returns `None` for manual-tier and empty entries.
-    pub fn invocation(&self) -> Option<Invocation> {
-        if let Some(remote) = self.streamable_remote() {
-            return Some(Invocation::Remote {
-                url: template_to_env_refs(&remote.url),
-                headers: remote.headers.iter().map(header_stub).collect(),
-            });
-        }
-        let pkg = self.stdio_package()?;
-        let (command, mut args): (&'static str, Vec<String>) = match pkg.registry_type.as_str() {
-            "npm" => ("npx", vec!["-y".to_string()]),
-            "pypi" => ("uvx", Vec::new()),
-            _ => return None,
-        };
-        args.extend(
-            pkg.runtime_arguments
-                .iter()
-                .filter_map(Argument::cli_fragment),
-        );
-        // `npx -y` is our baseline; drop a registry-supplied duplicate.
-        if command == "npx" {
-            args.dedup();
-        }
-        args.push(match &pkg.version {
-            Some(v) => format!("{}@{v}", pkg.identifier),
-            None => pkg.identifier.clone(),
-        });
-        args.extend(
-            pkg.package_arguments
-                .iter()
-                .filter_map(Argument::cli_fragment),
-        );
-        Some(Invocation::Stdio {
-            command,
-            args,
-            env: pkg.environment_variables.iter().map(env_stub).collect(),
-        })
-    }
-}
-
-/// Map a remote-header declaration to a stub line. Declared headers are
-/// auth-shaped, so they always render as active lines: a fixed value is
-/// template-converted; a missing value becomes a `""` placeholder.
-fn header_stub(kv: &KeyValue) -> KeyValueStub {
-    let value = kv
-        .value
-        .as_ref()
-        .map(|v| template_to_env_refs(v))
-        .or_else(|| kv.default.clone())
-        .unwrap_or_default();
-    KeyValueStub {
-        name: kv.name.clone(),
-        value,
-        active: true,
-        comment: stub_comment(kv),
-    }
-}
-
-/// Map an `environmentVariables` declaration to a stub line. Required vars
-/// with no fixed value render as `""` placeholders (active); optional vars
-/// with no default render as comments; anything with a fixed value or
-/// default renders active so the stub works out of the box.
-fn env_stub(kv: &KeyValue) -> KeyValueStub {
-    let (value, has_value) = match (&kv.value, &kv.default) {
-        (Some(v), _) => (template_to_env_refs(v), true),
-        (None, Some(d)) => (d.clone(), true),
-        (None, None) => (String::new(), false),
-    };
-    KeyValueStub {
-        name: kv.name.clone(),
-        value,
-        active: has_value || kv.is_required,
-        comment: stub_comment(kv),
-    }
-}
-
-/// Join the requirement/secret markers and description into one comment.
-fn stub_comment(kv: &KeyValue) -> Option<String> {
-    let mut parts: Vec<&str> = Vec::new();
-    if kv.is_required && kv.value.is_none() {
-        parts.push("required");
-    }
-    if kv.is_secret {
-        parts.push("secret");
-    }
-    let mut out = parts.join(", ");
-    if let Some(desc) = &kv.description {
-        let desc = one_line(desc);
-        if !desc.is_empty() {
-            if !out.is_empty() {
-                out.push_str(" — ");
-            }
-            out.push_str(&desc);
-        }
-    }
-    if out.is_empty() { None } else { Some(out) }
-}
-
-/// Collapse whitespace runs so a multi-line registry description stays on
-/// one comment line.
-fn one_line(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-/// Convert `{var}` templates in registry values to bitrouter's `${VAR}`
-/// env-reference form (uppercased, non-alphanumerics mapped to `_`), so a
-/// pasted stub resolves from the operator's environment. Braced spans that
-/// aren't identifier-shaped are left untouched.
-pub fn template_to_env_refs(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut rest = s;
-    while let Some(open) = rest.find('{') {
-        out.push_str(&rest[..open]);
-        let after = &rest[open + 1..];
-        match after.find('}') {
-            Some(close) => {
-                let inner = &after[..close];
-                if !inner.is_empty()
-                    && inner
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
-                {
-                    let var: String = inner
-                        .chars()
-                        .map(|c| {
-                            if c.is_ascii_alphanumeric() {
-                                c.to_ascii_uppercase()
-                            } else {
-                                '_'
-                            }
-                        })
-                        .collect();
-                    out.push_str(&format!("${{{var}}}"));
-                    rest = &after[close + 1..];
-                } else {
-                    out.push('{');
-                    rest = after;
-                }
-            }
-            None => {
-                out.push('{');
-                rest = after;
-            }
-        }
-    }
-    out.push_str(rest);
-    out
-}
-
 // ===== visibility filter =====
 
 /// Whether an entry is surfaced: published as `active` by the official
@@ -485,11 +211,6 @@ pub fn parse_server_list(json: &str) -> Result<ServerListPage> {
     })
 }
 
-/// Parse a `/v0.1/servers/{name}/versions/latest` response body.
-pub fn parse_server_detail(json: &str) -> Result<ServerEntry> {
-    serde_json::from_str(json).context("parsing MCP registry server detail")
-}
-
 // ===== rows for legacy `mcp search` =====
 
 /// One row in the registry table.
@@ -527,141 +248,6 @@ pub fn registry_rows(entries: &[ServerEntry]) -> Vec<RegistryRow> {
         .collect();
     rows.sort_by(|a, b| a.name.cmp(&b.name));
     rows
-}
-
-// ===== library-only registry stub generation =====
-
-/// The result of [`add_stub`]: the derived `mcp_servers:` key and the YAML.
-#[derive(Debug, Clone)]
-pub struct AddStub {
-    pub id: String,
-    pub yaml: String,
-}
-
-/// Emit a YAML stub for library callers reviewing a registry entry the
-/// user pastes under `mcp_servers:` after review. Manual-tier entries
-/// (oci/mcpb-only) are refused with a pointer to the project, mirroring the
-/// ACP binary-only refusal. Stub-paste is SEP-1024-compliant by
-/// construction: the user reviews the full command before it ever runs.
-pub fn add_stub(entry: &ServerEntry) -> Result<AddStub, String> {
-    let server = &entry.server;
-    let id = stub_id(&server.name);
-    let Some(invocation) = server.invocation() else {
-        let hint = server
-            .repository
-            .as_ref()
-            .and_then(|r| r.url.as_deref())
-            .unwrap_or("the project's documentation");
-        return Err(match server.install_support() {
-            InstallSupport::Manual => format!(
-                "'{}' has no safely stub-able, version-pinned npm/pypi stdio package (unsupported packages include oci/mcpb) — install it manually from {hint} and add an `mcp_servers:` entry pointing at the installed server.",
-                server.name
-            ),
-            _ => format!(
-                "'{}' publishes neither a remote endpoint nor an installable package — see {hint}.",
-                server.name
-            ),
-        });
-    };
-    let comment = server
-        .description
-        .clone()
-        .or_else(|| server.title.clone())
-        .unwrap_or_else(|| server.name.clone());
-    let version = server.version.as_deref().unwrap_or("unknown");
-    let source = format!("MCP registry {}@{version}", server.name);
-    Ok(AddStub {
-        id: id.clone(),
-        yaml: render_stub(&id, &one_line(&comment), &source, &invocation),
-    })
-}
-
-/// Derive the `mcp_servers:` key from a reverse-DNS registry name: the
-/// segment after the last `/`, restricted to URL-safe characters (the key
-/// becomes the `POST /mcp/<name>` path segment and must satisfy
-/// `McpServerConfig`'s name rules — non-empty, no `/`, not `sse`).
-pub fn stub_id(name: &str) -> String {
-    let last = name.rsplit('/').next().unwrap_or(name);
-    let cleaned: String = last
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    let trimmed = cleaned.trim_matches(['-', '.', '_']);
-    match trimmed {
-        "" => "mcp-server".to_string(),
-        // `sse` is a reserved server id in the config schema.
-        "sse" => "sse-mcp".to_string(),
-        id => id.to_string(),
-    }
-}
-
-fn render_stub(id: &str, comment: &str, source: &str, invocation: &Invocation) -> String {
-    use crate::config::yaml::yaml_scalar;
-    let mut out = String::new();
-    out.push_str(&format!(
-        "# {comment} — paste under `mcp_servers:` in bitrouter.yaml.\n"
-    ));
-    out.push_str(&format!("# Source: {source}\n"));
-    out.push_str(&format!("{id}:\n"));
-    out.push_str(&format!("  name: {id}\n"));
-    out.push_str("  transport:\n");
-    match invocation {
-        Invocation::Remote { url, headers } => {
-            out.push_str("    type: http\n");
-            out.push_str(&format!("    url: {}\n", yaml_scalar(url)));
-            if !headers.is_empty() {
-                out.push_str("    headers:\n");
-                for h in headers {
-                    if let Some(comment) = &h.comment {
-                        out.push_str(&format!("      # {comment}\n"));
-                    }
-                    out.push_str(&format!(
-                        "      {}: {}\n",
-                        yaml_scalar(&h.name),
-                        yaml_scalar(&h.value)
-                    ));
-                }
-            }
-        }
-        Invocation::Stdio { command, args, env } => {
-            out.push_str("    type: stdio\n");
-            out.push_str(&format!("    command: {command}\n"));
-            out.push_str("    args:\n");
-            for a in args {
-                out.push_str(&format!("      - {}\n", yaml_scalar(a)));
-            }
-            if !env.is_empty() {
-                out.push_str("    env:\n");
-                for kv in env {
-                    if kv.active {
-                        if let Some(comment) = &kv.comment {
-                            out.push_str(&format!("      # {comment}\n"));
-                        }
-                        out.push_str(&format!(
-                            "      {}: {}\n",
-                            yaml_scalar(&kv.name),
-                            yaml_scalar(&kv.value)
-                        ));
-                    } else {
-                        // Optional knob with no default — document it as a
-                        // commented-out line rather than forcing a value.
-                        match &kv.comment {
-                            Some(comment) => out.push_str(&format!("      # {comment}\n")),
-                            None => out.push_str("      # optional\n"),
-                        }
-                        out.push_str(&format!("      # {}: \"\"\n", kv.name));
-                    }
-                }
-            }
-        }
-    }
-    out
 }
 
 // ===== HTTP client + cache =====
@@ -741,19 +327,6 @@ impl RegistryClient {
         })
     }
 
-    /// Fetch one registry server's latest version for library callers.
-    pub async fn latest(&self, name: &str) -> Result<FetchOutcome<ServerEntry>> {
-        let cache = self
-            .cache_dir
-            .as_ref()
-            .map(|d| d.join(format!("server--{}.json", cache_key(name))));
-        let outcome = fetch_with_cache(cache, || self.fetch_latest(name)).await?;
-        if outcome.data.server.name != name || !visible(&outcome.data) {
-            anyhow::bail!("cached MCP registry entry does not match active server '{name}'");
-        }
-        Ok(outcome)
-    }
-
     /// Paginate `/v0.1/servers`, keeping only visible entries.
     async fn fetch_servers(&self, query: Option<&str>, limit: usize) -> Result<Vec<ServerEntry>> {
         let mut out: Vec<ServerEntry> = Vec::new();
@@ -772,24 +345,6 @@ impl RegistryClient {
             }
         }
         Ok(out)
-    }
-
-    /// Fetch `/v0.1/servers/{name}/versions/latest`.
-    async fn fetch_latest(&self, name: &str) -> Result<ServerEntry> {
-        let url = latest_url(&self.base_url, name)?;
-        let body = self.get(&url).await.with_context(|| {
-            format!(
-                "looking up '{name}' — check the id with `{cli} mcp search <query>`",
-                cli = invocation::name()
-            )
-        })?;
-        let entry = parse_server_detail(&body)?;
-        if !visible(&entry) {
-            anyhow::bail!(
-                "'{name}' is not an active, latest entry in the MCP registry (it may be deprecated)"
-            );
-        }
-        Ok(entry)
     }
 
     async fn get(&self, url: &str) -> Result<String> {
@@ -830,19 +385,6 @@ fn servers_url(
         pairs.append_pair("limit", &limit.to_string());
         pairs.append_pair("version", "latest");
     }
-    Ok(url.into())
-}
-
-/// Build a `/v0.1/servers/{name}/versions/latest` URL. Registry names are
-/// reverse-DNS (`org/name`); only the slash needs encoding.
-fn latest_url(base: &str, name: &str) -> Result<String> {
-    let mut url = reqwest::Url::parse(&format!("{base}/v0.1/servers"))
-        .context("building MCP registry URL")?;
-    url.path_segments_mut()
-        .map_err(|_| anyhow::anyhow!("MCP registry base URL cannot hold path segments"))?
-        .push(name)
-        .push("versions")
-        .push("latest");
     Ok(url.into())
 }
 
@@ -1132,34 +674,6 @@ mod tests {
       "metadata": { "nextCursor": "com.pulsemcp/remote-filesystem:0.1.5", "count": 6 }
     }"#;
 
-    /// A pypi entry with packageArguments and a user-supplied positional.
-    const DETAIL_FIXTURE: &str = r#"{
-      "server": {
-        "name": "io.github.06ketan/substack-ops",
-        "description": "Substack operations.",
-        "version": "0.3.5",
-        "packages": [
-          {
-            "registryType": "pypi",
-            "identifier": "substack-ops",
-            "version": "0.3.5",
-            "runtimeHint": "uvx",
-            "transport": { "type": "stdio" },
-            "packageArguments": [
-              { "value": "mcp", "type": "positional" },
-              { "value": "serve", "type": "positional" },
-              { "type": "named", "name": "--root", "value": "{root_dir}" },
-              { "type": "positional", "valueHint": "newsletter_slug" }
-            ],
-            "environmentVariables": [
-              { "name": "SUBSTACK_API_KEY", "isRequired": true, "isSecret": true, "description": "API key." }
-            ]
-          }
-        ]
-      },
-      "_meta": { "io.modelcontextprotocol.registry/official": { "status": "active", "isLatest": true } }
-    }"#;
-
     fn entries() -> Vec<ServerEntry> {
         parse_server_list(LIST_FIXTURE)
             .expect("fixture parses")
@@ -1176,7 +690,6 @@ mod tests {
         );
         let fs = &page.entries[0];
         assert_eq!(fs.server.name, "com.pulsemcp/remote-filesystem");
-        assert_eq!(fs.server.packages[0].environment_variables.len(), 4);
     }
 
     #[test]
@@ -1218,7 +731,7 @@ mod tests {
     }
 
     #[test]
-    fn package_stubs_require_explicit_stdio_and_pinned_version() {
+    fn runner_classification_requires_explicit_stdio_and_pinned_version() {
         let package = |transport: Option<&str>, version: Option<&str>| Package {
             registry_type: "npm".to_string(),
             identifier: "example-mcp".to_string(),
@@ -1226,16 +739,12 @@ mod tests {
             transport: transport.map(|kind| PackageTransport {
                 kind: kind.to_string(),
             }),
-            runtime_arguments: Vec::new(),
-            package_arguments: Vec::new(),
-            environment_variables: Vec::new(),
         };
         let server = |package| RegistryServer {
             name: "com.example/server".to_string(),
             title: None,
             description: None,
             version: Some("1.0.0".to_string()),
-            repository: None,
             remotes: Vec::new(),
             packages: vec![package],
         };
@@ -1247,7 +756,6 @@ mod tests {
         ] {
             let server = server(unsafe_package);
             assert_eq!(server.install_support(), InstallSupport::Manual);
-            assert_eq!(server.invocation(), None);
         }
     }
 
@@ -1259,239 +767,6 @@ mod tests {
         assert_eq!(rows[0].install, "remote");
         assert_eq!(rows[1].install, "npx");
         assert_eq!(rows[2].install, "manual");
-    }
-
-    #[test]
-    fn stdio_invocation_pins_version_and_dedups_dash_y() {
-        let vis: Vec<_> = entries().into_iter().filter(visible).collect();
-        let fs = vis
-            .iter()
-            .find(|e| e.server.name == "com.pulsemcp/remote-filesystem")
-            .expect("entry");
-        let inv = fs.server.invocation().expect("stdio maps");
-        let Invocation::Stdio { command, args, env } = inv else {
-            panic!("expected stdio invocation");
-        };
-        assert_eq!(command, "npx");
-        assert_eq!(args, vec!["-y", "remote-filesystem-mcp-server@0.1.5"]);
-        let bucket = env.iter().find(|e| e.name == "GCS_BUCKET").expect("env");
-        assert!(
-            bucket.active,
-            "required var renders as an active placeholder"
-        );
-        assert_eq!(bucket.value, "");
-        assert_eq!(bucket.comment.as_deref(), Some("required — Bucket name."));
-    }
-
-    #[test]
-    fn env_stub_tiers_required_default_optional() {
-        let old = &entries()[0].server.packages[0];
-        let stubs: Vec<KeyValueStub> = old.environment_variables.iter().map(env_stub).collect();
-        let by_name = |n: &str| stubs.iter().find(|s| s.name == n).expect("stub");
-        assert!(by_name("GCS_BUCKET").active);
-        let secret = by_name("GCS_PRIVATE_KEY");
-        assert!(secret.active);
-        assert_eq!(
-            secret.comment.as_deref(),
-            Some("required, secret — Private key.")
-        );
-        let defaulted = by_name("GCS_MAKE_PUBLIC");
-        assert!(defaulted.active);
-        assert_eq!(defaulted.value, "false");
-        let optional = by_name("GCS_ROOT_PATH");
-        assert!(!optional.active, "optional without default comments out");
-    }
-
-    #[test]
-    fn remote_invocation_converts_header_templates() {
-        let vis: Vec<_> = entries().into_iter().filter(visible).collect();
-        let remote = vis
-            .iter()
-            .find(|e| e.server.name == "ai.smithery/context7fork")
-            .expect("entry");
-        let inv = remote.server.invocation().expect("remote maps");
-        let Invocation::Remote { url, headers } = inv else {
-            panic!("expected remote invocation");
-        };
-        assert_eq!(url, "https://server.smithery.ai/@x/context7fork/mcp");
-        assert_eq!(headers.len(), 1);
-        assert_eq!(headers[0].name, "Authorization");
-        assert_eq!(headers[0].value, "Bearer ${SMITHERY_API_KEY}");
-    }
-
-    #[test]
-    fn template_conversion_uppercases_and_sanitises() {
-        assert_eq!(
-            template_to_env_refs("Bearer {smithery_api_key}"),
-            "Bearer ${SMITHERY_API_KEY}"
-        );
-        assert_eq!(template_to_env_refs("{a-b.c}"), "${A_B_C}");
-        assert_eq!(template_to_env_refs("no templates"), "no templates");
-        assert_eq!(template_to_env_refs("100% {"), "100% {");
-        assert_eq!(template_to_env_refs("{not a var}"), "{not a var}");
-        assert_eq!(template_to_env_refs("{}"), "{}");
-    }
-
-    #[test]
-    fn stub_id_derives_url_safe_key() {
-        assert_eq!(
-            stub_id("com.pulsemcp/remote-filesystem"),
-            "remote-filesystem"
-        );
-        assert_eq!(stub_id("io.github.06ketan/substack-ops"), "substack-ops");
-        assert_eq!(stub_id("plainname"), "plainname");
-        assert_eq!(stub_id("org/sse"), "sse-mcp", "sse is a reserved id");
-        assert_eq!(stub_id("org/we ird"), "we-ird");
-        assert_eq!(stub_id("org/"), "mcp-server");
-    }
-
-    #[test]
-    fn pypi_invocation_appends_package_arguments() {
-        let entry = parse_server_detail(DETAIL_FIXTURE).expect("fixture parses");
-        let inv = entry.server.invocation().expect("uvx maps");
-        let Invocation::Stdio { command, args, .. } = inv else {
-            panic!("expected stdio invocation");
-        };
-        assert_eq!(command, "uvx");
-        assert_eq!(
-            args,
-            vec![
-                "substack-ops@0.3.5",
-                "mcp",
-                "serve",
-                "--root=${ROOT_DIR}",
-                "<newsletter_slug>"
-            ]
-        );
-    }
-
-    #[test]
-    fn arguments_render_registry_defaults() {
-        let named: Argument = serde_json::from_value(serde_json::json!({
-            "type": "named",
-            "name": "--port",
-            "default": "3000"
-        }))
-        .expect("named argument");
-        assert_eq!(named.cli_fragment().as_deref(), Some("--port=3000"));
-
-        let positional: Argument = serde_json::from_value(serde_json::json!({
-            "type": "positional",
-            "valueHint": "workspace",
-            "default": "/srv/project"
-        }))
-        .expect("positional argument");
-        assert_eq!(positional.cli_fragment().as_deref(), Some("/srv/project"));
-    }
-
-    #[test]
-    fn add_stub_stdio_round_trips_through_config_schema() {
-        let vis: Vec<_> = entries().into_iter().filter(visible).collect();
-        let fs = vis
-            .iter()
-            .find(|e| e.server.name == "com.pulsemcp/remote-filesystem")
-            .expect("entry");
-        let stub = add_stub(fs).expect("stub");
-        assert_eq!(stub.id, "remote-filesystem");
-        assert!(stub.yaml.contains("remote-filesystem:"));
-        assert!(stub.yaml.contains("command: npx"));
-        assert!(stub.yaml.contains("remote-filesystem-mcp-server@0.1.5"));
-        let body: std::collections::HashMap<String, crate::config::mcp::McpServerConfig> =
-            serde_saphyr::from_str(&stub.yaml)
-                .expect("stub must deserialise into the config schema");
-        let entry = body.get("remote-filesystem").expect("key present");
-        assert_eq!(entry.name, "remote-filesystem");
-        entry.validate().expect("stub must pass config validation");
-        match &entry.transport {
-            crate::config::mcp::McpTransport::Stdio { command, args, env } => {
-                assert_eq!(command, "npx");
-                assert_eq!(args[0], "-y");
-                assert!(env.contains_key("GCS_BUCKET"));
-                // A registry default that parses as a YAML bool must still
-                // land as a *string* in the pasted config.
-                assert_eq!(
-                    env.get("GCS_MAKE_PUBLIC").map(String::as_str),
-                    Some("false")
-                );
-            }
-            other => panic!("expected stdio transport, got {other:?}"),
-        }
-        assert!(stub.yaml.contains("GCS_MAKE_PUBLIC: \"false\""));
-    }
-
-    #[test]
-    fn add_stub_remote_round_trips_through_config_schema() {
-        let vis: Vec<_> = entries().into_iter().filter(visible).collect();
-        let remote = vis
-            .iter()
-            .find(|e| e.server.name == "ai.smithery/context7fork")
-            .expect("entry");
-        let stub = add_stub(remote).expect("stub");
-        assert_eq!(stub.id, "context7fork");
-        let body: std::collections::HashMap<String, crate::config::mcp::McpServerConfig> =
-            serde_saphyr::from_str(&stub.yaml)
-                .expect("stub must deserialise into the config schema");
-        let entry = body.get("context7fork").expect("key present");
-        entry.validate().expect("stub must pass config validation");
-        match &entry.transport {
-            crate::config::mcp::McpTransport::Http { url, headers } => {
-                assert_eq!(url, "https://server.smithery.ai/@x/context7fork/mcp");
-                assert_eq!(
-                    headers.get("Authorization").map(String::as_str),
-                    Some("Bearer ${SMITHERY_API_KEY}")
-                );
-            }
-            other => panic!("expected http transport, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn add_stub_pypi_fixture_has_required_env_placeholder() {
-        let entry = parse_server_detail(DETAIL_FIXTURE).expect("fixture parses");
-        let stub = add_stub(&entry).expect("stub");
-        assert_eq!(stub.id, "substack-ops");
-        assert!(stub.yaml.contains("command: uvx"));
-        assert!(stub.yaml.contains("# required, secret — API key."));
-        assert!(stub.yaml.contains("SUBSTACK_API_KEY: \"\""));
-        let body: std::collections::HashMap<String, crate::config::mcp::McpServerConfig> =
-            serde_saphyr::from_str(&stub.yaml).expect("schema round-trip");
-        body.get("substack-ops")
-            .expect("key")
-            .validate()
-            .expect("valid");
-    }
-
-    #[test]
-    fn add_stub_refuses_manual_tier_with_pointer() {
-        let vis: Vec<_> = entries().into_iter().filter(visible).collect();
-        let oci = vis
-            .iter()
-            .find(|e| e.server.name == "io.github.some/oci-only")
-            .expect("entry");
-        let err = add_stub(oci).unwrap_err();
-        assert!(err.contains("oci/mcpb"), "{err}");
-        assert!(err.contains("mcp_servers:"), "{err}");
-    }
-
-    #[test]
-    fn add_stub_refuses_empty_entry() {
-        let entry = ServerEntry {
-            server: RegistryServer {
-                name: "x.example/empty".to_string(),
-                title: None,
-                description: None,
-                version: None,
-                repository: None,
-                remotes: Vec::new(),
-                packages: Vec::new(),
-            },
-            meta: EntryMeta::default(),
-        };
-        let err = add_stub(&entry).unwrap_err();
-        assert!(
-            err.contains("neither a remote endpoint nor an installable package"),
-            "{err}"
-        );
     }
 
     #[test]
@@ -1523,16 +798,6 @@ mod tests {
         assert_eq!(
             bare,
             "https://registry.example/v0.1/servers?limit=25&version=latest"
-        );
-    }
-
-    #[test]
-    fn latest_url_encodes_the_slash() {
-        let url =
-            latest_url("https://registry.example", "com.pulsemcp/remote-filesystem").expect("url");
-        assert_eq!(
-            url,
-            "https://registry.example/v0.1/servers/com.pulsemcp%2Fremote-filesystem/versions/latest"
         );
     }
 
@@ -1707,34 +972,6 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn latest_cache_keys_do_not_alias_distinct_registry_names() {
-            let server = MockServer::start().await;
-            let cache = tmp_cache("name-collision");
-            for name in ["com.example/a-b", "com.example/a_b"] {
-                let encoded = name.replace('/', "%2F");
-                let detail = serde_json::json!({
-                    "server": {"name": name, "description": "test", "version": "1.0.0"},
-                    "_meta": {"io.modelcontextprotocol.registry/official": {
-                        "status": "active", "isLatest": true
-                    }}
-                });
-                Mock::given(method("GET"))
-                    .and(path(format!("/v0.1/servers/{encoded}/versions/latest")))
-                    .respond_with(ResponseTemplate::new(200).set_body_json(detail))
-                    .expect(1)
-                    .mount(&server)
-                    .await;
-            }
-
-            let c = client(&server, &cache);
-            let first = c.latest("com.example/a-b").await.expect("first fetch");
-            assert_eq!(first.data.server.name, "com.example/a-b");
-            let second = c.latest("com.example/a_b").await.expect("second fetch");
-            assert_eq!(second.data.server.name, "com.example/a_b");
-            let _ = std::fs::remove_dir_all(&cache);
-        }
-
-        #[tokio::test]
         async fn servers_falls_back_to_stale_cache_on_network_failure() {
             let cache = tmp_cache("stale");
             let live = MockServer::start().await;
@@ -1774,109 +1011,5 @@ mod tests {
             assert!(err.to_string().contains("fetching MCP registry"), "{err}");
             let _ = std::fs::remove_dir_all(&cache);
         }
-
-        #[tokio::test]
-        async fn latest_fetches_detail_and_caches_by_name() {
-            let server = MockServer::start().await;
-            let cache = tmp_cache("detail");
-            Mock::given(method("GET"))
-                .and(path(
-                    "/v0.1/servers/com.pulsemcp%2Fremote-filesystem/versions/latest",
-                ))
-                .respond_with(ResponseTemplate::new(200).set_body_string(DETAIL_LATEST))
-                .expect(1)
-                .mount(&server)
-                .await;
-            let c = client(&server, &cache);
-            let out = c
-                .latest("com.pulsemcp/remote-filesystem")
-                .await
-                .expect("fetch");
-            assert!(!out.from_cache);
-            assert_eq!(out.data.server.version.as_deref(), Some("0.1.5"));
-            let cached = c
-                .latest("com.pulsemcp/remote-filesystem")
-                .await
-                .expect("cached");
-            assert!(cached.from_cache);
-            let _ = std::fs::remove_dir_all(&cache);
-        }
-
-        #[tokio::test]
-        async fn latest_rejects_non_latest_detail() {
-            let server = MockServer::start().await;
-            let cache = tmp_cache("notlatest");
-            Mock::given(method("GET"))
-                .and(path("/v0.1/servers/x%2Fy/versions/latest"))
-                .respond_with(ResponseTemplate::new(200).set_body_string(
-                    r#"{"server": {"name": "x/y", "version": "1.0.0"},
-                        "_meta": {"io.modelcontextprotocol.registry/official": {"status": "active", "isLatest": false}}}"#,
-                ))
-                .mount(&server)
-                .await;
-            let c = client(&server, &cache);
-            let err = c.latest("x/y").await.unwrap_err();
-            assert!(err.to_string().contains("deprecated"), "{err}");
-            let _ = std::fs::remove_dir_all(&cache);
-        }
-
-        #[tokio::test]
-        async fn latest_404_hints_at_search() {
-            let server = MockServer::start().await;
-            let cache = tmp_cache("404");
-            Mock::given(method("GET"))
-                .and(path("/v0.1/servers/no%2Fsuch/versions/latest"))
-                .respond_with(
-                    ResponseTemplate::new(404).set_body_string(r#"{"error":"not found"}"#),
-                )
-                .mount(&server)
-                .await;
-            let c = client(&server, &cache);
-            let err = c.latest("no/such").await.unwrap_err();
-            let msg = format!("{err:#}");
-            assert!(msg.contains("bitrouter mcp search"), "{msg}");
-            let _ = std::fs::remove_dir_all(&cache);
-        }
-
-        #[tokio::test]
-        async fn latest_does_not_revive_stale_entry_after_404() {
-            let cache = tmp_cache("removed");
-            let live = MockServer::start().await;
-            Mock::given(method("GET"))
-                .and(path("/v0.1/servers/no%2Fsuch/versions/latest"))
-                .respond_with(ResponseTemplate::new(200).set_body_string(
-                    r#"{"server": {"name": "no/such", "description": "test", "version": "1.0.0"},
-                        "_meta": {"io.modelcontextprotocol.registry/official": {"status": "active", "isLatest": true}}}"#,
-                ))
-                .mount(&live)
-                .await;
-            let c = client(&live, &cache);
-            c.latest("no/such").await.expect("populate cache");
-
-            age_only_cache_entry(&cache);
-
-            let removed = MockServer::start().await;
-            Mock::given(method("GET"))
-                .and(path("/v0.1/servers/no%2Fsuch/versions/latest"))
-                .respond_with(ResponseTemplate::new(404).set_body_string(r#"{"error":"deleted"}"#))
-                .mount(&removed)
-                .await;
-            let c = client(&removed, &cache);
-            let err = c.latest("no/such").await.unwrap_err();
-            assert!(format!("{err:#}").contains("bitrouter mcp search"));
-            let _ = std::fs::remove_dir_all(&cache);
-        }
-
-        const DETAIL_LATEST: &str = r#"{
-          "server": {
-            "name": "com.pulsemcp/remote-filesystem",
-            "description": "MCP server for remote filesystem operations.",
-            "version": "0.1.5",
-            "packages": [
-              { "registryType": "npm", "identifier": "remote-filesystem-mcp-server", "version": "0.1.5", "transport": { "type": "stdio" } }
-            ]
-          },
-          "_meta": { "io.modelcontextprotocol.registry/official": { "status": "active", "isLatest": true } }
-        }"#;
     }
 }

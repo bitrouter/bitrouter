@@ -281,7 +281,6 @@ fn apply_invalidation(
             sc.evict_method("resources/templates/list");
         }
         InvalidationKind::PromptsListChanged => sc.evict_method("prompts/list"),
-        InvalidationKind::Reinitialized => sc.clear(),
     }
 }
 
@@ -424,10 +423,7 @@ impl<E: Executor + 'static> Executor for CachingExecutor<E> {
                 method = %key.method,
                 "mcp cache: hit",
             );
-            return Ok(McpResponse {
-                request_id: request.request_id.clone(),
-                result: value,
-            });
+            return Ok(McpResponse { result: value });
         }
         tracing::debug!(
             server = %key.server_name,
@@ -475,10 +471,7 @@ impl<E: Executor + 'static> Executor for CachingExecutor<E> {
             params_hash: params_hash(&request.params),
         };
         if let Some(value) = self.cache_lookup(&key) {
-            let response = McpResponse {
-                request_id: request.request_id.clone(),
-                result: value,
-            };
+            let response = McpResponse { result: value };
             return Ok(stream::once(async move { Ok(McpStreamPart::Final(response)) }).boxed());
         }
 
@@ -528,10 +521,9 @@ mod tests {
 
     #[async_trait]
     impl Executor for CountingExecutor {
-        async fn execute(&self, _t: &McpTarget, request: &McpRequest) -> Result<McpResponse> {
+        async fn execute(&self, _t: &McpTarget, _request: &McpRequest) -> Result<McpResponse> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Ok(McpResponse {
-                request_id: request.request_id.clone(),
                 result: self.value.clone(),
             })
         }

@@ -1,6 +1,6 @@
 //! Application validation and namespace policy for MCP skills.
 //! Public wire records live in [`crate::skills::wire`].
-//! Content format parsing lives in [`crate::skills::format`].
+//! Skill-name validation uses the shared `bitrouter-skills` format.
 //!
 //! The gateway prefixes skill URIs with the member label without changing
 //! frontmatter or content digests. Direct routes retain upstream URI schemes.
@@ -8,19 +8,15 @@
 //! and the [Agent Skills specification](https://agentskills.io/specification).
 
 use crate::skills::wire::DYNAMIC_RESOURCES;
-use crate::skills::wire::GetSkillResult;
-use crate::skills::wire::ListSkillsResult;
 use crate::skills::wire::MAX_SKILL_RESOURCES;
 use crate::skills::wire::MAX_SKILL_TOTAL_BYTES;
 use crate::skills::wire::SKILL_SCHEME;
 use crate::skills::wire::SkillEntry;
 use crate::skills::wire::SkillResources;
-use crate::skills::wire::SkillsCacheScope;
-use crate::skills::wire::SkillsResultType;
 #[cfg(test)]
 use crate::skills::wire::{
-    GetSkillParams, RESOURCES_DIRECTORY_READ_METHOD, SKILLS_EXTENSION_ID, SKILLS_GET_METHOD,
-    SKILLS_LIST_METHOD, SkillResource,
+    RESOURCES_DIRECTORY_READ_METHOD, SKILLS_EXTENSION_ID, SKILLS_GET_METHOD, SKILLS_LIST_METHOD,
+    SkillResource,
 };
 
 pub trait SkillEntryExt: Sized {
@@ -72,38 +68,6 @@ impl SkillEntryExt for SkillEntry {
             return Err("skill manifest does not include its SKILL.md URI".into());
         }
         Ok(())
-    }
-}
-
-pub trait ListSkillsResultExt: Sized {
-    fn complete(skills: Vec<SkillEntry>, ttl_ms: u64, cache_scope: SkillsCacheScope) -> Self;
-}
-
-impl ListSkillsResultExt for ListSkillsResult {
-    /// Build a conformant, synchronously complete listing.
-    fn complete(skills: Vec<SkillEntry>, ttl_ms: u64, cache_scope: SkillsCacheScope) -> Self {
-        Self {
-            result_type: SkillsResultType::Complete,
-            skills,
-            ttl_ms,
-            cache_scope,
-        }
-    }
-}
-
-pub trait GetSkillResultExt: Sized {
-    fn complete(skill: SkillEntry, ttl_ms: u64, cache_scope: SkillsCacheScope) -> Self;
-}
-
-impl GetSkillResultExt for GetSkillResult {
-    /// Build a conformant, synchronously complete skill lookup.
-    fn complete(skill: SkillEntry, ttl_ms: u64, cache_scope: SkillsCacheScope) -> Self {
-        Self {
-            result_type: SkillsResultType::Complete,
-            skill,
-            ttl_ms,
-            cache_scope,
-        }
     }
 }
 
@@ -354,49 +318,6 @@ mod tests {
 
     const DIGEST: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-    /// The SEP's own `skills/list` example must round-trip byte-identically.
-    #[test]
-    fn sep_example_round_trips() {
-        let wire = serde_json::json!({
-            "resultType": "complete",
-            "skills": [
-                {
-                    "uri": "skill://git-workflow/SKILL.md",
-                    "frontmatter": {
-                        "name": "git-workflow",
-                        "description": "Follow this team's Git conventions"
-                    },
-                    "resources": [
-                        {
-                            "uri": "skill://git-workflow/SKILL.md",
-                            "digest": "sha256:a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2",
-                            "size": 2314
-                        }
-                    ]
-                },
-                {
-                    "uri": "skill://acme/billing/refunds/SKILL.md",
-                    "frontmatter": {
-                        "name": "refunds",
-                        "description": "Process customer refund requests",
-                        "license": "Apache-2.0"
-                    },
-                    "resources": [
-                        {
-                            "uri": "skill://acme/billing/refunds/SKILL.md",
-                            "digest": "sha256:b2c3d4e5b2c3d4e5b2c3d4e5b2c3d4e5b2c3d4e5b2c3d4e5b2c3d4e5b2c3d4e5",
-                            "size": 3871
-                        }
-                    ]
-                }
-            ],
-            "ttlMs": 300000,
-            "cacheScope": "public"
-        });
-        let parsed: ListSkillsResult = serde_json::from_value(wire.clone()).expect("parses");
-        assert_eq!(serde_json::to_value(&parsed).expect("serializes"), wire);
-    }
-
     /// Frontmatter is verbatim: a field this crate has never heard of must
     /// survive a round trip, because the Agent Skills spec evolves
     /// independently of the transport binding.
@@ -454,13 +375,12 @@ mod tests {
         assert_eq!(wire["resources"], serde_json::json!("dynamic"));
         let back: SkillEntry = serde_json::from_value(wire).expect("de");
         assert_eq!(back.resources, SkillResources::Dynamic);
-        assert_eq!(back.resources.entries(), None);
 
         let enumerated = entry("skill://x/SKILL.md", "x");
         let wire = serde_json::to_value(&enumerated).expect("ser");
         assert_eq!(wire["resources"][0]["size"], serde_json::json!(12));
         let back: SkillEntry = serde_json::from_value(wire).expect("de");
-        assert_eq!(back.resources.entries().map(<[_]>::len), Some(1));
+        assert!(matches!(back.resources, SkillResources::Enumerated(files) if files.len() == 1));
     }
 
     /// "An entry with no `resources` at all, or with any value other than an
@@ -503,25 +423,6 @@ mod tests {
         assert_eq!(MAX_SKILL_RESOURCES, 512);
         assert_eq!(MAX_SKILL_TOTAL_BYTES, 16_777_216);
         assert_eq!(DYNAMIC_RESOURCES, "dynamic");
-    }
-
-    #[test]
-    fn get_params_and_result_use_the_sep_field_names() {
-        let params: GetSkillParams =
-            serde_json::from_value(serde_json::json!({"uri": "skill://pdf/SKILL.md"}))
-                .expect("parses");
-        assert_eq!(params.uri, "skill://pdf/SKILL.md");
-
-        let result = GetSkillResult::complete(
-            entry("skill://pdf/SKILL.md", "pdf"),
-            0,
-            SkillsCacheScope::Public,
-        );
-        let wire = serde_json::to_value(&result).expect("ser");
-        assert_eq!(wire["resultType"], "complete");
-        assert_eq!(wire["skill"]["uri"], "skill://pdf/SKILL.md");
-        assert_eq!(wire["ttlMs"], 0);
-        assert_eq!(wire["cacheScope"], "public");
     }
 
     /// The method names the relay allowlist and the origin server's dispatch

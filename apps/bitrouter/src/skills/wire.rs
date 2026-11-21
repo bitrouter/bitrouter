@@ -39,29 +39,6 @@ pub const MAX_SKILL_RESOURCES: usize = 512;
 /// SEP-2640's per-skill cap on the sum of `resources[].size`: 16 MiB.
 pub const MAX_SKILL_TOTAL_BYTES: u64 = 16_777_216;
 
-/// The only result discriminator valid for the synchronous Skills methods.
-///
-/// MCP `2026-07-28` permits other result kinds for methods that support MRTR
-/// or Tasks. The Skills extension explicitly requires `"complete"` for both
-/// `skills/list` and `skills/get`, so representing any other value here would
-/// let an origin server construct an invalid result.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SkillsResultType {
-    /// The operation completed synchronously.
-    Complete,
-}
-
-/// Cache visibility for a Skills result.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SkillsCacheScope {
-    /// The result is identical for every caller of this server instance.
-    Public,
-    /// The result may only be reused for the caller that requested it.
-    Private,
-}
-
 /// One file of a skill, paired with the digest **and byte length** of its
 /// bytes.
 ///
@@ -135,53 +112,6 @@ pub struct SkillEntry {
     /// means quietly degrading what an upstream published.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
-}
-
-/// The `skills/list` result.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ListSkillsResult {
-    /// Skills list operations always complete synchronously.
-    pub result_type: SkillsResultType,
-    /// The skills this server serves. MAY be empty; per the SEP a host "MUST
-    /// NOT treat an empty or partial listing as proof that a server has no
-    /// skills".
-    pub skills: Vec<SkillEntry>,
-    /// Freshness hint for the listing, in milliseconds.
-    pub ttl_ms: u64,
-    /// Whether the listing may be reused across callers.
-    pub cache_scope: SkillsCacheScope,
-}
-
-/// The `skills/get` params.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct GetSkillParams {
-    /// URI of a skill's `SKILL.md`.
-    pub uri: String,
-}
-
-/// The `skills/get` result.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GetSkillResult {
-    /// Skill lookups always complete synchronously.
-    pub result_type: SkillsResultType,
-    /// The requested entry.
-    pub skill: SkillEntry,
-    /// Freshness hint for the entry, in milliseconds.
-    pub ttl_ms: u64,
-    /// Whether the entry may be reused across callers.
-    pub cache_scope: SkillsCacheScope,
-}
-
-impl SkillResources {
-    /// The enumerated files, or `None` for a dynamic skill.
-    pub fn entries(&self) -> Option<&[SkillResource]> {
-        match self {
-            Self::Enumerated(entries) => Some(entries),
-            Self::Dynamic => None,
-        }
-    }
 }
 
 impl Serialize for SkillResources {

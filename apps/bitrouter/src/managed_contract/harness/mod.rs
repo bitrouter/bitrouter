@@ -11,7 +11,4 @@ macro_rules! redacted_contract_debug {
     )+};
 }
 
-pub mod agent;
 pub mod inspection;
-pub mod resources;
-pub mod skills;
