@@ -4035,7 +4035,6 @@ mod tests {
             crate::policy_source::PolicyFileUpdate {
                 path,
                 digest: publication.child_digest,
-                document,
                 parent_digest: Some(parent_digest),
                 changes: Vec::new(),
             },
@@ -4133,7 +4132,9 @@ mod tests {
         let (_directory, update) = source_recovery_fixture()?;
         reload_published_policy_or_restore_with(&update, || async { Ok(()) }).await?;
         let disk = crate::policy_source::load(&update.path).await?;
-        anyhow::ensure!(disk.digest == update.digest && disk.document == update.document);
+        anyhow::ensure!(
+            disk.digest == update.digest && disk.document == recovery_source("fixture:economy")?
+        );
         Ok(())
     }
 
