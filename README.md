@@ -86,21 +86,26 @@ See the [full study and limitations](benchmarks/002-2026-09-07-tbench-v2.1-route
 
 Official macOS distributions support Apple Silicon (`arm64`) only.
 
+Use the commands below once the `1.0.0-beta.1` packages and
+[release installers](https://github.com/bitrouter/bitrouter/releases) are
+available. For an alpha installation, review the fresh-install cutover in the
+[changelog](CHANGELOG.md) before starting a beta service.
+
 ```bash
 # macOS (Apple Silicon) / Linux
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/bitrouter/bitrouter/releases/download/v1.0.0-alpha.33/bitrouter-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/bitrouter/bitrouter/releases/download/v1.0.0-beta.1/bitrouter-installer.sh | sh
 
 # Homebrew
 brew install bitrouter/tap/bitrouter
 
 # Windows
-powershell -ExecutionPolicy Bypass -Command "irm https://github.com/bitrouter/bitrouter/releases/download/v1.0.0-alpha.33/bitrouter-installer.ps1 | iex"
+powershell -ExecutionPolicy Bypass -Command "irm https://github.com/bitrouter/bitrouter/releases/download/v1.0.0-beta.1/bitrouter-installer.ps1 | iex"
 
 # npm
-npm install -g bitrouter
+npm install -g bitrouter@1.0.0-beta.1
 
 # From source (Cargo)
-cargo install bitrouter
+cargo install bitrouter --version 1.0.0-beta.1
 ```
 
 These installers select the full product. Gateway-only release archives keep

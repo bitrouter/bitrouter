@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::Config;
 use crate::gateway::providers::auth::store::{CredentialKey, DEFAULT_ACCOUNT};
 use crate::policy::Policy;
-use crate::policy_lock::PolicyLock;
+use bitrouter_ai::policy::Document;
 
 use super::authority::{Authority, Head};
 use super::credentials::Credentials;
@@ -51,7 +51,7 @@ pub(super) struct Configuration {
     /// Complete policy documents, never paths to files on individual workers.
     #[serde(default)]
     pub policies: Vec<serde_json::Value>,
-    pub policy_lock: Option<PolicyLock>,
+    pub model_policy: Option<Document>,
     pub credentials: Vec<CredentialBinding>,
     #[serde(default)]
     pub require_known_pricing: bool,
@@ -69,7 +69,7 @@ impl Configuration {
     /// Preparation performs no environment, filesystem, credential or provider I/O.
     /// Every replica validates the same complete input before exposing it.
     pub fn prepare(&self) -> Result<PreparedConfiguration> {
-        ensure!(self.format == 1, "unsupported shared configuration format");
+        ensure!(self.format == 2, "unsupported shared configuration format");
         ensure!(
             serde_json::to_vec(self)?.len() <= MAX_PUBLICATION_BYTES,
             "shared configuration exceeds byte limit"
@@ -87,8 +87,6 @@ impl Configuration {
                         | "models"
                         | "routers"
                         | "checkers"
-                        | "presets"
-                        | "variants"
                         | "upstream"
                         | "trajectory"
                         | "continuation"
@@ -112,7 +110,7 @@ impl Configuration {
             .map_err(|_| anyhow::anyhow!("invalid shared routing configuration"))?;
         ensure!(
             config.policy.path.is_none(),
-            "shared routing requires an embedded policy lock, not policy.path"
+            "shared routing requires an embedded model policy, not policy.path"
         );
         ensure!(
             config.checkers.is_empty(),
@@ -229,7 +227,7 @@ impl Configuration {
             );
             policies.push(policy);
         }
-        if let Some(document) = &self.policy_lock {
+        if let Some(document) = &self.model_policy {
             crate::policy_lock::validate_document(document)?;
             crate::policy_lock::validate_for_config(&config, document)?;
         } else {
@@ -291,6 +289,82 @@ fn validate_derivation_bounds(fields: &serde_json::Map<String, serde_json::Value
 }
 
 impl Authority {
+    /// Authenticate the complete current namespace before any incarnation or recovery write.
+    pub(super) async fn preflight_current(&self) -> Result<()> {
+        self.store()
+            .bounded(async {
+                let tx = self.store().begin().await?;
+                ensure!(
+                    super::schema::current(&tx).await?,
+                    "shared schema is not initialized"
+                );
+                let head: Stored<Head> = self
+                    .store()
+                    .read(&tx, Kind::Authority, "head")
+                    .await?
+                    .context("shared authority is not initialized")?;
+                self.validate_head(&head.value)?;
+                let mut after = String::new();
+                let mut count = 0_u64;
+                loop {
+                    let page = self
+                        .store()
+                        .publication_page::<SealedSecret>(&tx, &after)
+                        .await?;
+                    if page.is_empty() {
+                        break;
+                    }
+                    for stored in page {
+                        ensure!(
+                            stored.key() > after.as_str(),
+                            "shared publication key order"
+                        );
+                        let generation: u64 = stored
+                            .key()
+                            .strip_prefix("configuration/")
+                            .context("shared publication identity")?
+                            .parse()?;
+                        ensure!(
+                            generation > 0
+                                && generation <= head.value.config_generation
+                                && stored.key() == format!("configuration/{generation}")
+                                && stored.revision()? == 0
+                                && stored.status() == "retained",
+                            "invalid retained shared publication"
+                        );
+                        let bytes = self.open(stored.key(), generation, &stored.value)?;
+                        ensure!(
+                            bytes.len() <= MAX_PUBLICATION_BYTES,
+                            "shared publication byte limit"
+                        );
+                        let configuration: Configuration =
+                            serde_json::from_slice(&bytes).map_err(|_| {
+                                anyhow::anyhow!("unsupported retained shared publication encoding")
+                            })?;
+                        configuration.prepare()?;
+                        count = count
+                            .checked_add(1)
+                            .context("shared publication count overflow")?;
+                        after = stored.key().to_owned();
+                    }
+                }
+                ensure!(
+                    count == head.value.config_generation,
+                    "shared publication history is incomplete"
+                );
+                self.preflight_execution_current(&tx).await?;
+                crate::storage::evaluation::shared::SharedEvaluation::new(
+                    self.store().namespace(),
+                )?
+                .validate_retained_subjects_in(&tx)
+                .await
+                .context("validating retained shared Eval subjects")?;
+                tx.commit().await?;
+                Ok(())
+            })
+            .await
+    }
+
     /// Commit a validated immutable document and its head in the same transaction.
     /// The exclusive head fence orders publication after all older dispatch commits.
     #[cfg(test)]

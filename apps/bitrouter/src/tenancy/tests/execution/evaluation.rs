@@ -15,9 +15,9 @@ use std::{sync::atomic::AtomicUsize, time::Duration};
 use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 use tower::ServiceExt;
 
-mod exploration;
 mod owned;
-mod trajectory;
+#[cfg(any(feature = "db-postgres", feature = "db-mysql"))]
+mod server;
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -59,26 +59,16 @@ async fn provider(State(state): State<Provider>, Json(body): Json<serde_json::Va
 }
 
 async fn policy_fixture(url: &str, mode: LearningMode) -> Result<(Fixture, RevisionId)> {
-    let mut document = crate::policy_lock::PolicyLock::default();
-    document.policies.insert(
-        "selected".into(),
-        crate::policy_lock::PolicyDefinition {
-            tiers: [(
-                "economy".into(),
-                bitrouter_ai::routing::PolicyModelTarget::model_only("mock:model-a".into()),
-            )]
-            .into(),
-            default_tier: Some("economy".into()),
-            ..Default::default()
-        },
-    );
+    let document = crate::model_policy::parse(
+        &json!({"spec_version":"policy/1.0.0-beta.1", "policies":{"selected":{"tiers":{"economy":{"model":"mock:model-a"}},"default_tier":"economy"}}}),
+    )?;
     policy_fixture_with_document(url, mode, document, true).await
 }
 
 async fn policy_fixture_with_document(
     url: &str,
     mode: LearningMode,
-    document: crate::policy_lock::PolicyLock,
+    document: bitrouter_ai::policy::Document,
     bind_route: bool,
 ) -> Result<(Fixture, RevisionId)> {
     policy_fixture_with_trajectory(url, mode, document, bind_route, None).await
@@ -87,7 +77,7 @@ async fn policy_fixture_with_document(
 async fn policy_fixture_with_trajectory(
     url: &str,
     mode: LearningMode,
-    document: crate::policy_lock::PolicyLock,
+    document: bitrouter_ai::policy::Document,
     bind_route: bool,
     trajectory: Option<serde_json::Value>,
 ) -> Result<(Fixture, RevisionId)> {
@@ -97,7 +87,7 @@ async fn policy_fixture_with_trajectory(
 async fn policy_fixture_named(
     url: &str,
     mode: LearningMode,
-    document: crate::policy_lock::PolicyLock,
+    document: bitrouter_ai::policy::Document,
     bind_route: bool,
     trajectory: Option<serde_json::Value>,
     name: &str,
@@ -118,7 +108,7 @@ async fn policy_fixture_with_existing(
     fixture: Fixture,
     url: &str,
     mode: LearningMode,
-    policy: (&str, crate::policy_lock::PolicyLock),
+    policy: (&str, bitrouter_ai::policy::Document),
     bind_route: bool,
     trajectory: Option<serde_json::Value>,
     started: &mut impl FnMut(&Service),
@@ -136,7 +126,7 @@ async fn policy_fixture_with_existing(
     };
     let resources = super::super::super::resources::Resources::with_key(
         fixture.installation.clone(),
-        [29; 32],
+        fixture.wrapping_key,
     )?;
     let mut imports = vec![json!({"reference":policy,
         "definition":{"kind":"policy","name":name,"document":document}})];
@@ -158,7 +148,7 @@ async fn policy_fixture_with_existing(
         .provision_bytes(
             &fixture.db,
             &serde_json::to_vec(&json!({
-                "format":1, "installation_id":fixture.installation, "resources":imports
+                "format":4, "installation_id":fixture.installation, "resources":imports
             }))?,
         )
         .await?;
@@ -192,7 +182,7 @@ async fn policy_fixture_with_existing(
 async fn scoped_eval_store(
     fixture: &Fixture,
     headers: &::http::HeaderMap,
-) -> Result<crate::core::eval::store::EvalStore> {
+) -> Result<crate::eval::store::EvalStore> {
     let execution = admitted(fixture, headers).await?;
     let id = execution.id().clone();
     let store = execution.eval_store();
@@ -302,8 +292,20 @@ async fn policy_settlement_uses_owned_store_for_success_error_and_stream_only_wh
             ensure!(state.calls.load(Ordering::SeqCst) == 1);
             let subjects = store.list_subjects().await?;
             ensure!(subjects.len() == usize::from(mode != LearningMode::Off));
-            ensure!(crate::core::eval::store::EvalStore::new(fixture.db.clone()).list_subjects().await?.is_empty());
+            ensure!(crate::eval::store::EvalStore::new(fixture.db.clone()).list_subjects().await?.is_empty());
             if let Some(subject) = subjects.first() {
+                ensure!(subject.spec_version == bitrouter_ai::eval::SpecVersion::Beta1);
+                let bitrouter_ai::eval::EvalSubjectIdentity::TenantModelPolicy {
+                    installation_id, tenant_id, configuration_revision, policy, name, source_digest, ..
+                } = &subject.identity else {
+                    anyhow::bail!("tenant policy settlement lost its exact identity");
+                };
+                ensure!(installation_id == &fixture.installation && tenant_id == &fixture.tenant);
+                ensure!(configuration_revision == &revision && name == "selected");
+                ensure!(policy.owner_kind == OwnerKind::Tenant && policy.owner_id.as_str() == fixture.tenant.as_str()
+                    && policy.resource_kind == ResourceKind::Policy && policy.resource_id.as_str() == "observed-policy"
+                    && policy.revision_id.as_str() == "r1");
+                ensure!(source_digest.is_some());
                 ensure!(subject.eval_id == format!("request:{}", subject.subject_id));
                 ensure!(subject.subject_id != "same-correlation");
                 ensure!(subject.decisions.len() == 1 && subject.decisions[0].selected_tier == "economy");

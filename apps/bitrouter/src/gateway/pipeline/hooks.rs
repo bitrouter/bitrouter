@@ -236,7 +236,7 @@ pub trait ObserveHook: Send + Sync {
         &self,
         _ctx: &PipelineContext,
         _target: &RoutingTarget,
-        _report: &bitrouter_ai::conversion::ConversionReport,
+        _report: &crate::gateway::conversion_report::ConversionReport,
     ) {
     }
 
@@ -247,7 +247,7 @@ pub trait ObserveHook: Send + Sync {
         &self,
         _ctx: &PipelineContext,
         _target: &RoutingTarget,
-        _report: &bitrouter_ai::conversion::ConversionReport,
+        _report: &crate::gateway::conversion_report::ConversionReport,
     ) {
     }
 

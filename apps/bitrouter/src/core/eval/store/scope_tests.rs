@@ -108,18 +108,18 @@ async fn three_namespaces_share_logical_content_but_never_sql_identity() -> Resu
     );
     assert_ne!(frozen.evidence_root, legacy_frozen.evidence_root);
     assert!(
-        crate::core::eval::compiler::EvalEvidenceSnapshot::from_manifest(&legacy, frozen.clone())
+        crate::eval::compiler::EvalEvidenceSnapshot::from_manifest(&legacy, frozen.clone())
             .await
             .is_err()
     );
     assert!(
-        crate::core::eval::compiler::EvalEvidenceSnapshot::from_manifest(&legacy, legacy_frozen)
+        crate::eval::compiler::EvalEvidenceSnapshot::from_manifest(&legacy, legacy_frozen)
             .await
             .is_ok()
     );
     let owned_legacy = legacy.freeze_snapshot_for_owner(FROZEN, "local").await?;
     assert!(
-        crate::core::eval::compiler::EvalEvidenceSnapshot::from_manifest(&legacy, owned_legacy)
+        crate::eval::compiler::EvalEvidenceSnapshot::from_manifest(&legacy, owned_legacy)
             .await
             .is_ok()
     );
@@ -237,7 +237,7 @@ async fn projections_and_parent_scope_tampering_fail_closed() -> Result<()> {
     for column in [
         subject_entity::Column::SubjectId,
         subject_entity::Column::Scope,
-        subject_entity::Column::PolicyDigest,
+        subject_entity::Column::IdentityDigest,
         subject_entity::Column::ContentDigest,
         subject_entity::Column::OwnerUserId,
     ] {
@@ -305,14 +305,14 @@ async fn frozen_roots_bind_namespace_and_survive_later_admission_changes() -> Re
     let snapshot = a.freeze_snapshot(FROZEN).await?;
     assert!(b.persist_snapshot(&snapshot).await.is_err());
     assert!(
-        crate::core::eval::compiler::EvalEvidenceSnapshot::from_manifest(&b, snapshot.clone())
+        crate::eval::compiler::EvalEvidenceSnapshot::from_manifest(&b, snapshot.clone())
             .await
             .is_err()
     );
     let mut tampered = snapshot.clone();
     tampered.entries[0].eval_id = "foreign".into();
     assert!(
-        crate::core::eval::compiler::EvalEvidenceSnapshot::from_manifest(&a, tampered)
+        crate::eval::compiler::EvalEvidenceSnapshot::from_manifest(&a, tampered)
             .await
             .is_err()
     );
@@ -324,7 +324,7 @@ async fn frozen_roots_bind_namespace_and_survive_later_admission_changes() -> Re
         Some(snapshot.clone())
     );
     assert_eq!(
-        crate::core::eval::compiler::EvalEvidenceSnapshot::from_manifest(&a, snapshot)
+        crate::eval::compiler::EvalEvidenceSnapshot::from_manifest(&a, snapshot)
             .await?
             .records
             .len(),
@@ -341,6 +341,7 @@ async fn missing_closure_and_forged_physical_projections_are_rejected() -> Resul
     admitted(&b).await?;
     let foreign = b.freeze_snapshot(FROZEN).await?;
     let claimed = EvalSnapshot {
+        spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
         evidence_root: a.snapshot_root(None, FROZEN, &foreign.entries)?,
         frozen_at: FROZEN.into(),
         entries: foreign.entries,
@@ -386,7 +387,9 @@ async fn row_limit_rejects_overflow_without_truncation_or_cross_namespace_counti
             owner_user_id: Set(a.owner("local")?),
             subject_id: Set(value.subject_id.clone()),
             scope: Set(scope_name(value.scope).into()),
-            policy_digest: Set(value.policy_digest.clone()),
+            identity_digest: Set(crate::storage::evaluation::identity_digest(
+                &value.identity,
+            )?),
             holdout: Set(value.holdout),
             content_digest: Set(crate::storage::evaluation::subject_digest(&value)?),
             subject_json: Set(serde_json::to_string(&value)?),
@@ -625,7 +628,7 @@ async fn pad_subject_json(store: &EvalStore, bytes: i64) -> Result<()> {
 
 #[tokio::test]
 async fn compiler_load_reads_closure_once_and_bounds_manifest_plus_records() -> Result<()> {
-    use crate::core::eval::compiler::EvalEvidenceSnapshot;
+    use crate::eval::compiler::EvalEvidenceSnapshot;
 
     let mut db = database().await?;
     let queries = query_log(&mut db);
@@ -720,7 +723,7 @@ async fn freeze_shares_materialization_and_persistence_budget() -> Result<()> {
 
 #[tokio::test]
 async fn compiler_load_preserves_legacy_wildcard_owned_and_empty_roots() -> Result<()> {
-    use crate::core::eval::compiler::EvalEvidenceSnapshot;
+    use crate::eval::compiler::EvalEvidenceSnapshot;
 
     let mut db = database().await?;
     let queries = query_log(&mut db);
@@ -782,7 +785,7 @@ async fn compiler_closure_has_one_cumulative_byte_budget() -> Result<()> {
             [(18_i64 * 1024 * 1024).into(), a.key(KeyDomain::EvalSubject, id)?.into()])).await?;
         assert!(a.subject(id).await?.is_some());
     }
-    let error = crate::core::eval::compiler::EvalEvidenceSnapshot::from_manifest(&a, snapshot)
+    let error = crate::eval::compiler::EvalEvidenceSnapshot::from_manifest(&a, snapshot)
         .await
         .err()
         .context("compiler accepted oversized closure")?;

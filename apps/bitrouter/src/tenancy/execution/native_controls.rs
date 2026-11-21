@@ -1,11 +1,13 @@
 //! Opaque provider controls under current ordered authority, without ID custody.
 
+use crate::gateway::conversion_report::{
+    ConversionEffect, ConversionLocation, ConversionReason, ConversionReport,
+};
 use crate::gateway::{
     error::BitrouterError,
     model::{conversion::ReportAdmission, protocol::values::extra_value_for_protocol},
 };
 use bitrouter_ai::{
-    conversion::{ConversionEffect, ConversionLocation, ConversionReason, ConversionReport},
     tenancy::operation::ErrorCode,
     types::{ApiProtocol, Prompt},
 };

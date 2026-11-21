@@ -1,7 +1,7 @@
 //! Bounded cold discovery closes the gap between process startup and explicit
 //! loading. Cold metadata does not grant access or become model context.
 
-use bitrouter_ai::harness::runtime::StartupDiscovery;
+use crate::managed_contract::harness::runtime::StartupDiscovery;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -11,7 +11,7 @@ use super::ServiceError;
 use super::ThreadService;
 use super::recovery;
 use crate::harness::storage::ExecutionHead;
-use bitrouter_ai::harness::runtime::ErrorCode;
+use crate::managed_contract::harness::runtime::ErrorCode;
 
 #[derive(Serialize)]
 pub(super) struct ColdExecution {

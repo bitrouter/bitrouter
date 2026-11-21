@@ -64,7 +64,7 @@ async fn profiled_equal_private_targets_use_original_ordinals_and_distinct_profi
         .bind(
             harness.revision.revision_id.clone(),
             "equal-projections".try_into()?,
-            OrderedCandidateSelectionV1 {
+            OrderedCandidateSelection {
                 schema_version: 1,
                 admission_mode: manifest.admission_mode,
                 route: harness.route.clone(),
@@ -86,7 +86,7 @@ async fn profiled_equal_private_targets_use_original_ordinals_and_distinct_profi
             .await?
             .attempts
             .iter()
-            .map(|attempt| attempt.candidate_index)
+            .filter_map(|attempt| attempt.candidate_index)
             .collect::<Vec<_>>()
             == [2, 0]
     );
@@ -148,7 +148,7 @@ async fn rotate(
 }
 
 fn count(
-    observation: &bitrouter_ai::tenancy::ordered::CandidateManifestV1,
+    observation: &bitrouter_ai::tenancy::ordered::CandidateManifest,
     index: usize,
 ) -> Result<u64> {
     Ok(observation
@@ -238,12 +238,12 @@ async fn capacity_profile_case(envelope: bool, shared_health: bool) -> Result<()
                     .iter_mut()
                     .filter(|row| row["reference"]["resource_kind"] == "policy")
                 {
-                    let local: AdmissionProfileV1 =
+                    let local: AdmissionProfile =
                         serde_json::from_value(row["definition"]["profile"].clone())?;
                     let mut profile =
                         super::shared::grouped(local.rate.context("rate")?.member_rpm)?;
                     profile.health.as_mut().context("health")?.failure_threshold = 1000;
-                    row["definition"] = json!({"kind":"admission_profile_v2","profile":profile});
+                    row["definition"] = json!({"kind":"admission_profile","profile":profile});
                 }
             }
             Ok(())
@@ -291,9 +291,9 @@ async fn capacity_profile_case(envelope: bool, shared_health: bool) -> Result<()
         .binding(order.clone(), GenerationProtocol::ChatCompletions)
         .await?;
     revoke(&harness, reference(1)?).await?;
-    let values: bitrouter_ai::tenancy::generation_defaults::GenerationDefaultsEnvelopeV1 =
+    let values: bitrouter_ai::tenancy::generation_defaults::GenerationDefaultsEnvelope =
         serde_json::from_value(
-            json!({"schema_version":1,"supplemental":{"vendor_knob":"bounded"}}),
+            json!({"schema_version":2,"configuration_defaults":"apply","supplemental":{"vendor_knob":"bounded"}}),
         )?;
     let id = if envelope {
         let binding = binding.with_generation_defaults_envelope(&values)?;
@@ -320,7 +320,7 @@ async fn capacity_profile_case(envelope: bool, shared_health: bool) -> Result<()
     let receipt = harness.receipt(&id).await?;
     ensure!(receipt.outcome == Outcome::Completed);
     if envelope {
-        ensure!(receipt.accepted_selection.generation_defaults_digest == Some(values.digest()?));
+        ensure!(receipt_selection(&receipt)?.generation_defaults_digest == Some(values.digest()?));
         let bodies = harness
             .controls
             .bodies
@@ -328,12 +328,12 @@ async fn capacity_profile_case(envelope: bool, shared_health: bool) -> Result<()
             .map_err(|_| anyhow::anyhow!("provider bodies"))?;
         ensure!(bodies.len() == 64 && bodies.iter().all(|body| body["vendor_knob"] == "bounded"));
     }
-    ensure!(receipt.accepted_selection.candidate_indices == order);
+    ensure!(receipt_selection(&receipt)?.candidate_indices == order);
     ensure!(
         receipt
             .attempts
             .iter()
-            .map(|attempt| attempt.candidate_index)
+            .filter_map(|attempt| attempt.candidate_index)
             .collect::<Vec<_>>()
             == order
     );
@@ -374,7 +374,7 @@ async fn profiled_success_prefix_never_charges_an_unreached_distinct_group() -> 
             .await?
             .attempts
             .iter()
-            .map(|attempt| attempt.candidate_index)
+            .filter_map(|attempt| attempt.candidate_index)
             .collect::<Vec<_>>()
             == [1, 0]
     );
@@ -430,16 +430,16 @@ async fn revocation_after_charge(shared_health: bool) -> Result<()> {
         if matches!(change, "pinned" | "current") {
             let result = harness
                 .control(true, HttpVersion::Http1Only)?
-                .put_resource_v2(
+                .put_resource(
                     &harness.fixture.tenant,
-                    &bitrouter_ai::tenancy::resources_v2::ResourcePutV2 {
-                        format: 2,
+                    &bitrouter_ai::tenancy::resources::ResourcePut {
+                        format: 1,
                         operation_id: "rotate-before-revocation".try_into()?,
                         installation_id: harness.fixture.installation.clone(),
                         key: current.key(),
                         expected_revision: Some(current.revision_id.clone()),
                         definition:
-                            bitrouter_ai::tenancy::resources_v2::DefinitionV2::AdmissionProfileV2 {
+                            bitrouter_ai::tenancy::resources::Definition::AdmissionProfile {
                                 profile: super::shared::grouped(501)?,
                             },
                     },
@@ -490,17 +490,17 @@ async fn revocation_after_charge(shared_health: bool) -> Result<()> {
         // operator read grants no submission authority or fallback send.
         let audit = harness.control(true, HttpVersion::Http1Only)?;
         let receipt = audit
-            .execution_v2(&harness.fixture.installation, &harness.fixture.tenant, &id)
+            .execution(&harness.fixture.installation, &harness.fixture.tenant, &id)
             .await?;
         receipt.validate()?;
         audit
-            .usage_evidence_v2(&receipt)
+            .usage_evidence(&receipt)
             .await?
             .validate_against(&receipt)?;
         if change == "grant" {
             let error = harness
                 .control(false, HttpVersion::Http1Only)?
-                .execution_v2(&harness.fixture.installation, &harness.fixture.tenant, &id)
+                .execution(&harness.fixture.installation, &harness.fixture.tenant, &id)
                 .await
                 .err()
                 .context("narrowed tenant read unexpectedly succeeded")?;

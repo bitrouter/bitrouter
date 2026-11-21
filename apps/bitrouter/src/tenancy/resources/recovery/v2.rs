@@ -65,6 +65,49 @@ impl Resources {
                 after = Some(reference);
             }
         }
+        self.inspect_all_configurations_in(db, bytes, check).await?;
+        Ok(())
+    }
+
+    /// Integrity-only authentication of every retained compiler envelope. Capability
+    /// qualification belongs to activation or the explicit current BRO owner.
+    pub(in crate::tenancy) async fn inspect_all_configurations_in(
+        &self,
+        db: &impl ConnectionTrait,
+        bytes: usize,
+        check: &(dyn Fn() -> Result<()> + Sync),
+    ) -> Result<()> {
+        let mut after = None;
+        loop {
+            check()?;
+            let page = configuration_store::retained_configuration_page(db, after.as_ref()).await?;
+            if page.is_empty() {
+                break;
+            }
+            for (tenant, revision) in page {
+                check()?;
+                memory::preflight(
+                    db,
+                    "tenancy_configurations",
+                    &[
+                        ("tenant_id", tenant.as_str()),
+                        ("revision_id", revision.as_str()),
+                    ],
+                    &["document_json", "compiled_json", "dependencies_json"],
+                    bytes / 4,
+                )
+                .await?;
+                let stored = configuration_store::configuration(db, &tenant, &revision)
+                    .await?
+                    .context("retained configuration disappeared during authentication")?;
+                let checked = || check().map_err(|_| ErrorCode::AuthorityUnavailable);
+                let budget = crate::storage::operation_budget::OperationBudget::with_limits(
+                    &checked, 65536, bytes,
+                );
+                validation::compiled_with_operation(self, &stored, Some(&budget))?;
+                after = Some((tenant, revision));
+            }
+        }
         Ok(())
     }
 
@@ -240,7 +283,7 @@ impl Resources {
                 &self.installation,
                 &stored.revision.tenant_id,
                 &stored.revision.revision_id,
-                COMPILER_VERSION,
+                stored.revision.compiler_version.as_str(),
                 &stored.revision.document,
                 &stored.dependencies,
             );

@@ -7,7 +7,7 @@ use super::SessionSnapshot;
 use crate::gateway::model::decision::policy::{DecisionPolicy, DecisionPricing};
 use crate::gateway::model::decision::types::{DecisionError, DecisionRequest, DecisionResponse};
 use crate::gateway::pipeline::native::NativePlan;
-use bitrouter_ai::core::protocol::{CoreError, ErrorCode};
+use crate::managed_contract::protocol::{CoreError, ErrorCode};
 #[cfg(any(feature = "core", feature = "harness"))]
 use bitrouter_ai::types::Content;
 use serde::{Deserialize, Serialize};
@@ -49,7 +49,7 @@ pub struct WorkUnit {
     pub shared_evidence: Vec<String>,
     pub recalled: Vec<String>,
     pub last_view_id: Option<String>,
-    pub status: bitrouter_ai::harness::inspection::AgentStatus,
+    pub status: crate::managed_contract::harness::inspection::AgentStatus,
     pub result_evidence: Vec<String>,
     /// Frozen native skill decisions survive worker and root Turn reuse.
     #[serde(default, skip_serializing_if = "Option::is_none")]

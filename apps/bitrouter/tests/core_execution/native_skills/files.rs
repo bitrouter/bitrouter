@@ -1,6 +1,6 @@
 use super::*;
+use bitrouter::managed_contract::evidence::{InputTokenCounting, NativeInputCount};
 use bitrouter::storage::skills::files::TOOL;
-use bitrouter_ai::core::evidence::{InputTokenCounting, NativeInputCount};
 use bitrouter_ai::types::Role;
 
 struct FileCounter {
@@ -766,7 +766,7 @@ async fn a_supporting_read_settles_while_the_same_tool_batch_waits_for_a_child()
     let advanced = advanced??;
     assert_eq!(
         advanced.root_turn().map(|turn| turn.status),
-        Some(bitrouter_ai::harness::inspection::AgentStatus::WaitingMessage)
+        Some(bitrouter::managed_contract::harness::inspection::AgentStatus::WaitingMessage)
     );
     assert_eq!(host.file_reads.load(Ordering::SeqCst), 1);
     assert_eq!(

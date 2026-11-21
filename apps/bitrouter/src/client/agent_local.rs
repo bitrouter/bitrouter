@@ -3,15 +3,20 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
-use bitrouter_ai::harness::agent::AgentConfig;
-use bitrouter_ai::harness::runtime::{ErrorCode, RuntimeCapabilities};
+use crate::managed_contract::harness::agent::AgentConfig;
+use crate::managed_contract::harness::runtime::ErrorCode;
+use crate::managed_contract::harness::runtime::RuntimeCapabilities;
 #[cfg(all(test, unix))]
-use bitrouter_ai::harness::thread::PermissionProfile;
-use bitrouter_ai::harness::thread::{
-    ThreadHistoryPage, ThreadObservation, ThreadSnapshot, ThreadView,
-};
-use bitrouter_ai::harness::turn::{SteeringReceipt, TurnReceipt, TurnSnapshot, TurnStatus};
+use crate::managed_contract::harness::thread::PermissionProfile;
+use crate::managed_contract::harness::thread::ThreadHistoryPage;
+use crate::managed_contract::harness::thread::ThreadObservation;
+use crate::managed_contract::harness::thread::ThreadSnapshot;
+use crate::managed_contract::harness::thread::ThreadView;
+use crate::managed_contract::harness::turn::SteeringReceipt;
+use crate::managed_contract::harness::turn::TurnReceipt;
+use crate::managed_contract::harness::turn::TurnSnapshot;
+use crate::managed_contract::harness::turn::TurnStatus;
+use anyhow::{Context, Result};
 use bitrouter_ai::types::ReasoningEffort;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
@@ -32,14 +37,20 @@ pub async fn connect_or_start(
 ) -> Result<PathBuf> {
     if crate::daemon::probe_status(control_socket).await?.is_none() {
         let log = source.home().join("bitrouter.log");
-        match crate::daemon::start_and_wait(
-            source,
-            &log,
-            Some(control_socket),
-            std::time::Duration::from_secs(15),
-        )
-        .await?
-        {
+        let outcome = {
+            #[cfg(all(feature = "core", feature = "harness"))]
+            let start = crate::daemon::start_harness_and_wait;
+            #[cfg(not(all(feature = "core", feature = "harness")))]
+            let start = crate::daemon::start_and_wait;
+            start(
+                source,
+                &log,
+                Some(control_socket),
+                std::time::Duration::from_secs(15),
+            )
+            .await?
+        };
+        match outcome {
             crate::daemon::DaemonStartOutcome::Ready(_) => {}
             crate::daemon::DaemonStartOutcome::Exited { status, log_tail } => {
                 anyhow::bail!("BRO server exited ({status}): {log_tail}")
@@ -102,12 +113,12 @@ pub enum Operation {
         workspace: PathBuf,
         model: String,
         #[serde(default)]
-        model_mode: bitrouter_ai::core::protocol::ModelMode,
+        model_mode: crate::managed_contract::harness::agent::ModelMode,
         effort: Option<ReasoningEffort>,
         #[serde(default)]
         max_output_tokens: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        skills: Option<bitrouter_ai::core::skills::SkillConstraints>,
+        skills: Option<crate::managed_contract::harness::skills::SkillConstraints>,
         #[serde(default)]
         read_only: bool,
         verification_command: Option<String>,
@@ -130,7 +141,7 @@ pub enum Operation {
     },
     RecoverThread {
         thread_id: String,
-        request: bitrouter_ai::harness::thread::ThreadRecoveryRequest,
+        request: crate::managed_contract::harness::thread::ThreadRecoveryRequest,
     },
     ReadTurn {
         thread_id: String,
@@ -295,7 +306,8 @@ impl ThreadClient {
             effort: config.effort,
             max_output_tokens: config.max_output_tokens,
             skills: config.skills.clone(),
-            read_only: config.tool_mode == bitrouter_ai::harness::agent::ToolMode::ReadOnly,
+            read_only: config.tool_mode
+                == crate::managed_contract::harness::agent::ToolMode::ReadOnly,
             verification_command: verification_command.clone(),
             idempotency_key: create_key.clone(),
         };
@@ -539,7 +551,7 @@ mod tests {
             max_context_bytes: 512 * 1024,
             max_spend_microusd: None,
             estimate_rates: None,
-            tool_mode: bitrouter_ai::harness::agent::ToolMode::ReadOnly,
+            tool_mode: crate::managed_contract::harness::agent::ToolMode::ReadOnly,
         }
     }
     use super::*;
@@ -685,7 +697,7 @@ mod tests {
                                 snapshot: Box::new(ThreadSnapshot {
                                     server_instance_id: "fixture-epoch".into(),
                                     thread_id: "original-thread".into(),
-                                    status: bitrouter_ai::harness::thread::ThreadStatus::Idle,
+                                    status: crate::managed_contract::harness::thread::ThreadStatus::Idle,
                                     workspace: PathBuf::from("/fixture"),
                                     model: "fixture-model".into(),
                                     permission_profile: PermissionProfile::ReadOnly,
@@ -722,7 +734,7 @@ mod tests {
                                     thread_id,
                                     turn_id: "original-turn".into(),
                                     queue_order: 1,
-                                    status: bitrouter_ai::harness::turn::TurnStatus::Accepted,
+                                    status: crate::managed_contract::harness::turn::TurnStatus::Accepted,
                                 },
                             },
                         )
@@ -761,11 +773,13 @@ mod tests {
             skill_constraints: false,
         };
         let mut config = fixture_config();
-        config.skills = Some(bitrouter_ai::core::skills::SkillConstraints {
-            include: vec![bitrouter_ai::core::skills::SkillSelector::Mcp {
-                server: "source".into(),
-                uri: "skill://review/SKILL.md".into(),
-            }],
+        config.skills = Some(crate::managed_contract::harness::skills::SkillConstraints {
+            include: vec![
+                crate::managed_contract::harness::skills::SkillSelector::Mcp {
+                    server: "source".into(),
+                    uri: "skill://review/SKILL.md".into(),
+                },
+            ],
             exclude: Vec::new(),
         });
         let error = client

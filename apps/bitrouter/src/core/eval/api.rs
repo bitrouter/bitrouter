@@ -47,6 +47,14 @@ async fn put_subject(
     Json(subject): Json<EvalSubject>,
 ) -> Result<Json<PutSubjectReport>, ApiError> {
     let principal = authenticate(&state, &headers).await?;
+    if !matches!(
+        subject.identity,
+        bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {}
+    ) {
+        return Err(ApiError::bad_request(
+            "gateway eval requires gateway_generic identity",
+        ));
+    }
     let outcome = state
         .service
         .store()
@@ -255,13 +263,13 @@ mod tests {
 
     use super::router;
     use crate::auth::{db as auth_db, keys};
-    use crate::core::eval::EvalService;
-    use crate::core::eval::store::EvalStore;
+    use crate::eval::EvalService;
+    use crate::eval::store::EvalStore;
     use {
-        crate::storage::evaluation::evidence_digest, bitrouter_ai::eval::EVAL_SCHEMA_VERSION,
-        bitrouter_ai::eval::EvalScope, bitrouter_ai::eval::EvalSubject,
-        bitrouter_ai::eval::EvalVerdict, bitrouter_ai::eval::EvaluationResult,
-        bitrouter_ai::eval::EvaluatorIdentity, bitrouter_ai::eval::EvaluatorKind,
+        crate::storage::evaluation::evidence_digest, bitrouter_ai::eval::EvalScope,
+        bitrouter_ai::eval::EvalSubject, bitrouter_ai::eval::EvalVerdict,
+        bitrouter_ai::eval::EvaluationResult, bitrouter_ai::eval::EvaluatorIdentity,
+        bitrouter_ai::eval::EvaluatorKind,
     };
 
     #[tokio::test]
@@ -286,7 +294,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn authenticated_exchange_is_tenant_scoped() -> anyhow::Result<()> {
+    async fn authenticated_gateway_exchange_is_owner_scoped() -> anyhow::Result<()> {
         let db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&db).await?;
         let user_a_key = insert_active_key(&db, "user-a").await?;
@@ -328,7 +336,7 @@ mod tests {
             .post("/v1/evals/results")
             .authorization_bearer(&user_b_key)
             .json(&EvaluationResult {
-                schema_version: EVAL_SCHEMA_VERSION,
+                spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
                 eval_id: "eval-user-a".into(),
                 evidence_digest: subject_a.evidence_digest.clone(),
                 evaluator: EvaluatorIdentity {
@@ -336,7 +344,9 @@ mod tests {
                     evaluator_id: "cross-tenant-probe".into(),
                     kind: EvaluatorKind::Generic,
                     version: "1".into(),
-                    config_digest: subject_a.policy_digest.clone(),
+                    config_digest: crate::storage::evaluation::canonical_digest(
+                        &subject_a.identity,
+                    )?,
                 },
                 verdict: EvalVerdict::Pass,
                 metrics: BTreeMap::new(),
@@ -392,13 +402,11 @@ mod tests {
     fn subject() -> anyhow::Result<EvalSubject> {
         let evidence = Vec::new();
         Ok(EvalSubject {
-            schema_version: 1,
+            spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
+            identity: bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {},
             eval_id: "eval-http".into(),
             scope: EvalScope::Task,
             subject_id: "task-http".into(),
-            policy_digest:
-                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
-            preset: Some("auto".into()),
             cohort: None,
             holdout: false,
             decisions: Vec::new(),

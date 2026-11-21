@@ -1,3 +1,4 @@
+use crate::managed_contract::evidence::NativeAttemptReport;
 use crate::{
     gateway::{
         error::{BitrouterError, Result},
@@ -11,7 +12,7 @@ use crate::{
     tenancy::learning::source::Binding,
 };
 use async_trait::async_trait;
-use bitrouter_ai::{core::evidence::NativeAttemptReport, tenancy::identity::ExecutionId};
+use bitrouter_ai::tenancy::identity::ExecutionId;
 
 pub(super) struct Control {
     binding: Binding,

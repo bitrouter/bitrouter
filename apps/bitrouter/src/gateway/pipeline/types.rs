@@ -3,11 +3,12 @@
 //! Model content, prompts, results and events are owned by `bitrouter_ai::types`.
 
 use crate::gateway::caller::CallerContext;
+use crate::gateway::model::capabilities::ReasoningEffortConfig;
 use crate::gateway::model::target::{AuthScheme, ModelTarget};
 use bitrouter_ai::decisions::{DecisionRequest, DecisionResult};
 use bitrouter_ai::types::{
     ApiProtocol, ChatCompletionsCompatibility, ChatTokenLimitField, GenerateResult,
-    ModelCompatibility, ModelOperation, Prompt, ReasoningEffortConfig, ServerToolCall, Usage,
+    ModelCompatibility, ModelOperation, Prompt, ServerToolCall, Usage,
 };
 
 pub mod generate_content;
@@ -296,8 +297,8 @@ fn is_reserved_provider_header(name: &http::HeaderName) -> bool {
             | "traceparent"
             | "tracestate"
             | "x-bitrouter-request-id"
-            | bitrouter_ai::tenancy::private_adapter::ATTEMPT_HEADER
-            | bitrouter_ai::tenancy::private_adapter::OUTCOME_HEADER
+            | crate::managed_contract::private_adapter::ATTEMPT_HEADER
+            | crate::managed_contract::private_adapter::OUTCOME_HEADER
     )
 }
 
@@ -334,7 +335,7 @@ pub struct RoutingTarget {
     /// `None` means unknown, not unsupported.
     pub reasoning_effort: Option<ReasoningEffortConfig>,
     /// Authoritative limits for managed model execution.
-    pub model_constraints: bitrouter_ai::core::evidence::NativeRouteConstraints,
+    pub model_constraints: crate::managed_contract::evidence::NativeRouteConstraints,
     /// Which account of a multi-account provider this target came from
     /// — `None` for a single-credential provider. Surfaced in the
     /// request log so an operator can see which subscription served a

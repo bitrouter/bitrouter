@@ -1,4 +1,4 @@
-//! Versioned resource provisioning contracts. Validation does not grant authority.
+//! Current resource provisioning contracts. Validation does not grant authority.
 //!
 //! Provider secrets are write-only. Route and policy documents are compiled by
 //! the service; this crate neither resolves their configuration nor executes it.
@@ -12,10 +12,11 @@ mod decoding;
 pub(super) mod schema;
 
 use super::{
-    admission::{AdmissionAttachmentV1, AdmissionProfileV1},
+    admission::{AdmissionAttachment, AdmissionProfile},
     authority::{OwnerKind, ResourceKey, ResourceKind},
     configuration::ResourceRef,
     identity::{AuthorityRevision, InstallationId, OperationId, RevisionId},
+    ordered::GenerationProtocol,
     validation::{Validate, ValidationError, bytes, nullable, require, text, unique},
 };
 
@@ -39,10 +40,10 @@ pub struct CredentialBinding {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Definition {
-    /// Installation-managed operational profile, independent of PolicyLock.
+    /// Installation-managed operational profile, independent of routing Policy.
     AdmissionProfile {
         /// Closed, bounded operational rules.
-        profile: AdmissionProfileV1,
+        profile: AdmissionProfile,
     },
     /// Static ordered route with an explicit profile for every protocol-root entry.
     ProfiledRoute {
@@ -55,19 +56,16 @@ pub enum Definition {
         /// Selector resolved exclusively inside this document.
         #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 512)))]
         selector: String,
-        /// Required-nullable policy reference; only qualified static roots execute.
+        /// Required null; profiled routes use a static ordered root.
         #[serde(deserialize_with = "nullable")]
-        #[cfg_attr(
-            feature = "schema",
-            schemars(with = "schema::RequiredNullable<ResourceRef>")
-        )]
+        #[cfg_attr(feature = "schema", schemars(required, with = "()"))]
         policy: Option<ResourceRef>,
         /// Separately owned immutable credential slots.
         #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 256)))]
         credentials: Vec<CredentialBinding>,
-        /// Total unique map over the three actual compiled protocol roots.
-        #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 768)))]
-        attachments: Vec<AdmissionAttachmentV1>,
+        /// Total unique map over the actual compiled protocol roots.
+        #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 1024)))]
+        attachments: Vec<AdmissionAttachment>,
     },
     /// Static upstream credential; ingress credentials use the separate issuance API.
     Credential {
@@ -100,11 +98,7 @@ pub enum Definition {
     /// Policy-as-code, interpreted and validated exclusively by the service.
     Policy {
         /// Explicit policy document; filesystem paths are not authority.
-        #[cfg_attr(
-            feature = "schema",
-            schemars(with = "std::collections::BTreeMap<String, Value>")
-        )]
-        document: Value,
+        document: crate::policy::Document,
         /// Selected policy name in this document.
         #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 256)))]
         name: String,
@@ -114,6 +108,65 @@ pub enum Definition {
     },
 }
 redacted_contract_debug!(Definition);
+
+/// Authorized model-policy source at one exact immutable resource revision.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct PolicySource {
+    /// Resource identity, lifecycle and authority stamp for this read.
+    pub status: ResourceStatus,
+    /// Portable model-only policy source; contains no provider credentials.
+    pub document: crate::policy::Document,
+    /// Selected named policy within the document.
+    pub name: String,
+}
+
+/// Installed model-policy support, separate from resource-envelope versions.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct PolicyCapabilities {
+    /// Persistent installation being addressed.
+    pub installation_id: InstallationId,
+    /// Exact supported model-policy contract.
+    pub spec_version: crate::policy::SpecVersion,
+    /// Serving classification rubric/configuration digest for explicit routes.
+    pub classifier_digest: String,
+    /// Immutable provisioning is available with the installation wrapping key.
+    pub provisioning_enabled: bool,
+}
+
+impl Validate for PolicyCapabilities {
+    fn validate(&self) -> Result<(), ValidationError> {
+        require(
+            self.classifier_digest
+                .strip_prefix("sha256:")
+                .is_some_and(|value| {
+                    value.len() == 64
+                        && value
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                }),
+            "policy classifier digest",
+        )
+    }
+}
+
+impl Validate for PolicySource {
+    fn validate(&self) -> Result<(), ValidationError> {
+        self.status.validate()?;
+        require(
+            self.status.reference.resource_kind == ResourceKind::Policy,
+            "policy source kind",
+        )?;
+        require(
+            self.document.policies.contains_key(&self.name),
+            "policy source name",
+        )?;
+        bytes(self, 2 * 1024 * 1024)
+    }
+}
 
 impl Definition {
     /// Resource class required for the addressed key.
@@ -198,7 +251,7 @@ pub struct ResourceStatus {
     pub revoked: bool,
 }
 
-/// Independently versioned descriptor; does not alter strict v1 discovery.
+/// Current provisioning capabilities; discovery does not grant resource authority.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -216,15 +269,30 @@ pub struct ResourceCapabilities {
     #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 1048576)))]
     pub max_command_bytes: u32,
     /// Endpoint selection by tenant credentials requires host-approved origins.
+    #[cfg_attr(feature = "schema", schemars(extend("const" = true)))]
     pub tenant_routes_require_approved_origins: bool,
+    /// Supported ingress protocols in canonical order.
+    #[cfg_attr(feature = "schema", schemars(extend("const" = serde_json::json!(["chat_completions","messages","responses","generate_content"]))))]
+    pub generation_protocols: [GenerationProtocol; 4],
 }
 
 impl Validate for Definition {
     fn validate(&self) -> Result<(), ValidationError> {
+        if let Self::Route { routing, .. } | Self::ProfiledRoute { routing, .. } = self {
+            super::validation::json_depth(routing, 3, "routing JSON depth")?;
+        }
         bytes(self, 1024 * 1024)?;
-        if let Self::ProfiledRoute { attachments, .. } = self {
+        if let Self::ProfiledRoute {
+            selector,
+            policy,
+            attachments,
+            ..
+        } = self
+        {
+            require(selector.len() <= 512, "selector byte bound")?;
+            require(policy.is_none(), "profiled static route policy")?;
             require(
-                !attachments.is_empty() && attachments.len() <= 768,
+                !attachments.is_empty() && attachments.len() <= 1024,
                 "admission attachment count",
             )?;
             let mut ordinals = std::collections::HashSet::new();
@@ -287,16 +355,13 @@ impl Validate for Definition {
                 name,
                 dependencies,
             } => {
-                require(document.is_object(), "policy document")?;
                 text(name, 256)?;
+                require(document.policies.contains_key(name), "policy name")?;
                 unique(dependencies, 0, 256)?;
                 require(
-                    dependencies.iter().all(|r| {
-                        matches!(
-                            r.resource_kind,
-                            ResourceKind::Credential | ResourceKind::Checkpoint
-                        )
-                    }),
+                    dependencies
+                        .iter()
+                        .all(|r| matches!(r.resource_kind, ResourceKind::Credential)),
                     "policy dependency kind",
                 )
             }
@@ -335,7 +400,14 @@ impl Validate for ResourceCapabilities {
             self.format == 1
                 && self.max_command_bytes > 0
                 && self.max_command_bytes <= 1024 * 1024
-                && self.tenant_routes_require_approved_origins,
+                && self.tenant_routes_require_approved_origins
+                && self.generation_protocols
+                    == [
+                        GenerationProtocol::ChatCompletions,
+                        GenerationProtocol::Messages,
+                        GenerationProtocol::Responses,
+                        GenerationProtocol::GenerateContent,
+                    ],
             "resource capabilities",
         )
     }

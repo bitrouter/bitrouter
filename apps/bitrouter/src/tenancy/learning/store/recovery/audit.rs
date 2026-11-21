@@ -88,7 +88,6 @@ pub(super) async fn inspect(
     prior: Option<&BTreeMap<(TenantId, RevisionId), Arc<closure::Configuration>>>,
 ) -> Result<Plan> {
     let Access {
-        database,
         state,
         origin,
         proof,
@@ -126,14 +125,8 @@ pub(super) async fn inspect(
                 && row.body.len() <= RECORD_BYTES,
             "paid row namespace or metadata invalid"
         );
-        let identity = RecoveryIdentity::checked(
-            database,
-            origin,
-            proof,
-            &state.installation,
-            &tenant,
-            principal,
-        )?;
+        let identity =
+            RecoveryIdentity::checked(origin, proof, &state.installation, &tenant, principal)?;
         let (scope, provenance) = Scope::for_paid_recovery(&identity);
         scope.validate_metadata(MetadataRef {
             installation: row.installation_id.as_deref(),
@@ -197,7 +190,7 @@ pub(super) async fn inspect(
     let mut members = BTreeMap::new();
     let mut sets = BTreeMap::new();
     let mut writes = Vec::new();
-    for (row, value, scope, provenance, identity) in &jobs {
+    for (row, value, scope, provenance, _identity) in &jobs {
         let tenant: TenantId = row
             .tenant_id
             .clone()
@@ -233,7 +226,6 @@ pub(super) async fn inspect(
             value,
             (scope.clone(), provenance.clone()),
             profile,
-            identity,
             budget,
         )
         .await?;
@@ -282,9 +274,6 @@ pub(super) async fn inspect(
                     && seed.connection.as_deref() == Some(a.connection()),
                 "paid seed differs from historical capture"
             ),
-            namespace::Stored::Native(_) => {
-                ensure!(seed.native.is_some(), "native paid seed absent")
-            }
         }
         origin.bootstrap_excludes(proof, &seed.origin)?;
         let stopped = retained
@@ -305,7 +294,6 @@ pub(super) async fn inspect(
                 );
                 crate::storage::evolution::digest(&connection.metadata_json)?
             }
-            namespace::Stored::Native(_) => native::cleanup(tx, identity, retained, budget).await?,
         };
         ensure!(
             cleanup_digest == stopped.local_cleanup_digest,
@@ -323,12 +311,9 @@ pub(super) async fn inspect(
                 );
             }
         }
-        let refs = if seed.native.is_some() {
-            profile
-                .execution
-                .native_paid_recovery_credentials(&closed.subject, &seed.evaluator)
-        } else {
-            profile.execution.paid_recovery_credentials(
+        let refs = profile
+            .execution
+            .paid_recovery_credentials(
                 &seed
                     .descriptor
                     .as_ref()
@@ -336,8 +321,7 @@ pub(super) async fn inspect(
                     .model,
                 &seed.evaluator,
             )
-        }
-        .map_err(|_| anyhow::anyhow!("paid retained execution is outside recovery profile"))?;
+            .map_err(|_| anyhow::anyhow!("paid retained execution is outside recovery profile"))?;
         for reference in refs {
             resources
                 .paid_recovery_static(tx, &reference, budget)

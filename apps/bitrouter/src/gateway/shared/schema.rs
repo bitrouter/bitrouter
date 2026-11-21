@@ -1,9 +1,71 @@
 //! Shared-only schema with an independent migration ledger.
 
+mod current_validation;
+
+use std::collections::BTreeSet;
+
 use sea_orm::{ConnectionTrait, DatabaseBackend, IsolationLevel, Statement};
 use sea_orm_migration::prelude::*;
 
 pub(super) struct SharedMigrator;
+const BASELINE: &str = "m20261118_000002_model_policy_shared";
+
+type TableNames = BTreeSet<&'static str>;
+type IdentityColumns = BTreeSet<(&'static str, &'static str)>;
+
+/// Validate the independent shared ledger without installing or changing it.
+pub(super) async fn current(db: &impl ConnectionTrait) -> anyhow::Result<bool> {
+    use anyhow::ensure;
+    ensure!(
+        db.get_database_backend() == DatabaseBackend::Postgres,
+        "shared schema requires PostgreSQL"
+    );
+    let tables = db.query_all(Statement::from_sql_and_values(DatabaseBackend::Postgres,
+        "SELECT c.relname AS name FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema() AND starts_with(c.relname,'gateway_shared_') AND c.relkind IN ('r','p','v','m','f') ORDER BY c.relname LIMIT $1",
+        [<i64 as TryFrom<usize>>::try_from(current_validation::TABLE_COUNT + 1)?.into()]
+    )).await?;
+    if tables.is_empty() {
+        return Ok(false);
+    }
+    ensure!(
+        tables.iter().any(|row| row
+            .try_get::<String>("", "name")
+            .is_ok_and(|name| name == "gateway_shared_migrations")),
+        "unmarked shared schema"
+    );
+    ensure!(
+        tables.len() == current_validation::TABLE_COUNT,
+        "partial or foreign shared schema"
+    );
+    // Prove the complete layout before trusting even the ledger: RLS or a
+    // substituted table must not hide retained rows from the format checks.
+    current_validation::validate(db).await?;
+    let rows = db
+        .query_all(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "SELECT CASE WHEN octet_length(version)<=256 THEN version ELSE NULL END AS version,applied_at FROM gateway_shared_migrations LIMIT 2",
+        ))
+        .await?;
+    ensure!(
+        rows.len() == 1 && rows[0].try_get::<String>("", "version")? == BASELINE,
+        "unsupported or partial shared schema ledger"
+    );
+    let _: i64 = rows[0].try_get("", "applied_at")?;
+    Ok(true)
+}
+
+/// Authenticate the shared schema and ledger before excluding its exact tables
+/// and identity columns from an ordinary-store inventory. No ordinary-store
+/// validator is called here, and an absent schema grants no exclusions.
+///
+/// # Errors
+/// Returns an error for absent, incomplete or incompatible shared storage.
+pub(crate) async fn validated_tables(
+    db: &impl ConnectionTrait,
+) -> anyhow::Result<(TableNames, IdentityColumns)> {
+    anyhow::ensure!(current(db).await?, "shared schema is not initialized");
+    Ok(current_validation::layout())
+}
 
 /// Serialize schema changes only; this lock never participates in inference.
 #[cfg(test)]
@@ -34,10 +96,22 @@ async fn initialize_selected(store: &super::store::Store, ordinary: bool) -> any
                 [0x4252_4757_5343_4831_i64.into()],
             ))
             .await?;
+            let shared_current = current(&tx).await?;
+            // Old and unmarked datasets are refused before either framework
+            // can install a migration ledger or perform any schema write.
+            if !shared_current {
+                crate::db::store_format::inspect(&tx).await?;
+            }
             if ordinary {
                 crate::db::migration::Migrator::up(&tx, None).await?;
             }
-            SharedMigrator::up(&tx, None).await?;
+            if !shared_current {
+                SharedMigrator::up(&tx, None).await?;
+                anyhow::ensure!(
+                    current(&tx).await?,
+                    "shared baseline initialization is incomplete"
+                );
+            }
             tx.commit().await?;
             Ok(())
         })
@@ -47,17 +121,33 @@ async fn initialize_selected(store: &super::store::Store, ordinary: bool) -> any
 #[async_trait::async_trait]
 impl MigratorTrait for SharedMigrator {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        vec![
-            Box::new(Initial),
-            Box::new(NativeContinuations),
-            Box::new(SharedMetering),
-            Box::new(SharedTrajectory),
-            Box::new(SharedEvaluation),
-        ]
+        vec![Box::new(CurrentSchema)]
     }
 
     fn migration_table_name() -> DynIden {
         Alias::new("gateway_shared_migrations").into_iden()
+    }
+}
+
+struct CurrentSchema;
+impl MigrationName for CurrentSchema {
+    fn name(&self) -> &str {
+        BASELINE
+    }
+}
+#[async_trait::async_trait]
+impl MigrationTrait for CurrentSchema {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        Initial.up(manager).await?;
+        NativeContinuations.up(manager).await?;
+        SharedMetering.up(manager).await?;
+        SharedTrajectory.up(manager).await?;
+        SharedEvaluation.up(manager).await
+    }
+    async fn down(&self, _: &SchemaManager) -> Result<(), DbErr> {
+        Err(DbErr::Custom(
+            "shared baseline requires verified-backup rollback".into(),
+        ))
     }
 }
 

@@ -2,8 +2,9 @@
 
 mod admission;
 mod attempts;
+#[cfg(test)]
+mod contract_tests;
 mod finalization;
-pub(super) mod guard;
 mod lease;
 pub(super) mod management;
 #[cfg(test)]
@@ -140,14 +141,6 @@ pub(super) struct TrajectoryBinding {
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct EpisodeFence {
-    owner_user_id: String,
-    episode_id: String,
-    pending: BTreeSet<String>,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct Outbox {
     event: GatewayTerminalEvent,
     lease: Option<OutboxLease>,
@@ -211,6 +204,7 @@ pub(super) struct LeaseObservation {
 
 impl Engine {
     pub async fn join(authority: Authority, lease_ms: u64) -> Result<Self> {
+        authority.preflight_current().await?;
         ensure!(
             (1_000..=300_000).contains(&lease_ms),
             "shared lease must be 1..300 seconds"

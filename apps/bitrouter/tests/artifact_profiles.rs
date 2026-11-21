@@ -3,7 +3,7 @@
 //! Set BITROUTER_TEST_FULL_BINARY and BITROUTER_TEST_GATEWAY_BINARY to absolute
 //! paths before explicitly selecting this ignored test. The latter must have
 //! no application features. This test never builds or substitutes an artifact.
-//! The historical-data transition test additionally requires
+//! The current-data transition and historical-dataset refusal tests also require
 //! BITROUTER_TEST_HARNESS_BINARY built with --no-default-features --features harness.
 //! Gateway transitions use a core-enabled test harness for publication fixtures
 //! and the original judge dispatch. Serving and replay HTTP requests use only
@@ -372,21 +372,7 @@ impl Fixture {
             report.daemon_version.as_ref() == Some(&resident.version),
             "{report:?}"
         );
-        ensure!(report.handoff_protocol == Some(2), "{report:?}");
-        ensure!(
-            report.handoff_build_id.as_ref() == Some(&resident.handoff_build_id),
-            "{report:?}"
-        );
         ensure!(report.daemon_cli_owned == Some(true), "{report:?}");
-        let compatibility = if installed == resident {
-            "compatible"
-        } else {
-            "profile_mismatch"
-        };
-        ensure!(
-            report.compatibility.as_deref() == Some(compatibility),
-            "{report:?}"
-        );
         ensure!(
             report.socket.as_deref() == self.socket.to_str(),
             "CLI selected an unexpected socket: {report:?}"
@@ -400,7 +386,7 @@ impl Fixture {
         let DaemonResponse::HandoffHello {
             protocol: 2,
             version,
-            build_id,
+            build_id: _,
             instance_id,
             cli_owned: true,
             artifact: Some(reported),
@@ -409,10 +395,7 @@ impl Fixture {
             bail!("missing protocol-2 artifact/ownership evidence: {reply:?}");
         };
         ensure!(
-            reported == artifact
-                && version == &artifact.version
-                && build_id == &artifact.handoff_build_id
-                && !instance_id.is_empty(),
+            reported == artifact && version == &artifact.version && !instance_id.is_empty(),
             "incorrect handshake identity: {reply:?}"
         );
         Ok(instance_id.clone())
@@ -581,9 +564,7 @@ fn exercise(fixture: &mut Fixture, full_binary: &Path, gateway_binary: &Path) ->
     );
     for artifact in [&full, &gateway] {
         ensure!(
-            !artifact.version.is_empty()
-                && !artifact.target.is_empty()
-                && !artifact.handoff_build_id.is_empty(),
+            !artifact.version.is_empty() && !artifact.target.is_empty(),
             "incomplete identity: {artifact:?}"
         );
         ensure!(
@@ -612,7 +593,7 @@ fn exercise(fixture: &mut Fixture, full_binary: &Path, gateway_binary: &Path) ->
         "artifacts must share version/source/target: {full:?}; {gateway:?}"
     );
     ensure!(
-        full.features != gateway.features && full.handoff_build_id != gateway.handoff_build_id,
+        full.features != gateway.features,
         "distinct capabilities must have distinct build fingerprints: {full:?}; {gateway:?}"
     );
 
@@ -623,10 +604,11 @@ fn exercise(fixture: &mut Fixture, full_binary: &Path, gateway_binary: &Path) ->
     let report = fixture.status(gateway_binary, &gateway, &full, full_pid)?;
     fixture.health(&report)?;
     ensure!(
-        report
-            .handoff_activity
-            .as_ref()
-            .is_some_and(|activity| activity.operations > 0),
+        matches!(
+            fixture.control(&DaemonCommand::Status)?,
+            DaemonResponse::Status { handoff_activity: Some(activity), .. }
+                if activity.operations > 0
+        ),
         "full must retain its native lifetime admission: {report:?}"
     );
 
@@ -671,13 +653,12 @@ fn exercise(fixture: &mut Fixture, full_binary: &Path, gateway_binary: &Path) ->
     let report = fixture.status(full_binary, &full, &gateway, gateway_pid)?;
     fixture.health(&report)?;
     ensure!(
-        report.handoff_activity.as_ref().is_some_and(|activity| {
+        matches!(fixture.control(&DaemonCommand::Status)?, DaemonResponse::Status { handoff_activity: Some(activity), .. } if
             activity.operations == 0
                 && activity.supervised_runs == Some(0)
                 && activity.route_leases == 0
                 && activity.acp_recordings == Some(0)
-                && !activity.drain_in_progress
-        }),
+                && !activity.drain_in_progress),
         "gateway is not provably idle: {report:?}"
     );
 

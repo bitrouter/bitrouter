@@ -5,9 +5,9 @@
 //! separate admission obligations.
 
 use super::*;
+use crate::managed_contract::checkpoint::ToolStartFence;
+use crate::managed_contract::protocol::{OwnershipGrant, RunActivityReconciliation, ToolStatus};
 use crate::storage::checkpoint::serialized_bytes;
-use bitrouter_ai::core::checkpoint::ToolStartFence;
-use bitrouter_ai::core::protocol::{OwnershipGrant, RunActivityReconciliation, ToolStatus};
 
 #[derive(Default)]
 struct Reservation {
@@ -529,7 +529,7 @@ mod tests {
     #[test]
     fn saturated_auxiliary_reports_keep_admitted_capacity() -> Result<(), Box<dyn std::error::Error>>
     {
-        use bitrouter_ai::core::evidence::NativeRouteConstraints;
+        use crate::managed_contract::evidence::NativeRouteConstraints;
         for kind in ["preparation", "count", "validation", "provider"] {
             let mut state = fixture()?;
             let limits = state.run.as_ref().ok_or("run")?.limits.clone();
@@ -652,8 +652,8 @@ mod tests {
     fn saturated_complete_report_and_error_handoffs_keep_frozen_capacity()
     -> Result<(), Box<dyn std::error::Error>> {
         use crate::gateway::pipeline::native::NativePlan;
-        use bitrouter_ai::core::evidence::NativeRouteConstraints;
-        use bitrouter_ai::core::evidence::NativeTokenCost;
+        use crate::managed_contract::evidence::NativeRouteConstraints;
+        use crate::managed_contract::evidence::NativeTokenCost;
         for failed in [false, true] {
             let mut state = fixture()?;
             let mut child = state.agents.get("root").ok_or("root")?.clone();
@@ -935,7 +935,7 @@ mod tests {
         let receipt = json!({"decision_id":"decision","attempt_id":"attempt","cost_source":"unknown","cache_observation_source":"unknown",
             "report":{"request_id":"request","attempt_index":0,"elapsed_ms":0,"result":result,
                 "route":{"provider":"provider","model":"model","protocol":"chat_completions",
-                    "constraints":bitrouter_ai::core::evidence::NativeRouteConstraints::default()}}});
+                    "constraints":crate::managed_contract::evidence::NativeRouteConstraints::default()}}});
         let step: ModelStep = serde_json::from_value(json!({
             "step_id":"step", "decision_id":"decision", "context_revision":0,"signal_revision":0,
             "manifest":state.manifest,"materials":[],"context":context,"input_state_revision":1,"input_history":[],

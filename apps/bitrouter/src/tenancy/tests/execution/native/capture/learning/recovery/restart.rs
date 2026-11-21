@@ -1,6 +1,7 @@
 use super::*;
 
 struct Stopped {
+    key: [u8; 32],
     root: tempfile::TempDir,
     provider: Provider,
     judge: Judge,
@@ -9,6 +10,7 @@ struct Stopped {
 impl Stopped {
     async fn new(mode: &str) -> Result<Self> {
         let root = tempfile::tempdir()?;
+        let key = rand::random();
         let provider = Provider::start(false).await?;
         let mut judge = if mode == "interrupted" {
             Judge::rejected().await?
@@ -25,6 +27,7 @@ impl Stopped {
                 "producer",
                 root.path(),
                 mode,
+                &key,
                 Some((&provider.url, &judge.url)),
             )?;
             let checked = async {
@@ -58,6 +61,7 @@ impl Stopped {
             return Err(error);
         }
         Ok(Self {
+            key,
             root,
             provider,
             judge,
@@ -65,7 +69,7 @@ impl Stopped {
         })
     }
     async fn run(&self, selector: &str, mode: &str) -> Result<()> {
-        let child = Child::start(selector, self.root.path(), mode, None)?;
+        let child = Child::start(selector, self.root.path(), mode, &self.key, None)?;
         child.finish(false, Ok(())).await?;
         ensure!(
             self.provider.calls() == self.calls
@@ -145,7 +149,7 @@ async fn consumer() -> Result<()> {
             }
         }
         let before = exact(&db).await?;
-        let open = Service::open_owned_profile(
+        let open = Service::open_owned_bro_profile(
             database,
             &config(),
             &crate::config::ContinuationConfig::default(),
@@ -338,7 +342,13 @@ async fn corrupt(db: &sea_orm::DatabaseConnection, mode: &str) -> Result<()> {
 pub(super) async fn campaign(mode: &str) -> Result<()> {
     let stopped = Stopped::new("stopped").await?;
     let result = async {
-        let mut child = Child::start("custody::opener", stopped.root.path(), mode, None)?;
+        let mut child = Child::start(
+            "custody::opener",
+            stopped.root.path(),
+            mode,
+            &stopped.key,
+            None,
+        )?;
         let witnessed = async {
             child.line("paid-bootstrap-owner-retained").await?;
             locked(stopped.root.path())?;
@@ -406,7 +416,13 @@ async fn paid_missing_terminal_after_confirmed_local_stop_repairs_unknown_once_w
 pub(super) async fn commit_campaign(mode: &str) -> Result<()> {
     let stopped = Stopped::new("missing-terminal").await?;
     let result = async {
-        let mut child = Child::start("commit::opener", stopped.root.path(), mode, None)?;
+        let mut child = Child::start(
+            "commit::opener",
+            stopped.root.path(),
+            mode,
+            &stopped.key,
+            None,
+        )?;
         let checked = async {
             child.line("paid-repair-commit-pending").await?;
             locked(stopped.root.path())?;

@@ -1,4 +1,4 @@
-//! Preserve exact profile-number tokens while keeping the legacy import codec.
+//! Decode current source and preserve independent route/profile discriminators.
 
 use super::*;
 use serde::de::Error;
@@ -16,7 +16,7 @@ struct Tag {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
-enum LegacyDefinition {
+enum SourceDefinition {
     Route {
         routing: Value,
         selector: String,
@@ -32,13 +32,10 @@ enum LegacyDefinition {
         block: Option<Box<super::super::block::Profile>>,
     },
     Policy {
-        document: PolicyLock,
+        document: Document,
         name: String,
         #[serde(default)]
         dependencies: Vec<ResourceRef>,
-    },
-    Checkpoint {
-        evidence: super::super::checkpoint::Evidence,
     },
     Credential {
         credential: Credential,
@@ -53,34 +50,6 @@ impl<'de> Deserialize<'de> for Definition {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let raw = Box::<RawValue>::deserialize(deserializer)?;
         let tag: Tag = serde_json::from_str(raw.get()).map_err(D::Error::custom)?;
-        if tag.kind == "native_profiled_route_v1" {
-            let bitrouter_ai::tenancy::resources_v3::DefinitionV3::NativeProfiledRouteV1 {
-                routing,
-                selector,
-                policy,
-                credentials,
-                attachments,
-            } = serde_json::from_str(raw.get()).map_err(D::Error::custom)?;
-            return Ok(Self::NativeProfiledRouteV1 {
-                routing,
-                selector,
-                policy,
-                attachments,
-                credentials: credentials
-                    .into_iter()
-                    .map(|binding| CredentialBinding {
-                        provider: binding.provider,
-                        account: binding.account,
-                        credential: binding.credential,
-                    })
-                    .collect(),
-            });
-        }
-        if tag.kind == "admission_profile_v2" {
-            let bitrouter_ai::tenancy::resources_v2::DefinitionV2::AdmissionProfileV2 { profile } =
-                serde_json::from_str(raw.get()).map_err(D::Error::custom)?;
-            return Ok(Self::AdmissionProfileV2 { profile });
-        }
         if matches!(tag.kind.as_str(), "admission_profile" | "profiled_route") {
             let public: bitrouter_ai::tenancy::resources::Definition =
                 serde_json::from_str(raw.get()).map_err(D::Error::custom)?;
@@ -111,7 +80,7 @@ impl<'de> Deserialize<'de> for Definition {
                 _ => Err(D::Error::custom("invalid profiled resource definition")),
             }
         } else {
-            LegacyDefinition::deserialize(&mut serde_json::Deserializer::from_str(raw.get()))
+            SourceDefinition::deserialize(&mut serde_json::Deserializer::from_str(raw.get()))
                 .map_err(D::Error::custom)
         }
     }

@@ -1,28 +1,18 @@
-#[cfg(any(feature = "core", feature = "multi-instance"))]
-pub(crate) mod headroom;
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use {
-    crate::storage::evaluation::canonical_digest, crate::storage::evaluation::evidence_digest,
-    crate::storage::evaluation::validate_result_for_subject, bitrouter_ai::eval::DecisionCredit,
-    bitrouter_ai::eval::EVAL_SCHEMA_VERSION, bitrouter_ai::eval::EvalDecisionRef,
-    bitrouter_ai::eval::EvalExperimentRef, bitrouter_ai::eval::EvalScope,
-    bitrouter_ai::eval::EvalSubject, bitrouter_ai::eval::EvalVerdict,
-    bitrouter_ai::eval::EvaluationResult, bitrouter_ai::eval::EvaluatorIdentity,
-    bitrouter_ai::eval::EvaluatorKind, bitrouter_ai::eval::EvidenceItem,
-    bitrouter_ai::eval::ExperimentArm, bitrouter_ai::eval::ExperimentAssignmentUnit,
-    bitrouter_ai::eval::MetricUnit, bitrouter_ai::eval::MetricValue,
+use crate::storage::evaluation::{canonical_digest, evidence_digest, validate_result_for_subject};
+use bitrouter_ai::eval::{
+    EvalScope, EvalSubject, EvalVerdict, EvaluationResult, EvaluatorIdentity, EvaluatorKind,
+    EvidenceItem, MetricUnit, MetricValue,
 };
 
 use super::health::reduce;
 use super::types::{HistoryCompleteness, TrajectoryEvent, TrajectoryEventKind};
 
 pub(crate) const TRAJECTORY_EVAL_TOPIC: &str = "eval.trajectory-operational.v1";
-const ROUTE_EVAL_SCHEMA: &str = "trajectory.v1";
 pub(crate) const TRAJECTORY_EVALUATOR_ID: &str = "bitrouter.trajectory-operational";
 pub(crate) const TRAJECTORY_EVALUATOR_AUTHORITY_ID: &str = "bitrouter.builtin";
 pub(crate) const TRAJECTORY_EVALUATOR_VERSION: &str = "1";
@@ -59,7 +49,7 @@ pub(crate) fn validate_evaluation_envelope(envelope: &TrajectoryEvaluationEnvelo
     Ok(())
 }
 
-#[cfg(any(feature = "core", feature = "multi-instance"))]
+#[cfg(feature = "core")]
 pub(crate) fn validate_builtin_trajectory_result(result: &EvaluationResult) -> Result<()> {
     use crate::trajectory::evaluation::{
         TRAJECTORY_EVALUATOR_AUTHORITY_ID, TRAJECTORY_EVALUATOR_ID, TRAJECTORY_EVALUATOR_VERSION,
@@ -94,28 +84,8 @@ pub(crate) fn build_operational_evaluation(
         .filter(|event| event.kind == TrajectoryEventKind::RequestSettled)
         .ok_or_else(|| anyhow::anyhow!("trajectory evaluation requires a terminal settlement"))?;
     let snapshot = reduce(events, &BTreeSet::new())?;
-    let mut decoded = Vec::new();
-    for event in events
-        .iter()
-        .filter(|event| event.kind == TrajectoryEventKind::RouteIntentRecorded)
-    {
-        match decode_eval_decision(event)? {
-            Some(decision) => decoded.push((event, decision)),
-            None if event.evidence.digests.contains_key("route.policy_lock") => {
-                anyhow::bail!(
-                    "guarded route '{}' predates replayable evaluation identity",
-                    event.event_id
-                )
-            }
-            None => {}
-        }
-    }
-    let (current_route, current_decision) = decoded
-        .iter()
-        .rev()
-        .find(|(event, _)| event.request_id == settlement.request_id)
-        .ok_or_else(|| anyhow::anyhow!("settlement has no matching replayable route intent"))?;
-
+    // Episode observations retain operational facts and routing receipts. Policy
+    // decisions belong to the independent typed request/shared Eval producers.
     let metrics = operational_metrics(&snapshot.health, settlement)?;
     let requested_dimensions = metrics.keys().cloned().collect::<BTreeSet<_>>();
     let event_digests = events
@@ -176,35 +146,26 @@ pub(crate) fn build_operational_evaluation(
         .iter()
         .map(|item| item.evidence_id.clone())
         .collect();
-    let decisions = decoded
-        .iter()
-        .map(|(_, decision)| decision.clone())
-        .collect::<Vec<_>>();
     let eval_id = format!(
         "trajectory:{}:{}",
         snapshot.episode_id, snapshot.through_sequence
     );
     let subject = EvalSubject {
-        schema_version: EVAL_SCHEMA_VERSION,
+        spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
+        identity: bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {},
         eval_id: eval_id.clone(),
         scope: EvalScope::Episode,
         subject_id: snapshot.episode_id.clone(),
-        policy_digest: current_decision.policy_digest.clone(),
-        preset: current_route
-            .evidence
-            .categorical
-            .get("route.preset")
-            .cloned(),
         cohort: None,
         holdout: false,
-        decisions,
+        decisions: Vec::new(),
         requested_dimensions,
         evidence,
         evidence_digest: evidence_digest.clone(),
         observed_at: settlement.captured_at.clone(),
     };
     let result = EvaluationResult {
-        schema_version: EVAL_SCHEMA_VERSION,
+        spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
         eval_id,
         evidence_digest,
         evaluator: EvaluatorIdentity {
@@ -215,7 +176,7 @@ pub(crate) fn build_operational_evaluation(
             config_digest: trajectory_evaluator_config_digest()?,
         },
         verdict: EvalVerdict::Inconclusive,
-        decision_credit: decision_credit(&decoded, settlement, &metrics),
+        decision_credit: BTreeMap::new(),
         metrics,
         hard_violations: Vec::new(),
         confidence_ppm: None,
@@ -306,135 +267,6 @@ fn prediction_observation_evidence(settlement: &TrajectoryEvent) -> Result<Optio
         redacted: true,
         attributes,
     }))
-}
-
-pub(crate) fn decode_eval_decision(event: &TrajectoryEvent) -> Result<Option<EvalDecisionRef>> {
-    let Some(schema) = event.evidence.categorical.get("route.eval_schema") else {
-        return Ok(None);
-    };
-    if schema != ROUTE_EVAL_SCHEMA {
-        anyhow::bail!("route intent has unsupported route.eval_schema '{schema}'")
-    }
-    let required = |key: &str| {
-        event
-            .evidence
-            .categorical
-            .get(key)
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("trajectory evaluation route is missing {key}"))
-    };
-    let policy_digest = event
-        .evidence
-        .digests
-        .get("route.policy_lock")
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("trajectory evaluation route is missing policy digest"))?;
-    let selected_effort = event
-        .evidence
-        .categorical
-        .get("route.selected_effort")
-        .map(|value| value.parse())
-        .transpose()
-        .map_err(anyhow::Error::msg)?;
-    let baseline_effort = event
-        .evidence
-        .categorical
-        .get("route.baseline_effort")
-        .map(|value| value.parse())
-        .transpose()
-        .map_err(anyhow::Error::msg)?;
-    let experiment = decode_experiment_ref(event)?;
-    Ok(Some(EvalDecisionRef {
-        decision_id: event.event_id.clone(),
-        policy: required("route.policy")?,
-        route_projection: required("route.route_projection")?,
-        request_key: required("route.request_key")?,
-        selected_tier: required("route.selected_tier")?,
-        selected_effort,
-        baseline_tier: event
-            .evidence
-            .categorical
-            .get("route.baseline_tier")
-            .cloned(),
-        baseline_effort,
-        policy_digest,
-        experiment,
-        route_measurement: event.evidence.route_measurement.clone(),
-    }))
-}
-
-fn decode_experiment_ref(event: &TrajectoryEvent) -> Result<Option<EvalExperimentRef>> {
-    let categorical = &event.evidence.categorical;
-    let digests = &event.evidence.digests;
-    let structural = &event.evidence.structural;
-    let present = [
-        categorical.contains_key("route.experiment_id"),
-        categorical.contains_key("route.experiment_arm"),
-        categorical.contains_key("route.experiment_assignment_unit"),
-        digests.contains_key("route.experiment_assignment_id"),
-        structural.contains_key("route.experiment_challenger_propensity_ppm"),
-    ];
-    if present.iter().all(|present| !present) {
-        return Ok(None);
-    }
-    if present.iter().any(|present| !present) {
-        anyhow::bail!("trajectory evaluation route has partial experiment evidence")
-    }
-    let required = |key: &str| {
-        categorical
-            .get(key)
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("trajectory evaluation route is missing {key}"))
-    };
-    let experiment_id = required("route.experiment_id")?;
-    let assignment_id_digest = digests
-        .get("route.experiment_assignment_id")
-        .cloned()
-        .ok_or_else(|| {
-            anyhow::anyhow!("trajectory evaluation route is missing assignment digest")
-        })?;
-    validate_sha256_digest(&experiment_id, "trajectory experiment id")?;
-    validate_sha256_digest(&assignment_id_digest, "trajectory assignment id")?;
-    let arm = match required("route.experiment_arm")?.as_str() {
-        "control" => ExperimentArm::Control,
-        "challenger" => ExperimentArm::Challenger,
-        _ => anyhow::bail!("trajectory evaluation route has invalid experiment arm"),
-    };
-    let assignment_unit = match required("route.experiment_assignment_unit")?.as_str() {
-        "task" => ExperimentAssignmentUnit::Task,
-        "episode" => ExperimentAssignmentUnit::Episode,
-        _ => anyhow::bail!("trajectory evaluation route has invalid experiment assignment unit"),
-    };
-    let challenger_propensity_ppm = u32::try_from(
-        *structural
-            .get("route.experiment_challenger_propensity_ppm")
-            .ok_or_else(|| anyhow::anyhow!("trajectory evaluation route is missing propensity"))?,
-    )
-    .context("trajectory experiment propensity exceeds u32")?;
-    if !(1..=1_000_000).contains(&challenger_propensity_ppm) {
-        anyhow::bail!("trajectory experiment propensity must be between 1 and 1000000")
-    }
-    Ok(Some(EvalExperimentRef {
-        experiment_id,
-        arm,
-        assignment_unit,
-        assignment_id_digest,
-        challenger_propensity_ppm,
-    }))
-}
-
-fn validate_sha256_digest(value: &str, field: &str) -> Result<()> {
-    let Some(hex_digest) = value.strip_prefix("sha256:") else {
-        anyhow::bail!("{field} must be a sha256 digest")
-    };
-    if hex_digest.len() != 64
-        || !hex_digest
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-    {
-        anyhow::bail!("{field} must contain 64 lowercase hexadecimal digits")
-    }
-    Ok(())
 }
 
 fn operational_metrics(
@@ -534,35 +366,6 @@ fn operational_metrics(
     Ok(metrics)
 }
 
-fn decision_credit(
-    decoded: &[(&TrajectoryEvent, EvalDecisionRef)],
-    current_settlement: &TrajectoryEvent,
-    metrics: &BTreeMap<String, MetricValue>,
-) -> BTreeMap<String, DecisionCredit> {
-    let Some((_, decision)) = decoded
-        .iter()
-        .rev()
-        .find(|(event, _)| event.request_id == current_settlement.request_id)
-    else {
-        return BTreeMap::new();
-    };
-    let metric_ids = ["cost.usd_micros", "latency.ms"]
-        .into_iter()
-        .filter(|metric| metrics.contains_key(*metric))
-        .map(str::to_owned)
-        .collect::<BTreeSet<_>>();
-    if metric_ids.is_empty() {
-        return BTreeMap::new();
-    }
-    BTreeMap::from([(
-        decision.decision_id.clone(),
-        DecisionCredit {
-            weight_ppm: 1_000_000,
-            metric_ids,
-        },
-    )])
-}
-
 fn insert_u64(
     metrics: &mut BTreeMap<String, MetricValue>,
     id: &str,
@@ -591,22 +394,13 @@ fn completeness_name(value: HistoryCompleteness) -> &'static str {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
-    use super::{
-        build_operational_evaluation, decision_credit, decode_eval_decision, operational_metrics,
-    };
-    use crate::trajectory::health::reduce;
+    use super::{build_operational_evaluation, operational_metrics};
     use crate::trajectory::types::{
         HistoryCompleteness, TRAJECTORY_SCHEMA_VERSION, TrajectoryEvent, TrajectoryEventKind,
         TrajectoryEvidence, TrajectoryHealth,
     };
-    use {
-        bitrouter_ai::eval::EvalScope, bitrouter_ai::eval::EvalVerdict,
-        bitrouter_ai::eval::ExperimentArm, bitrouter_ai::eval::ExperimentAssignmentUnit,
-        bitrouter_ai::eval::MetricUnit, bitrouter_ai::eval::RouteActionCandidate,
-    };
-
-    const POLICY_DIGEST: &str =
-        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    use bitrouter_ai::eval::{EvalScope, EvalVerdict, EvidenceItem, MetricUnit};
+    use serde_json::json;
 
     #[test]
     fn episode_evaluation_is_operational_inconclusive_and_replayable() -> anyhow::Result<()> {
@@ -615,20 +409,16 @@ mod tests {
 
         assert_eq!(envelope.subject.scope, EvalScope::Episode);
         assert_eq!(envelope.subject.subject_id, "episode-1");
-        assert_eq!(envelope.subject.eval_id, "trajectory:episode-1:3");
-        assert_eq!(envelope.subject.policy_digest, POLICY_DIGEST);
-        assert_eq!(envelope.subject.preset.as_deref(), Some("auto:cost"));
-        assert_eq!(envelope.subject.decisions.len(), 1);
-        assert_eq!(envelope.subject.decisions[0].decision_id, "route-1");
-        assert_eq!(envelope.subject.decisions[0].policy, "auto:cost");
-        assert_eq!(
-            envelope.subject.decisions[0].route_projection,
-            "semantic_route/v1|unknown|orchestrate|normal"
-        );
-        assert_eq!(
-            envelope.subject.decisions[0].request_key,
-            "semantic_route/v1|unknown|orchestrate|normal"
-        );
+        assert_eq!(envelope.subject.eval_id, "trajectory:episode-1:2");
+        assert!(matches!(
+            envelope.subject.identity,
+            bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {}
+        ));
+        assert!(envelope.subject.decisions.is_empty());
+        assert!(envelope.result.decision_credit.is_empty());
+        assert_eq!(envelope.result.metrics["cost.usd_micros"].value, 70);
+        assert_eq!(envelope.result.metrics["latency.ms"].value, 100);
+        assert_eq!(envelope.result.metrics["trajectory.total_tokens"].value, 15);
         assert_eq!(
             envelope.subject.requested_dimensions,
             envelope.result.metrics.keys().cloned().collect()
@@ -640,15 +430,8 @@ mod tests {
         );
         assert!(envelope.result.hard_violations.is_empty());
         assert!(!envelope.result.metrics.contains_key("quality.pass"));
-        assert_eq!(envelope.subject.observed_at, "2026-08-01T00:00:02Z");
+        assert_eq!(envelope.subject.observed_at, "2026-08-01T00:00:01Z");
         assert_eq!(envelope.result.submitted_at, envelope.subject.observed_at);
-        assert!(envelope.result.decision_credit.keys().all(|id| {
-            envelope
-                .subject
-                .decisions
-                .iter()
-                .any(|item| &item.decision_id == id)
-        }));
         Ok(())
     }
 
@@ -722,16 +505,6 @@ mod tests {
     }
 
     #[test]
-    fn evaluation_identity_marker_never_guesses_missing_policy() -> anyhow::Result<()> {
-        let mut events = complete_events(Some(15), Some(70))?;
-        events[1].evidence.categorical.remove("route.policy");
-        resign(&mut events[1])?;
-        let error = build_operational_evaluation(&events).expect_err("missing policy must fail");
-        assert!(error.to_string().contains("route.policy"));
-        Ok(())
-    }
-
-    #[test]
     fn context_growth_above_one_hundred_percent_uses_unbounded_ratio_micros() -> anyhow::Result<()>
     {
         let events = complete_events(None, None)?;
@@ -752,7 +525,7 @@ mod tests {
                 total_tokens: None,
                 settled_cost_micro_usd: None,
             },
-            &events[2],
+            &events[1],
         )?;
         let growth = metrics
             .get("trajectory.context_growth_ppm")
@@ -763,258 +536,131 @@ mod tests {
     }
 
     #[test]
-    fn decision_credit_only_names_the_current_route_after_interleaving_and_recovery_reset()
-    -> anyhow::Result<()> {
-        let events = complete_events(Some(15), Some(70))?;
-        let mut first = events[1].clone();
-        first.request_id = Some("request-1".into());
-        let mut interleaved = first.clone();
-        interleaved.event_id = "route-2-unsettled".into();
-        interleaved.request_id = Some("request-2".into());
-        interleaved
-            .evidence
-            .categorical
-            .insert("route.workflow_state".into(), "recovery".into());
-        resign(&mut interleaved)?;
-        let mut current = first.clone();
-        current.event_id = "route-3-current".into();
-        current.request_id = Some("request-4-unsettled".into());
-        current
-            .evidence
-            .categorical
-            .insert("route.workflow_state".into(), "editing".into());
-        resign(&mut current)?;
-        let mut settlement = events[2].clone();
-        settlement.request_id = Some("request-3".into());
-        resign(&mut settlement)?;
-        first.request_id = Some("request-3".into());
-        resign(&mut first)?;
-        let decoded = [&first, &interleaved, &current]
-            .into_iter()
-            .map(|event| {
-                decode_eval_decision(event)?
-                    .map(|decision| (event, decision))
-                    .ok_or_else(|| anyhow::anyhow!("typed route did not decode"))
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
-        let metrics = operational_metrics(
-            &TrajectoryHealth {
-                completeness: HistoryCompleteness::Complete,
-                request_count: 3,
-                settled_request_count: 2,
-                unsettled_request_count: 1,
-                elapsed_ms: 10,
-                latest_projection: None,
-                same_projection_streak: 1,
-                same_selected_tier_streak: 1,
-                consecutive_unprotected_requests: 1,
-                recovery_count: 1,
-                requests_since_recovery: Some(1),
-                context_growth_ppm: None,
-                total_tokens: Some(15),
-                settled_cost_micro_usd: Some(70),
-            },
-            &settlement,
-        )?;
-
-        let credits = decision_credit(&decoded, &settlement, &metrics);
-        assert_eq!(credits.keys().cloned().collect::<Vec<_>>(), ["route-1"]);
-        assert!(
-            !credits["route-1"]
-                .metric_ids
-                .contains("trajectory.recovery_count")
-        );
-        assert!(
-            !credits["route-1"]
-                .metric_ids
-                .contains("trajectory.total_tokens")
-        );
-        assert!(
-            !credits["route-1"]
-                .metric_ids
-                .contains("trajectory.cost.usd_micros")
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn interleaved_settlements_credit_only_their_request_local_metrics() -> anyhow::Result<()> {
-        let events = interleaved_events()?;
-
-        let settled_a = build_operational_evaluation(&events[..5])?;
-        assert_eq!(
-            settled_a.result.decision_credit.keys().collect::<Vec<_>>(),
-            ["route-a"]
-        );
-        assert_eq!(
-            settled_a.result.decision_credit["route-a"].metric_ids,
-            BTreeSet::from(["cost.usd_micros".into(), "latency.ms".into()])
-        );
+    fn interleaved_settlements_keep_current_metrics_without_policy_credit() -> anyhow::Result<()> {
+        let events = vec![
+            request_start(1, "start-a", "request-a", 20)?,
+            request_start(2, "start-b", "request-b", 40)?,
+            request_settlement(3, "settlement-a", "request-a", 100, 15, 70)?,
+            request_settlement(4, "settlement-b", "request-b", 200, 20, 90)?,
+        ];
+        let settled_a = build_operational_evaluation(&events[..3])?;
+        let settled_b = build_operational_evaluation(&events)?;
+        for envelope in [&settled_a, &settled_b] {
+            assert!(envelope.subject.decisions.is_empty());
+            assert!(envelope.result.decision_credit.is_empty());
+        }
         assert_eq!(settled_a.result.metrics["cost.usd_micros"].value, 70);
         assert_eq!(settled_a.result.metrics["latency.ms"].value, 100);
-
-        let settled_b = build_operational_evaluation(&events)?;
         assert_eq!(
-            settled_b.result.decision_credit.keys().collect::<Vec<_>>(),
-            ["route-b"]
-        );
-        assert_eq!(
-            settled_b.result.decision_credit["route-b"].metric_ids,
-            BTreeSet::from(["cost.usd_micros".into(), "latency.ms".into()])
+            settled_a.result.metrics["trajectory.settled_request_count"].value,
+            1
         );
         assert_eq!(settled_b.result.metrics["cost.usd_micros"].value, 90);
         assert_eq!(settled_b.result.metrics["latency.ms"].value, 200);
+        assert_eq!(
+            settled_b.result.metrics["trajectory.cost.usd_micros"].value,
+            160
+        );
+        assert_eq!(
+            settled_b.result.metrics["trajectory.total_tokens"].value,
+            35
+        );
         Ok(())
     }
 
     #[test]
-    fn route_experiment_evidence_round_trips_and_legacy_route_stays_valid() -> anyhow::Result<()> {
-        let start = request_start(1, "start-experiment", "request-experiment", 20)?;
-        let mut route = typed_route(
-            std::slice::from_ref(&start),
-            2,
-            "route-experiment",
-            "request-experiment",
-            "agent_trace/v2|planning|normal",
-            "planning",
-            ("economy", false),
-        )?;
+    fn native_routing_receipts_remain_evidence_and_reject_conflicts() -> anyhow::Result<()> {
+        let receipt = EvidenceItem {
+            evidence_id: "native-plan".into(),
+            kind: "routing.plan".into(),
+            digest: crate::storage::evaluation::canonical_digest(&"native-plan")?,
+            redacted: true,
+            attributes: BTreeMap::from([("model".into(), "provider:model".into())]),
+        };
+        let mut events = complete_events(Some(15), Some(70))?;
+        events[1].evidence.routing_evidence.push(receipt.clone());
+        resign(&mut events[1])?;
+        let envelope = build_operational_evaluation(&events)?;
         assert_eq!(
-            decode_eval_decision(&route)?.and_then(|decision| decision.experiment),
-            None
+            envelope
+                .subject
+                .evidence
+                .iter()
+                .find(|item| item.kind == "routing.plan"),
+            Some(&receipt)
         );
-
-        route.evidence.categorical.extend(BTreeMap::from([
-            ("route.experiment_id".into(), POLICY_DIGEST.into()),
-            ("route.experiment_arm".into(), "challenger".into()),
-            ("route.experiment_assignment_unit".into(), "task".into()),
-        ]));
-        route
-            .evidence
-            .structural
-            .insert("route.experiment_challenger_propensity_ppm".into(), 100_000);
-        route.evidence.digests.insert(
-            "route.experiment_assignment_id".into(),
-            "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".into(),
-        );
-        resign(&mut route)?;
-
-        let decision = decode_eval_decision(&route)?
-            .ok_or_else(|| anyhow::anyhow!("route intent must decode to an eval decision"))?;
-        let experiment = decision.experiment.ok_or_else(|| {
-            anyhow::anyhow!("experiment evidence must survive the trajectory codec")
-        })?;
-        assert_eq!(experiment.arm, ExperimentArm::Challenger);
-        assert_eq!(experiment.assignment_unit, ExperimentAssignmentUnit::Task);
-        assert_eq!(experiment.experiment_id, POLICY_DIGEST);
-        assert_eq!(
-            experiment.assignment_id_digest,
-            "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
-        );
-        assert_eq!(experiment.challenger_propensity_ppm, 100_000);
-
-        let mut partial = typed_route(
-            std::slice::from_ref(&start),
-            3,
-            "route-partial-experiment",
-            "request-experiment",
-            "agent_trace/v2|planning|normal",
-            "planning",
-            ("economy", false),
-        )?;
-        partial
-            .evidence
-            .categorical
-            .insert("route.experiment_id".into(), POLICY_DIGEST.into());
-        resign(&mut partial)?;
-        assert!(decode_eval_decision(&partial).is_err());
-
-        let mut malformed = route.clone();
-        malformed
-            .evidence
-            .categorical
-            .insert("route.experiment_arm".into(), "invalid".into());
-        resign(&mut malformed)?;
-        assert!(decode_eval_decision(&malformed).is_err());
+        assert!(envelope.subject.decisions.is_empty());
+        assert!(envelope.result.decision_credit.is_empty());
+        let mut invalid = events.clone();
+        invalid[1].evidence.routing_evidence[0].redacted = false;
+        resign(&mut invalid[1])?;
+        assert!(build_operational_evaluation(&invalid).is_err());
+        events.push(request_start(3, "start-2", "request-2", 40)?);
+        let mut conflicting = request_settlement(4, "settled-2", "request-2", 200, 20, 90)?;
+        let mut changed = receipt;
+        changed.digest = crate::storage::evaluation::canonical_digest(&"changed-plan")?;
+        conflicting.evidence.routing_evidence.push(changed);
+        resign(&mut conflicting)?;
+        events.push(conflicting);
+        assert!(build_operational_evaluation(&events).is_err());
         Ok(())
     }
 
     #[test]
-    fn route_measurement_survives_trajectory_evaluation() -> anyhow::Result<()> {
-        let start = request_start(1, "start-measurement", "request-measurement", 20)?;
-        let mut route = typed_route(
-            std::slice::from_ref(&start),
-            2,
-            "route-measurement",
-            "request-measurement",
-            "agent_trace/v2|planning|normal",
-            "planning",
-            ("economy", false),
-        )?;
-        route.evidence.route_measurement =
-            Some(crate::storage::evaluation::route_decision_measurement(
-                "economy",
-                "vendor/economy",
-                None,
-                vec![
-                    RouteActionCandidate {
-                        context: Default::default(),
-                        tier: "economy".into(),
-                        model: "vendor/economy".into(),
-                        effort: None,
-                        logging_probability_ppm: 1_000_000,
-                    },
-                    RouteActionCandidate {
-                        context: Default::default(),
-                        tier: "strong".into(),
-                        model: "vendor/strong".into(),
-                        effort: None,
-                        logging_probability_ppm: 0,
-                    },
-                ],
-            )?);
+    fn raw_old_guard_intent_never_becomes_policy_decision_or_credit() -> anyhow::Result<()> {
+        let start = request_start(1, "start-old", "request-old", 20)?;
+        let snapshot =
+            crate::trajectory::health::reduce(std::slice::from_ref(&start), &BTreeSet::new())?;
+        // Opaque historical journal input, never a typed current Policy producer.
+        let mut route: TrajectoryEvent = serde_json::from_value(json!({
+            "schema_version":TRAJECTORY_SCHEMA_VERSION, "event_id":"old-route",
+            "owner_user_id":"owner-1", "episode_id":"episode-1", "request_id":"request-old",
+            "sequence":2, "kind":"route_intent_recorded", "captured_at":"2026-08-01T00:00:01Z",
+            "content_digest":"", "evidence":{
+                "structural":{"route.applied_clause_count":0,"route.selected_is_protected":0,
+                    "route.experiment_challenger_propensity_ppm":100000},
+                "categorical":{
+                    "route.eval_schema":"trajectory.v1", "route.policy":"retired-policy",
+                    "route.request_key":"unknown|orchestrate|normal",
+                    "route.route_projection":"unknown|orchestrate|normal",
+                    "route.baseline_tier":"reference", "route.preset":"auto:cost",
+                    "route.projection":"agent_trace/v2|planning|normal", "route.workflow_state":"planning",
+                    "route.selected_tier":"economy", "route.experiment_id":format!("sha256:{}", "a".repeat(64)),
+                    "route.experiment_arm":"challenger", "route.experiment_assignment_unit":"task",
+                    "route.clause_00.id":"progress_guard.active_hold", "route.clause_00.disposition":"skipped",
+                    "route.clause_01.id":"progress_guard.incomplete_history", "route.clause_01.disposition":"skipped",
+                    "route.clause_02.id":"progress_guard.max_consecutive_unprotected", "route.clause_02.disposition":"skipped",
+                    "route.clause_03.id":"progress_guard.max_same_projection_unprotected", "route.clause_03.disposition":"skipped",
+                    "route.clause_04.id":"progress_guard.max_recovery_count", "route.clause_04.disposition":"skipped",
+                    "route.clause_05.id":"progress_guard.max_episode_requests", "route.clause_05.disposition":"skipped",
+                    "route.clause_06.id":"progress_guard.max_episode_elapsed_ms", "route.clause_06.disposition":"skipped",
+                    "route.clause_07.id":"progress_guard.max_episode_cost_micro_usd", "route.clause_07.disposition":"skipped",
+                    "route.clause_08.id":"tool_safety.floor", "route.clause_08.disposition":"skipped"
+                },
+                "digests":{"route.policy_lock":format!("sha256:{}", "b".repeat(64)),
+                    "route.health_snapshot":snapshot.evidence_digest,
+                    "route.experiment_assignment_id":format!("sha256:{}", "c".repeat(64))}
+            }
+        }))?;
         resign(&mut route)?;
-
-        let decoded = decode_eval_decision(&route)?
-            .and_then(|decision| decision.route_measurement)
-            .ok_or_else(|| anyhow::anyhow!("route measurement must survive trajectory codec"))?;
-        assert_eq!(decoded.logging_action_tier, "economy");
-        assert_eq!(decoded.logging_action_probability_ppm, 1_000_000);
+        let events = [
+            start,
+            route,
+            request_settlement(3, "settled-old", "request-old", 100, 15, 70)?,
+        ];
+        let envelope = build_operational_evaluation(&events)?;
+        assert!(envelope.subject.decisions.is_empty());
+        assert!(envelope.result.decision_credit.is_empty());
+        assert_eq!(envelope.result.metrics["cost.usd_micros"].value, 70);
+        assert_eq!(envelope.result.metrics["latency.ms"].value, 100);
+        assert_eq!(
+            envelope.subject.evidence[0]
+                .attributes
+                .get("event_count")
+                .map(String::as_str),
+            Some("3")
+        );
         Ok(())
-    }
-
-    fn interleaved_events() -> anyhow::Result<Vec<TrajectoryEvent>> {
-        let start_a = request_start(1, "start-a", "request-a", 20)?;
-        let route_a = typed_route(
-            std::slice::from_ref(&start_a),
-            2,
-            "route-a",
-            "request-a",
-            "agent_trace/v2|planning|normal",
-            "planning",
-            ("economy", false),
-        )?;
-        let start_b = request_start(3, "start-b", "request-b", 40)?;
-        let prefix_b = vec![start_a.clone(), route_a.clone(), start_b.clone()];
-        let route_b = typed_route(
-            &prefix_b,
-            4,
-            "route-b",
-            "request-b",
-            "agent_trace/v2|recovery|guarded",
-            "recovery",
-            ("strong", true),
-        )?;
-        let settlement_a = request_settlement(5, "settlement-a", "request-a", 100, 15, 70)?;
-        let settlement_b = request_settlement(6, "settlement-b", "request-b", 200, 20, 90)?;
-        Ok(vec![
-            start_a,
-            route_a,
-            start_b,
-            route_b,
-            settlement_a,
-            settlement_b,
-        ])
     }
 
     fn request_start(
@@ -1038,79 +684,6 @@ mod tests {
             ]),
             BTreeMap::new(),
         )
-    }
-
-    fn typed_route(
-        prefix: &[TrajectoryEvent],
-        sequence: u64,
-        event_id: &str,
-        request_id: &str,
-        projection: &str,
-        workflow_state: &str,
-        selection: (&str, bool),
-    ) -> anyhow::Result<TrajectoryEvent> {
-        let (selected_tier, selected_is_protected) = selection;
-        let snapshot = reduce(prefix, &BTreeSet::new())?;
-        let mut route = event_for_request(
-            sequence,
-            event_id,
-            request_id,
-            TrajectoryEventKind::RouteIntentRecorded,
-            BTreeMap::from([
-                ("route.applied_clause_count".to_owned(), 0),
-                (
-                    "route.selected_is_protected".to_owned(),
-                    u64::from(selected_is_protected),
-                ),
-            ]),
-            BTreeMap::from([
-                ("route.eval_schema".to_owned(), "trajectory.v1".to_owned()),
-                ("route.policy".to_owned(), "auto:cost".to_owned()),
-                (
-                    "route.request_key".to_owned(),
-                    "semantic_route/v1|unknown|orchestrate|normal".to_owned(),
-                ),
-                (
-                    "route.route_projection".to_owned(),
-                    "semantic_route/v1|unknown|orchestrate|normal".to_owned(),
-                ),
-                ("route.baseline_tier".to_owned(), "reference".to_owned()),
-                ("route.preset".to_owned(), "auto:cost".to_owned()),
-                ("route.projection".to_owned(), projection.to_owned()),
-                ("route.workflow_state".to_owned(), workflow_state.to_owned()),
-                ("route.selected_tier".to_owned(), selected_tier.to_owned()),
-            ]),
-            BTreeMap::from([
-                ("route.policy_lock".to_owned(), POLICY_DIGEST.to_owned()),
-                ("route.health_snapshot".to_owned(), snapshot.evidence_digest),
-            ]),
-        )?;
-        for (index, clause_id) in [
-            "progress_guard.active_hold",
-            "progress_guard.incomplete_history",
-            "progress_guard.max_consecutive_unprotected",
-            "progress_guard.max_same_projection_unprotected",
-            "progress_guard.max_recovery_count",
-            "progress_guard.max_episode_requests",
-            "progress_guard.max_episode_elapsed_ms",
-            "progress_guard.max_episode_cost_micro_usd",
-            "tool_safety.floor",
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let clause = format!("route.clause_{index:02}");
-            route
-                .evidence
-                .categorical
-                .insert(format!("{clause}.id"), clause_id.to_owned());
-            route
-                .evidence
-                .categorical
-                .insert(format!("{clause}.disposition"), "skipped".to_owned());
-        }
-        resign(&mut route)?;
-        Ok(route)
     }
 
     fn request_settlement(
@@ -1144,76 +717,7 @@ mod tests {
         total_tokens: Option<u64>,
         cost_micro_usd: Option<u64>,
     ) -> anyhow::Result<Vec<TrajectoryEvent>> {
-        let start = event(
-            1,
-            "start-1",
-            TrajectoryEventKind::RequestStarted,
-            BTreeMap::from([("request.canonical_input_bytes".to_owned(), 20)]),
-            BTreeMap::from([
-                ("history.completeness".to_owned(), "complete".to_owned()),
-                ("correlation.source".to_owned(), "explicit_root".to_owned()),
-            ]),
-            BTreeMap::new(),
-        )?;
-        let snapshot = reduce(std::slice::from_ref(&start), &BTreeSet::new())?;
-        let mut route = event(
-            2,
-            "route-1",
-            TrajectoryEventKind::RouteIntentRecorded,
-            BTreeMap::from([
-                ("route.applied_clause_count".to_owned(), 0),
-                ("route.selected_is_protected".to_owned(), 0),
-            ]),
-            BTreeMap::from([
-                ("route.eval_schema".to_owned(), "trajectory.v1".to_owned()),
-                ("route.policy".to_owned(), "auto:cost".to_owned()),
-                (
-                    "route.request_key".to_owned(),
-                    "semantic_route/v1|unknown|orchestrate|normal".to_owned(),
-                ),
-                (
-                    "route.route_projection".to_owned(),
-                    "semantic_route/v1|unknown|orchestrate|normal".to_owned(),
-                ),
-                ("route.baseline_tier".to_owned(), "reference".to_owned()),
-                ("route.preset".to_owned(), "auto:cost".to_owned()),
-                (
-                    "route.projection".to_owned(),
-                    "agent_trace/v2|planning|normal".to_owned(),
-                ),
-                ("route.workflow_state".to_owned(), "planning".to_owned()),
-                ("route.selected_tier".to_owned(), "economy".to_owned()),
-            ]),
-            BTreeMap::from([
-                ("route.policy_lock".to_owned(), POLICY_DIGEST.to_owned()),
-                ("route.health_snapshot".to_owned(), snapshot.evidence_digest),
-            ]),
-        )?;
-        for (index, clause_id) in [
-            "progress_guard.active_hold",
-            "progress_guard.incomplete_history",
-            "progress_guard.max_consecutive_unprotected",
-            "progress_guard.max_same_projection_unprotected",
-            "progress_guard.max_recovery_count",
-            "progress_guard.max_episode_requests",
-            "progress_guard.max_episode_elapsed_ms",
-            "progress_guard.max_episode_cost_micro_usd",
-            "tool_safety.floor",
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let prefix = format!("route.clause_{index:02}");
-            route
-                .evidence
-                .categorical
-                .insert(format!("{prefix}.id"), clause_id.to_owned());
-            route
-                .evidence
-                .categorical
-                .insert(format!("{prefix}.disposition"), "skipped".to_owned());
-        }
-        resign(&mut route)?;
+        let start = request_start(1, "start-1", "request-1", 20)?;
         let mut structural = BTreeMap::from([("settlement.duration_ms".to_owned(), 100)]);
         if let Some(total_tokens) = total_tokens {
             structural.insert("settlement.total_tokens".to_owned(), total_tokens);
@@ -1222,7 +726,7 @@ mod tests {
             structural.insert("settlement.cost_micro_usd".to_owned(), cost_micro_usd);
         }
         let settlement = event(
-            3,
+            2,
             "settlement-1",
             TrajectoryEventKind::RequestSettled,
             structural,
@@ -1233,7 +737,7 @@ mod tests {
             ]),
             BTreeMap::new(),
         )?;
-        Ok(vec![start, route, settlement])
+        Ok(vec![start, settlement])
     }
 
     fn event(

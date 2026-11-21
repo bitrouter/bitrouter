@@ -234,6 +234,7 @@ async fn provision(
     .await?;
     a = next;
     let b = Fixture {
+        wrapping_key: a.wrapping_key,
         service: a.service.clone(),
         db: db.clone(),
         operator: a.operator.clone(),
@@ -369,7 +370,7 @@ async fn campaign(database: &mut database::Fixture, consumers: &mut Consumers) -
         initial,
         Arc::new(Resources::with_key(
             a.fixture.installation.clone(),
-            [29; 32],
+            a.fixture.wrapping_key,
         )?),
     )
     .await?;

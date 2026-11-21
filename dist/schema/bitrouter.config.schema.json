@@ -1313,77 +1313,12 @@
       "type": "array"
     },
     "PolicyConfig": {
-      "description": "Current routing-policy artifact configuration.",
+      "additionalProperties": false,
+      "description": "Portable model-policy source location.",
       "properties": {
-        "mode": {
-          "$ref": "#/$defs/PolicyRuntimeMode",
-          "default": "frozen",
-          "description": "Runtime authority for adaptive routing and active policy publication.\n`writeback` is accepted as a migration alias for older configuration."
-        },
         "path": {
           "default": null,
-          "description": "Override for the policy lock. Relative paths are resolved against the\ndirectory containing the parsed `bitrouter.yaml`. `None` means the\nsibling `policy-lock.yaml` default.",
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
-    "PolicyRuntimeMode": {
-      "description": "Process-owned routing-policy behavior.",
-      "oneOf": [
-        {
-          "const": "frozen",
-          "description": "Route from the static lock while continuing to record evidence. Learned\ndatabase state cannot affect live routing or replace the active lock.",
-          "type": "string"
-        },
-        {
-          "const": "adaptive",
-          "description": "Permit explicit validated publication to atomically replace the active\nlock. Request-time routing remains identical to frozen mode.",
-          "type": "string"
-        }
-      ]
-    },
-    "PresetConfig": {
-      "description": "An `@preset` definition.",
-      "properties": {
-        "model": {
-          "default": null,
-          "description": "Substitute the request's model with this one.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "params": {
-          "additionalProperties": true,
-          "default": {},
-          "description": "Generation-parameter overrides, merged shallowly into the request.",
-          "type": "object"
-        },
-        "policy": {
-          "default": null,
-          "description": "Name of a policy in `policy-lock.yaml`. Only requests that explicitly\nselect this preset opt into adaptive model selection.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "routing": {
-          "$ref": "#/$defs/RoutingConfig",
-          "default": {
-            "ignore": [],
-            "only": [],
-            "require_tags": [],
-            "sort": null
-          },
-          "description": "Routing knobs fed into the cascade."
-        },
-        "system_prompt": {
-          "default": null,
-          "description": "Prepend / replace the system prompt.",
+          "description": "Source path relative to the configuration directory. Defaults to policy.yaml.",
           "type": [
             "string",
             "null"
@@ -2173,6 +2108,7 @@
       "properties": {
         "ignore": {
           "default": [],
+          "description": "Providers excluded by the router.",
           "items": {
             "type": "string"
           },
@@ -2180,6 +2116,7 @@
         },
         "only": {
           "default": [],
+          "description": "Providers allowed by the router.",
           "items": {
             "type": "string"
           },
@@ -2187,6 +2124,7 @@
         },
         "require_tags": {
           "default": [],
+          "description": "Provider tags required by the router.",
           "items": {
             "type": "string"
           },
@@ -2201,7 +2139,8 @@
               "type": "null"
             }
           ],
-          "default": null
+          "default": null,
+          "description": "Cascade-chain ordering."
         }
       },
       "type": "object"
@@ -2251,7 +2190,7 @@
               "type": "string"
             },
             "policy": {
-              "description": "Policy name in `policy-lock.yaml`.",
+              "description": "Literal Policy name in the current `policy.yaml` source.",
               "type": "string"
             },
             "routing": {
@@ -2289,48 +2228,6 @@
           "format": "uint",
           "minimum": 0,
           "type": "integer"
-        }
-      },
-      "type": "object"
-    },
-    "RoutingConfig": {
-      "description": "Routing knobs shared by presets and variants.",
-      "properties": {
-        "ignore": {
-          "default": [],
-          "description": "Drop these providers from the chain.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "only": {
-          "default": [],
-          "description": "Restrict the chain to exactly these providers.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "require_tags": {
-          "default": [],
-          "description": "Require providers carrying all these tags.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "sort": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SortOrder"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Cascade-chain ordering."
         }
       },
       "type": "object"
@@ -2493,14 +2390,6 @@
           "minimum": 0,
           "type": [
             "integer",
-            "null"
-          ]
-        },
-        "learning_registrations": {
-          "default": null,
-          "description": "Optional local learning registration manifest, authenticated after H bootstrap.\nOmission preserves startup behavior and does not erase durable schedules.",
-          "type": [
-            "string",
             "null"
           ]
         },
@@ -2685,22 +2574,6 @@
         "timeouts": {
           "$ref": "#/$defs/TimeoutConfig",
           "description": "Global upstream timeout defaults. A provider may override any field\nunder `providers.<id>.timeouts:`."
-        }
-      },
-      "type": "object"
-    },
-    "VariantConfig": {
-      "description": "A `:variant` definition — a routing modifier only.",
-      "properties": {
-        "routing": {
-          "$ref": "#/$defs/RoutingConfig",
-          "default": {
-            "ignore": [],
-            "only": [],
-            "require_tags": [],
-            "sort": null
-          },
-          "description": "Routing knobs fed into the cascade."
         }
       },
       "type": "object"
@@ -3059,7 +2932,7 @@
       "type": "object"
     }
   },
-  "$id": "https://bitrouter.dev/schema/v1.0.0-alpha.36/config.schema.json",
+  "$id": "https://bitrouter.dev/schema/v1.0.0-beta.1/config.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "The top-level configuration.",
@@ -3170,17 +3043,9 @@
     "policy": {
       "$ref": "#/$defs/PolicyConfig",
       "default": {
-        "mode": "frozen",
         "path": null
       },
-      "description": "Adaptive model-policy settings. A file-backed config resolves the\noptional path relative to its own directory; when omitted the app looks\nfor `policy-lock.yaml` next to `bitrouter.yaml`. The SDK only carries\nthis declaration -- loading and evolving policy locks belongs to the\nBitRouter app layer."
-    },
-    "presets": {
-      "additionalProperties": {
-        "$ref": "#/$defs/PresetConfig"
-      },
-      "description": "`@preset` definitions.",
-      "type": "object"
+      "description": "Adaptive model-policy settings. A file-backed config resolves the\noptional path relative to its own directory; when omitted the app looks\nfor `policy.yaml` next to `bitrouter.yaml`. The SDK only carries\nthis declaration -- loading and evolving policy locks belongs to the\nBitRouter app layer."
     },
     "providers": {
       "additionalProperties": {
@@ -3232,15 +3097,9 @@
     "upstream": {
       "$ref": "#/$defs/UpstreamConfig",
       "description": "Outbound / upstream HTTP settings (the client that calls providers)."
-    },
-    "variants": {
-      "additionalProperties": {
-        "$ref": "#/$defs/VariantConfig"
-      },
-      "description": "`:variant` definitions.",
-      "type": "object"
     }
   },
   "title": "BitRouter config",
-  "type": "object"
+  "type": "object",
+  "x-bitrouter-spec-version": "configuration/1.0.0-beta.5"
 }

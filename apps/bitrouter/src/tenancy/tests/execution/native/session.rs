@@ -8,18 +8,16 @@ mod consumer;
 #[cfg(unix)]
 mod custody;
 mod discovery;
-mod experiment;
 mod input_count;
 mod server;
+mod verification;
 mod waits;
 use crate::harness::resources::{
     HarnessConfig,
     managed::session::{NativeApproval, NativeSession},
 };
-use bitrouter_ai::{
-    core::protocol::{CoreError, TaskInput, ToolExecute},
-    harness::agent::ToolMode,
-};
+use crate::managed_contract::harness::agent::ToolMode;
+use crate::managed_contract::protocol::{CoreError, TaskInput, ToolExecute};
 use chrono::Utc;
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
@@ -52,13 +50,14 @@ async fn file_fixture(
     provider: &Provider,
     directory: &std::path::Path,
 ) -> Result<(Fixture, ResourceRef)> {
-    file_fixture_profile(provider, directory, false).await
+    file_fixture_profile(provider, directory, false, None).await
 }
 
 async fn file_fixture_profile(
     provider: &Provider,
     directory: &std::path::Path,
     count: bool,
+    wrapping_key_env: Option<&str>,
 ) -> Result<(Fixture, ResourceRef)> {
     let database = directory.join("owned.db");
     let url = format!("sqlite://{}", database.display());
@@ -67,18 +66,19 @@ async fn file_fixture_profile(
     // Provision the encrypted resources on this leased file from the start.
     // An in-memory connection's VACUUM INTO can retain SQLITE_OPEN_MEMORY.
     let fixture = Fixture::with_database(db, &mut |_| {}).await?;
-    let (mut fixture, route, slot) =
-        crate::tenancy::tests::execution::provision_protocol_with_fixture(
-            fixture,
-            &provider.url,
-            if count {
-                "responses"
-            } else {
-                "chat_completions"
-            },
-            &mut |_| {},
-        )
-        .await?;
+    let (mut fixture, route, slot) = crate::tenancy::tests::execution::provision_protocol_observed(
+        fixture,
+        &provider.url,
+        if count {
+            "responses"
+        } else {
+            "chat_completions"
+        },
+        &mut |_| {},
+        wrapping_key_env,
+        (crate::telemetry::receipt_latency::Sink::default(), None),
+    )
+    .await?;
     let route = if count {
         revised_route(
             &mut fixture,
@@ -128,7 +128,7 @@ async fn file_fixture_profile(
         fixture.db.clone(),
         Some(owner),
         snapshot,
-        Arc::new(Resources::with_key(fixture.installation.clone(), [29; 32])?),
+        fixture.service.resources.clone(),
     )
     .await?;
     Ok((fixture, route))
@@ -212,7 +212,7 @@ async fn unbound_and_unauthenticated_native_openers_reject_before_workspace_read
         .await
         .err()
         .context("missing auth accepted")?;
-        ensure!(denied.code == bitrouter_ai::core::protocol::ErrorCode::UnauthorizedScope);
+        ensure!(denied.code == crate::managed_contract::protocol::ErrorCode::UnauthorizedScope);
         let legacy_store = Arc::new(crate::managed_store::DatabaseNativeStore::new(
             fixture.db.clone(),
             "private".into(),
@@ -228,7 +228,7 @@ async fn unbound_and_unauthenticated_native_openers_reject_before_workspace_read
         .await
         .err()
         .context("Legacy entry accepted")?;
-        ensure!(denied.code == bitrouter_ai::core::protocol::ErrorCode::UnauthorizedScope);
+        ensure!(denied.code == crate::managed_contract::protocol::ErrorCode::UnauthorizedScope);
         let mut duplicate = headers;
         duplicate.append("authorization", "Bearer forged".parse()?);
         ensure!(
@@ -465,7 +465,7 @@ async fn idle_host_keeps_no_execution_lease_and_every_run_uses_retained_r1() -> 
         .await
         .err()
         .context("changed revision restored")?;
-        ensure!(denied.code == bitrouter_ai::core::protocol::ErrorCode::UnauthorizedScope);
+        ensure!(denied.code == crate::managed_contract::protocol::ErrorCode::UnauthorizedScope);
         let row = fixture
             .db
             .query_one(Statement::from_string(

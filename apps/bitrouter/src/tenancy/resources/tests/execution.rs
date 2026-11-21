@@ -306,7 +306,7 @@ async fn generation_defaults_and_unknown_capabilities_preserve_routing_semantics
 }
 
 #[tokio::test]
-async fn retained_policy_accessors_and_tier_exploration_chains_are_immutable() -> Result<()> {
+async fn retained_policy_accessors_and_tier_chains_are_immutable() -> Result<()> {
     let (db, resources) = fixture().await?;
     let mut input = route("tenant", "choice", "base")?;
     let policy_ref = reference("tenant", ResourceKind::Policy, "policy")?;
@@ -315,7 +315,6 @@ async fn retained_policy_accessors_and_tier_exploration_chains_are_immutable() -
     input["definition"]["routing"]["routers"] = json!({"choice": {
         "selection":{"kind":"policy", "policy":"selected", "base_model":"fixture:base"}
     }});
-    input["definition"]["exploration"] = json!(["fixture:explore"]);
     let mut policy = policy("tenant", "policy")?;
     let extra_ref = reference("tenant", ResourceKind::Credential, "policy-slot")?;
     policy["definition"]["dependencies"] = json!([extra_ref]);
@@ -358,10 +357,8 @@ async fn retained_policy_accessors_and_tier_exploration_chains_are_immutable() -
     assert_eq!(retained_policy.reference(), &policy_ref);
     assert_eq!(retained_policy.name(), "selected");
     assert_eq!(
-        retained_policy.document().policies["selected"]
-            .default_tier
-            .as_deref(),
-        Some("economy")
+        retained_policy.document().policies["selected"].default_tier,
+        "economy"
     );
     assert!(
         checked(retained_policy.configuration())?
@@ -372,7 +369,6 @@ async fn retained_policy_accessors_and_tier_exploration_chains_are_immutable() -
         ("choice", "base"),
         ("fixture:cheap", "cheap"),
         ("fixture:strong", "strong"),
-        ("fixture:explore", "explore"),
     ] {
         let resolution = route.resolve_model(selector).await?;
         let targets = route
@@ -384,8 +380,22 @@ async fn retained_policy_accessors_and_tier_exploration_chains_are_immutable() -
             .await?;
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].service_id, expected);
-        assert!(route.match_candidate(&targets[0]).is_ok());
+        assert_eq!(
+            checked(route.match_candidate(&targets[0]))?,
+            reference("tenant", ResourceKind::Credential, "slot")?
+        );
     }
+    assert!(route.resolve_model("fixture:explore").await.is_err());
+    assert!(
+        route
+            .route_resolved(
+                "fixture:explore",
+                &RoutingPrefs::default(),
+                &CallerContext::local()
+            )
+            .await
+            .is_err()
+    );
     assert!(route.resolve_model("fixture:unretained").await.is_err());
     Ok(())
 }

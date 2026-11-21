@@ -15,15 +15,15 @@ use crate::harness::storage::ExecutionStore;
 use crate::harness::storage::MemoryExecutionStore;
 use crate::harness::thread::ThreadHistoryRequest;
 use crate::harness::turn::ApprovalAnswer;
-use bitrouter_ai::harness::runtime::EffectStatus;
-use bitrouter_ai::harness::runtime::ErrorCode;
-use bitrouter_ai::harness::runtime::RuntimeLimits;
-use bitrouter_ai::harness::thread::ThreadChange;
-use bitrouter_ai::harness::thread::ThreadObservation;
-use bitrouter_ai::harness::thread::ThreadStatus;
-use bitrouter_ai::harness::thread::ThreadView;
-use bitrouter_ai::harness::turn::TurnEventPayload;
-use bitrouter_ai::harness::turn::TurnStatus;
+use crate::managed_contract::harness::runtime::EffectStatus;
+use crate::managed_contract::harness::runtime::ErrorCode;
+use crate::managed_contract::harness::runtime::RuntimeLimits;
+use crate::managed_contract::harness::thread::ThreadChange;
+use crate::managed_contract::harness::thread::ThreadObservation;
+use crate::managed_contract::harness::thread::ThreadStatus;
+use crate::managed_contract::harness::thread::ThreadView;
+use crate::managed_contract::harness::turn::TurnEventPayload;
+use crate::managed_contract::harness::turn::TurnStatus;
 
 fn snapshot(observation: ThreadObservation) -> Result<ThreadView, String> {
     match observation {
@@ -388,19 +388,19 @@ impl ExecutionStore for GatedCommit {
     async fn claim_owner(
         &self,
         id: &str,
-    ) -> Result<bitrouter_ai::harness::runtime::OwnerClaim, String> {
+    ) -> Result<crate::managed_contract::harness::runtime::OwnerClaim, String> {
         self.memory.claim_owner(id).await
     }
     async fn read_owner(
         &self,
         id: &str,
-    ) -> Result<Option<bitrouter_ai::harness::runtime::ExecutionOwner>, String> {
+    ) -> Result<Option<crate::managed_contract::harness::runtime::ExecutionOwner>, String> {
         self.memory.read_owner(id).await
     }
     async fn stop_owner(
         &self,
-        owner: &bitrouter_ai::harness::runtime::ExecutionOwner,
-    ) -> Result<bitrouter_ai::harness::runtime::ExecutionOwner, String> {
+        owner: &crate::managed_contract::harness::runtime::ExecutionOwner,
+    ) -> Result<crate::managed_contract::harness::runtime::ExecutionOwner, String> {
         self.memory.stop_owner(owner).await
     }
 
@@ -428,7 +428,7 @@ impl ExecutionStore for GatedCommit {
 
     async fn commit_owned(
         &self,
-        owner: &bitrouter_ai::harness::runtime::ExecutionOwner,
+        owner: &crate::managed_contract::harness::runtime::ExecutionOwner,
         id: &str,
         version: u64,
         records: &[ExecutionRecord],

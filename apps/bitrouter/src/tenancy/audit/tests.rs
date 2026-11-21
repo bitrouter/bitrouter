@@ -253,6 +253,62 @@ async fn existing_only_decoder_never_creates_identity_or_repairs_missing_counter
     Ok(())
 }
 #[tokio::test]
+async fn current_store_preflight_fits_fixed_audit_pages_and_refuses_old_markers() -> Result<()> {
+    use sea_orm::sqlx::{Connection, SqliteConnection};
+
+    let directory = tempfile::tempdir()?;
+    let (bundle, _) = bundle(directory.path()).await?;
+    let before = inventory(&bundle)?;
+    let source = directory.path().join("authority.sqlite");
+    let owner = crate::tenancy::ownership::acquire_path(&source, false)?;
+    let mut db =
+        SqliteConnection::connect(&format!("sqlite://{}?mode=rw", source.display())).await?;
+    let reader = ReadConnection::new(&mut db).with_row_limit(32);
+    let count = reader
+        .query_one(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "SELECT COUNT(*) AS n FROM main.sqlite_schema WHERE name NOT LIKE 'sqlite_%'",
+        ))
+        .await?
+        .context("catalog size")?;
+    ensure!(count.try_get::<i64>("", "n")? > 64);
+    ensure!(
+        reader
+            .query_all(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT name,type FROM main.sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY name",
+            ))
+            .await
+            .is_err(),
+        "audit query row capacity was lifted"
+    );
+    ensure!(
+        crate::db::store_format::inspect(&reader).await? == crate::db::store_format::State::Current
+    );
+    drop(reader);
+    sea_orm::sqlx::query(
+        "UPDATE seaql_migrations SET version='m20240101_000048_native_generate_content'",
+    )
+    .execute(&mut db)
+    .await?;
+    let reader = ReadConnection::new(&mut db).with_row_limit(32);
+    let error = crate::db::store_format::inspect(&reader)
+        .await
+        .err()
+        .context("old marker selected a current dataset")?;
+    ensure!(
+        error
+            .to_string()
+            .contains("historical or future store format")
+    );
+    drop(reader);
+    db.close().await?;
+    drop(owner);
+    ensure!(inventory(&bundle)? == before);
+    Ok(())
+}
+
+#[tokio::test]
 async fn archive_projection_requires_anchor_and_stays_outside_exact_bundle() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let (bundle, digest) = bundle(directory.path()).await?;

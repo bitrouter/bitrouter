@@ -1368,6 +1368,12 @@ async fn handle(
 /// Validate the original protocol document before shared admission. Configurable
 /// prompt transforms and route/default expansion run only after that boundary.
 pub(crate) fn parse_input(inbound: &ApiProtocol, body: serde_json::Value) -> Result<PipelineInput> {
+    if body.get("bitrouter_generation_defaults").is_some() {
+        return Err(BitrouterError::bad_request(
+            "unknown generation request member",
+        ));
+    }
+
     if body
         .get(bitrouter_ai::tenancy::generation_defaults::ENVELOPE_BODY_MEMBER)
         .is_some()
@@ -2135,7 +2141,8 @@ async fn stream_response(
             .to_wire()
             .map(String::into_bytes)
     });
-    bitrouter_ai::axum::response::Reply::sse_body(Body::from_stream(with_keepalive)).into_response()
+    crate::gateway::http_adapter::response::Reply::sse_body(Body::from_stream(with_keepalive))
+        .into_response()
 }
 
 impl IntoResponse for BitrouterError {
@@ -3259,7 +3266,7 @@ mod tests {
         use bitrouter_ai::types::{FinishReason, StreamPart};
         let executor = MockExecutor::new(vec![MockResponse::Stream(vec![
             StreamPart::TextDelta {
-                text: "\0".repeat(bitrouter_ai::wire::DEFAULT_JSON_LIMIT / 6),
+                text: "\0".repeat(crate::gateway::wire::DEFAULT_JSON_LIMIT / 6),
             },
             StreamPart::Finish {
                 reason: FinishReason::Stop,
@@ -3306,7 +3313,7 @@ mod tests {
             },
             StreamPart::Finish {
                 reason: FinishReason::Other(
-                    "\0".repeat(bitrouter_ai::wire::DEFAULT_JSON_LIMIT / 6),
+                    "\0".repeat(crate::gateway::wire::DEFAULT_JSON_LIMIT / 6),
                 ),
             },
         ])]);

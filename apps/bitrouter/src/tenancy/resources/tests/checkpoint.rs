@@ -1,10 +1,11 @@
 use super::*;
 
-// Format fixtures do not stand in for accepted learner/assessment evidence.
+// Retired wire input stays raw: there is no current typed checkpoint capability.
 fn checkpoint(owner: &str) -> Result<Value> {
     let digest = format!("sha256:{}", "a".repeat(64));
     Ok(json!({
-        "reference": reference(owner, ResourceKind::Checkpoint, "learned")?,
+        "reference": {"owner_kind":"tenant", "owner_id":owner,
+            "resource_kind":"checkpoint", "resource_id":"learned", "revision_id":"v1"},
         "definition": {"kind":"checkpoint", "evidence": {
             "profile":"learned_checkpoint_v1", "source_configuration":"source-r1",
             "source_policy":reference(owner, ResourceKind::Policy, "parent")?,
@@ -18,9 +19,9 @@ fn checkpoint(owner: &str) -> Result<Value> {
 }
 
 #[test]
-fn learned_checkpoint_rejects_unknown_profile_foreign_edges_and_counter_overflow() -> Result<()> {
+fn retired_learned_checkpoint_rejects_old_valid_evidence_and_mutations() -> Result<()> {
     let base = checkpoint("tenant")?;
-    serde_json::from_value::<manifest::Import>(base.clone())?.validate()?;
+    assert!(serde_json::from_value::<manifest::Import>(base.clone()).is_err());
     for (field, value) in [
         ("profile", json!("learned_checkpoint_v99")),
         ("algorithm", json!("history_optimizer_v99")),
@@ -32,145 +33,129 @@ fn learned_checkpoint_rejects_unknown_profile_foreign_edges_and_counter_overflow
             "source_policy",
             serde_json::to_value(reference("other", ResourceKind::Policy, "parent")?)?,
         ),
-        (
-            "predecessor",
-            serde_json::to_value(reference("tenant", ResourceKind::Checkpoint, "learned")?)?,
-        ),
+        ("predecessor", base["reference"].clone()),
     ] {
         let mut bad = base.clone();
         bad["definition"]["evidence"][field] = value;
-        assert!(
-            serde_json::from_value::<manifest::Import>(bad)
-                .and_then(|value| value.validate().map_err(serde::de::Error::custom))
-                .is_err()
-        );
+        assert!(serde_json::from_value::<manifest::Import>(bad).is_err());
     }
     Ok(())
 }
 
 #[tokio::test]
-async fn learned_checkpoint_uses_v3_only_when_selected_and_keeps_exact_policy_closure() -> Result<()>
-{
+async fn retired_checkpoint_import_is_atomic_and_preserves_current_policy_closure() -> Result<()> {
     let (db, resources) = fixture().await?;
-    let checked = async {
-        let checkpoint = checkpoint("tenant")?;
-        let checkpoint_ref = reference("tenant", ResourceKind::Checkpoint, "learned")?;
-        let mut successor = policy("tenant", "successor")?;
-        successor["definition"]["dependencies"] = json!([checkpoint_ref]);
-        import(
-            &resources,
-            &db,
-            vec![policy("tenant", "parent")?, checkpoint, successor],
-        )
-        .await?;
-        let original = document(
-            Vec::new(),
-            Some(reference("tenant", ResourceKind::Policy, "parent")?),
-        )?;
-        let original_compiled = compile(&resources, &db, &original).await?;
-        let old = decrypt(&resources, &original, &original_compiled)?;
-        assert_eq!(old.format, 1);
-        assert!(serde_json::to_value(&old)?.get("format").is_none());
-        let next = document(
-            Vec::new(),
-            Some(reference("tenant", ResourceKind::Policy, "successor")?),
-        )?;
-        let next_compiled = resources
-            .compile(
-                &db,
-                &"tenant".to_owned().try_into()?,
-                &"config-v1".to_owned().try_into()?,
-                &next,
-            )
-            .await;
-        if !cfg!(feature = "core") {
-            assert!(matches!(next_compiled, Err(ErrorCode::CapabilityMismatch)));
-            return Ok(());
+    let key = rand::random();
+    let resources = Resources::with_key(resources.installation, key)?;
+    import(
+        &resources,
+        &db,
+        vec![policy("tenant", "parent")?, policy("tenant", "unselected")?],
+    )
+    .await?;
+    let parent = reference("tenant", ResourceKind::Policy, "parent")?;
+    let original = document(Vec::new(), Some(parent.clone()))?;
+    let compiled = compile(&resources, &db, &original).await?;
+    assert_eq!(compiled.compiler_version, MODEL_POLICY_COMPILER_VERSION);
+    assert_eq!(compiled.dependencies, vec![parent]);
+    let retained = decrypt(&resources, &original, &compiled)?;
+    assert_eq!(retained.format, 7);
+    retained.validate_format()?;
+    assert_eq!(retained.artifacts.len(), 1);
+    let stored = validation::stored(original.clone(), compiled)?;
+    resources
+        .validate_compiled(&stored)
+        .map_err(|code| anyhow::anyhow!("current policy validation: {code:?}"))?;
+    resources
+        .open_execution(&stored)
+        .map_err(|code| anyhow::anyhow!("current policy open: {code:?}"))?;
+    let references = storage::references(&db).await?;
+    let mut successor = policy("tenant", "successor")?;
+    successor["definition"]["dependencies"] = json!([checkpoint("tenant")?["reference"]]);
+    let mut extra = credential("tenant")?;
+    extra["reference"]["resource_id"] = json!("must-not-be-created");
+    let rejected = vec![extra, checkpoint("tenant")?, successor];
+    for format in 1..=4 {
+        let bytes = serde_json::to_vec(&json!({
+            "format":format, "installation_id":resources.installation, "resources":rejected
+        }))?;
+        assert!(resources.provision_bytes(&db, &bytes).await.is_err());
+        #[cfg(all(feature = "core", feature = "harness"))]
+        {
+            let bro = Resources::with_key(resources.installation.clone(), key)?.for_bro_capture();
+            assert!(bro.provision_bytes(&db, &bytes).await.is_err());
         }
-        let next_compiled =
-            next_compiled.map_err(|code| anyhow::anyhow!("compile failed: {code:?}"))?;
-        assert_eq!(next_compiled.dependencies.len(), 3);
-        let mut learned = decrypt(&resources, &next, &next_compiled)?;
-        assert_eq!(learned.format, 3);
-        learned.validate_format()?;
-        assert!(next_compiled.dependencies.contains(&checkpoint_ref));
-        for wrong in [1, 2, 4] {
-            learned.format = wrong;
-            assert!(learned.validate_format().is_err());
-        }
-        let stored = validation::stored(next, next_compiled)?;
-        resources
-            .validate_compiled(&stored)
-            .map_err(|code| anyhow::anyhow!("retained validation: {code:?}"))?;
-        // An unrelated new capability in the catalog cannot change old bytes.
-        let recompiled = compile(&resources, &db, &original).await?;
-        assert_eq!(
-            serde_json::to_value(decrypt(&resources, &original, &recompiled)?)?,
-            serde_json::to_value(old)?
-        );
-        Ok::<(), anyhow::Error>(())
+        assert_eq!(storage::references(&db).await?, references);
     }
-    .await;
-    let closed = db.close().await;
-    checked?;
-    closed?;
+    let recompiled = compile(&resources, &db, &original).await?;
+    assert_eq!(
+        serde_json::to_value(decrypt(&resources, &original, &recompiled)?)?,
+        serde_json::to_value(retained)?
+    );
+    resources.open_execution(&stored).map_err(|code| {
+        anyhow::anyhow!("retained policy changed after rejected import: {code:?}")
+    })?;
+    db.close().await?;
     Ok(())
 }
 
 #[test]
-fn inactive_learned_data_authenticates_even_when_execution_capability_is_absent() -> Result<()> {
-    let resources = Resources::with_key("installation".to_owned().try_into()?, [7; 32])?;
-    let mut successor = policy("tenant", "successor")?;
-    successor["definition"]["dependencies"] =
-        json!([reference("tenant", ResourceKind::Checkpoint, "learned")?]);
-    let mut artifacts = Vec::new();
-    for value in [
-        policy("tenant", "parent")?,
-        checkpoint("tenant")?,
-        successor,
-    ] {
-        let input: manifest::Import = serde_json::from_value(value)?;
-        input.validate()?;
-        artifacts.push(Artifact {
-            reference: input.reference,
-            definition: input.definition,
-            envelope: None,
-        });
+fn authenticated_retired_checkpoint_is_rejected_even_with_current_bro_markers() -> Result<()> {
+    let key = rand::random();
+    let resources = Resources::with_key("installation".to_owned().try_into()?, key)?;
+    let parent = reference("tenant", ResourceKind::Policy, "parent")?;
+    let document = document(Vec::new(), Some(parent.clone()))?;
+    let current = policy("tenant", "parent")?;
+    let retired = checkpoint("tenant")?;
+    let mut envelope = json!({
+        "format":3, "document":document, "routes":[],
+        "artifacts":[
+            {"reference":current["reference"], "definition":current["definition"], "envelope":null},
+            {"reference":retired["reference"], "definition":retired["definition"], "envelope":null}
+        ]
+    });
+    for (format, compiler_version) in [(3, COMPILER_VERSION), (8, BRO_OBLIGATION_COMPILER_VERSION)]
+    {
+        envelope["format"] = json!(format);
+        // Neither old nor current numeric markers can restore the retired decoder.
+        assert!(serde_json::from_value::<Envelope>(envelope.clone()).is_err());
+        let mut stored = validation::stored(
+            document.clone(),
+            CompiledConfiguration {
+                payload: Value::Null,
+                dependencies: vec![parent.clone()],
+                compiler_version: compiler_version.into(),
+            },
+        )?;
+        validation::reseal(&resources, &mut stored, &envelope)?;
+        assert_eq!(
+            resources.validate_compiled(&stored),
+            Err(ErrorCode::AuthorityUnavailable)
+        );
+        assert_eq!(
+            resources.validate_executable(&stored),
+            Err(ErrorCode::AuthorityUnavailable)
+        );
+        assert!(matches!(
+            resources.open_execution(&stored),
+            Err(ErrorCode::AuthorityUnavailable)
+        ));
+        #[cfg(all(feature = "core", feature = "harness"))]
+        {
+            let bro = Resources::with_key(resources.installation.clone(), key)?.for_bro_capture();
+            assert_eq!(
+                bro.validate_compiled(&stored),
+                Err(ErrorCode::AuthorityUnavailable)
+            );
+            assert_eq!(
+                bro.validate_executable(&stored),
+                Err(ErrorCode::AuthorityUnavailable)
+            );
+            assert!(matches!(
+                bro.open_execution(&stored),
+                Err(ErrorCode::AuthorityUnavailable)
+            ));
+        }
     }
-    let document = document(
-        Vec::new(),
-        Some(reference("tenant", ResourceKind::Policy, "successor")?),
-    )?;
-    let dependencies = artifacts
-        .iter()
-        .map(|value| value.reference.clone())
-        .collect();
-    let envelope = Envelope {
-        format: 3,
-        document: document.clone(),
-        routes: Vec::new(),
-        artifacts,
-    };
-    let mut stored = validation::stored(
-        document,
-        CompiledConfiguration {
-            payload: Value::Null,
-            dependencies,
-            compiler_version: COMPILER_VERSION.into(),
-        },
-    )?;
-    // Explicit retained-format fixture, not a learner publication shortcut.
-    validation::reseal(&resources, &mut stored, &serde_json::to_value(envelope)?)?;
-    resources
-        .validate_compiled(&stored)
-        .map_err(|code| anyhow::anyhow!("inactive authentication: {code:?}"))?;
-    assert_eq!(
-        resources.validate_executable(&stored).is_ok(),
-        cfg!(feature = "core")
-    );
-    assert_eq!(
-        resources.open_execution(&stored).is_ok(),
-        cfg!(feature = "core")
-    );
     Ok(())
 }

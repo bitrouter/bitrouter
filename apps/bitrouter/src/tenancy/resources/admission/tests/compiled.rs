@@ -59,7 +59,7 @@ async fn compiled_profile_fixture(
     }
     if shared_health {
         imports[1] = super::shared::shared("profile", 1000)?;
-        super::shared::import_v2(&resources, &db, imports).await?;
+        super::shared::import_current(&resources, &db, imports).await?;
     } else {
         import(&resources, &db, imports).await?;
     }
@@ -166,7 +166,7 @@ async fn shared_profile_256_compiled_shape_retains_exact_closure_and_original_by
         .as_array()
         .context("artifacts")?
         .iter()
-        .position(|row| row["definition"]["kind"] == "admission_profile_v2")
+        .position(|row| row["definition"]["kind"] == "admission_profile")
         .context("shared profile")?;
     changed["artifacts"]
         .as_array_mut()

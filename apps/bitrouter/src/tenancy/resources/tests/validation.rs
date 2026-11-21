@@ -1,6 +1,8 @@
 use super::*;
 use crate::tenancy::configuration_store::StoredConfiguration;
+use anyhow::ensure;
 use bitrouter_ai::tenancy::configuration::ConfigurationRevision;
+use sea_orm_migration::MigratorTrait;
 use sha2::{Digest, Sha256};
 
 pub(in crate::tenancy::resources) fn stored(
@@ -190,6 +192,7 @@ async fn empty_retained_marker_requires_exact_binding_without_a_key() -> Result<
         installation: keyed.installation,
         key: None,
         approved_origins: Vec::new(),
+        bro_capture: false,
     };
     let doc = document(Vec::new(), None)?;
     let original = stored(doc.clone(), compile(&resources, &db, &doc).await?)?;
@@ -214,5 +217,131 @@ async fn empty_retained_marker_requires_exact_binding_without_a_key() -> Result<
         resources.validate_compiled(&changed),
         Err(ErrorCode::AuthorityUnavailable)
     ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn inactive_old_policy_envelope_after_a_page_boundary_refuses_bootstrap_and_restore()
+-> Result<()> {
+    let (db, resources) = fixture().await?;
+    // Retained configurations require a real current tenant, including inactive rows.
+    db.execute(Statement::from_sql_and_values(
+        DatabaseBackend::Sqlite,
+        "INSERT INTO tenancy_tenants (id, revision, state, created_at) VALUES (?, ?, ?, ?)",
+        [
+            "tenant".into(),
+            "v1".into(),
+            "active".into(),
+            "2026-01-01T00:00:00Z".into(),
+        ],
+    ))
+    .await?;
+    let policy_ref = reference("tenant", ResourceKind::Policy, "policy")?;
+    let mut input = route("tenant", "visible", "base")?;
+    input["definition"]["selector"] = json!("bitrouter/choice");
+    input["definition"]["policy"] = serde_json::to_value(&policy_ref)?;
+    input["definition"]["routing"]["routers"] = json!({"choice":{"selection":{"kind":"policy","policy":"selected","base_model":"fixture:base"}}});
+    import(
+        &resources,
+        &db,
+        vec![credential("tenant")?, policy("tenant", "policy")?, input],
+    )
+    .await?;
+    let document = document(
+        vec![reference("tenant", ResourceKind::Route, "visible")?],
+        Some(policy_ref),
+    )?;
+    let tenant: TenantId = "tenant".try_into()?;
+    let mut original_last = None;
+    for n in 0..35 {
+        let revision: RevisionId = format!("revision-{n:03}").try_into()?;
+        let compiled = resources
+            .compile(&db, &tenant, &revision, &document)
+            .await
+            .map_err(|error| anyhow::anyhow!("current fixture compile: {error:?}"))?;
+        let mut row = stored(document.clone(), compiled)?;
+        row.revision.tenant_id = tenant.clone();
+        row.revision.revision_id = revision;
+        resources
+            .validate_compiled(&row)
+            .map_err(|code| anyhow::anyhow!("current retained fixture: {code:?}"))?;
+        if n == 34 {
+            // The first page and its current overflow authenticate before adding corruption.
+            resources.bootstrap(&db, None).await?;
+            resources
+                .inspect_all_retained_in(&db, 64 * 1024 * 1024, &|| Ok(()))
+                .await?;
+            let binding = (
+                &resources.installation,
+                &row.revision.tenant_id,
+                &row.revision.revision_id,
+                row.revision.compiler_version.as_str(),
+                &row.revision.document,
+                &row.dependencies,
+            );
+            let sealed = serde_json::from_value(row.compiled["sealed"].clone())?;
+            let bytes = resources
+                .key
+                .as_ref()
+                .context("current fixture key")?
+                .open_bound("configuration", &binding, &sealed)?;
+            let mut envelope: Value = serde_json::from_slice(&bytes)?;
+            let mut changed = 0;
+            for artifact in envelope["artifacts"]
+                .as_array_mut()
+                .context("current artifacts")?
+            {
+                if artifact["definition"]["kind"] == "policy" {
+                    artifact["definition"]["document"] =
+                        json!({"lockfileVersion":4,"policies":{},"certificates":{}});
+                    changed += 1;
+                }
+            }
+            ensure!(changed == 1);
+            reseal(&resources, &mut row, &envelope)?;
+            ensure!(resources.validate_compiled(&row) == Err(ErrorCode::AuthorityUnavailable));
+            original_last = Some(serde_json::to_value(&row.compiled)?);
+        }
+        crate::tenancy::configuration_store::insert_configuration(&db, &row).await?;
+    }
+    ensure!(
+        crate::tenancy::configuration_store::retained_configuration_page(&db, None)
+            .await?
+            .len()
+            == 32
+    );
+    ensure!(
+        crate::tenancy::configuration_store::active_revision_page(&db, None)
+            .await?
+            .is_empty()
+    );
+    let ledger = crate::db::migration::Migrator::get_migration_models(&db).await?;
+    let mut extra = credential("tenant")?;
+    extra["reference"]["resource_id"] = json!("must-not-be-created");
+    let input = serde_json::to_vec(
+        &json!({"format":1,"installation_id":resources.installation,"resources":[extra]}),
+    )?;
+    ensure!(resources.bootstrap(&db, Some(&input)).await.is_err());
+    ensure!(
+        resources
+            .inspect_all_retained_in(&db, 64 * 1024 * 1024, &|| Ok(()))
+            .await
+            .is_err()
+    );
+    let references = storage::references(&db).await?;
+    ensure!(
+        references
+            .iter()
+            .all(|reference| reference.resource_id.as_str() != "must-not-be-created")
+    );
+    let last = crate::tenancy::configuration_store::configuration(
+        &db,
+        &tenant,
+        &"revision-034".try_into()?,
+    )
+    .await?
+    .context("inactive last row")?;
+    ensure!(Some(serde_json::to_value(last.compiled)?) == original_last);
+    ensure!(crate::db::migration::Migrator::get_migration_models(&db).await? == ledger);
     Ok(())
 }

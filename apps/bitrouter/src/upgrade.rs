@@ -83,8 +83,7 @@ fn decode_hello(reply: DaemonResponse) -> Result<Hello> {
             && !build_id.is_empty()
             && !artifact.target.is_empty()
             && artifact.features.windows(2).all(|pair| pair[0] < pair[1])
-            && artifact.version == version
-            && artifact.handoff_build_id == build_id =>
+            && artifact.version == version =>
         {
             Ok(Hello {
                 version,
@@ -504,9 +503,6 @@ mod tests {
 
         let mut wrong = current.clone();
         wrong.version = "0.0.0".into();
-        assert!(decode_hello(reply(HANDOFF_PROTOCOL, Some(wrong))).is_err());
-        let mut wrong = current.clone();
-        wrong.handoff_build_id = "another-build".into();
         assert!(decode_hello(reply(HANDOFF_PROTOCOL, Some(wrong))).is_err());
         let mut wrong = current;
         wrong.features = vec!["tui".into(), "harness".into()];

@@ -44,7 +44,6 @@ impl Fixture {
                 Vec::new()
             },
             profile: profile.identity(),
-            handoff_build_id: "test-build-id".to_owned(),
         };
         fs::write(
             out_dir.join("artifact.json"),

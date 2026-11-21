@@ -5,9 +5,6 @@ use sea_orm_migration::prelude::*;
 
 use super::m20240101_000028_resource_tenancy::identity;
 
-#[derive(DeriveMigrationName)]
-pub struct Migration;
-
 const TABLE: &str = "tenancy_continuation_epoch";
 
 fn definition(backend: DatabaseBackend) -> TableCreateStatement {
@@ -155,40 +152,13 @@ async fn validate(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
     Ok(())
 }
 
-#[async_trait::async_trait]
-impl MigrationTrait for Migration {
-    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        if !manager.has_table(TABLE).await? {
-            manager
-                .create_table(definition(manager.get_database_backend()))
-                .await?;
-        }
-        // Resume an acknowledged DDL whose migration-ledger write was interrupted.
-        validate(manager).await
-    }
-
-    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        if !manager.has_table(TABLE).await? {
-            return Ok(());
-        }
-        validate(manager).await?;
-        let row = manager
-            .get_connection()
-            .query_one(Statement::from_string(
-                manager.get_database_backend(),
-                "SELECT 1 FROM tenancy_continuation_epoch LIMIT 1".to_owned(),
-            ))
-            .await?;
-        if row.is_some() {
-            return Err(DbErr::Custom(
-                "migration031 cannot remove a retained native artifact key pin".into(),
-            ));
-        }
+/// DDL-only component of the fresh current baseline; never accepts an old dataset.
+pub(super) async fn initialize_current(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
+    if !manager.has_table(TABLE).await? {
         manager
-            .drop_table(Table::drop().table(Alias::new(TABLE)).to_owned())
-            .await
+            .create_table(definition(manager.get_database_backend()))
+            .await?;
     }
+    // Resume an acknowledged DDL whose migration-ledger write was interrupted.
+    validate(manager).await
 }
-
-#[cfg(test)]
-mod tests;

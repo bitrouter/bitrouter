@@ -1,6 +1,10 @@
 # BitRouter Registry v1
 
-Status: **normative beta protocol, `1.0.0-beta.7`.**
+Status: **normative beta protocol, `registry/1.0.0-beta.7`.**
+
+The qualified identifier names this contract. Its wire fields retain integer
+`version: 1` and unqualified `spec_revision: 1.0.0-beta.7`; no second
+independently editable contract discriminator is added.
 
 Date: 2026-11-16. Wire version: **`"version": 1`**.
 

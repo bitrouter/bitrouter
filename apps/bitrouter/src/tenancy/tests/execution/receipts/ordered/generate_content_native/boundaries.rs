@@ -52,7 +52,7 @@ impl Harness {
         &self,
         indices: Vec<u16>,
         raw: &str,
-        defaults: Option<&GenerationDefaultsEnvelopeV2>,
+        defaults: Option<&GenerationDefaultsEnvelope>,
         opt_in: bool,
         media: &str,
     ) -> Result<reqwest::Response> {
@@ -61,7 +61,7 @@ impl Harness {
             .binding(indices, GenerationProtocol::GenerateContent)
             .await?;
         let binding = match defaults {
-            Some(defaults) => binding.with_generation_defaults_envelope_v2(defaults)?,
+            Some(defaults) => binding.with_generation_defaults_envelope(defaults)?,
             None => binding,
         };
         let mut headers = caller_timeout::ordered_headers(&self.ordered, &binding)?;
@@ -142,7 +142,7 @@ fn envelope(request: &str, stream: bool) -> String {
     )
 }
 
-fn defaults(supplemental: Value) -> Result<GenerationDefaultsEnvelopeV2> {
+fn defaults(supplemental: Value) -> Result<GenerationDefaultsEnvelope> {
     Ok(serde_json::from_value(
         json!({"schema_version":2,"canonical":{"schema_version":1,"max_tokens":17},
         "supplemental":supplemental,"configuration_defaults":"preserve_absence"}),
@@ -152,6 +152,11 @@ fn defaults(supplemental: Value) -> Result<GenerationDefaultsEnvelopeV2> {
 #[tokio::test]
 async fn native_generate_content_mounted_discovery_without_peer_is_disabled_and_ordinary_still_works()
 -> Result<()> {
+    use bitrouter_ai::tenancy::{
+        operation::{DispatchState, Error, ErrorCode, OperationStatus},
+        resources::Definition,
+    };
+
     let ordered = OrderedHarness::with_profiles(
         1,
         8,
@@ -163,12 +168,35 @@ async fn native_generate_content_mounted_discovery_without_peer_is_disabled_and_
     let control = ordered.control(true, HttpVersion::Http1Only)?;
     let capabilities = control.ordered_generate_content_capabilities().await?;
     ensure!(!capabilities.enabled && !capabilities.cached_content_enabled);
+    // Resource provisioning describes the current wire and wrapping key, not peer readiness.
+    let resources = control
+        .resource_capabilities(&ordered.fixture.installation)
+        .await?;
+    ensure!(resources.format == 1 && resources.provisioning_enabled);
     ensure!(
-        !control
-            .resource_capabilities_v3(&ordered.fixture.installation)
-            .await?
-            .provisioning_enabled
+        resources
+            .generation_protocols
+            .contains(&GenerationProtocol::GenerateContent)
     );
+    let mut key = ordered.route.key();
+    key.resource_kind = ResourceKind::Credential;
+    key.resource_id = "native-disabled-slot".try_into()?;
+    let published = control
+        .put_resource(
+            &ordered.fixture.tenant,
+            &ResourcePut {
+                format: 1,
+                operation_id: "native-disabled-slot".try_into()?,
+                installation_id: ordered.fixture.installation.clone(),
+                key,
+                expected_revision: None,
+                definition: Definition::Credential {
+                    secret: "owned-upstream-secret".into(),
+                },
+            },
+        )
+        .await?;
+    ensure!(published.status == OperationStatus::Applied && published.resource_revision.is_some());
     let binding = ordered
         .binding(vec![0], GenerationProtocol::ChatCompletions)
         .await?;
@@ -189,6 +217,12 @@ async fn native_generate_content_mounted_discovery_without_peer_is_disabled_and_
     ensure!(
         response.status() == StatusCode::CONFLICT
             && !response.headers().contains_key("x-bitrouter-request-id")
+    );
+    let failure: Error = response.json().await?;
+    ensure!(
+        failure.code == ErrorCode::CapabilityMismatch
+            && failure.dispatch_state == DispatchState::NotStarted
+            && failure.execution_id.is_none()
     );
     ensure!(ordered.observed()?.is_empty());
     let id = ordered
@@ -230,7 +264,7 @@ async fn native_generate_content_mounted_original_tokens_survive_opaque_number_k
     ensure!(body["candidates"][0]["content"]["parts"][1]["inlineData"]["mimeType"] == "image/png");
     ensure!(harness.ordered.observed()? == ["model-0"]);
     let receipt = harness.ordered.receipt(&id).await?;
-    ensure!(receipt.attempts.len() == 1 && receipt.attempts[0].candidate_index == 0);
+    ensure!(receipt.attempts.len() == 1 && receipt.attempts[0].candidate_index == Some(0));
     {
         let records = harness
             .peer

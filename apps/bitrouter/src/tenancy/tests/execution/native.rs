@@ -8,6 +8,7 @@ use std::{
     time::Duration,
 };
 
+use crate::managed_contract::evidence::NativeAttemptReport;
 use anyhow::{Context, Result, ensure};
 use async_trait::async_trait;
 use axum::{
@@ -18,7 +19,6 @@ use axum::{
     routing::post,
 };
 use bitrouter_ai::{
-    core::evidence::NativeAttemptReport,
     tenancy::{
         authority::{BindingPut, CredentialIssued, GrantScope, TenantPut, TenantRole, TenantState},
         configuration::{Limits, ResourceRef},
@@ -1077,7 +1077,7 @@ async fn revised_route(
     count: bool,
 ) -> Result<ResourceRef> {
     fixture.service.shutdown().await?;
-    let resources = Resources::with_key(fixture.installation.clone(), [29; 32])?;
+    let resources = fixture.service.resources.clone();
     let mut route = route.clone();
     route.revision_id = "native-r2".try_into()?;
     resources.provision_bytes(&fixture.db, &serde_json::to_vec(&json!({
@@ -1092,7 +1092,7 @@ async fn revised_route(
     }))?).await?;
     let snapshot = store::load(&fixture.db, chrono::Utc::now()).await?;
     fixture.service =
-        Service::start_prepared(fixture.db.clone(), None, snapshot, Arc::new(resources)).await?;
+        Service::start_prepared(fixture.db.clone(), None, snapshot, resources).await?;
     Ok(route)
 }
 

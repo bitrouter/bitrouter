@@ -6,7 +6,61 @@ use super::identity::{
     AccountId, AttemptId, AuthorityRevision, CorrelationId, CredentialId, ExecutionId,
     InstallationId, PrincipalId, ProviderId, RevisionId, TenantId, Timestamp,
 };
+use super::ordered::{
+    AcceptedSelection, MAX_CANDIDATES, validate_attempt_limit, validate_tenant_reference,
+};
 use super::validation::{Validate, ValidationError, bytes, nullable, require, text, unique};
+
+mod dispatch;
+
+/// Maximum serialized receipt size.
+pub const MAX_BYTES: usize = 1024 * 1024;
+
+/// Dispatch facts accepted before any physical provider attempt.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum Dispatch {
+    /// Strict dispatch admits at most eight physical attempts.
+    Strict,
+    /// Ordered dispatch retains the exact selection and admission ceiling.
+    Ordered {
+        /// Accepted route, ingress protocol and original candidate order.
+        accepted_selection: AcceptedSelection,
+        /// Configured ceiling at admission, at least the accepted count.
+        attempt_limit: u8,
+    },
+}
+impl Dispatch {
+    /// Maximum number of actual attempts admitted by this dispatch.
+    pub fn accepted_count(&self) -> usize {
+        match self {
+            Self::Strict => 8,
+            Self::Ordered {
+                accepted_selection, ..
+            } => accepted_selection.candidate_indices.len(),
+        }
+    }
+    /// Validate the dispatch selection and its owning tenant.
+    ///
+    /// # Errors
+    /// Rejects invalid selections, limits and foreign tenant references.
+    pub fn validate_for(&self, tenant: &TenantId) -> Result<(), ValidationError> {
+        if let Self::Ordered {
+            accepted_selection,
+            attempt_limit,
+        } = self
+        {
+            accepted_selection.validate()?;
+            validate_tenant_reference(&accepted_selection.route, tenant)?;
+            validate_attempt_limit(*attempt_limit)?;
+            require(
+                accepted_selection.candidate_indices.len() <= usize::from(*attempt_limit),
+                "ordered attempt capacity",
+            )?;
+        }
+        Ok(())
+    }
+}
 
 /// Evidence provenance, kept conservative across every provider attempt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -145,6 +199,12 @@ pub enum Outcome {
 pub struct Attempt {
     /// Unique identity within the execution.
     pub attempt_id: AttemptId,
+    /// Accepted candidate ordinal for ordered dispatch; null for strict dispatch.
+    #[serde(deserialize_with = "optional_u16")]
+    pub candidate_index: Option<u16>,
+    /// Observed final upstream HTTP status, or explicit null if unknown.
+    #[serde(deserialize_with = "optional_u16")]
+    pub observed_http_status: Option<u16>,
     /// Actual selected target; required for completed attempts.
     #[serde(deserialize_with = "nullable")]
     pub target: Option<Target>,
@@ -169,9 +229,10 @@ pub enum ReceiptState {
 }
 
 /// Owner-bound facts of one actual invocation. Correlation never deduplicates it.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ExecutionReceipt {
+    /// Strict or ordered dispatch, including the accepted ordered selection.
+    pub dispatch: Dispatch,
     /// Store that admitted this invocation.
     pub installation_id: InstallationId,
     /// Immutable owning tenant.
@@ -188,12 +249,51 @@ pub struct ExecutionReceipt {
     pub state: ReceiptState,
     /// Observed overall outcome.
     pub outcome: Outcome,
-    /// At most eight distinct attempts, including failures.
+    /// Actual attempts in dispatch order, including failures.
     pub attempts: Vec<Attempt>,
     /// Conservative totals across every attempt.
     pub usage: Usage,
     /// UTC recording timestamp.
     pub recorded_at: Timestamp,
+}
+
+#[derive(Deserialize)]
+#[serde(remote = "ExecutionReceipt", deny_unknown_fields)]
+struct ReceiptFields {
+    dispatch: Dispatch,
+    installation_id: InstallationId,
+    tenant_id: TenantId,
+    principal_id: PrincipalId,
+    execution_id: ExecutionId,
+    correlation_id: CorrelationId,
+    execution_revision: RevisionId,
+    state: ReceiptState,
+    outcome: Outcome,
+    attempts: Vec<Attempt>,
+    usage: Usage,
+    recorded_at: Timestamp,
+}
+
+impl<'de> Deserialize<'de> for ExecutionReceipt {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Object;
+        impl<'de> serde::de::Visitor<'de> for Object {
+            type Value = ExecutionReceipt;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("an execution receipt JSON object")
+            }
+
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                map: M,
+            ) -> Result<Self::Value, M::Error> {
+                // Forward original field tokens to the closed derived decoder.
+                ReceiptFields::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+            }
+        }
+        deserializer.deserialize_map(Object)
+    }
 }
 
 /// One bounded, ASCII-ordered correlation query page.
@@ -225,6 +325,23 @@ impl Validate for NumericUsage {
 }
 impl Validate for Attempt {
     fn validate(&self) -> Result<(), ValidationError> {
+        require(
+            self.candidate_index
+                .is_none_or(|index| usize::from(index) < MAX_CANDIDATES),
+            "attempt candidate ordinal",
+        )?;
+        require(
+            self.observed_http_status
+                .is_none_or(|status| (200..=599).contains(&status)),
+            "observed HTTP status",
+        )?;
+        require(
+            self.outcome != Outcome::Completed
+                || self
+                    .observed_http_status
+                    .is_none_or(|status| (200..=299).contains(&status)),
+            "completed attempt HTTP status",
+        )?;
         validate_attempt_facts(
             self.outcome,
             self.target.as_ref(),
@@ -260,48 +377,41 @@ pub(super) fn validate_attempt_facts(
     bytes(&native_usage, 8192)
 }
 
-// Borrow facts across receipt versions without cloning or projecting into v1.
-pub(super) trait ReceiptAttempt: Validate {
-    fn id(&self) -> &AttemptId;
-    fn outcome(&self) -> Outcome;
-    fn usage(&self) -> &Usage;
-}
-impl ReceiptAttempt for Attempt {
-    fn id(&self) -> &AttemptId {
-        &self.attempt_id
-    }
-    fn outcome(&self) -> Outcome {
-        self.outcome
-    }
-    fn usage(&self) -> &Usage {
-        &self.usage
-    }
+fn optional_u16<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<u16>, D::Error> {
+    super::number::nullable_integer(deserializer)?
+        .map(|value| u16::try_from(value).map_err(serde::de::Error::custom))
+        .transpose()
 }
 
-pub(super) fn validate_receipt_facts<A: ReceiptAttempt>(
+fn validate_receipt_facts(
     outcome: Outcome,
-    attempts: &[A],
+    attempts: &[Attempt],
     usage: &Usage,
 ) -> Result<(), ValidationError> {
     require(
-        outcome != Outcome::Completed || attempts.iter().any(|a| a.outcome() == Outcome::Completed),
+        outcome != Outcome::Completed || attempts.iter().any(|a| a.outcome == Outcome::Completed),
         "completed execution attempt",
     )?;
     let mut ids = std::collections::HashSet::new();
     for attempt in attempts {
-        require(ids.insert(attempt.id()), "duplicate attempt identity")?;
+        require(
+            ids.insert(&attempt.attempt_id),
+            "duplicate attempt identity",
+        )?;
         attempt.validate()?;
     }
     usage.validate()?;
     let provenance = if attempts.is_empty()
         || attempts
             .iter()
-            .any(|a| a.usage().provenance == Provenance::Unknown)
+            .any(|a| a.usage.provenance == Provenance::Unknown)
     {
         Provenance::Unknown
     } else if attempts
         .iter()
-        .any(|a| a.usage().provenance == Provenance::Estimated)
+        .any(|a| a.usage.provenance == Provenance::Estimated)
     {
         Provenance::Estimated
     } else {
@@ -309,14 +419,14 @@ pub(super) fn validate_receipt_facts<A: ReceiptAttempt>(
     };
     require(usage.provenance == provenance, "aggregate provenance")?;
     require(
-        !usage.complete || (!attempts.is_empty() && attempts.iter().all(|a| a.usage().complete)),
+        !usage.complete || (!attempts.is_empty() && attempts.iter().all(|a| a.usage.complete)),
         "aggregate completeness",
     )?;
     for (index, total) in usage.quantities().into_iter().enumerate() {
         if let Some(total) = total {
             require(!attempts.is_empty(), "total without attempts")?;
             let sum = attempts.iter().try_fold(0_u64, |sum, a| {
-                sum.checked_add(a.usage().quantities()[index]?)
+                sum.checked_add(a.usage.quantities()[index]?)
             });
             require(sum == Some(total), "total must include every attempt")?;
         }
@@ -327,9 +437,48 @@ pub(super) fn validate_receipt_facts<A: ReceiptAttempt>(
 
 impl Validate for ExecutionReceipt {
     fn validate(&self) -> Result<(), ValidationError> {
-        require(self.attempts.len() <= 8, "attempt count")?;
+        self.dispatch.validate_for(&self.tenant_id)?;
+        require(
+            self.attempts.len() <= self.dispatch.accepted_count(),
+            "attempt count",
+        )?;
+        match &self.dispatch {
+            Dispatch::Strict => require(
+                self.attempts
+                    .iter()
+                    .all(|attempt| attempt.candidate_index.is_none()),
+                "strict attempt candidate ordinal",
+            )?,
+            Dispatch::Ordered {
+                accepted_selection, ..
+            } => {
+                let mut remaining = accepted_selection.candidate_indices.iter();
+                for attempt in &self.attempts {
+                    require(
+                        remaining.any(|&ordinal| Some(ordinal) == attempt.candidate_index),
+                        "ordered attempt subsequence",
+                    )?;
+                }
+                require(
+                    self.attempts
+                        .windows(2)
+                        .all(|pair| pair[0].outcome == Outcome::Failed),
+                    "ordered attempt after terminal outcome",
+                )?;
+                if self
+                    .attempts
+                    .iter()
+                    .any(|attempt| attempt.outcome == Outcome::Unknown)
+                {
+                    require(
+                        self.state == ReceiptState::Unknown && self.outcome == Outcome::Unknown,
+                        "unknown ordered attempt classification",
+                    )?;
+                }
+            }
+        }
         validate_receipt_facts(self.outcome, &self.attempts, &self.usage)?;
-        bytes(self, 1_048_576)
+        bytes(self, MAX_BYTES)
     }
 }
 impl Validate for ExecutionPage {

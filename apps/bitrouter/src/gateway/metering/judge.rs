@@ -4,6 +4,7 @@
 
 use std::sync::{Arc, Mutex};
 
+use crate::gateway::observability::event::PipelineEvent;
 use crate::gateway::pipeline::context::{PipelineContext, StreamContext};
 use crate::gateway::pipeline::hooks::{
     HookDecision, HopOutcome, ObserveHook, Phase, PreRequestHook, RequestOutcome,
@@ -12,7 +13,6 @@ use crate::gateway::pipeline::settlement::{SettlementContext, SettlementRecorder
 use crate::gateway::pipeline::types::RoutingTarget;
 use anyhow::{Result, ensure};
 use async_trait::async_trait;
-use bitrouter_ai::event::PipelineEvent;
 use bitrouter_ai::types::{StreamPart, ToolChoice, UsageOrigin};
 use sea_orm::DatabaseConnection;
 #[cfg(test)]

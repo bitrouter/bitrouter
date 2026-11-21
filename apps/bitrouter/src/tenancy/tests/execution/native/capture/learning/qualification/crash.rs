@@ -8,7 +8,7 @@ async fn accepted_child() -> Result<()> {
     let root = PathBuf::from(std::env::var_os(process::ROOT).context("crash root")?);
     let subject = std::env::var(process::SUBJECT)?;
     let judge = std::env::var(process::JUDGE)?;
-    let ready = file_ready(&root.join("owned.db"), &subject, &judge).await?;
+    let ready = file_ready(&root.join("owned.db"), &subject, &judge, Some(process::KEY)).await?;
     let port = ready.port().await?;
     let work = port.clone();
     let task = AbortOnDropHandle::new(tokio::spawn(async move { work.checkpoint(native()).await }));
@@ -47,11 +47,12 @@ async fn killed_file_backed_paid_owner_cannot_restart_or_replay_its_uncertain_pr
     let path = root.path().join("owned.db");
     let provider = Provider::start(false).await?;
     let mut judge = Judge::new(true).await?;
+    let key = rand::random();
     let mut child = process::Child::start(
         CHILD,
         root.path(),
         "crash",
-        Some((&provider.url, &judge.url)),
+        Some((&provider.url, &judge.url, &key)),
     )?;
     let observed = async {
         judge.receive().await?;
@@ -74,7 +75,7 @@ async fn killed_file_backed_paid_owner_cannot_restart_or_replay_its_uncertain_pr
             "accepted job/budget/pending not committed before death"
         );
         let snapshot = store::load(&db, Utc::now()).await?;
-        let resources = Resources::with_key(snapshot.installation.clone(), [29; 32])?;
+        let resources = Resources::with_key(snapshot.installation.clone(), key)?.for_bro_capture();
         let attempt = Service::start_prepared(
             db.clone(),
             Some(owner.clone()),

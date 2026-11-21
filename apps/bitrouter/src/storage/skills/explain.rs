@@ -5,12 +5,12 @@ use bitrouter_ai::types::{Content, Prompt, Role};
 use serde::Serialize;
 
 use super::{SkillCandidate, SkillCatalog, SkillConsent, SkillConstraints, SkillSource};
+use crate::managed_contract::harness::inspection::AgentStatus;
+use crate::managed_contract::protocol::CoreError;
 use crate::storage::checkpoint::sha256;
 use crate::storage::checkpoint::snapshot::context::{digest, view::SourceRevision};
 use crate::storage::checkpoint::snapshot::{ProviderWorkRecord, SessionSnapshot};
 use crate::storage::skills::state as skills;
-use bitrouter_ai::core::protocol::CoreError;
-use bitrouter_ai::harness::inspection::AgentStatus;
 
 #[derive(Debug, Serialize)]
 pub struct Explanation {

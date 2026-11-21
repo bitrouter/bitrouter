@@ -4,13 +4,13 @@ use crate::config::Config;
 use crate::config::checker::CheckerConfig;
 use crate::config::router::MAX_CHECKER_TIMEOUT_MS;
 use crate::gateway::extensions::registry::registration::Registration;
+use crate::gateway::extensions::request_check::{
+    Decision, Input, RequestCheckCoverageStatus, validate_revision,
+};
 use crate::gateway::pipeline::request_checks::{
     CheckerFailure, CheckerFailureKind, CheckerResult, RequestCheckBinding, RequestCheckerRunner,
 };
 use async_trait::async_trait;
-use bitrouter_ai::extension::request_check::{
-    Decision, Input, RequestCheckCoverageStatus, validate_revision,
-};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -232,15 +232,15 @@ impl RequestCheckerRunner for RequestCheckRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::router::RoutingConfig;
     use crate::config::router::{
         DEFAULT_CHECKER_MAX_INPUT_BYTES, RouterChecks, RouterConfig, RouterDefaults,
         RouterRequestCheck, RouterSelection,
     };
-    use bitrouter_ai::extension::request_check::{
+    use crate::gateway::extensions::request_check::{
         Callback as CheckCallback, ContentFragment, ContentFragmentKind, ContentRole, Decision,
         RequestCheckCoverage, RequestCheckCoverageScope,
     };
-    use bitrouter_ai::routing::RoutingConfig;
     use std::sync::Mutex;
     use std::sync::atomic::Ordering;
     fn binding(config: &Config) -> anyhow::Result<RequestCheckBinding> {
@@ -313,7 +313,7 @@ mod tests {
     #[tokio::test]
     async fn native_timeout_and_cancellation_hold_admission_until_cpu_work_finishes()
     -> anyhow::Result<()> {
-        use bitrouter_ai::extension::request_check::Decision as CheckDecision;
+        use crate::gateway::extensions::request_check::Decision as CheckDecision;
         use std::sync::atomic::AtomicUsize;
         for cancel in [false, true] {
             let config = native_config();
@@ -417,7 +417,7 @@ mod tests {
     #[test]
     fn native_activation_rejects_missing_mismatched_and_invalid_registrations() -> anyhow::Result<()>
     {
-        use bitrouter_ai::extension::request_check::Decision as CheckDecision;
+        use crate::gateway::extensions::request_check::Decision as CheckDecision;
         let config = native_config();
         assert!(RequestCheckRuntime::activate(&config).is_err());
         let register =

@@ -18,11 +18,7 @@ pub(super) fn assessment(
         "paid output lacks observed ACK"
     );
     let evaluator = io::json(&value.route, 4096)?;
-    let version = if value.version == 4 {
-        judge::NATIVE_JUDGE_VERSION
-    } else {
-        judge::JUDGE_VERSION
-    };
+    let version = judge::JUDGE_VERSION;
     let pipeline = crate::core::evolution::scoring::measurement_contract_for(
         &input.evidence.projection_version,
         AssessmentSource::Agentic,

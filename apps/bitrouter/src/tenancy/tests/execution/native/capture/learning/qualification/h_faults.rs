@@ -5,7 +5,7 @@ const CHILD: &str =
 async fn exercise(path: &Path, mode: &str) -> Result<()> {
     let provider = Provider::start(false).await?;
     let judge = Judge::new(false).await?;
-    let ready = file_ready(path, &provider.url, &judge.url).await?;
+    let ready = file_ready(path, &provider.url, &judge.url, None).await?;
     let (binding, port) = ready.port_pair().await?;
     let summary = frozen(&binding).await?;
     let proof = ready.fixture.service.cleanup.clone();

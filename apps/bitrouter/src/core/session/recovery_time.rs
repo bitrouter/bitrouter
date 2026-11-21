@@ -2,8 +2,8 @@
 //! Measurements replace the cumulative baseline; they are never added to it.
 
 use super::*;
+use crate::managed_contract::protocol::{Restore, RunActivityReconciliation};
 use crate::storage::checkpoint::snapshot::ActivityGap;
-use bitrouter_ai::core::protocol::{Restore, RunActivityReconciliation};
 
 pub(super) fn reconcile(state: &mut SessionSnapshot, request: &Restore) -> Result<(), CoreError> {
     let Some(run) = &mut state.run else {
@@ -257,7 +257,7 @@ fn conflict(message: &str) -> CoreError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitrouter_ai::core::checkpoint::{BatchIdentity, Checkpoint, DurableEvent};
+    use crate::managed_contract::checkpoint::{BatchIdentity, Checkpoint, DurableEvent};
 
     fn head(revision: u64) -> DurableHead {
         DurableHead {

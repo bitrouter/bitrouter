@@ -304,8 +304,9 @@ impl CoreSession {
             let mut response = None;
             let mut reason = "conservative_context";
             let needs_assessment = turn.input.routing.model
-                == bitrouter_ai::core::protocol::ModelMode::Policy
-                || (turn.input.routing.context == bitrouter_ai::core::protocol::ContextMode::Auto
+                == crate::managed_contract::harness::agent::ModelMode::Policy
+                || (turn.input.routing.context
+                    == crate::managed_contract::protocol::ContextMode::Auto
                     && !candidates.candidates.is_empty());
             if needs_assessment
                 && let Some((request, native)) =
@@ -415,7 +416,7 @@ impl CoreSession {
                 .as_ref()
                 .and_then(|id| current.context_store.decisions.get(id))
                 .map(crate::core::context_router::models::receipt);
-            if turn.input.routing.context == bitrouter_ai::core::protocol::ContextMode::Auto {
+            if turn.input.routing.context == crate::managed_contract::protocol::ContextMode::Auto {
                 capabilities.extend([
                     crate::gateway::routing::ContextCapability::OmitEvidence,
                     crate::gateway::routing::ContextCapability::UseExtract,
@@ -536,7 +537,7 @@ impl CoreSession {
 }
 
 fn portable_reasoning(state: &SessionSnapshot, turn: &AgentTurn) -> bool {
-    turn.input.routing.context == bitrouter_ai::core::protocol::ContextMode::Auto
+    turn.input.routing.context == crate::managed_contract::protocol::ContextMode::Auto
         && state.manifest.required_features.iter().any(|feature| {
             feature == crate::storage::checkpoint::snapshot::context::PORTABLE_RESPONSES_REASONING
         })

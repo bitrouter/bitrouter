@@ -101,21 +101,30 @@ pub(crate) async fn preflight(
     fields: &[&str],
     bytes: usize,
 ) -> Result<()> {
-    use sea_orm::{Statement, Value};
+    use sea_orm::{DatabaseBackend, Statement, Value};
+    let backend = db.get_database_backend();
     let predicate = keys
         .iter()
-        .map(|(key, _)| format!("{key}=?"))
+        .enumerate()
+        .map(|(index, (key, _))| match backend {
+            DatabaseBackend::Postgres => format!("{key}=${}", index + 1),
+            DatabaseBackend::Sqlite | DatabaseBackend::MySql => format!("{key}=?"),
+        })
         .collect::<Vec<_>>()
         .join(" AND ");
     let values: Vec<Value> = keys.iter().map(|(_, value)| (*value).into()).collect();
     let lengths = fields
         .iter()
-        .map(|name| format!("length(CAST({name} AS BLOB))"))
+        .map(|name| match backend {
+            DatabaseBackend::Sqlite => format!("length(CAST({name} AS BLOB))"),
+            DatabaseBackend::Postgres => format!("CAST(octet_length({name}) AS BIGINT)"),
+            DatabaseBackend::MySql => format!("CAST(octet_length({name}) AS SIGNED)"),
+        })
         .collect::<Vec<_>>()
         .join("+");
     let row = db
         .query_one(Statement::from_sql_and_values(
-            db.get_database_backend(),
+            backend,
             format!("SELECT {lengths} AS bytes FROM {table} WHERE {predicate} LIMIT 1"),
             values.clone(),
         ))
@@ -129,7 +138,7 @@ pub(crate) async fn preflight(
     ensure!(initial <= bytes, super::streams::WorkingCapacity);
     let row = db
         .query_one(Statement::from_sql_and_values(
-            db.get_database_backend(),
+            backend,
             format!(
                 "SELECT {} FROM {table} WHERE {predicate} LIMIT 1",
                 fields.join(",")

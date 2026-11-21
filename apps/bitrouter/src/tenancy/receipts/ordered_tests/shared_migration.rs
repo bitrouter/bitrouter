@@ -3,18 +3,14 @@ use super::*;
 use sea_orm_migration::MigratorTrait;
 
 #[tokio::test]
-async fn shared_health_upgrade_preserves_ordered_receipt_evidence_and_digest_bytes() -> Result<()> {
+async fn current_baseline_preserves_ordered_receipt_evidence_and_digest_bytes() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("format-three.sqlite");
     let (lease, proof, startup) = acquisition(&path)?;
     let db = crate::db::connect_tenancy(&format!("sqlite://{}?mode=rwc", path.display()), &lease)
         .await?;
-    let before = crate::db::migration::Migrator::migrations()
-        .iter()
-        .position(|m| m.name() == "m20240101_000047_shared_admission_health")
-        .context("shared migration")?;
-    crate::db::migration::Migrator::up(&db, Some(u32::try_from(before)?)).await?;
-    db.execute_unprepared("INSERT INTO tenancy_installation(singleton,installation_id,schema_version,authority_revision,operation_ids,safety_operation_ids,saturated,created_at) VALUES(1,'installation',3,0,0,0,0,'2026-10-25T00:00:00Z')").await?;
+    crate::db::migration::Migrator::up(&db, None).await?;
+    db.execute_unprepared("INSERT INTO tenancy_installation(singleton,installation_id,schema_version,authority_revision,operation_ids,safety_operation_ids,saturated,created_at) VALUES(1,'installation',5,0,0,0,0,'2026-10-25T00:00:00Z')").await?;
     let installation = "installation".try_into()?;
     let mut retained = Vec::new();
     for count in [1, 8, 9, 64] {
@@ -38,7 +34,7 @@ async fn shared_health_upgrade_preserves_ordered_receipt_evidence_and_digest_byt
             .await?
             .context("historical header")?
             .format
-            == crate::tenancy::store::startup::Format::V3
+            == crate::tenancy::store::startup::Format::V5
     );
     crate::db::run_migrations(&db).await?;
     ensure!(

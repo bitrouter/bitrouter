@@ -1,5 +1,5 @@
 //! Real HTTP consumers: no synthetic finalization context can mint a mapping.
-use super::{Fixture, MODEL, draft, failure, headers, provision_protocol};
+use super::{Fixture, MODEL, draft, failure, headers, provision_protocol_with_fixture};
 use anyhow::{Context, Result, ensure};
 use axum::{
     Json, Router,
@@ -35,11 +35,7 @@ mod receipts;
 mod retained_defaults;
 mod revision_policy;
 mod server;
-#[cfg(feature = "core")]
-mod sockets;
 mod store;
-#[cfg(feature = "core")]
-mod trajectory;
 #[cfg(unix)]
 mod unknown;
 
@@ -185,7 +181,11 @@ struct Ready {
     revision: bitrouter_ai::tenancy::configuration::ConfigurationRevision,
 }
 async fn ready(server: &Server) -> Result<Ready> {
-    let (fixture, route, _) = provision_protocol(&server.url, "responses").await?;
+    ready_with_fixture(server, Fixture::new().await?).await
+}
+async fn ready_with_fixture(server: &Server, fixture: Fixture) -> Result<Ready> {
+    let (fixture, route, _) =
+        provision_protocol_with_fixture(fixture, &server.url, "responses", &mut |_| {}).await?;
     let revision = draft(&fixture, &route, "http-continuation-draft", 32).await?;
     let issued = fixture.issue("http-continuation-user").await?;
     fixture

@@ -34,7 +34,7 @@ async fn restart(ready: &Ready) -> Result<Service> {
         crate::tenancy::store::load(&ready.fixture.db, chrono::Utc::now()).await?,
         Arc::new(Resources::with_key(
             ready.fixture.installation.clone(),
-            [29; 32],
+            ready.fixture.wrapping_key,
         )?),
     )
     .await
@@ -58,7 +58,7 @@ fn historic_payload(
     row: &configuration_store::StoredConfiguration,
     field: &str,
 ) -> Result<Value> {
-    let key = crate::runtime_crypto::DeploymentKey::from_bytes([29; 32])?;
+    let key = crate::runtime_crypto::DeploymentKey::from_bytes(ready.fixture.wrapping_key)?;
     let binding = (
         &ready.fixture.installation,
         &row.revision.tenant_id,
@@ -100,7 +100,7 @@ fn historic_payload(
     )
 }
 
-async fn read_http(ready: &Ready) -> Result<()> {
+async fn read_and_reject_candidates_http(ready: &Ready) -> Result<()> {
     let auth = crate::remote_control::auth::ControlAuth::from_lookup(
         &crate::config::ControlConfig {
             credentials: vec![crate::config::ControlCredentialConfig {
@@ -118,16 +118,120 @@ async fn read_http(ready: &Ready) -> Result<()> {
     ))
     .body(Body::empty())?;
     *request.headers_mut() = ready.headers.clone();
-    let response = crate::tenancy::http::router(ready.fixture.service.clone(), auth)
-        .oneshot(request)
-        .await?;
+    let router = crate::tenancy::http::router(ready.fixture.service.clone(), auth);
+    let response = router.clone().oneshot(request).await?;
     ensure!(
         response.status() == StatusCode::OK,
         "integrity-valid inactive revision must stay readable"
     );
     let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024).await?;
     ensure!(serde_json::from_slice::<Value>(&bytes)? == serde_json::to_value(&ready.revision)?);
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .extend_pairs([
+            ("route_owner_kind", "tenant"),
+            ("route_owner_id", ready.route.owner_id.as_str()),
+            ("route_id", ready.route.resource_id.as_str()),
+            ("route_revision", ready.route.revision_id.as_str()),
+            ("inbound_protocol", "responses"),
+        ])
+        .finish();
+    let request = Request::get(format!(
+        "/control/v1/tenancy/tenants/{}/configurations/{}/candidates?{query}",
+        ready.fixture.tenant, ready.revision.revision_id,
+    ))
+    .header(
+        "authorization",
+        "Bearer http034-operator-token-at-least-32-bytes",
+    )
+    .header(
+        "Bitrouter-Installation-Id",
+        ready.fixture.installation.as_str(),
+    )
+    .body(Body::empty())?;
+    let response = router.oneshot(request).await?;
+    ensure!(response.status() == StatusCode::BAD_REQUEST);
+    let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024).await?;
+    let error: bitrouter_ai::tenancy::operation::Error = serde_json::from_slice(&bytes)?;
+    ensure!(error.code == ErrorCode::InvalidRequest);
     ensure!(ready.fixture.service.current().is_ok());
+    Ok(())
+}
+
+#[tokio::test]
+async fn warm_candidate_cache_rechecks_resealed_defaults_without_fencing() -> Result<()> {
+    use bitrouter_ai::tenancy::ordered::GenerationProtocol;
+
+    for field in ["previous_response_id", "conversation"] {
+        let provider = Server::start().await?;
+        let ready = ready(&provider).await?;
+        let checked: Result<()> = async {
+            let authority = ready.fixture.service.current().map_err(failure)?.revision;
+            for _ in 0..2 {
+                ready
+                    .fixture
+                    .service
+                    .candidate_manifest(
+                        &ready.fixture.operator,
+                        &ready.fixture.tenant,
+                        &ready.revision.revision_id,
+                        &ready.route,
+                        GenerationProtocol::Responses,
+                    )
+                    .await
+                    .map_err(failure)?;
+            }
+            #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+            ensure!(
+                ready
+                    .fixture
+                    .service
+                    .caches
+                    .observed()
+                    .into_iter()
+                    .next()
+                    .context("execution cache usage")?
+                    .map_err(|_| anyhow::anyhow!("cache usage unavailable"))?
+                    .entries
+                    > 0
+            );
+            let mut row = configuration_store::configuration(
+                &ready.fixture.db,
+                &ready.fixture.tenant,
+                &ready.revision.revision_id,
+            )
+            .await?
+            .context("stored revision")?;
+            row.compiled = historic_payload(&ready, &row, field)?;
+            ensure!(
+                ready
+                    .fixture
+                    .service
+                    .resources
+                    .validate_compiled(&row)
+                    .is_ok()
+            );
+            ensure!(
+                ready.fixture.service.resources.validate_executable(&row)
+                    == Err(ErrorCode::InvalidRequest)
+            );
+            replace(&ready, &row.compiled).await?;
+            // Keep the service, authority and resource reference unchanged. A
+            // warmed control view must miss on changed authenticated bytes and
+            // preserve an ordinary qualification rejection on both attempts.
+            for _ in 0..2 {
+                read_and_reject_candidates_http(&ready).await?;
+                ensure!(ready.fixture.service.current().map_err(failure)?.revision == authority);
+            }
+            ensure!(provider.state.calls.load(Ordering::SeqCst) == 0);
+            Ok(())
+        }
+        .await;
+        let shutdown = ready.fixture.service.shutdown().await;
+        let closed = provider.close().await;
+        checked?;
+        shutdown?;
+        closed?;
+    }
     Ok(())
 }
 
@@ -152,7 +256,10 @@ async fn sealed_reserved_defaults_remain_readable_but_cannot_execute_or_activate
         .await?
         .context("stored revision")?;
         row.compiled = historic_payload(&ready, &row, field)?;
-        let resources = Resources::with_key(ready.fixture.installation.clone(), [29; 32])?;
+        let resources = Resources::with_key(
+            ready.fixture.installation.clone(),
+            ready.fixture.wrapping_key,
+        )?;
         ensure!(
             resources.validate_compiled(&row).is_ok(),
             "fixture must reconstruct, not merely authenticate"
@@ -169,7 +276,7 @@ async fn sealed_reserved_defaults_remain_readable_but_cannot_execute_or_activate
         let token = issued.secret.as_deref().context("issued secret")?;
         ready.headers = headers(&ready.fixture, token, &ready.revision.revision_id)?;
         let outcome: Result<()> = async {
-            read_http(&ready).await?;
+            read_and_reject_candidates_http(&ready).await?;
             // Both cold and cached retained reads, and both ingress wire kinds,
             // reject before rendering can smuggle a provider's raw identifier.
             for _ in 0..2 {
@@ -187,7 +294,7 @@ async fn sealed_reserved_defaults_remain_readable_but_cannot_execute_or_activate
             ensure!(matches!(ready.fixture.service.execute(ready.fixture.operator.clone(), activation(&ready, "reject-historic-activation")?).await, Err(error) if error.0.code == ErrorCode::InvalidRequest));
             ensure!(provider.state.calls.load(Ordering::SeqCst) == 0);
             ensure!(row_count(&ready).await? == 0);
-            read_http(&ready).await?;
+            read_and_reject_candidates_http(&ready).await?;
             let good_headers = headers(&ready.fixture, token, &good.revision_id)?;
             let (status, bytes) = send(&ready, good_headers, body(false, None)).await?;
             ensure!(status == StatusCode::OK);

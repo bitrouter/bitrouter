@@ -1,6 +1,6 @@
 use super::*;
+use bitrouter::managed_contract::protocol::{ToolObservation, ToolStatus};
 use bitrouter::storage::checkpoint::validation::ToolResultLimitsExt;
-use bitrouter_ai::core::protocol::{ToolObservation, ToolStatus};
 
 #[path = "artifact_storage/repeated_restore.rs"]
 mod repeated_restore;
@@ -315,7 +315,7 @@ async fn full_recovery_observation(
 }
 
 async fn restore_losing_ack(
-    request: bitrouter_ai::core::protocol::Restore,
+    request: bitrouter::managed_contract::protocol::Restore,
     harness: Arc<Harness>,
     committed: bool,
 ) -> Result<CoreSession, Box<dyn std::error::Error>> {

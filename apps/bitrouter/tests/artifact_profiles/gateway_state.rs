@@ -1,12 +1,11 @@
-//! Serve the same adopted policy and request facts through full/minimum artifacts.
+//! Explicit model-only publication and immutable request facts across artifacts.
 
 use super::*;
 use bitrouter::gateway::observability::inventory::INVENTORY_VERSION;
-use bitrouter::gateway::routing::blocks::control::ControlState;
-use bitrouter::gateway::routing::blocks::store::BlockPolicyStore;
 use bitrouter::metering::entities::requests;
 use bitrouter::storage::evolution::{EvolutionStore, digest};
 use bitrouter::storage::session_identity::SessionIdentity;
+use bitrouter_ai::policy::Document;
 use sea_orm::{DatabaseConnection, EntityTrait};
 use serde_json::{Value, json};
 use wiremock::{
@@ -24,7 +23,7 @@ mod judge;
 mod trajectory;
 
 fn selector(named: bool) -> &'static str {
-    if named { "@coding" } else { "coding" }
+    if named { "bitrouter/coding" } else { "coding" }
 }
 
 fn database_url(fixture: &Fixture) -> String {
@@ -77,28 +76,134 @@ fn snapshot(fixture: &Fixture, request_id: &str) -> Result<RequestFacts> {
     })
 }
 
-fn check_policy(fixture: &Fixture, adopted: &Value, baseline: &Value) -> Result<()> {
+// Only this isolation negative creates Block state. Independent judge and
+// trajectory fixtures use the neutral shared seed and never call this helper.
+fn seed_unrelated_adopted_block(fixture: &Fixture) -> Result<Value> {
+    use bitrouter::gateway::routing::blocks::{
+        allocation::BanditConfig,
+        control::{BlockDefinition, BlockRule, BlockStatus, ControlState},
+        store::BlockPolicyStore,
+    };
+    fixture.runtime.block_on(async {
+        let raw = fs::read_to_string(&fixture.config)?;
+        let config = bitrouter::config::parse_with(&raw, |_| None)?;
+        let assembled = Box::pin(bitrouter::assemble::build_app_with_path(
+            &config,
+            Some(&fixture.config),
+        ))
+        .await?;
+        assembled
+            .evolution
+            .register(
+                "local",
+                BlockDefinition {
+                    block_id: "unrelated-current-block".into(),
+                    source: "fixture".into(),
+                    rationale: "Stock gateway isolation negative.".into(),
+                    rules: vec![BlockRule {
+                        selector: "bitrouter/coding".into(),
+                        fingerprint: None,
+                        baseline_route: "bitrouter/coding".into(),
+                        challenger_route: "bitrouter/candidate".into(),
+                    }],
+                    independence_rationale: "One independent block.".into(),
+                    dependencies: std::collections::BTreeMap::new(),
+                    measurement_contract: "fixture-measurement".into(),
+                    batch_sessions: 32,
+                    bandit: BanditConfig::default(),
+                },
+            )
+            .await?;
+        let store = EvolutionStore::new(assembled.db.clone(), "local")?;
+        let (revision, _): (_, ControlState) = store
+            .get("control", "owner")
+            .await?
+            .context("registered control missing")?;
+        store
+            .update::<ControlState, _>("control", "owner", revision, |state| {
+                let block = state
+                    .blocks
+                    .get_mut("unrelated-current-block")
+                    .context("registered Block missing")?;
+                block.parent_revision = Some(block.revision.clone());
+                block.revision = "controlled-isolation-adoption".into();
+                block.status = BlockStatus::Adopted;
+                block.plan = None;
+                state.generation += 1;
+                Ok(())
+            })
+            .await?;
+        let state = BlockPolicyStore::new(assembled.db.clone(), "local")?
+            .state()
+            .await?;
+        let block = state
+            .blocks
+            .get("unrelated-current-block")
+            .context("current Block")?;
+        block.definition.validate()?;
+        ensure!(block.status == BlockStatus::Adopted && !block.routing_config_digest.is_empty());
+        let result = serde_json::to_value(state)?;
+        let db = assembled.db.clone();
+        drop(assembled);
+        db.close().await?;
+        Ok(result)
+    })
+}
+
+fn check_isolated_block(fixture: &Fixture, original: &Value) -> Result<()> {
     fixture.runtime.block_on(async {
         let db = bitrouter::db::connect(&database_url(fixture)).await?;
-        let store = BlockPolicyStore::new(db.clone(), "local")?;
-        ensure!(
-            serde_json::to_value(store.state().await?)? == *adopted,
-            "serving changed control state"
-        );
-        ensure!(
-            serde_json::to_value(store.enrollment(&session("baseline")).await?)? == *baseline,
-            "serving changed the preexisting baseline assignment"
-        );
-        ensure!(
-            EvolutionStore::new(db.clone(), "local")?
-                .list::<Value>("judge_job")
-                .await?
-                .is_empty(),
-            "serving created a learning job"
-        );
+        let store = EvolutionStore::new(db.clone(), "local")?;
+        let (_, state): (_, Value) = store
+            .get("control", "owner")
+            .await?
+            .context("isolation Block missing")?;
+        ensure!(state == *original, "gateway changed unrelated Block state");
+        for kind in ["enrollment", "route_intent", "judge_job"] {
+            ensure!(
+                store.list::<Value>(kind).await?.is_empty(),
+                "gateway created experimental {kind}"
+            );
+        }
         db.close().await?;
         Ok(())
     })
+}
+
+fn policy_cli(fixture: &mut Fixture, binary: &Path, args: &[&str]) -> Result<Value> {
+    let mut command = fixture.command(binary);
+    command
+        .args(["--json", "policy"])
+        .args(args)
+        .arg("--config")
+        .arg(&fixture.config);
+    fixture.run(command)?.json()
+}
+
+fn check_source(fixture: &mut Fixture, binary: &Path, source: &Document) -> Result<String> {
+    let digest = bitrouter::policy_lock::semantic_digest(source)?;
+    for (args, view) in [
+        (vec!["show", "coding"], "active"),
+        (vec!["show", "coding", "--disk"], "disk"),
+    ] {
+        let report = policy_cli(fixture, binary, &args)?;
+        ensure!(report["view"] == view && report["source_digest"] == digest);
+        ensure!(serde_json::from_value::<Document>(report["source"].clone())? == *source);
+    }
+    Ok(digest)
+}
+
+fn conversation() -> Vec<Value> {
+    vec![
+        json!({"role":"user", "content":"Make a small change."}),
+        json!({"role":"assistant", "content":"The existing contract must remain intact."}),
+        json!({"role":"user", "content":"Keep every earlier message and verify the result."}),
+    ]
+}
+
+struct ExpectedPolicy<'a> {
+    model: &'a str,
+    effort: &'a str,
 }
 
 fn upstream_count(fixture: &Fixture, upstream: &MockServer) -> Result<usize> {
@@ -119,13 +224,17 @@ fn request(
     named: bool,
 ) -> Result<(u16, Value)> {
     fixture.runtime.block_on(async {
-        let response = reqwest::Client::builder().no_proxy().timeout(COMMAND_TIMEOUT).build()?
+        let response = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(COMMAND_TIMEOUT)
+            .build()?
             .post(format!("http://{listen}/v1/chat/completions"))
             .header("x-bitrouter-request-id", id)
             .header("x-bitrouter-controller-id", "controller")
             .header("x-bitrouter-acp-session-id", session_id)
-            .json(&json!({"model":selector(named),"messages":[{"role":"user","content":"Make a small change."}]}))
-            .send().await?;
+            .json(&json!({"model":selector(named),"messages":conversation()}))
+            .send()
+            .await?;
         let status = response.status().as_u16();
         Ok((status, response.json().await?))
     })
@@ -138,8 +247,9 @@ fn dispatch(
     id: &str,
     session_id: &str,
     named: bool,
-    expected_model: &str,
+    expected: &ExpectedPolicy<'_>,
 ) -> Result<RequestFacts> {
+    let expected_model = expected.model;
     let before = upstream_count(fixture, upstream)?;
     let (status, body) = request(fixture, listen, id, session_id, named)?;
     ensure!(status == 200, "request {id} failed: {status}: {body}");
@@ -175,6 +285,33 @@ fn dispatch(
         "wrong selected route for {id}: {sent}; route intent: {:?}",
         facts.intent
     );
+    ensure!(
+        sent["reasoning_effort"] == expected.effort,
+        "wrong policy effort: {sent}"
+    );
+    ensure!(
+        sent["temperature"] == 0.7 && sent["max_tokens"] == 96,
+        "an unrelated route's defaults shadowed the public binding: {sent}"
+    );
+    let mut messages = vec![json!({"role":"system", "content":"Use recorded requirements."})];
+    messages.extend(conversation());
+    ensure!(
+        sent["messages"] == json!(messages),
+        "policy changed the full context: {sent}"
+    );
+    ensure!(
+        facts.intent.is_none(),
+        "mature gateway retained a Block route intent"
+    );
+    ensure!(facts.metering.router_id.as_deref() == Some("coding"));
+    ensure!(
+        facts
+            .metering
+            .binding_digest
+            .as_ref()
+            .is_some_and(|value| !value.is_empty())
+    );
+    ensure!(facts.metering.original_selector.as_deref() == Some("bitrouter/coding"));
     ensure!(facts.metering.model_id == expected_model && facts.metering.error.is_none());
     ensure!(facts.metering.prompt_tokens == 10 && facts.metering.completion_tokens == 2);
     ensure!(
@@ -203,6 +340,10 @@ fn dispatch(
         ensure!(execution["request_id"] == id && execution["identity"] == identity);
         ensure!(execution["attempt_id"] == facts.inventory.1["attempt_id"]);
         ensure!(execution["settlement"] == *settlement);
+        ensure!(
+            execution["intent"].is_null(),
+            "canonical fallback acquired Block authority"
+        );
     }
     Ok(facts)
 }
@@ -246,12 +387,23 @@ fn start(
     Ok((pid, report.listen.context("listen address missing")?))
 }
 
-fn exercise(
-    fixture: &mut Fixture,
-    full_binary: &Path,
-    minimum_binary: &Path,
-    named: bool,
+fn replay_completed(
+    fixture: &Fixture,
+    upstream: &MockServer,
+    listen: &str,
+    completed: &[(String, String, RequestFacts)],
 ) -> Result<()> {
+    for (id, session_id, facts) in completed {
+        ensure!(
+            snapshot(fixture, id)? == *facts,
+            "publication changed prior facts for {id}"
+        );
+        reject_replay(fixture, upstream, listen, (id, session_id), true, facts)?;
+    }
+    Ok(())
+}
+
+fn exercise(fixture: &mut Fixture, full_binary: &Path, minimum_binary: &Path) -> Result<()> {
     let full = super::persistence::identity(fixture, full_binary)?;
     let minimum = super::persistence::identity(fixture, minimum_binary)?;
     ensure!(full.profile == DistributionProfile::Full);
@@ -261,7 +413,6 @@ fn exercise(
             && full.source_revision == minimum.source_revision
             && full.target == minimum.target
             && full.version == minimum.version
-            && full.handoff_build_id != minimum.handoff_build_id
     );
     let upstream = fixture.runtime.block_on(async {
         let upstream = MockServer::start().await;
@@ -276,135 +427,99 @@ fn exercise(
         }
         upstream
     });
-    let raw = seed::configuration(fixture, &upstream.uri(), named)?;
-    let (pid, listen) = start(fixture, full_binary, &full)?;
-    let baseline_request = dispatch(
-        fixture,
-        &upstream,
-        &listen,
-        "baseline-first",
-        "baseline",
-        named,
-        "strong",
+    let raw = seed::configuration(fixture, &upstream.uri(), true)?;
+    seed::assert_no_blocks(fixture)?;
+    let source_a = seed::source("strong")?;
+    let source_b = seed::source("cheap")?;
+    let digest_a = bitrouter::policy_lock::semantic_digest(&source_a)?;
+    let digest_b = bitrouter::policy_lock::semantic_digest(&source_b)?;
+    ensure!(digest_a != digest_b);
+    let original_bytes = fs::read(fixture.directory.path().join("policy.yaml"))?;
+    fs::write(
+        fixture.directory.path().join("candidate.yaml"),
+        bitrouter::policy_lock::deterministic_yaml(&source_b)?,
     )?;
-    let baseline = fixture.runtime.block_on(async {
-        let db = bitrouter::db::connect(&database_url(fixture)).await?;
-        let enrollment = BlockPolicyStore::new(db.clone(), "local")?
-            .enrollment(&session("baseline"))
-            .await?
-            .context("baseline enrollment missing")?;
-        ensure!(enrollment.adopted_blocks.is_empty() && enrollment.assignments.is_empty());
-        db.close().await?;
-        Ok::<_, anyhow::Error>(serde_json::to_value(enrollment)?)
-    })?;
-    fixture.stop_resident(pid)?;
-    let adopted = seed::adopt(fixture)?;
-    let mut completed = vec![("baseline-first", "baseline", baseline_request)];
+    let unrelated = seed_unrelated_adopted_block(fixture)?;
+    let strong = ExpectedPolicy {
+        model: "strong",
+        effort: "high",
+    };
+    let cheap = ExpectedPolicy {
+        model: "cheap",
+        effort: "low",
+    };
+    let mut completed = Vec::new();
     for (binary, artifact, session_id) in [
         (full_binary, &full, "full"),
         (minimum_binary, &minimum, "minimum"),
-        (full_binary, &full, "restored"),
     ] {
         let (pid, listen) = start(fixture, binary, artifact)?;
-        for (id, original_session, facts) in &completed {
-            reject_replay(
-                fixture,
-                &upstream,
-                &listen,
-                (id, original_session),
-                named,
-                facts,
-            )?;
-        }
-        let facts = dispatch(
-            fixture, &upstream, &listen, session_id, session_id, named, "cheap",
+        check_source(fixture, binary, &source_a)?;
+        check_isolated_block(fixture, &unrelated)?;
+        replay_completed(fixture, &upstream, &listen, &completed)?;
+        // A candidate file and a valid adopted Block cannot publish a new source.
+        let id = format!("{session_id}-a");
+        let facts = dispatch(fixture, &upstream, &listen, &id, session_id, true, &strong)?;
+        completed.push((id, session_id.to_owned(), facts));
+        ensure!(fs::read(fixture.directory.path().join("policy.yaml"))? == original_bytes);
+        let published = policy_cli(
+            fixture,
+            binary,
+            &["publish", "candidate.yaml", "--expected-digest", &digest_a],
         )?;
-        ensure!(
-            facts.intent.as_ref().context("adopted intent missing")?.1["reason"]
-                == "adopted_baseline"
-        );
-        completed.push((session_id, session_id, facts));
+        ensure!(published["applied"] == true);
+        check_source(fixture, binary, &source_b)?;
+        replay_completed(fixture, &upstream, &listen, &completed)?;
+        let id = format!("{session_id}-b");
+        let facts = dispatch(fixture, &upstream, &listen, &id, session_id, true, &cheap)?;
+        completed.push((id, session_id.to_owned(), facts));
+        policy_cli(
+            fixture,
+            binary,
+            &["rollback", &digest_a, "--expected-digest", &digest_b],
+        )?;
+        check_source(fixture, binary, &source_a)?;
+        ensure!(fs::read(fixture.directory.path().join("policy.yaml"))? == original_bytes);
+        replay_completed(fixture, &upstream, &listen, &completed)?;
+        let id = format!("{session_id}-rollback");
+        let facts = dispatch(fixture, &upstream, &listen, &id, session_id, true, &strong)?;
+        completed.push((id, session_id.to_owned(), facts));
         if artifact.features.is_empty() {
-            let retained = dispatch(
-                fixture,
-                &upstream,
-                &listen,
-                "baseline-next",
-                "baseline",
-                named,
-                "strong",
-            )?;
-            ensure!(
-                retained
-                    .intent
-                    .as_ref()
-                    .context("baseline intent missing")?
-                    .1["reason"]
-                    == "retained_preexisting_baseline"
-            );
-            completed.push(("baseline-next", "baseline", retained));
-            let unresolved = dispatch(
+            let facts = dispatch(
                 fixture,
                 &upstream,
                 &listen,
                 "unresolved",
                 "missing-session",
-                named,
-                "strong",
+                true,
+                &strong,
             )?;
             ensure!(
-                unresolved.inventory.1["binding"].is_null()
-                    && unresolved.execution.is_none()
-                    && unresolved.intent.is_none()
+                facts.inventory.1["binding"].is_null()
+                    && facts.execution.is_none()
+                    && facts.intent.is_none()
             );
-            completed.push(("unresolved", "missing-session", unresolved));
+            completed.push(("unresolved".into(), "missing-session".into(), facts));
         }
-        check_policy(fixture, &adopted, &baseline)?;
+        check_isolated_block(fixture, &unrelated)?;
+        ensure!(
+            fs::read_to_string(&fixture.config)? == raw,
+            "publication changed router definitions"
+        );
         fixture.stop_resident(pid)?;
-        check_policy(fixture, &adopted, &baseline)?;
-        ensure!(fs::read_to_string(&fixture.config)? == raw);
+        check_isolated_block(fixture, &unrelated)?;
     }
-    // Both direct and named routes depend on the complete provider contract.
-    // Change that contract without re-publishing the adopted block.
-    let mut changed: Value = serde_saphyr::from_str(&raw)?;
-    changed["providers"]["fixture"]["models"][1]["pricing"]["input_micro_usd_per_token"] = json!(3);
-    fs::write(&fixture.config, serde_saphyr::to_string(&changed)?)?;
-    let (pid, listen) = start(fixture, minimum_binary, &minimum)?;
-    let changed = dispatch(
-        fixture, &upstream, &listen, "changed", "changed", named, "strong",
-    )?;
-    ensure!(
-        changed
-            .intent
-            .as_ref()
-            .context("changed-dependency intent missing")?
-            .1["reason"]
-            == "routing_dependency_changed"
-    );
-    check_policy(fixture, &adopted, &baseline)?;
-    fixture.stop_resident(pid)?;
-    fs::write(&fixture.config, &raw)?;
     let (pid, listen) = start(fixture, full_binary, &full)?;
-    for (id, original_session, facts) in &completed {
-        reject_replay(
-            fixture,
-            &upstream,
-            &listen,
-            (id, original_session),
-            named,
-            facts,
-        )?;
-    }
-    reject_replay(
-        fixture,
-        &upstream,
-        &listen,
-        ("changed", "changed"),
-        named,
-        &changed,
-    )?;
-    check_policy(fixture, &adopted, &baseline)?;
+    check_source(fixture, full_binary, &source_a)?;
+    replay_completed(fixture, &upstream, &listen, &completed)?;
+    check_isolated_block(fixture, &unrelated)?;
     fixture.stop_resident(pid)?;
+    for (id, _, facts) in completed {
+        ensure!(
+            snapshot(fixture, &id)? == facts,
+            "restart changed prior facts for {id}"
+        );
+    }
     Ok(())
 }
 
@@ -414,18 +529,15 @@ fn published_policy_and_accounting_survive_full_minimum_full() -> Result<()> {
     let full = artifact_path("BITROUTER_TEST_FULL_BINARY")?;
     let minimum = artifact_path("BITROUTER_TEST_GATEWAY_BINARY")?;
     ensure!(full != minimum);
-    for named in [false, true] {
-        let mut fixture = Fixture::new()?;
-        let result = exercise(&mut fixture, &full, &minimum, named);
-        let cleanup = fixture.cleanup();
-        result.with_context(|| {
-            format!(
-                "gateway policy transition failed (named={named})\n{}",
-                fixture.diagnostics()
-            )
-        })?;
-        cleanup
-            .with_context(|| format!("gateway policy cleanup failed\n{}", fixture.diagnostics()))?;
-    }
+    let mut fixture = Fixture::new()?;
+    let result = exercise(&mut fixture, &full, &minimum);
+    let cleanup = fixture.cleanup();
+    result.with_context(|| {
+        format!(
+            "gateway source publication transition failed\n{}",
+            fixture.diagnostics()
+        )
+    })?;
+    cleanup.with_context(|| format!("gateway policy cleanup failed\n{}", fixture.diagnostics()))?;
     Ok(())
 }

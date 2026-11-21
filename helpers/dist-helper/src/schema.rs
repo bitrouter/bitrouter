@@ -45,6 +45,7 @@ fn render(root: &Path) -> Result<String> {
             "--locked",
             "-p",
             "bitrouter",
+            "--no-default-features",
             "--example",
             "config_schema",
         ])

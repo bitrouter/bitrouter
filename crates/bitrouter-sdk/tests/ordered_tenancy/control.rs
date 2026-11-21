@@ -1,10 +1,10 @@
 use super::*;
-use bitrouter_ai::tenancy::{ordered::MAX_MANIFEST_BYTES, usage_evidence_v2::EvidenceBudgetV2};
+use bitrouter_ai::tenancy::{ordered::MAX_MANIFEST_BYTES, usage_evidence::EvidenceBudget};
 use bitrouter_sdk::error::Error;
 
 fn manifest() -> TestResult<Value> {
     Ok(
-        json!({"schema_version":1,"admission_mode":"legacy","runtime_observation":null,"installation_id":"installation","tenant_id":"tenant",
+        json!({"schema_version":1,"admission_mode":"unprofiled","runtime_observation":null,"installation_id":"installation","tenant_id":"tenant",
         "execution_revision":"revision","authority_revision":7,"route":route()?,"inbound_protocol":"chat_completions",
         "candidates":[{"candidate_index":255,"admission_profile":null,"target":{"provider_id":"provider","model_id":"model",
             "account_id":"opaque-account","credential_id":"opaque-credential","credential_version":"slot-revision"},
@@ -14,7 +14,7 @@ fn manifest() -> TestResult<Value> {
 }
 async fn read_manifest(
     client: &TenancyClient,
-) -> TestResult<bitrouter_ai::tenancy::ordered::CandidateManifestV1> {
+) -> TestResult<bitrouter_ai::tenancy::ordered::CandidateManifest> {
     Ok(client
         .candidate_manifest(
             &"installation".try_into()?,
@@ -55,15 +55,15 @@ async fn explicit_control_paths_bind_installation_and_preserve_all_v2_attempts()
         assert_eq!(manifest.candidates[0].candidate_index, 255);
         for count in [1, 8, 9, 64] {
             let result = client
-                .execution_v2(
+                .execution(
                     &caps.installation_id,
                     &"tenant".try_into()?,
                     &"execution".try_into()?,
                 )
                 .await?;
             assert_eq!(result.attempts.len(), count);
-            assert_eq!(result.accepted_selection.candidate_indices.len(), count);
-            let evidence = client.usage_evidence_v2(&result).await?;
+            assert_eq!(result.dispatch.accepted_count(), count);
+            let evidence = client.usage_evidence(&result).await?;
             assert_eq!(evidence.attempts.len(), count);
             evidence.validate_against(&result)?;
         }
@@ -87,11 +87,11 @@ async fn explicit_control_paths_bind_installation_and_preserve_all_v2_attempts()
                 ),
                 _ if index % 2 == 0 => assert_eq!(
                     record.path,
-                    "/control/v1/tenancy/tenants/tenant/executions/execution/v2"
+                    "/control/v1/tenants/tenant/executions/execution"
                 ),
                 _ => assert_eq!(
                     record.path,
-                    "/control/v1/tenancy/tenants/tenant/executions/execution/usage-evidence/v2"
+                    "/control/v1/tenants/tenant/executions/execution/usage-evidence"
                 ),
             }
             if index > 0 {
@@ -276,9 +276,13 @@ async fn manifest_auth_refusal_and_local_validation_do_not_send_followups() -> T
         Err(Error::Request(_))
     ));
     let mut invalid = receipt(1)?;
-    invalid.accepted_selection.candidate_indices.clear();
+    if let bitrouter_ai::tenancy::execution::Dispatch::Ordered { attempt_limit, .. } =
+        &mut invalid.dispatch
+    {
+        *attempt_limit = 0;
+    }
     assert!(matches!(
-        client.usage_evidence_v2(&invalid).await,
+        client.usage_evidence(&invalid).await,
         Err(Error::Request(_))
     ));
     assert_eq!(server.records.lock().await.len(), 1);
@@ -299,8 +303,8 @@ async fn receipt_and_evidence_require_exact_identity_and_selection() -> TestResu
             "/installation_id",
             "/tenant_id",
             "/execution_id",
-            "/accepted_selection/route/revision_id",
-            "/accepted_selection/inbound_protocol",
+            "/dispatch/accepted_selection/route/revision_id",
+            "/dispatch/accepted_selection/inbound_protocol",
         ] {
             let mut value = serde_json::to_value(evidence(&original)?)?;
             *value.pointer_mut(pointer).ok_or("fixture field")? =
@@ -322,7 +326,7 @@ async fn receipt_and_evidence_require_exact_identity_and_selection() -> TestResu
         for _ in 0..3 {
             assert!(
                 client
-                    .execution_v2(
+                    .execution(
                         &original.installation_id,
                         &original.tenant_id,
                         &original.execution_id
@@ -332,7 +336,7 @@ async fn receipt_and_evidence_require_exact_identity_and_selection() -> TestResu
             );
         }
         for _ in 0..6 {
-            assert!(client.usage_evidence_v2(&original).await.is_err());
+            assert!(client.usage_evidence(&original).await.is_err());
         }
         assert_eq!(server.records.lock().await.len(), 9);
     }
@@ -340,66 +344,111 @@ async fn receipt_and_evidence_require_exact_identity_and_selection() -> TestResu
 }
 
 #[tokio::test]
-async fn explicit_v1_v2_receipt_and_evidence_reads_never_convert_formats() -> TestResult {
+async fn one_receipt_endpoint_accepts_both_dispatch_modes_and_binds_evidence() -> TestResult {
     for (version, wire) in versions() {
-        let receipt = receipt(1)?;
-        let old_receipt = json!({"installation_id":"installation","tenant_id":"tenant","principal_id":"principal",
-            "execution_id":"execution","correlation_id":"correlation","execution_revision":"revision",
-            "state":"unknown","outcome":"unknown","attempts":[],"usage":unknown_usage(),"recorded_at":"2026-11-02T00:00:00Z"});
-        let old_evidence = json!({"schema_version":1,"installation_id":"installation","tenant_id":"tenant","execution_id":"execution",
-            "parent_execution_id":null,"child_execution_ids":[],"capture":"not_captured","extractor_version":1,"estimation":"not_captured",
-            "estimate":null,"attempts":[],"frames":[],"truncated":false,"dropped_frames":0});
-        serde_json::from_value::<bitrouter_ai::tenancy::execution::ExecutionReceipt>(
-            old_receipt.clone(),
-        )?
-        .validate()?;
-        serde_json::from_value::<bitrouter_ai::tenancy::usage_evidence::ExecutionUsageEvidenceV1>(
-            old_evidence.clone(),
-        )?
-        .validate()?;
+        let ordered = receipt(1)?;
+        let mut strict = ordered.clone();
+        strict.dispatch = bitrouter_ai::tenancy::execution::Dispatch::Strict;
+        strict.attempts[0].candidate_index = None;
         let server = server::serve(
             wire,
             vec![
-                Some(server::json(old_receipt)?),
-                Some(server::json(serde_json::to_value(&receipt)?)?),
-                Some(server::json(old_evidence)?),
-                Some(server::json(serde_json::to_value(evidence(&receipt)?)?)?),
+                Some(server::json(serde_json::to_value(&strict)?)?),
+                Some(server::json(serde_json::to_value(&ordered)?)?),
+                Some(server::json(serde_json::to_value(evidence(&strict)?)?)?),
+                Some(server::json(serde_json::to_value(evidence(&ordered)?)?)?),
             ],
         )
         .await?;
         let client = control_client(&server, version)?;
-        assert!(
-            client
-                .execution_v2(
-                    &receipt.installation_id,
-                    &receipt.tenant_id,
-                    &receipt.execution_id
-                )
-                .await
-                .is_err()
-        );
-        assert!(
-            client
+        for expected in [&strict, &ordered] {
+            let actual = client
                 .execution(
-                    &receipt.installation_id,
-                    &receipt.tenant_id,
-                    &receipt.execution_id
+                    &expected.installation_id,
+                    &expected.tenant_id,
+                    &expected.execution_id,
                 )
-                .await
-                .is_err()
-        );
-        assert!(client.usage_evidence_v2(&receipt).await.is_err());
-        assert!(
-            client
-                .usage_evidence(
-                    &receipt.installation_id,
-                    &receipt.tenant_id,
-                    &receipt.execution_id
-                )
-                .await
-                .is_err()
-        );
+                .await?;
+            assert_eq!(actual.dispatch, expected.dispatch);
+        }
+        assert!(client.usage_evidence(&ordered).await.is_err());
+        client.usage_evidence(&ordered).await?;
         assert_eq!(server.records.lock().await.len(), 4);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn receipt_and_evidence_reject_alternate_wire_shapes_over_http() -> TestResult {
+    let ordered = receipt(1)?;
+    let mut strict = ordered.clone();
+    strict.dispatch = bitrouter_ai::tenancy::execution::Dispatch::Strict;
+    strict.attempts[0].candidate_index = None;
+    for (version, wire) in versions() {
+        for original in [&strict, &ordered] {
+            original.validate()?;
+            let dispatch = serde_json::to_value(&original.dispatch)?;
+            let mode = dispatch["mode"].as_str().ok_or("mode")?;
+            let positional = if mode == "strict" {
+                json!([mode])
+            } else {
+                json!([
+                    mode,
+                    dispatch["accepted_selection"],
+                    dispatch["attempt_limit"]
+                ])
+            };
+            let mut tagged_mode = dispatch.clone();
+            tagged_mode["mode"] = json!({(mode): null});
+            let mut replies = Vec::new();
+            for invalid in [positional, tagged_mode] {
+                for mut document in [
+                    serde_json::to_value(original)?,
+                    serde_json::to_value(evidence(original)?)?,
+                ] {
+                    document["dispatch"] = invalid.clone();
+                    replies.push(Some(server::json(document)?));
+                }
+            }
+            for document in [
+                serde_json::to_value(original)?,
+                serde_json::to_value(evidence(original)?)?,
+            ] {
+                let positional = Value::Array(
+                    document
+                        .as_object()
+                        .ok_or("wire object")?
+                        .values()
+                        .cloned()
+                        .collect(),
+                );
+                replies.push(Some(server::json(positional)?));
+            }
+            let server = server::serve(wire, replies).await?;
+            let client = control_client(&server, version)?;
+            for _ in 0..3 {
+                let receipt_result = client
+                    .execution(
+                        &original.installation_id,
+                        &original.tenant_id,
+                        &original.execution_id,
+                    )
+                    .await
+                    .map(|_| ());
+                let evidence_result = client.usage_evidence(original).await.map(|_| ());
+                for result in [receipt_result, evidence_result] {
+                    let Err(Error::Tenancy(failure)) = result else {
+                        return Err("alternate wire shape did not fail decoding".into());
+                    };
+                    assert_eq!(failure.status, 200);
+                    assert!(matches!(
+                        failure.body_error,
+                        Some(Error::Response("invalid tenancy response shape"))
+                    ));
+                }
+            }
+            assert_eq!(server.records.lock().await.len(), 6);
+        }
     }
     Ok(())
 }
@@ -429,7 +478,7 @@ async fn raw_response_budgets_include_whitespace_and_follow_accepted_count() -> 
         ];
         for count in [1, 8, 9, 64] {
             let receipt = receipt(count)?;
-            let budget = EvidenceBudgetV2::for_attempts(usize::from(count))?;
+            let budget = EvidenceBudget::for_attempts(usize::from(count))?;
             let mut body = serde_json::to_string(&evidence(&receipt)?)?;
             body.push_str(&" ".repeat(budget.max_bytes - body.len()));
             replies.push(Some(raw_json(body.clone())?));
@@ -452,7 +501,7 @@ async fn raw_response_budgets_include_whitespace_and_follow_accepted_count() -> 
         let first = receipt(1)?;
         assert_limit(
             client
-                .execution_v2(
+                .execution(
                     &first.installation_id,
                     &first.tenant_id,
                     &first.execution_id,
@@ -462,10 +511,10 @@ async fn raw_response_budgets_include_whitespace_and_follow_accepted_count() -> 
         for count in [1, 8, 9, 64] {
             let receipt = receipt(count)?;
             assert_eq!(
-                client.usage_evidence_v2(&receipt).await?.attempts.len(),
+                client.usage_evidence(&receipt).await?.attempts.len(),
                 usize::from(count)
             );
-            assert_limit(client.usage_evidence_v2(&receipt).await)?;
+            assert_limit(client.usage_evidence(&receipt).await)?;
         }
         assert_eq!(server.records.lock().await.len(), 10);
     }

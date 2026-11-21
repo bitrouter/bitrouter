@@ -6,7 +6,7 @@ use serde::{Deserialize, Deserializer, Serialize, de};
 
 use crate::gateway::error::BitrouterError;
 use crate::gateway::error::Result;
-use bitrouter_ai::extension::request_check::validate_revision;
+use crate::gateway::extensions::request_check::validate_revision;
 
 /// A request-check implementation explicitly linked by a custom host.
 ///

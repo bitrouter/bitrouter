@@ -12,7 +12,6 @@ use bitrouter_ai::tenancy::{
     identity::{CredentialId, TenantId},
 };
 use sea_orm::{DatabaseBackend, Statement, TransactionTrait};
-use sea_orm_migration::{MigratorTrait, SchemaManager};
 
 const ROW_BYTES: usize = 8 * 1024 * 1024;
 
@@ -43,19 +42,7 @@ fn operator() -> Result<Caller> {
 
 async fn database() -> Result<DatabaseConnection> {
     let db = crate::db::connect("sqlite::memory:").await?;
-    let manager = SchemaManager::new(&db);
-    for migration in crate::db::migration::Migrator::migrations() {
-        if [
-            "m20240101_000028_",
-            "m20240101_000029_",
-            "m20240101_000039_",
-        ]
-        .iter()
-        .any(|name| migration.name().starts_with(name))
-        {
-            migration.up(&manager).await?;
-        }
-    }
+    crate::db::run_migrations(&db).await?;
     Ok(db)
 }
 

@@ -5,13 +5,12 @@ pub(in crate::gateway::shared) mod tests;
 
 use std::collections::BTreeSet;
 
-use bitrouter_ai::eval::{EVAL_SCHEMA_VERSION, EvalScope, EvalSubject};
+use bitrouter_ai::eval::{EvalScope, EvalSubject};
 use bitrouter_ai::gateway::execution::{AttemptState, ExecutionState, TerminalOutcome};
 
 use super::*;
 use crate::metering::shared::record::Record;
 use crate::storage::evaluation::{canonical_digest, evidence_digest, validate_subject};
-use crate::trajectory::types::TrajectoryEvidence;
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "reason", rename_all = "snake_case", deny_unknown_fields)]
@@ -24,7 +23,6 @@ pub(in crate::gateway::shared) enum NoEvaluation {
 pub(in crate::gateway::shared) enum EvaluationInput {
     None(NoEvaluation),
     Request(Box<EvalSubject>),
-    Trajectory,
 }
 
 impl Inputs {
@@ -48,26 +46,12 @@ impl Inputs {
                     .all(|attempt| { matches!(attempt.state, AttemptState::NotDispatched) }),
             "dispatched execution has no complete original routing evidence"
         );
-        if bound {
-            ensure!(
-                self.requirements.trajectory == TrajectoryRequirement::GuardedPolicies
-                    && self.requirements.policy_lock_digest.is_some()
-                    && matches!(
-                        self.policy,
-                        Policy::Pending | Policy::Evaluated { guarded: true, .. }
-                    ),
-                "trajectory binding contradicts admitted projection requirements"
-            );
-            return Ok(EvaluationInput::Trajectory);
-        }
+        ensure!(!bound, "model policy cannot own a trajectory binding");
         match &self.policy {
             Policy::Pending => Ok(EvaluationInput::None(NoEvaluation::SelectionNotReached)),
             Policy::Bypassed { reason } => Ok(EvaluationInput::None(NoEvaluation::Bypassed {
                 bypass: *reason,
             })),
-            Policy::Evaluated { guarded: true, .. } => {
-                anyhow::bail!("guarded selection lost its trajectory binding")
-            }
             Policy::Evaluated {
                 treatment: None, ..
             } => Ok(EvaluationInput::None(NoEvaluation::NoSelectedTier)),
@@ -133,12 +117,11 @@ impl Inputs {
                     });
                 }
                 let subject = EvalSubject {
-                    schema_version: EVAL_SCHEMA_VERSION,
+                    spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
+                    identity: bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {},
                     eval_id: format!("request:{}", self.execution_id),
                     scope: EvalScope::Request,
                     subject_id: self.execution_id.clone(),
-                    policy_digest: treatment.decision.policy_digest.clone(),
-                    preset: treatment.preset.clone(),
                     cohort: None,
                     holdout: treatment.holdout,
                     decisions: vec![treatment.decision.clone()],
@@ -155,83 +138,6 @@ impl Inputs {
                 Ok(EvaluationInput::Request(Box::new(subject)))
             }
         }
-    }
-
-    /// A guarded route was committed under this original whole-document digest.
-    pub fn check_trajectory_decision(&self, decision: &EvalDecisionRef) -> Result<()> {
-        ensure!(
-            self.requirements.policy_lock_digest.as_deref() == Some(&decision.policy_digest),
-            "trajectory policy differs from admitted lock"
-        );
-        if let Policy::Evaluated {
-            policy, treatment, ..
-        } = &self.policy
-        {
-            ensure!(
-                *policy == decision.policy,
-                "trajectory policy differs from selected policy"
-            );
-            if let Some(treatment) = treatment {
-                ensure!(
-                    treatment.decision == *decision,
-                    "trajectory route differs from captured treatment"
-                );
-            }
-        }
-        Ok(())
-    }
-
-    pub fn trajectory_evidence(&self, record: &Record) -> Result<TrajectoryEvidence> {
-        self.check_identity(
-            &record.event.execution.execution_id,
-            &record.event.tenant_id,
-            record.event.execution.operation,
-        )?;
-        ensure!(
-            matches!(self.phase, Phase::Terminal { .. }),
-            "trajectory projection inputs are not terminal"
-        );
-        let accounting = record.accounting()?;
-        let mut structural = BTreeMap::new();
-        for (key, value) in usage_fields(&accounting.usage) {
-            if let Some(value) = value {
-                structural.insert(format!("settlement.{key}"), value);
-            }
-        }
-        structural.insert(
-            "settlement.known_attempts".into(),
-            u64::from(accounting.known_attempts),
-        );
-        structural.insert(
-            "settlement.unknown_attempts".into(),
-            u64::from(accounting.unknown_attempts),
-        );
-        let mut categorical = BTreeMap::from([
-            (
-                "settlement.usage_origin".into(),
-                accounting.usage.origin.as_str().into(),
-            ),
-            ("settlement.outcome".into(), outcome(record)?.into()),
-        ]);
-        for (key, value) in self.prediction_attributes() {
-            if matches!(
-                key.as_str(),
-                "prediction_confidence_ppm"
-                    | "task_family_confidence_ppm"
-                    | "observation_confidence_ppm"
-            ) {
-                structural.insert(format!("routing.{key}"), value.parse()?);
-            } else {
-                categorical.insert(format!("routing.{key}"), value);
-            }
-        }
-        Ok(TrajectoryEvidence {
-            structural,
-            categorical,
-            digests: BTreeMap::new(),
-            route_measurement: None,
-            routing_evidence: self.routing.clone(),
-        })
     }
 }
 

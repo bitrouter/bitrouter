@@ -10,7 +10,7 @@ use crate::gateway::model::decision::types::Question;
 use crate::gateway::routing::assessment;
 use crate::gateway::routing::preparation::Prepared;
 use crate::gateway::routing::preparation::Receipt;
-use bitrouter_ai::harness::inspection::NextStepRole;
+use bitrouter_ai::policy::NextStep;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -62,12 +62,7 @@ impl DecisionExecutor for SemanticFixture {
 struct SemanticPolicy(Mutex<Vec<assessment::Assessment>>);
 #[async_trait]
 impl ModelSelector for SemanticPolicy {
-    async fn select_variant(
-        &self,
-        policy: &str,
-        _: Option<&str>,
-        ctx: &mut PipelineContext,
-    ) -> Result<()> {
+    async fn select_policy(&self, policy: &str, ctx: &mut PipelineContext) -> Result<()> {
         assert_eq!(policy, "coding");
         let prepared = ctx
             .extension::<Prepared>()
@@ -77,7 +72,7 @@ impl ModelSelector for SemanticPolicy {
             .as_ref()
             .and_then(|receipt| receipt.assessment.as_ref())
             .ok_or_else(|| BitrouterError::internal("missing semantic assessment"))?;
-        assert_eq!(assessment.next_step_role, NextStepRole::Verify);
+        assert_eq!(assessment.next_step_role, NextStep::Verify);
         self.0.lock().await.push(assessment.clone());
         ctx.set_model("verification-model");
         Ok(())
@@ -110,7 +105,7 @@ impl native::NativeExecutionControl for SemanticControl {
     async fn before_attempt(&self, _: &str, _: u32) -> Result<()> {
         Ok(())
     }
-    async fn after_attempt(&self, _: bitrouter_ai::core::evidence::NativeAttemptReport) {}
+    async fn after_attempt(&self, _: crate::managed_contract::evidence::NativeAttemptReport) {}
 }
 
 #[derive(Default, Clone)]
@@ -145,7 +140,7 @@ async fn rich_request_and_managed_input_share_classification_policy_and_settleme
         .decision_model(runtime.clone())
         .language_model(|builder| {
             builder
-                .routing_table(Arc::new(PresetAwareRoutingTable))
+                .routing_table(Arc::new(NamedRoutingTable))
                 .executor(Arc::new(MockExecutor::new(vec![
                     MockResponse::Generate(gen_result(Vec::new())),
                     MockResponse::Generate(gen_result(Vec::new())),
@@ -154,7 +149,7 @@ async fn rich_request_and_managed_input_share_classification_policy_and_settleme
                 .settlement_recorder(settlement.clone());
         })
         .build()?;
-    let mut request = request_for_model("@adaptive:preferred");
+    let mut request = request_for_model("bitrouter/adaptive");
     request
         .input
         .generation_prompt_mut()
@@ -206,7 +201,7 @@ async fn rich_request_and_managed_input_share_classification_policy_and_settleme
     assert_eq!(classifications.len(), 2);
     assert_eq!(classifications[0], classifications[1]);
     let plans = control.plans.lock().await;
-    assert_eq!(plans[0].original_model, "@adaptive:preferred");
+    assert_eq!(plans[0].original_model, "bitrouter/adaptive");
     assert_eq!(plans[0].effective_model, "verification-model");
     assert_eq!(
         plans[0]
@@ -233,7 +228,7 @@ async fn rejected_entry_never_calls_the_semantic_backend() -> Result<()> {
         })
         .language_model(|builder| {
             builder
-                .routing_table(Arc::new(PresetAwareRoutingTable))
+                .routing_table(Arc::new(NamedRoutingTable))
                 .pre_request_hook(DenyHook)
                 .executor(Arc::new(MockExecutor::always_text("unreachable")));
         })
@@ -243,7 +238,7 @@ async fn rejected_entry_never_calls_the_semantic_backend() -> Result<()> {
         .ok_or_else(|| BitrouterError::internal("missing pipeline"))?;
     assert!(
         pipeline
-            .execute(request_for_model("@adaptive:preferred"))
+            .execute(request_for_model("bitrouter/adaptive"))
             .await
             .is_err()
     );

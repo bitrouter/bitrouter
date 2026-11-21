@@ -147,24 +147,8 @@ pub(crate) fn router(service: Service, operators: ControlAuth) -> Router {
             get(super::ordered::manifest),
         )
         .route(
-            "/control/v1/tenancy/tenants/{tenant}/executions/{execution}/v2",
-            get(super::ordered::receipt),
-        )
-        .route(
-            "/control/v1/tenancy/tenants/{tenant}/executions/{execution}/usage-evidence/v2",
-            get(super::ordered::evidence),
-        )
-        .route(
-            "/control/v1/tenants/{tenant_id}/executions/{execution_id}/provider-technical-facts/v1",
+            "/control/v1/tenants/{tenant_id}/executions/{execution_id}/provider-technical-facts",
             get(super::receipts::provider_technical::http::read),
-        )
-        .route(
-            "/control/v1/tenants/{tenant_id}/executions/{execution_id}/provider-technical-facts/v2",
-            get(super::receipts::provider_technical::http::read_v2),
-        )
-        .route(
-            "/control/v1/tenants/{tenant_id}/executions/{execution_id}/provider-technical-facts/v3",
-            get(super::receipts::provider_technical::http::read_v3),
         )
         .route(
             "/control/v1/tenancy/usage-evidence/capabilities",
@@ -179,12 +163,8 @@ pub(crate) fn router(service: Service, operators: ControlAuth) -> Router {
             get(resource_capabilities),
         )
         .route(
-            "/control/v1/tenancy/resource-capabilities/v3",
-            get(resource_capabilities_v3),
-        )
-        .route(
-            "/control/v1/tenancy/resource-capabilities/v2",
-            get(resource_capabilities_v2),
+            "/control/v1/tenancy/policy-capabilities",
+            get(policy_capabilities),
         )
         .route(
             "/control/v1/tenants/{tenant_id}/resources",
@@ -193,6 +173,10 @@ pub(crate) fn router(service: Service, operators: ControlAuth) -> Router {
         .route(
             "/control/v1/tenants/{tenant_id}/resources/revoke",
             post(revoke_resource),
+        )
+        .route(
+            "/control/v1/tenants/{tenant_id}/resources/policy",
+            get(policy_source),
         )
         .route(
             "/control/v1/tenancy/operations/{operation_id}",
@@ -246,7 +230,6 @@ pub(crate) fn router(service: Service, operators: ControlAuth) -> Router {
             authenticate,
         ))
         .with_state(service.clone());
-    #[cfg(feature = "core")]
     let router = router.merge(super::eval::http::router(service));
     router.merge(observations)
 }
@@ -399,34 +382,21 @@ async fn resource_capabilities(
     Ok(Json(service.resource_capabilities(&caller).await?).into_response())
 }
 
+async fn policy_capabilities(
+    State(service): State<Service>,
+    Extension(caller): Extension<Caller>,
+) -> Result<Response, Failure> {
+    Ok(Json(service.policy_capabilities(&caller).await?).into_response())
+}
+
 async fn put_resource(
     State(service): State<Service>,
     Extension(caller): Extension<Caller>,
     tenant: Result<Path<TenantId>, PathRejection>,
-    input: Result<Json<bitrouter_ai::tenancy::resources_v2::ResourcePutRequest>, JsonRejection>,
+    input: Result<Json<bitrouter_ai::tenancy::resources::ResourcePut>, JsonRejection>,
 ) -> Result<Response, Failure> {
-    use bitrouter_ai::tenancy::resources_v2::ResourcePutRequest;
-    let tenant = path(tenant)?;
-    let command = match body(input)? {
-        ResourcePutRequest::V1(input) => Command::Resource(tenant, *input),
-        ResourcePutRequest::V2(input) => Command::ResourceV2(tenant, *input),
-        ResourcePutRequest::V3(input) => Command::ResourceV3(tenant, *input),
-    };
+    let command = Command::Resource(path(tenant)?, body(input)?);
     Ok(response(service.execute(caller, command).await?))
-}
-
-async fn resource_capabilities_v3(
-    State(service): State<Service>,
-    Extension(caller): Extension<Caller>,
-) -> Result<Response, Failure> {
-    Ok(Json(service.resource_capabilities_v3(&caller).await?).into_response())
-}
-
-async fn resource_capabilities_v2(
-    State(service): State<Service>,
-    Extension(caller): Extension<Caller>,
-) -> Result<Response, Failure> {
-    Ok(Json(service.resource_capabilities_v2(&caller).await?).into_response())
 }
 
 async fn revoke_resource(
@@ -456,6 +426,25 @@ async fn resource_status(
     Ok(Json(
         service
             .resource_status(&caller, &path(tenant)?, &reference)
+            .await?,
+    )
+    .into_response())
+}
+
+async fn policy_source(
+    State(service): State<Service>,
+    Extension(caller): Extension<Caller>,
+    tenant: Result<Path<TenantId>, PathRejection>,
+    query: Result<
+        axum::extract::Query<bitrouter_ai::tenancy::configuration::ResourceRef>,
+        axum::extract::rejection::QueryRejection,
+    >,
+) -> Result<Response, Failure> {
+    let axum::extract::Query(reference) =
+        query.map_err(|_| Failure::from(ErrorCode::InvalidRequest))?;
+    Ok(Json(
+        service
+            .policy_source(&caller, &path(tenant)?, &reference)
             .await?,
     )
     .into_response())

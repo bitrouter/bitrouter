@@ -1,11 +1,11 @@
 //! Native skill selection belongs to the original Turn checkpoint. A source
 //! receipt identifies content; it never grants tools or MCP execution consent.
 
+use crate::managed_contract::harness::skills::SkillConstraints;
+use crate::managed_contract::harness::skills::SkillSelector;
+use crate::managed_contract::skills::{SkillConsent, SkillConsentAnswer, SkillConsentRequest};
 use crate::skills::library::LocalSkillExt;
 use crate::skills::mcp::HeldMcpSkillExt;
-use bitrouter_ai::core::skills::{
-    SkillConsent, SkillConsentAnswer, SkillConsentRequest, SkillConstraints, SkillSelector,
-};
 
 pub mod explain;
 pub mod files;
@@ -14,12 +14,14 @@ pub(crate) mod state;
 
 use serde::{Deserialize, Serialize};
 
-use bitrouter_ai::harness::skills::{HeldMcpSkill, McpSkillCatalog};
-use bitrouter_ai::harness::skills::{LocalSkill, LocalSkillCatalog};
+use crate::managed_contract::harness::skills::HeldMcpSkill;
+use crate::managed_contract::harness::skills::LocalSkill;
+use crate::managed_contract::harness::skills::LocalSkillCatalog;
+use crate::managed_contract::harness::skills::McpSkillCatalog;
 
 use super::checkpoint::sha256;
+use crate::managed_contract::protocol::{CoreError, ErrorCode};
 use crate::storage::checkpoint::snapshot::context::view::SourceRevision;
-use bitrouter_ai::core::protocol::{CoreError, ErrorCode};
 
 /// Checkpoint/host contract for frozen skill selection and explicit MCP consent.
 /// A core without this feature must not drop these facts while restoring.

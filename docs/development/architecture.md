@@ -5,15 +5,15 @@ The application owns gateway execution, Core scheduling, Harness execution and
 storage, CLI orchestration, and optional telemetry. The former standalone
 implementation crates have been consolidated into the application; the
 first-party terminal UI has been retired. The SDK provides gateway, control,
-evaluation, Harness and managed Core transport clients. Implementation ownership follows the module layout below.
+evaluation, operator and tenancy transport clients. Implementation ownership follows the module layout below.
 
 BitRouter is a Cargo workspace organized into `crates/` for shared libraries and contracts, `apps/` for product hosts, and `extensions/` for independently delivered capabilities. Each extension groups its related Cargo packages in one directory; `helpers/` contains contributor tooling.
 
 | Crate                            | Tier    | Responsibility                                                                                                          |
 | -------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `crates/bitrouter-ai`            | crate   | Lightweight model/protocol, lifecycle, extension, observation, catalog, managed-attempt and harness API contracts; optional schema derives; no service runtime or transport |
-| `crates/bitrouter-sdk` | crate | Gateway HTTP/SSE, control, evaluation and harness HTTP/SSE clients using AI wire contracts; optional managed core WebSocket transport with caller-owned checkpoint ACKs |
-| `extensions/regex-checker/matcher` | extension library | Rules and native request-check callback using AI contracts; legacy hooks live in the application |
+| `crates/bitrouter-ai`            | crate   | Shared model/protocol, artifact, control, Policy, Eval and tenancy data; optional schema derives; no service runtime or transport |
+| `crates/bitrouter-sdk` | crate | Gateway HTTP/SSE, control, evaluation, operator and tenancy clients using AI wire contracts |
+| `extensions/regex-checker/matcher` | extension library | Compiled regex rules and configuration; request-check callback and hook adapters live in the application |
 | `apps/bitrouter`                 | app     | Assembly library + the `bro` CLI binary (package/lib stay `bitrouter`) — turns a `Config` into a running `App`, owns core scheduling, harness execution/storage, CLI orchestration, optional OTLP and management commands |
 | `helpers/dist-helper` | helper | Unpublished registry/chart tooling; configuration schema delegates to the application-owned generator |
 
@@ -21,6 +21,42 @@ The `extensions/` directory expresses ownership and delivery boundaries; it does
 
 For the native runtime module map, execution reading order and test layout, see
 the [core and harness source guide](../../apps/bitrouter/HARNESS.md).
+
+### Accepted M0 product boundary
+
+The [canonical specs](../specs/README.md) define the M0 cutover and the product
+boundary below. CI and the implementation PR carry conformance evidence.
+
+BitRouter owns gateway execution, automatic model/effort selection, tenant
+isolation, immutable source/revisions, explicit Policy updates and Eval fact
+exchange. AI owns lightweight typed contracts; application model_policy owns
+validation and private compiled selection; SDK owns service transport. Source
+is retained directly. Files/defaults/CLI/SDK/API/export share that source, with
+no PolicyLock bridge, compiler marker or inferred source reconstruction.
+
+Context rewriting, orchestration, exploration, learning and paid assessment have
+an explicit BRO local harness owner or are removed. Mature tenant/shared product
+entry points reject those routes/dependencies even without Policy and in
+all-feature builds. Feature compilation is not product authority. Necessary
+runtime entry isolation is part of M0; large crate/binary splits are deferred.
+Current BRO producers require explicit ownership and matching current recovery;
+historical session formats are not automatically included in this cutover.
+
+Mature Policy and tenant Eval exchange are available in the minimum gateway
+profile independently of core/harness. External evaluators run revision-bound
+inference and submit facts. Service validation binds their installation, tenant,
+configuration, Policy ResourceRef and literal name; generic profiles have their
+own scope. Freeze and drafting never activate a revision. Publication/activation
+remain explicit authenticated CAS operations. No server Eval job runner or
+implicit learning backend is introduced.
+
+Affected service stores use current-only baseline/content validation before
+ready, registration or recovery writes. Old data stays with its old binary;
+new data locations/installation identities are explicit. Current receipt,
+stream-cancellation, unknown usage, cumulative budgets and recovery obligations
+remain required. See [tenant service](tenant-service.md) for ownership and the
+[store contract](../specs/service-api/README.md#resource-and-evidence-migration-and-rollback)
+for actual format selection/refusal. A Policy-free active head is no exception.
 
 ### External interfaces
 
@@ -90,7 +126,7 @@ checkpoint recovery preserve identities and budgets without replaying completed
 effects; lost owners, unknown effects and uncertain accounting remain blocked.
 
 Managed attempt evidence used by the core's existing `model.evidence` command
-now lives in `bitrouter_ai::core::evidence`. Import `NativeAttemptReport`, its
+now lives in `bitrouter::managed_contract::evidence`. Import `NativeAttemptReport`, its
 route/usage evidence and private-context/continuation observations there.
 These data structures confer no ownership or execution authority. The gateway
 still validates provider provenance, projects raw usage, computes commitments
@@ -98,8 +134,8 @@ and enforces report limits; the core still decides whether evidence may be
 admitted.
 
 Existing managed wire commands, responses, limits and HTTP error envelopes live
-in `bitrouter_ai::core::protocol`; durable checkpoint envelopes and ACK data live
-in `bitrouter_ai::core::checkpoint`. The application retains exact-byte encoding,
+in `bitrouter::managed_contract::protocol`; durable checkpoint envelopes and ACK data live
+in `bitrouter::managed_contract::checkpoint`. The application retains exact-byte encoding,
 digest verification, append admission and the commit barrier. Trusted host
 consumers import `CheckpointBatchExt` from `bitrouter::storage::checkpoint` for
 the existing codec/admission methods, and `HarnessManifestExt` and
@@ -113,7 +149,7 @@ records now live in `bitrouter::storage::checkpoint::snapshot`, including
 `SessionSnapshot`, its routing/collaboration/accounting records and context
 evidence. Offline immutable-history validation and bounded observation projection
 live below `snapshot::context`. These remain application storage types;
-AI/SDK checkpoint envelopes carry the state opaquely. Public observation DTOs
+Application checkpoint envelopes carry the state opaquely. Public observation DTOs
 must not expose the complete private snapshot. Core retains live context
 selection, collaboration, accounting transitions and session execution.
 The scheduler and its local native drivers are gated by `core`. Without core,
@@ -125,22 +161,11 @@ Harness-only checks use `--no-default-features --features harness`; the live
 scheduler and terminal dependencies remain absent. The complete final feature
 matrix, packaged artifacts and profile transitions remain separate P0 gates.
 
-Public Thread HTTP v2 data lives in `bitrouter_ai::harness`: `api` defines wire
-requests/envelopes, `thread` and `turn` define observations, and `runtime`,
-`agent`, `item`, `resources` and `inspection` own their nested data. The app
-retains agent defaults, limit policy, mutable projection helpers and all
-execution/storage authority. Local IPC envelopes remain app-owned.
-`bitrouter_sdk::harness::HarnessClient` uses a separate execution credential and
-pins one negotiated server instance. Its observation stream does not end when
-a Turn settles, acknowledge checkpoints, or approve tools; callers handle
-detachment and resynchronization explicitly. Historical events retain their
-original instance IDs even when the current page/view uses a new instance.
-
-The SDK provides the existing core capability HTTP method and, with its client
-`core` feature, the managed WebSocket channel. Clients explicitly persist and
-acknowledge checkpoints; the SDK neither executes tools nor replays commands
-after uncertain delivery. This preserves the existing service transports rather
-than establishing complete core HTTP coverage.
+Harness contracts, including tool permissions, effect outcomes, turn events,
+thread observations, agent configuration, resources, skill inventories and
+recovery records, live in `bitrouter::managed_contract::harness`. The application owns
+execution, storage and local IPC. The SDK exposes no harness or managed-core
+client; application transports retain their instance and recovery checks.
 
 Trusted application hosts that previously called
 `NativeEvidenceCommitment::capture` use
@@ -318,7 +343,7 @@ bridge. It consumes AI's observation schema and implements the pipeline's
 `ObserveHook`. Other observers continue to record essential request facts and
 usage even when OTLP is absent. The contract carries no OTel types. See the committed observation schema for wire behavior.
 
-Because the schema is the contract, it is written down rather than inferred from a renderer's call sites. `crates/bitrouter-ai/src/observe/schema.rs` declares every span, attribute, event, metric and silent-failure invariant, names no `opentelemetry` type, depends on nothing but `serde`, and renders to the committed artifact `crates/bitrouter-ai/span-schema.json` — regenerate with `UPDATE_SPAN_SCHEMA=1 cargo test -p bitrouter-ai committed_artifact` (default features: the module is ungated, and a staleness guard that only fired under `--all-features` would let the artifact rot everywhere else), and the ordinary test run fails when it is stale. It ships with the AI contract crate because it is the interop surface. The declaration is `pub` for the same reason: a second renderer needs it at compile time, not just as JSON. The three helpers only a conformance suite calls — `span_def_for`, `value_type_matches` and `render_json` — sit behind the default-off `testing` feature instead, since public API with no production caller is what CLAUDE.md rule 4 forbids; the feature carries no dependency, so a renderer enables it under `[dev-dependencies]` and pays nothing. Conformance tests in application `telemetry/exporter.rs`, `telemetry/acp.rs` and `telemetry/http_layer.rs` drive real lifecycles and assert that nothing reaches the wire the declaration does not describe, so the artifact is checked rather than aspirational.
+The application declares its spans, attributes, events, metrics and failure invariants in `apps/bitrouter/src/gateway/observability/schema.rs`. It renders the committed `apps/bitrouter/span-schema.json`; regenerate with `UPDATE_SPAN_SCHEMA=1 cargo test -p bitrouter committed_artifact`. An ordinary unit test rejects stale output. Application telemetry conformance tests drive real lifecycles against that declaration, using helpers compiled only for tests. Lifecycle events and span attributes live alongside the schema in `gateway::observability`.
 
 The application gateway owns `assembly`, `http`, `pipeline`, `mcp`, `routing`,
 `observability` and `extensions`. Configuration lives in application `config`.
@@ -328,13 +353,13 @@ The generation pipeline retains its hooks, request checks, execution, stream
 processing and settlement; MCP has its own routing contract. ACP belongs to
 harness execution, not a gateway protocol pipeline.
 
-Serving-time workflow extraction, identity, predictor contracts and decision
-records live in `gateway::routing::workflow`. Published experiment state and
-stable assignment live in `gateway::routing::exploration`; certificate identity
-and compiler-digest helpers live in `gateway::routing::experiment_identity`.
-Learning and replay consumers import these owners rather than supplying a second
-projection or assignment algorithm. The existing model/provider wire formats,
-experiment digest domains and policy-decision records are unchanged.
+Serving-time model classification and decision capture belong to gateway
+routing. Classifier contract identity is separate from source digest, compiled
+cache identity and immutable resource/configuration revisions. Experimental
+assignment, certificates and predictor/learner state have BRO ownership and
+cannot qualify a mature model Policy or become service publication authority.
+Retained experiment consumers must be moved together or retired; they do not
+justify keeping a second Policy format.
 
 Gateway `observability::decision` owns bounded pending policy observations and
 routing receipts; `observability::prediction` owns the response observer.
@@ -345,31 +370,20 @@ silently replace or erase the captured decision. Shared durable evaluation
 validation/digests live in application `storage::evaluation`, without publishing
 service algorithms through AI.
 
-Trajectory settlement always follows authoritative metering and persists its
-terminal fact and outbox envelope together. Without core, assembly does not
-construct an eval service/publisher or mount eval HTTP routes; outbox rows remain
-pending and retention protects them. Core-enabled assembly retains startup,
-request-triggered and shutdown drains. Evaluation, outbox publication, policy
-compilation/publication, optimization, adequacy and workflow research now live
-under `core::{eval,policy,optimization,adequacy,workflow_state}`. The file-based
-policy producer is `core::policy::files`; gateway `policy_lock` retains published
-artifact loading, validation and operator configuration/rollback operations.
-`eval`, `optimize`, `workflow-state` and policy compilation/publication commands
-require core, as does `BITROUTER_WORKFLOW_TRACE_JSONL` capture. Unavailable work
-is rejected before its input files or execution stores are opened. Ordinary
-trajectory inspection/replay/pruning remains available without core.
+Trajectory settlement follows authoritative metering and retains its terminal
+fact and outbox ownership. Experimental publishers, optimization, adequacy and
+workflow research remain BRO concerns when retained. Their feature gates do not
+own mature Policy file loading/publication or tenant Eval transport. Policy
+loading/init/show/publish/reload/rollback use the public source and preserve
+atomicity/conflict semantics without core learning. Legacy compile/evolve/
+evidence-verification entry points leave mature Policy commands. Unavailable
+experimental work is refused before input files or execution stores are opened.
 
-Checkpoint learning, scoring, operator controls and the background worker now
-live in `core::evolution`. Published block contracts, allocation draws, session
-membership, request intents and live dispatch fences belong to
-`gateway::routing::blocks`. Every build uses the same serving implementation,
-including adopted policies while evolution mode is Off. Core supplies posterior
-learning and operator/publication mutations through separate implementations.
-Without core, no evolution worker starts; unavailable CLI and local control
-operations reject execution. Shared
-checkpoint codecs and historical records live in application storage; live
-capture and conversation commits remain harness-owned. The progress ledger
-records the isolated dependency/runtime checks and outstanding final validation.
+Retained BRO checkpoint learning, scoring, block experiments and background
+workers require explicit local harness assembly. Tenant/shared endpoints never
+inherit their execution authority from core/harness features. Current codecs,
+obligation writers and recovery move together under that owner. No historical
+paid-recovery decoder is retained as an exception to the current-store fence.
 
 Reserved judge request admission and attempt bookkeeping now belong to
 `gateway::metering::judge::JudgeCosts`. They retain their pre-authentication
@@ -384,8 +398,9 @@ execution, settlement and route-intent data live in `storage::execution`, the
 native `SessionIdentity` index in `storage::session_identity`, and shared
 capture ORM definitions in `storage::capture`. Capture, gateway and learning
 consumers use the same definitions. Storage table names, digest domains,
-serialized fields and validation remain unchanged. These are internal application
-records, not new SDK contracts or authority to execute a session.
+serialized fields and validation follow their own current discriminators. M0
+changes affected Policy-bearing records explicitly; other current consumers
+retain their identities. Internal records grant no authority to execute a session.
 
 `gateway::observability::requests::GatewayRequestTracker` owns canonical request
 identification, duplicate rejection and admission inventory, plus hop, terminal
@@ -394,11 +409,11 @@ capture-registration consumers so they share the serving epoch. The tracker runs
 before learning selection. `CanonicalRequestBinding` then creates the bound
 execution record and validates routing/policy generations and the recorded
 session before dispatch or context revalidation. `EvolutionRuntime` supplies an
-optional selection and retains live learning-control validation. Gateway
-bookkeeping does not construct the learning service or mutate canonical
-conversation content. Optional learning
-startup, source and command gates remain unfinished; this move alone does not
-establish the complete minimum-gateway dependency closure.
+optional selection for explicitly assembled BRO experiments and retains their
+live validation. Gateway bookkeeping does not construct a learner or mutate
+canonical conversation content. Mature Policy selection neither enables this
+runtime nor obtains context treatment from it. Minimum-gateway dependency and
+all-feature product isolation must both be verified for the M0 cutover.
 
 `bitrouter-ai` contains no model execution or authentication implementation.
 Optional guardrails adapters and telemetry remain application modules; enabling
@@ -410,10 +425,10 @@ Capability implementation libraries use AI's `Input`, `Decision` and `Callback`
 contracts. Custom hosts install those callbacks through a function accepting
 `bitrouter::gateway::extensions::registry::ExtensionApi` and call
 `request_check(id, revision, callback)`. Business inputs and decisions live in
-`bitrouter_ai::extension::request_check`, without a wire envelope. The custom host passes the
+`bitrouter::gateway::extensions::request_check`, without a wire envelope. The custom host passes the
 registration function to `host::serve_with_extensions` for the shared foreground
 daemon lifecycle, or `assemble::build_app_with_extensions` for low-level embedding.
-Fragment and coverage types also live in `bitrouter_ai::extension::request_check`.
+Fragment and coverage types also live in `bitrouter::gateway::extensions::request_check`.
 Concrete callback registrations live in application
 `gateway::extensions::registry::registration`, alongside the host collection.
 Router bindings
@@ -636,7 +651,9 @@ When the optional authenticated HTTP control listener is enabled, it exposes
 typed operator reads and reload operations behind its own bearer gate and
 loopback exposure policy. It does not mount an MCP origin endpoint. See
 `apps/bitrouter/src/{daemon,remote_control}.rs`. Portable control transport,
-capability discovery and reload recovery now live in `bitrouter_sdk::control`;
+capability discovery and reload recovery live in `bitrouter_sdk::control`.
+The accepted M0 contract requires protocol2 and exact action descriptor checks
+on every SDK path, without legacy name discovery or local-file fallback;
 `apps/bitrouter/src/client/control.rs` retains profile/environment integration
 and CLI error classification.
 

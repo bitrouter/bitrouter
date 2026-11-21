@@ -7,10 +7,10 @@ use crate::storage::checkpoint::snapshot::allocation::{
 
 use bitrouter_ai::types::Message;
 
+use crate::managed_contract::protocol::{CoreError, ErrorCode, TaskInput};
 use crate::storage::checkpoint::snapshot::collaboration::{Assignment, Work};
 use crate::storage::checkpoint::snapshot::routing::ContextManifest;
 use crate::storage::checkpoint::snapshot::{AgentState, SessionSnapshot};
-use bitrouter_ai::core::protocol::{CoreError, ErrorCode, TaskInput};
 
 impl ContextSource {
     pub fn capture(context: &ContextManifest) -> Self {

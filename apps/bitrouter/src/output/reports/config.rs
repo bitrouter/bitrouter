@@ -43,16 +43,12 @@ pub struct ValidateReport {
     pub providers: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub models: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub presets: Option<usize>,
-    /// Named router definitions in this file (legacy presets counted separately).
+    /// Named router definitions in this file.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub routers: Option<usize>,
-    /// Explicit compatibility guidance; old presets still execute normally.
+    /// Guidance for other independently supported configuration updates.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub migration_hint: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub variants: Option<usize>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<UnsetVar>,
     /// Configuration present in the file that the binary will not act on.
@@ -63,23 +59,14 @@ pub struct ValidateReport {
 }
 
 impl ValidateReport {
-    pub fn valid(
-        path: String,
-        providers: usize,
-        models: usize,
-        presets: usize,
-        variants: usize,
-        warnings: Vec<UnsetVar>,
-    ) -> Self {
+    pub fn valid(path: String, providers: usize, models: usize, warnings: Vec<UnsetVar>) -> Self {
         Self {
             valid: true,
             path,
             providers: Some(providers),
             models: Some(models),
-            presets: Some(presets),
             routers: None,
-            migration_hint: (presets > 0).then(|| "Legacy presets remain supported; preview conversion with `bro config migrate-routers`.".to_string()),
-            variants: Some(variants),
+            migration_hint: None,
             warnings,
             ignored_config: Vec::new(),
             errors: Vec::new(),
@@ -104,10 +91,8 @@ impl ValidateReport {
             path,
             providers: None,
             models: None,
-            presets: None,
             routers: None,
             migration_hint: None,
-            variants: None,
             warnings: Vec::new(),
             ignored_config: Vec::new(),
             errors: vec![error],
@@ -120,11 +105,9 @@ impl CliReport for ValidateReport {
         if self.valid {
             h.line(&format!("✓ {} is valid", self.path))?;
             h.line(&format!(
-                "  providers: {}  models: {}  presets: {}  variants: {}",
+                "  providers: {}  models: {}",
                 self.providers.unwrap_or(0),
                 self.models.unwrap_or(0),
-                self.presets.unwrap_or(0),
-                self.variants.unwrap_or(0),
             ))?;
             if let Some(routers) = self.routers {
                 h.line(&format!("  routers: {routers}"))?;
@@ -175,37 +158,38 @@ mod tests {
     use crate::output::CliReport;
 
     #[test]
-    fn ignored_config_is_reported_without_failing_validation() {
-        let report = ValidateReport::valid("p".into(), 1, 0, 0, 0, vec![])
+    fn ignored_config_is_reported_without_failing_validation() -> anyhow::Result<()> {
+        let report = ValidateReport::valid("p".into(), 1, 0, vec![])
             .with_ignored_config(vec!["plugins.bitrouter-guardrail is ignored".into()]);
         // A misconfiguration, not a malformed config: CI gates on `valid`, and
         // an ignored block must not turn a green pipeline red.
         assert_eq!(report.exit_code(), 0);
-        let v = serde_json::to_value(&report).unwrap();
+        let v = serde_json::to_value(&report)?;
         assert_eq!(
             v["ignored_config"][0],
             "plugins.bitrouter-guardrail is ignored"
         );
         // and it is omitted entirely when there is nothing to say.
-        let clean = ValidateReport::valid("p".into(), 1, 0, 0, 0, vec![]);
+        let clean = ValidateReport::valid("p".into(), 1, 0, vec![]);
         assert!(
-            serde_json::to_value(&clean)
-                .unwrap()
+            serde_json::to_value(&clean)?
                 .get("ignored_config")
                 .is_none()
         );
+        Ok(())
     }
 
     #[test]
-    fn validate_exit_code_and_shape() {
-        let ok = ValidateReport::valid("p".into(), 1, 2, 0, 0, vec![]);
+    fn validate_exit_code_and_shape() -> anyhow::Result<()> {
+        let ok = ValidateReport::valid("p".into(), 1, 2, vec![]);
         assert_eq!(ok.exit_code(), 0);
         let bad = ValidateReport::invalid("p".into(), "boom".into());
         assert_eq!(bad.exit_code(), 1);
-        let v = serde_json::to_value(&bad).unwrap();
+        let v = serde_json::to_value(&bad)?;
         assert_eq!(v["valid"], false);
         assert_eq!(v["errors"][0], "boom");
         // valid report omits the empty errors array.
-        assert!(serde_json::to_value(&ok).unwrap().get("errors").is_none());
+        assert!(serde_json::to_value(&ok)?.get("errors").is_none());
+        Ok(())
     }
 }

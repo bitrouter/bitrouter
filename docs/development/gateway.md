@@ -70,6 +70,35 @@ from shared gateway mode; the two profiles cannot be enabled together.
 [Tenant routing](tenant-routing.md) describes the actual-send limits and health
 state inside the authorized retained candidate set.
 
+## Accepted M0 Policy and Eval boundary
+
+These boundaries apply independently of the compiled feature set.
+Gateway model Policy uses the same public typed source as files, defaults, CLI,
+SDK and tenant resources. Shared publication carries model_policy under format2;
+ACL policies stay independent. Runtime selection changes model/effort and keeps
+complete admitted context. A private compiled view never becomes an editable
+format or a source-reconstruction bridge. Exact revision/literal-name bindings,
+full dependency qualification and live authority are checked before dispatch.
+
+Tenant/shared import, configuration and execution reject experimental context,
+core_choice, paid assessment and ACP block even on Policy-free routes with all
+features enabled. Retained experiments have an explicit BRO local harness owner.
+Ordinary provider continuation and explicitly enabled server tools retain their
+own permissions; selecting a Policy cannot start tool execution.
+
+Model Policy and tenant Eval exchange belong to the minimum gateway profile.
+Evaluation executes externally; the service admits/queries/freezes facts against
+verified closed identities. It adds no Eval runner or implicit learner. Results,
+freeze and draft source do not change active routing. Source publication and
+configuration activation are distinct authorized/CAS operations.
+
+Shared bootstrap/join/restart validate the current baseline, authenticated head
+and all affected encrypted publications before instance registration, heartbeat
+or recovery writes. A Policy-free head does not permit old retained content.
+Refusal preserves old data; current shared reconciliation, idempotency, output,
+usage/Unknown and cancellation obligations remain required. Format selection is
+owned by the [service contract](../specs/service-api/README.md#resource-and-evidence-migration-and-rollback).
+
 ## Adapter validation
 
 Authentication, routes and model availability are deployment-specific. Unknown
@@ -84,15 +113,16 @@ and their consuming tests define the supported conversion shapes.
 configuration and requests its model catalog. Local HTTP and online HTTPS use
 that same check. It resolves `api_base`, an account's endpoint override,
 `protocol_endpoints`, and `${VAR}` credential references the way config load
-does. An unresolved endpoint or credential reference fails that connection and
-does not open a socket. A resolved empty credential is allowed; a local
-endpoint may omit a key.
+does. An unresolved reference in the endpoint, credential, or static header
+fails before dialing. A local endpoint may omit its API key.
 
 The request is a GET of the selected protocol's model list. Chat Completions,
 Responses, and Messages use `{api_base}/models` and accept `{ "data": [{ "id" }] }`.
-Authentication, static provider headers, and upstream timeouts are the ones the
-gateway uses for that provider. The check does not render a prompt, does not
-enter scheduling, and does not change `active` or write `bitrouter.yaml`.
+The check uses configured API keys, static provider headers, and upstream
+timeouts. A provider that uses stored login credentials needs a configured API
+key or static authentication header for this check. A redirect returns its
+original HTTP status. The check does not render a prompt, does not enter
+scheduling, and does not change `active` or write `bitrouter.yaml`.
 Model ids it sees are reported only. `auto_discover` still runs only at startup
 and reload.
 
@@ -138,7 +168,7 @@ existence of cached content; listing a skill does not authorize execution.
 Upstream connections use configured server credentials, not a downstream user's
 inference credential. Connection sharing does not confer tenant isolation.
 
-Schemas and bounded skills representations are in the [wire types](../../crates/bitrouter-ai/src/protocol/mcp_skills.rs).
+Schemas and bounded skills representations are in the [wire types](../../apps/bitrouter/src/skills/wire.rs).
 The protocol is evolving; callers must use discovered capabilities, tolerate
 unknown optional response fields, reject unsupported required behavior and
 handle errors.

@@ -12,12 +12,10 @@ use crate::gateway::{
         native_preparation::{NativePreparationWorkKind, NativePreparationWorkReport},
     },
 };
+use crate::managed_contract::evidence::NativeAttemptReport;
 use crate::tenancy::transaction::{JobTarget, Phase};
 use async_trait::async_trait;
-use bitrouter_ai::{
-    core::evidence::NativeAttemptReport,
-    types::{Message, Prompt, Role},
-};
+use bitrouter_ai::types::{Message, Prompt, Role};
 
 #[derive(Default)]
 struct PlanGate {

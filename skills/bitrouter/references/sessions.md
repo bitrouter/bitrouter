@@ -134,9 +134,9 @@ _bitrouter/route/reset  { sessionId }
 The manager must capability-probe this metadata. An absent or null
 `routeControl` means the route UI is unavailable, and calling the extension
 returns method-not-found. `list` and `set` are daemon-confirmed; `route` accepts
-BitRouter presets, logical models, or explicit provider/model routes allowed
+BitRouter named routers, logical models, or explicit provider/model routes allowed
 by current policy. `list.available` contains live logical-model picker
-suggestions, not an exhaustive grammar for presets or explicit routes. Do not
+suggestions, not an exhaustive grammar for routers or explicit routes. Do not
 use client-side `providers/*` as a compatibility alias.
 
 The same trusted binding advertises `_meta["bitrouter.dev/controller"].usage`
@@ -223,7 +223,7 @@ controller/harness headers together with Claude or Codex native
 session/thread/agent/turn evidence. Session routes are ephemeral leases keyed
 by API principal, declared controller, and native session. These headers are
 correlation and routing claims, not authenticated facts; processes sharing one
-API key can deliberately reuse them. An explicit caller route or preset and a
+API key can deliberately reuse them. An explicit caller route or named router and a
 Responses continuation pin remain stronger than a lease.
 
 Close/delete removes a lease only after the harness operation succeeds;

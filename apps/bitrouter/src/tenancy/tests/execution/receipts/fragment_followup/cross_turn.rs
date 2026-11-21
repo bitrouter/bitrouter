@@ -19,7 +19,7 @@ use async_trait::async_trait;
 use bitrouter_ai::{
     tenancy::{
         execution::UsageDimension,
-        usage_evidence::{Dimension, ExecutionUsageEvidenceV1, Source},
+        usage_evidence::{Dimension, ExecutionUsageEvidence, Source},
     },
     types::{OperationScope, Tool, ToolResultOutput, UsageOrigin},
 };
@@ -416,7 +416,7 @@ async fn multi_round(
         )
         .await
         .map_err(failure)?;
-    let evidence: ExecutionUsageEvidenceV1 = serde_json::from_slice(&bytes)?;
+    let evidence: ExecutionUsageEvidence = serde_json::from_slice(&bytes)?;
     ensure!(!evidence.truncated && evidence.dropped_frames == 0);
     for (index, attempt) in receipt.attempts.iter().enumerate() {
         let (input, output) = if index == 0 { (10, 3) } else { (40, 7) };

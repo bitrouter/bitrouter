@@ -107,10 +107,7 @@ async fn bootstrap_refuses_a_durable_pending_job_instead_of_reconstructing_send_
             ready.fixture.db.clone(),
             None,
             initial,
-            Arc::new(Resources::with_key(
-                ready.fixture.installation.clone(),
-                [29; 32],
-            )?),
+            ready.fixture.service.resources.clone(),
         )
         .await;
         if let Ok(service) = attempt {

@@ -1,7 +1,6 @@
 //! Public routing identities and policy data carried by service APIs.
 //! Selection, authorization and execution remain application-owned.
 
-use crate::event::PipelineEvent;
 use serde::{Deserialize, Serialize};
 
 /// How a cascade chain should be ordered.
@@ -47,110 +46,11 @@ pub struct ModelInfo {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RouterRequestIdentity {
-    /// Canonical router id, including the name normalized from a legacy preset.
+    /// Canonical router ID.
     pub router_id: String,
     /// Exact inbound model selector before ingress transforms, such as
     /// `bitrouter/coding` or `@coding`.
     pub original_selector: String,
     /// Versioned, redaction-safe effective binding digest.
     pub binding_digest: String,
-}
-
-/// Context treatment owned by a policy action. It never grants host rights.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Default,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    serde::Serialize,
-    serde::Deserialize,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum ContextStrategy {
-    /// Preserve the complete admitted source view.
-    Preserve,
-    /// Select among semantically justified views within granted capabilities.
-    #[default]
-    Evidence,
-}
-
-/// One policy action: generation model, optional effort and context treatment.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PolicyModelTarget {
-    /// Normal generation route selector.
-    pub model: String,
-    /// Explicit policy effort; absence preserves a caller constraint.
-    pub effort: Option<crate::types::ReasoningEffort>,
-    /// Context strategy is part of the action identity, including Learn evidence.
-    pub context: crate::routing::ContextStrategy,
-}
-
-/// Routing knobs shared by presets and variants.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct RoutingConfig {
-    /// Cascade-chain ordering.
-    pub sort: Option<SortOrder>,
-    /// Require providers carrying all these tags.
-    pub require_tags: Vec<String>,
-    /// Restrict the chain to exactly these providers.
-    pub only: Vec<String>,
-    /// Drop these providers from the chain.
-    pub ignore: Vec<String>,
-}
-
-impl PolicyModelTarget {
-    /// Construct a model action with evidence routing and inherited effort.
-    pub fn model_only(model: String) -> Self {
-        Self {
-            model,
-            effort: None,
-            context: Default::default(),
-        }
-    }
-    /// Model selected by this action.
-    pub fn model(&self) -> &str {
-        &self.model
-    }
-    /// Optional policy effort.
-    pub fn effort(&self) -> Option<crate::types::ReasoningEffort> {
-        self.effort
-    }
-}
-
-impl From<String> for PolicyModelTarget {
-    fn from(model: String) -> Self {
-        Self::model_only(model)
-    }
-}
-
-impl From<&str> for PolicyModelTarget {
-    fn from(model: &str) -> Self {
-        Self::model_only(model.into())
-    }
-}
-
-impl std::fmt::Display for PolicyModelTarget {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "{}", self.model)?;
-        if let Some(effort) = self.effort {
-            write!(formatter, "@{effort}")?;
-        }
-        write!(formatter, ":{:?}", self.context)
-    }
-}
-
-impl PipelineEvent for RouterRequestIdentity {
-    fn event_name(&self) -> &'static str {
-        "router.resolved"
-    }
 }

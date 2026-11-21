@@ -3,15 +3,6 @@ use anyhow::Result;
 use bitrouter_ai::tenancy::identity::{InstallationId, TenantId};
 use sha2::{Digest, Sha256};
 
-#[cfg(all(feature = "core", feature = "harness"))]
-pub(crate) fn learner_schedule(
-    installation: &InstallationId,
-    tenant: &TenantId,
-    id: &str,
-) -> Result<String> {
-    tenant_key(installation, tenant, "owned.learner.schedule.v1", &[id])
-}
-
 pub(super) const LEARNING_PENDING: &str = "learning.pending";
 pub(super) const NATIVE_EXPERIMENT_PENDING: &str = "native.experiment.pending";
 

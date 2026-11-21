@@ -7,13 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-beta.1]
+
 ### Changed
 
-- Publish the HTTP service SDK on the independently versioned
-  `2.0.0-alpha.1` API line, distinguishing it from the incompatible embedded
-  pipeline SDK. AI contracts and the application keep their existing version
-  line. Transport implementation and protocol payload semantics are unchanged;
-  the default User-Agent now identifies `bitrouter-sdk/2.0.0-alpha.1`.
+- **Breaking:** use `policy/1.0.0-beta.1` source documents for model-only routing,
+  including the bundled default and templates. Replace presets/variants with
+  named routers, use `policy.yaml`, and publish with an explicit expected digest.
+  Retire lockfile v1–v4, compiler/evolution commands, runtime modes and migration
+  aliases. Access-control policies remain a separate namespace.
+- **Breaking:** control protocol 2 requires current action descriptors; shared
+  publications use format 2 and typed `model_policy`. Eval subject schema 2
+  binds model-policy evidence to the installation, tenant, configuration revision,
+  Policy resource revision and literal selected name. Eval remains client-driven;
+  importing facts does not activate or rewrite a Policy.
+- **Breaking:** new installations use current-only ordinary and shared database
+  baselines. Old, unmarked nonempty, partial and unsupported stores are refused
+  without migration or recovery writes. Drain unresolved work with the old binary,
+  archive its data and keys separately, then explicitly provision a fresh
+  installation. Rollback requires the old binary and its consistent data/config
+  copy; opening new data with an old binary is unsupported. Current-format
+  immutable revisions, receipts and restart recovery remain supported.
+
+- Start the shared `1.0.0-beta.1` software release line for the workspace
+  crates and agent plugins. Update the HTTP service SDK and `bitrouter-ai`
+  together when adopting the beta. Applications staying on the earlier HTTP
+  SDK can pin `bitrouter-ai = "=1.0.0-alpha.36"` for its control API.
 
 ## [1.0.0-alpha.36]
 

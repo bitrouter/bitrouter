@@ -13,6 +13,10 @@ pub(super) async fn load(
     db: &impl ConnectionTrait,
     budget: ValidationBudget,
 ) -> Result<startup::LoadedHeader> {
+    anyhow::ensure!(
+        crate::db::store_format::inspect(db).await? == crate::db::store_format::State::Current,
+        "offline inspection requires a current store"
+    );
     // Authority pages honor the requested row budget. Evidence uses fixed
     // 32-key pages and a separately reserved overlapping decode envelope.
     if budget.rows < obligations::VALIDATION_PAGE_ROWS
@@ -21,7 +25,7 @@ pub(super) async fn load(
     {
         return Err(CapacityExceeded.into());
     }
-    crate::db::migration::m20240101_000044_capacity_upgrade::validate_authority(db).await?;
+    crate::db::migration::validate_authority(db).await?;
     let loaded = startup::load_header_in(
         db,
         startup::Budget {
@@ -45,6 +49,13 @@ pub(super) async fn load(
         }
         Ok(())
     })
+    .await?;
+    crate::eval::store::retained::validate_retained_subjects_in(
+        db,
+        &loaded.header.installation,
+        budget.bytes,
+        &|| Ok(()),
+    )
     .await?;
     Ok(loaded)
 }

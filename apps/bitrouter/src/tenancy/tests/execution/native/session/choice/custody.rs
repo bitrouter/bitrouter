@@ -226,7 +226,7 @@ pub(in crate::tenancy::tests::execution::native::session) async fn exercise(
         .await
         .err()
         .context("retained Core owner was discarded")?;
-    ensure!(fence.code == bitrouter_ai::core::protocol::ErrorCode::Busy);
+    ensure!(fence.code == crate::managed_contract::protocol::ErrorCode::Busy);
     super::super::custody::no_clean_drain(&bound.fixture).await?;
     ensure!(
         bound

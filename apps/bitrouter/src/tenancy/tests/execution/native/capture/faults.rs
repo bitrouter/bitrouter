@@ -64,7 +64,10 @@ async fn file_fixture(provider: &Provider, root: &Path) -> Result<(Fixture, Reso
         fixture.db.clone(),
         Some(owner),
         initial,
-        Arc::new(Resources::with_key(fixture.installation.clone(), [29; 32])?),
+        Arc::new(Resources::with_key(
+            fixture.installation.clone(),
+            fixture.wrapping_key,
+        )?),
     )
     .await?;
     Ok((fixture, route))

@@ -1,7 +1,9 @@
 //! A custom asynchronous directory must not resume file I/O after revocation.
 use super::*;
+use crate::managed_contract::harness::skills::LocalScope;
+use crate::managed_contract::harness::skills::LocalSkill;
+use crate::managed_contract::harness::skills::LocalSkillCatalog;
 use crate::skills::library::SkillDirectory;
-use bitrouter_ai::harness::skills::{LocalScope, LocalSkill, LocalSkillCatalog};
 use std::path::PathBuf;
 
 struct DelayedDirectory {
@@ -172,7 +174,9 @@ async fn runtime_local_skills_recheck_before_resuming_custom_directory_io() -> R
                     .await
                     .err()
                     .context("missing local file was accepted")?;
-                ensure!(error.code == bitrouter_ai::core::protocol::ErrorCode::ArtifactUnavailable);
+                ensure!(
+                    error.code == crate::managed_contract::protocol::ErrorCode::ArtifactUnavailable
+                );
                 ensure!(library.reads.load(Ordering::SeqCst) == 3);
             }
             drop(port);

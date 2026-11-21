@@ -216,7 +216,7 @@ impl Decoder {
                         self.source_bytes = self
                             .source_bytes
                             .checked_add(
-                                bitrouter_ai::wire::json(&source, parts::MAX_BYTES)
+                                crate::gateway::wire::json(&source, parts::MAX_BYTES)
                                     .map_err(|_| {
                                         invalid_response(
                                             "GenerateContent grounding exceeds codec bound",
@@ -246,7 +246,7 @@ impl Decoder {
         // at its first call until the actual source turn is complete at EOF.
         for part in event_parts {
             if !self.buffered.is_empty() || matches!(part, StreamPart::ToolCallDelta { .. }) {
-                let size = bitrouter_ai::wire::json(&part, parts::MAX_BYTES)
+                let size = crate::gateway::wire::json(&part, parts::MAX_BYTES)
                     .map_err(|_| {
                         invalid_response("GenerateContent stream suffix exceeds codec bound")
                     })?
@@ -393,7 +393,7 @@ impl Encoder {
                 "unsupported GenerateContent tool identity",
             ));
         }
-        let metadata_size = bitrouter_ai::wire::json(metadata, parts::MAX_BYTES)
+        let metadata_size = crate::gateway::wire::json(metadata, parts::MAX_BYTES)
             .map_err(|_| invalid_response("GenerateContent tool metadata exceeds codec bound"))?
             .len();
         let size = id

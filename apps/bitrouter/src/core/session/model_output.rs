@@ -288,7 +288,7 @@ fn validate_limit(
 pub(super) fn report_allowance(
     canonical: u64,
     request_id: &str,
-    route: &bitrouter_ai::core::evidence::NativeRoute,
+    route: &crate::managed_contract::evidence::NativeRoute,
 ) -> Result<u64, CoreError> {
     let envelope =
         crate::gateway::pipeline::native_report::rejection_byte_reserve(request_id, route)
@@ -300,7 +300,7 @@ fn validate_report_allowance(
     contract: (Option<u64>, Option<u32>, Option<u64>),
     bytes: u64,
     request_id: &str,
-    route: &bitrouter_ai::core::evidence::NativeRoute,
+    route: &crate::managed_contract::evidence::NativeRoute,
 ) -> Result<(), CoreError> {
     if contract.1 != Some(CURRENT_VERSION)
         || contract
@@ -355,9 +355,9 @@ fn validate_complete_report(
     limit: Option<u64>,
     report: &NativeAttemptReport,
 ) -> Result<(), CoreError> {
-    use bitrouter_ai::core::evidence::NativeEvidenceCommitment;
-    use bitrouter_ai::core::evidence::NativeReportRejectionReason;
-    use bitrouter_ai::core::evidence::NativeTokenCost;
+    use crate::managed_contract::evidence::NativeEvidenceCommitment;
+    use crate::managed_contract::evidence::NativeReportRejectionReason;
+    use crate::managed_contract::evidence::NativeTokenCost;
     let invalid = || {
         reject(
             ErrorCode::CheckpointConflict,
@@ -438,7 +438,7 @@ fn validate_complete_report(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitrouter_ai::core::evidence::NativeRouteConstraints;
+    use crate::managed_contract::evidence::NativeRouteConstraints;
 
     #[test]
     fn report_rejection_contract_rejects_inconsistent_evidence()

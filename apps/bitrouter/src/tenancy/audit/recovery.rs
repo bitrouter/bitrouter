@@ -214,6 +214,7 @@ pub(crate) async fn inspect_target(
     for (table, expected) in [
         ("tenancy_configurations", observed.configurations.len()),
         ("tenancy_active_configurations", observed.active.len()),
+        ("tenancy_resource_lifecycle", observed.resources.len()),
     ] {
         let row = reader
             .query_one(Statement::from_string(
@@ -226,6 +227,16 @@ pub(crate) async fn inspect_target(
             usize::try_from(row.try_get::<i64>("", "count")?)? == expected,
             "hidden expired/revoked or unapproved fresh rows"
         );
+    }
+    for reference in &observed.resources {
+        budget.check()?;
+        crate::tenancy::resources::lifecycle::inspect_fresh_in(
+            &reader,
+            &state.installation,
+            state.revision,
+            reference,
+        )
+        .await?;
     }
     let mut after = None;
     let mut active_count = 0_usize;

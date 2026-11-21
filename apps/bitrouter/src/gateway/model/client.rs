@@ -122,11 +122,28 @@ impl ModelClient {
 
     /// Build a client with an explicitly supplied protocol registry.
     pub fn with_dispatch(timeouts: HttpTimeouts, dispatch: Arc<OutboundDispatch>) -> Result<Self> {
+        Self::with_redirect_policy(timeouts, dispatch, reqwest::redirect::Policy::default())
+    }
+
+    pub(crate) fn for_model_list_probe(timeouts: HttpTimeouts) -> Result<Self> {
+        Self::with_redirect_policy(
+            timeouts,
+            Arc::new(OutboundDispatch::builtin()),
+            reqwest::redirect::Policy::none(),
+        )
+    }
+
+    fn with_redirect_policy(
+        timeouts: HttpTimeouts,
+        dispatch: Arc<OutboundDispatch>,
+        redirects: reqwest::redirect::Policy,
+    ) -> Result<Self> {
         let client = reqwest::Client::builder()
             .connect_timeout(timeouts.connect)
             .read_timeout(timeouts.read)
             .pool_idle_timeout(timeouts.pool_idle)
             .tcp_keepalive(timeouts.tcp_keepalive)
+            .redirect(redirects)
             .build()
             .map_err(|error| ModelError::Configuration {
                 message: format!("building HTTP client: {error}"),
@@ -182,7 +199,7 @@ impl ModelClient {
         stream: bool,
     ) -> Result<(
         serde_json::Value,
-        bitrouter_ai::conversion::ConversionReport,
+        crate::gateway::conversion_report::ConversionReport,
     )> {
         if let Some(message) =
             crate::gateway::providers::retired::protocol_message(target.api_protocol.as_str())
@@ -281,8 +298,8 @@ impl ModelClient {
         DecisionsCodec::parse_response(body, request)
     }
 
-    /// GET this protocol's model catalog with the client's timeouts and the
-    /// same authentication the gateway uses for the provider. This is not a
+    /// GET this protocol's model catalog with the client's timeouts and its
+    /// configured authentication mechanisms. This is not a
     /// generation: it does not render a prompt or call [`Self::generate`].
     pub async fn list_models(
         &self,

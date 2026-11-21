@@ -9,7 +9,7 @@ use axum::{
 use bitrouter_ai::tenancy::{
     identity::{ExecutionId, TenantId},
     operation::ErrorCode,
-    usage_evidence::UsageEvidenceCapabilitiesV1,
+    usage_evidence::UsageEvidenceCapabilities,
 };
 
 pub(in crate::tenancy) async fn capabilities(
@@ -17,7 +17,7 @@ pub(in crate::tenancy) async fn capabilities(
     Extension(caller): Extension<Caller>,
 ) -> Result<Response, Failure> {
     let installed = service.capabilities(&caller).await?;
-    let mut capabilities = UsageEvidenceCapabilitiesV1::new(installed.installation_id);
+    let mut capabilities = UsageEvidenceCapabilities::new(installed.installation_id);
     capabilities.child_linkage = cfg!(all(feature = "core", feature = "harness"));
     Ok(Json(capabilities).into_response())
 }

@@ -16,12 +16,12 @@ use bitrouter::harness::resources::{
         store::NativeStore,
     },
 };
+use bitrouter::managed_contract::protocol::{
+    CommitStatus, CoreError, ErrorCode, TaskInput, ToolExecute, ToolOutcome,
+};
 use bitrouter::managed_task::{
     local::Client,
     protocol::{Operation, Report, socket_path},
-};
-use bitrouter_ai::core::protocol::{
-    CommitStatus, CoreError, ErrorCode, TaskInput, ToolExecute, ToolOutcome,
 };
 use serde_json::{Value, json};
 use tokio::process::{Child, Command};
@@ -564,7 +564,7 @@ async fn original_embedded_journal_continues_in_daemon_without_identity_migratio
         bitrouter::gateway::caller::CallerContext::local(),
         store.clone(),
         &fixture.workspace,
-        bitrouter_ai::harness::agent::ToolMode::ReadOnly,
+        bitrouter::managed_contract::harness::agent::ToolMode::ReadOnly,
         &HarnessConfig::default(),
     )
     .await?;
@@ -620,7 +620,7 @@ impl NativeStore for LostInputAck {
         let journal: Value = serde_json::from_slice(&bytes)
             .map_err(|e| CoreError::rejected(ErrorCode::CheckpointUnavailable, e.to_string()))?;
         let accepted = if journal["checkpoint"].is_object() {
-            let batch: bitrouter_ai::core::checkpoint::CheckpointBatch =
+            let batch: bitrouter::managed_contract::checkpoint::CheckpointBatch =
                 serde_json::from_value(journal["checkpoint"].clone()).map_err(|e| {
                     CoreError::rejected(ErrorCode::CheckpointUnavailable, e.to_string())
                 })?;
@@ -669,7 +669,7 @@ async fn durable_input_ack_uncertainty_remains_blocked_without_replay_or_forced_
         bitrouter::gateway::caller::CallerContext::local(),
         store.clone(),
         &fixture.workspace,
-        bitrouter_ai::harness::agent::ToolMode::ReadOnly,
+        bitrouter::managed_contract::harness::agent::ToolMode::ReadOnly,
         &HarnessConfig::default(),
     )
     .await?;

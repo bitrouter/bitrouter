@@ -15,7 +15,7 @@ impl Drop for ReleaseGate {
 
 pub(super) fn ordered_headers(
     h: &OrderedHarness,
-    binding: &OrderedDispatchBindingV2,
+    binding: &OrderedDispatchBinding,
 ) -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
     for (name, value) in [
@@ -100,8 +100,9 @@ async fn caller_wait_timeout_retains_cancelled_cleanup_without_fencing() -> Resu
         .await
         .map_err(failure)?;
 
-    // The unrelated management transaction has a longer deadline than the caller.
-    let gate = service.cleanup.hold(Phase::Committing);
+    // Hold the authority actor before acquiring SQL. The caller must finish its
+    // bounded content read, then queue an intent behind this unrelated command.
+    let gate = service.cleanup.hold(Phase::Beginning);
     let _release = ReleaseGate(service.cleanup.clone());
     let blocking_service = service.clone();
     let operator = h.fixture.operator.clone();
@@ -113,6 +114,8 @@ async fn caller_wait_timeout_retains_cancelled_cleanup_without_fencing() -> Resu
         blocking_service.execute(operator, command).await
     }));
     timeout(Duration::from_secs(2), gate.entered.notified()).await?;
+    // The Beginning gate precedes the counter increment, so this baseline also
+    // excludes both the held management command's read and write BEGINs.
     let before = service.cleanup.sql_counts_for_test();
     let before_queue = service.commands.capacity();
     let start = Instant::now();
@@ -225,9 +228,10 @@ async fn caller_wait_timeout_retains_cancelled_cleanup_without_fencing() -> Resu
             .0
             == 0
     );
+    let after = service.cleanup.sql_counts_for_test();
     ensure!(
-        service.cleanup.sql_counts_for_test().0 == before.0 + 2,
-        "expected one intent and one terminal cleanup transaction"
+        after.0 == before.0 + 4,
+        "expected management read/write, one intent, and one terminal cleanup BEGIN; before={before:?}, after={after:?}"
     );
     ensure!(
         service.admission.receipts_ready() && service.current().is_ok() && h.observed()?.is_empty()

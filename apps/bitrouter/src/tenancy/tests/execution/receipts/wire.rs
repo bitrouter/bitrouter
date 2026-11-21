@@ -153,7 +153,7 @@ pub(super) fn chat_stream(usage: Value, terminal: bool) -> Result<String> {
 #[tokio::test]
 async fn ignored_messages_sse_labels_cannot_inject_usage_into_either_receipt_contract() -> Result<()>
 {
-    use bitrouter_ai::tenancy::usage_evidence::{Dimension, ExecutionUsageEvidenceV1, Source};
+    use bitrouter_ai::tenancy::usage_evidence::{Dimension, ExecutionUsageEvidence, Source};
     let events = [
         (
             "message_start",
@@ -199,7 +199,7 @@ async fn ignored_messages_sse_labels_cannot_inject_usage_into_either_receipt_con
         )
         .await
         .map_err(failure)?;
-    let evidence: ExecutionUsageEvidenceV1 = serde_json::from_slice(&bytes)?;
+    let evidence: ExecutionUsageEvidence = serde_json::from_slice(&bytes)?;
     evidence.validate()?;
     ensure!(
         evidence.frames.len() == 2

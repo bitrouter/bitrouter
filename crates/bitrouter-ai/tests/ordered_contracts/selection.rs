@@ -1,15 +1,15 @@
 use super::*;
 
-pub(super) fn capabilities() -> Result<OrderedCapabilitiesV2, serde_json::Error> {
+pub(super) fn capabilities() -> Result<OrderedCapabilities, serde_json::Error> {
     serde_json::from_value(
         json!({"contract_version":2,"installation_id":"installation",
         "instance_id":"instance","capability_revision":"capability","authority_revision":1,
         "attempt_limit":64,"revision_bound_dispatch":true,"strict_receipts":true,"dispatch_enabled":true}),
     )
 }
-pub(super) fn manifest(count: u16) -> Result<CandidateManifestV1, serde_json::Error> {
+pub(super) fn manifest(count: u16) -> Result<CandidateManifest, serde_json::Error> {
     serde_json::from_value(
-        json!({"schema_version":1,"admission_mode":"legacy","runtime_observation":null,"installation_id":"installation",
+        json!({"schema_version":1,"admission_mode":"unprofiled","runtime_observation":null,"installation_id":"installation",
         "tenant_id":"tenant","execution_revision":"revision","authority_revision":1,
         "route":reference("route"),"inbound_protocol":"messages",
         "candidates":(0..count).map(|index| json!({"candidate_index":index,
@@ -53,7 +53,7 @@ fn selection_count_order_and_ordinal_bounds() -> TestResult {
     ] {
         let mut value = serde_json::to_value(selected(vec![0])?)?;
         value["route"]["resource_kind"] = json!(kind);
-        assert!(!valid::<OrderedCandidateSelectionV1>(value));
+        assert!(!valid::<OrderedCandidateSelection>(value));
     }
     Ok(())
 }
@@ -66,10 +66,10 @@ fn strict_selection_and_protocol_wire_contracts() -> TestResult {
     for version in [0, 2, 255] {
         let mut value = serde_json::to_value(&selection)?;
         value["schema_version"] = json!(version);
-        assert!(!valid::<OrderedCandidateSelectionV1>(value));
+        assert!(!valid::<OrderedCandidateSelection>(value));
     }
     let raw = serde_json::to_string(&selection)?;
-    serde_json::from_str::<OrderedCandidateSelectionV1>(&raw.replace("[255,0]", "[255e0,0.0]"))?
+    serde_json::from_str::<OrderedCandidateSelection>(&raw.replace("[255,0]", "[255e0,0.0]"))?
         .validate()?;
     for invalid in [
         "-1",
@@ -80,7 +80,7 @@ fn strict_selection_and_protocol_wire_contracts() -> TestResult {
         "null",
     ] {
         assert!(
-            serde_json::from_str::<OrderedCandidateSelectionV1>(
+            serde_json::from_str::<OrderedCandidateSelection>(
                 &raw.replace("[255,0]", &format!("[{invalid}]"))
             )
             .is_err()
@@ -89,7 +89,7 @@ fn strict_selection_and_protocol_wire_contracts() -> TestResult {
     for protocol in ["chat_completions", "messages", "responses"] {
         let mut value = serde_json::to_value(selection.accept(GenerationProtocol::Messages)?)?;
         value["inbound_protocol"] = json!(protocol);
-        assert!(valid::<AcceptedSelectionV2>(value));
+        assert!(valid::<AcceptedSelection>(value));
     }
     for protocol in [
         json!("decisions"),
@@ -99,7 +99,7 @@ fn strict_selection_and_protocol_wire_contracts() -> TestResult {
     ] {
         let mut value = serde_json::to_value(selection.accept(GenerationProtocol::Messages)?)?;
         value["inbound_protocol"] = protocol;
-        assert!(!valid::<AcceptedSelectionV2>(value));
+        assert!(!valid::<AcceptedSelection>(value));
     }
     Ok(())
 }
@@ -162,7 +162,7 @@ fn discovery_binding_requires_entire_chain_and_strict_guarantees() -> TestResult
     ] {
         let mut value = serde_json::to_value(&capabilities)?;
         value[key] = json!(false);
-        let caps: OrderedCapabilitiesV2 = serde_json::from_value(value)?;
+        let caps: OrderedCapabilities = serde_json::from_value(value)?;
         caps.validate()?;
         assert!(
             caps.bind(
@@ -184,7 +184,7 @@ fn discovery_binding_requires_entire_chain_and_strict_guarantees() -> TestResult
     ] {
         let mut value = serde_json::to_value(&binding)?;
         value[key] = json!(invalid);
-        assert!(!valid::<OrderedDispatchBindingV2>(value));
+        assert!(!valid::<OrderedDispatchBinding>(value));
     }
     Ok(())
 }
@@ -229,7 +229,7 @@ fn manifest_keeps_sparse_root_ordinals_and_exact_references() -> TestResult {
     ] {
         let mut value = base.clone();
         *value.pointer_mut(pointer).ok_or("pointer")? = invalid;
-        assert!(!valid::<CandidateManifestV1>(value), "{pointer}");
+        assert!(!valid::<CandidateManifest>(value), "{pointer}");
     }
     Ok(())
 }
@@ -238,13 +238,13 @@ fn manifest_keeps_sparse_root_ordinals_and_exact_references() -> TestResult {
 fn maximum_manifest_and_selection_fit_documented_bounds() -> TestResult {
     let mut value = serde_json::to_value(manifest(256)?)?;
     maximize(&mut value);
-    let manifest: CandidateManifestV1 = serde_json::from_value(value)?;
+    let manifest: CandidateManifest = serde_json::from_value(value)?;
     manifest.validate()?;
     let bytes = serde_json::to_vec(&manifest)?.len();
     assert!(bytes > 512 * 1024 && bytes <= 1024 * 1024, "{bytes}");
     let mut value = serde_json::to_value(selected((192..256).collect())?)?;
     maximize(&mut value);
-    let selection: OrderedCandidateSelectionV1 = serde_json::from_value(value)?;
+    let selection: OrderedCandidateSelection = serde_json::from_value(value)?;
     selection.validate()?;
     // Unpadded base64url size can be proved without adding an encoding dependency.
     let encoded_size = (serde_json::to_vec(&selection)?.len() * 8).div_ceil(6);

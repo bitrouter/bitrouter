@@ -131,9 +131,13 @@ pub(crate) async fn router_statuses(
 
     for entry in inventory {
         let (selection, bound_policy) = match entry.selection {
-            RouterInventorySelection::Model { model, routing } => {
-                (RouterSelectionStatus::Model { model, routing }, None)
-            }
+            RouterInventorySelection::Model { model, routing } => (
+                RouterSelectionStatus::Model {
+                    model,
+                    routing: routing.into(),
+                },
+                None,
+            ),
             RouterInventorySelection::Policy {
                 policy,
                 base_model,
@@ -142,27 +146,26 @@ pub(crate) async fn router_statuses(
                 RouterSelectionStatus::Policy {
                     policy: policy.clone(),
                     base_model,
-                    routing,
+                    routing: routing.into(),
                 },
                 Some(policy),
             ),
         };
         let source = match entry.source {
             RouterConfigSource::User => RouterSource::User,
-            RouterConfigSource::LegacyPreset => RouterSource::Legacy,
         };
         let address = match source {
             RouterSource::User => format!("bitrouter/{}", entry.id),
-            RouterSource::Legacy if entry.id == "auto" && bound_policy.is_some() => {
-                "bitrouter/auto".to_string()
-            }
-            RouterSource::Legacy => format!("@{}", entry.id),
             RouterSource::Default => String::new(),
         };
         let policy_problem = bound_policy
             .as_deref()
             .map(|policy| match policy_readiness {
-                PolicyReadiness::Known(report) if report.definitions.contains_key(policy) => None,
+                PolicyReadiness::Known(report)
+                    if report.policies.iter().any(|name| name == policy) =>
+                {
+                    None
+                }
                 PolicyReadiness::Known(_) => Some((
                     RouterReadiness::NotReady,
                     format!("bound policy '{policy}' is unavailable"),
@@ -460,11 +463,6 @@ routers:
       system_prompt: top secret prompt
       params:
         private_token: top secret value
-presets:
-  legacy:
-    model: demo-model
-  auto:
-    model: demo-model
 "#,
         )?;
         let policies = bitrouter_ai::control::administration::PolicyReport::from_loaded(
@@ -482,19 +480,6 @@ presets:
         assert_eq!(review.source, RouterSource::User);
         assert!(review.system_prompt_default);
         assert_eq!(review.parameter_defaults, ["private_token"]);
-
-        let legacy = routers
-            .iter()
-            .find(|router| router.id == "legacy")
-            .ok_or_else(|| anyhow::anyhow!("legacy router missing"))?;
-        assert_eq!(legacy.address, "@legacy");
-        assert_eq!(legacy.source, RouterSource::Legacy);
-        let auto = routers
-            .iter()
-            .find(|router| router.id == "auto")
-            .ok_or_else(|| anyhow::anyhow!("legacy auto router missing"))?;
-        assert_eq!(auto.address, "@auto");
-        assert_eq!(auto.readiness, RouterReadiness::Ready);
 
         let coding = routers
             .iter()
@@ -583,20 +568,12 @@ routers:
 "#,
         )?;
         std::fs::write(
-            dir.path().join("policy-lock.yaml"),
-            r#"lockfileVersion: 4
-artifact:
-  evidence_root: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-  source_snapshot_time_unix_ms: 0
-  compiler:
-    id: bitrouter-policy-compiler
-    version: 1
-    config_digest: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            dir.path().join("policy.yaml"),
+            r#"spec_version: policy/1.0.0-beta.1
 policies:
   coding:
-    key_strategy: agent_trace
     tiers:
-      strong: { model: unavailable-model, context: evidence }
+      strong: { model: unavailable-model }
     routes: {}
     default_tier: strong
     tool_use_tier: strong

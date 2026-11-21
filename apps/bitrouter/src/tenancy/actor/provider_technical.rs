@@ -58,7 +58,7 @@ impl Slot {
             return;
         };
         #[cfg(test)]
-        if let Some(view) = facts.operation_view(&terminal) {
+        if let Some(view) = facts.operation_snapshot(&terminal) {
             worker.technical_io.captured(&view);
         }
         if self.disabled || self.task.is_some() {
@@ -160,7 +160,7 @@ async fn write(
 ) -> Report {
     // Scope wait, connection and INSERT all share ONE existing optional bound.
     let deadline = cleanup.min(Instant::now() + crate::tenancy::MANAGEMENT_TIMEOUT);
-    let Some(facts) = facts.finish_v3(&terminal, deadline, &cancel).await else {
+    let Some(facts) = facts.finish(&terminal, deadline, &cancel).await else {
         return Report {
             closed: true,
             disable: false,

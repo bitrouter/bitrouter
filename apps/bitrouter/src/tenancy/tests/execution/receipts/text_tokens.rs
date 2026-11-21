@@ -2,7 +2,7 @@
 use super::*;
 use bitrouter_ai::tenancy::{
     execution::Outcome,
-    usage_evidence::{Dimension, ExecutionUsageEvidenceV1, Source},
+    usage_evidence::{Dimension, ExecutionUsageEvidence, Source},
     validation::Validate,
 };
 
@@ -94,7 +94,7 @@ async fn text_tokens_json_sse_capture_exact_facts_and_keep_refusals_durable() ->
                 ensure!(receipt.usage.cache_write_tokens.is_none() && !receipt.usage.complete);
                 ensure!(receipt.attempts[0].native_usage.len() == 4);
                 let saved = evidence(&harness, &id).await?;
-                let document: ExecutionUsageEvidenceV1 = serde_json::from_slice(&saved)?;
+                let document: ExecutionUsageEvidence = serde_json::from_slice(&saved)?;
                 document.validate()?;
                 ensure!(document.execution_id == receipt.execution_id);
                 ensure!(document.attempts[0].attempt_id == receipt.attempts[0].attempt_id);

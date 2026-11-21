@@ -10,6 +10,66 @@ use std::sync::Mutex;
 
 struct CaptureTargets(Arc<Mutex<Vec<String>>>);
 
+#[tokio::test]
+async fn old_policy_input_is_rejected_before_any_resource_write() -> Result<()> {
+    let (db, resources) = fixture().await?;
+    let mut old = policy("tenant", "policy")?;
+    old["definition"]["document"] = json!({"lockfileVersion":4,"policies":{},"certificates":{}});
+    assert!(
+        import(&resources, &db, vec![credential("tenant")?, old])
+            .await
+            .is_err()
+    );
+    assert!(storage::references(&db).await?.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn authenticated_old_policy_bytes_are_refused_on_every_current_open() -> Result<()> {
+    let (db, resources) = fixture().await?;
+    let policy_ref = reference("tenant", ResourceKind::Policy, "policy")?;
+    let mut input = route("tenant", "visible", "base")?;
+    input["definition"]["selector"] = json!("bitrouter/choice");
+    input["definition"]["policy"] = serde_json::to_value(&policy_ref)?;
+    input["definition"]["routing"]["routers"] = json!({"choice": {
+        "selection":{"kind":"policy","policy":"selected","base_model":"fixture:base"}
+    }});
+    import(
+        &resources,
+        &db,
+        vec![credential("tenant")?, policy("tenant", "policy")?, input],
+    )
+    .await?;
+    let config = document(
+        vec![reference("tenant", ResourceKind::Route, "visible")?],
+        Some(policy_ref),
+    )?;
+    let compiled = compile(&resources, &db, &config).await?;
+    let mut envelope = serde_json::to_value(decrypt(&resources, &config, &compiled)?)?;
+    for artifact in envelope["artifacts"].as_array_mut().context("artifacts")? {
+        if artifact["definition"]["kind"] == "policy" {
+            artifact["definition"]["document"] =
+                json!({"lockfileVersion":4,"policies":{},"certificates":{}});
+        }
+    }
+    let mut historical = validation::stored(config, compiled)?;
+    validation::reseal(&resources, &mut historical, &envelope)?;
+    assert!(resources.validate_compiled(&historical).is_err());
+    assert!(resources.validate_executable(&historical).is_err());
+    assert!(resources.open_execution(&historical).is_err());
+    #[cfg(all(feature = "core", feature = "harness"))]
+    {
+        let check = || Ok(());
+        let budget = crate::storage::operation_budget::OperationBudget::new(&check);
+        assert!(
+            resources
+                .open_obligation_recovery(&historical, &budget)
+                .is_err()
+        );
+    }
+    Ok(())
+}
+
 #[async_trait::async_trait]
 impl RouteHook for CaptureTargets {
     async fn resolve(
@@ -123,7 +183,7 @@ async fn public_resource_name_equal_to_a_policy_tier_stays_distinct_through_pipe
 async fn resolved_tier_sort_does_not_alias_its_public_resource_name() -> Result<()> {
     use bitrouter_ai::routing::SortOrder;
     let (db, resources) = fixture().await?;
-    const PUBLIC: &str = "shared:fast";
+    const PUBLIC: &str = "shared";
     let mut input = route("tenant", PUBLIC, "base")?;
     let policy_ref = reference("tenant", ResourceKind::Policy, "policy")?;
     input["definition"]["selector"] = json!("bitrouter/choice");
@@ -131,9 +191,9 @@ async fn resolved_tier_sort_does_not_alias_its_public_resource_name() -> Result<
     let routing = &mut input["definition"]["routing"];
     routing["routers"] = json!({"choice": {
         "selection": {"kind":"policy", "policy":"selected", "base_model":"fixture:base",
-            "routing":{"sort":"alphabetical"}}
+            "routing":{"sort":"cost"}}
     }});
-    routing["variants"] = json!({"fast":{"routing":{"sort":"cost"}}});
+
     routing["providers"]["fixture"]["models"] = json!([
         {"id":"base"}, {"id":"expensive", "routing_weight":100},
         {"id":"cheap", "routing_weight":1}, {"id":"strong"}
@@ -142,9 +202,7 @@ async fn resolved_tier_sort_does_not_alias_its_public_resource_name() -> Result<
         {"provider":"fixture", "service_id":"expensive"},
         {"provider":"fixture", "service_id":"cheap"}
     ]}});
-    let mut selected_policy = policy("tenant", "policy")?;
-    selected_policy["definition"]["document"]["policies"]["selected"]["tiers"]["economy"]["model"] =
-        json!(PUBLIC);
+    let selected_policy = policy_with_economy("tenant", "policy", PUBLIC)?;
     import(
         &resources,
         &db,
@@ -168,8 +226,13 @@ async fn resolved_tier_sort_does_not_alias_its_public_resource_name() -> Result<
     assert_eq!(ingress.clean_model, "bitrouter/choice");
     assert_eq!(
         checked(route.routing_sort(&ingress.clean_model))?,
-        SortOrder::Alphabetical
+        SortOrder::Cost
     );
+    let base = route
+        .route_chain(PUBLIC, &RoutingPrefs::default(), &CallerContext::local())
+        .await?;
+    assert_eq!(base.len(), 1);
+    assert_eq!(base[0].service_id, "base");
     let tier = route
         .route_resolved(PUBLIC, &RoutingPrefs::default(), &CallerContext::local())
         .await?;

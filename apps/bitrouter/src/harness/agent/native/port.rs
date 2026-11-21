@@ -10,8 +10,8 @@ use tokio_util::sync::CancellationToken;
 use crate::core::session::HarnessPort;
 use crate::harness::agent::{RunEvent, commit_execution};
 use crate::harness::storage::{CommitRequest, ExecutionRecord};
-use bitrouter_ai::core::checkpoint::{CheckpointAck, CheckpointBatch, ToolStartFence};
-use bitrouter_ai::core::protocol::{ArtifactRef, CoreError, ErrorCode, ServerMessage};
+use crate::managed_contract::checkpoint::{CheckpointAck, CheckpointBatch, ToolStartFence};
+use crate::managed_contract::protocol::{ArtifactRef, CoreError, ErrorCode, ServerMessage};
 
 use super::journal::Journal;
 
@@ -91,7 +91,7 @@ impl HarnessPort for Port {
         server: &str,
         uri: &str,
         cancel: &CancellationToken,
-    ) -> Result<bitrouter_ai::harness::skills::HeldMcpSkill, CoreError> {
+    ) -> Result<crate::managed_contract::harness::skills::HeldMcpSkill, CoreError> {
         self.authorize_dispatch().await?;
         self.resources
             .as_ref()

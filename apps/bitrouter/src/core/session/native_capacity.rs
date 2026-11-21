@@ -1,8 +1,8 @@
 //! Capacity facts derived from the actual Core all-pending cleanup projection.
 //! These values never authorize work or stand in for a result/receipt.
 use super::*;
+use crate::managed_contract::protocol::OwnershipGrant;
 use crate::storage::checkpoint::serialized_bytes;
-use bitrouter_ai::core::protocol::OwnershipGrant;
 
 pub(crate) struct Projection {
     pub checkpoint: u64,

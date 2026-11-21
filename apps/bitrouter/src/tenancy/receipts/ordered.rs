@@ -5,27 +5,33 @@ use super::store::{
 };
 use anyhow::{Result, ensure};
 use bitrouter_ai::tenancy::{
-    execution_v2::ExecutionReceiptV2, usage_evidence_v2::ExecutionUsageEvidenceV2,
-    validation::Validate,
+    execution::ExecutionReceipt, usage_evidence::ExecutionUsageEvidence, validation::Validate,
 };
 
 #[path = "ordered_intent.rs"]
 pub(in crate::tenancy) mod intent;
 
 pub(in crate::tenancy) struct CandidateV2 {
-    pub receipt: ExecutionReceiptV2,
+    pub receipt: ExecutionReceipt,
     pub(super) json: String,
     pub(super) private_json: String,
     pub(super) digest: String,
-    pub(super) evidence: super::usage_evidence::storage::EvidenceV2,
+    pub(super) evidence: super::usage_evidence::storage::Evidence,
 }
 impl CandidateV2 {
     pub fn new(
-        receipt: ExecutionReceiptV2,
+        receipt: ExecutionReceipt,
         disposition: Disposition,
-        document: ExecutionUsageEvidenceV2,
+        document: ExecutionUsageEvidence,
     ) -> Result<Self> {
         receipt.validate()?;
+        ensure!(
+            matches!(
+                receipt.dispatch,
+                bitrouter_ai::tenancy::execution::Dispatch::Ordered { .. }
+            ),
+            "ordered storage dispatch"
+        );
         ensure!(
             disposition.auxiliary_digest.is_none(),
             "ordered receipt has auxiliary work"
@@ -39,7 +45,7 @@ impl CandidateV2 {
                     .collect::<Vec<_>>(),
             "ordered disposition status mismatch"
         );
-        let evidence = super::usage_evidence::storage::EvidenceV2::new(document, &receipt)?;
+        let evidence = super::usage_evidence::storage::Evidence::new(document, &receipt)?;
         let mut disposition: StoredDisposition = disposition.into();
         disposition.usage_evidence_digest = Some(evidence.digest.clone());
         let json = serde_json::to_string(&receipt)?;
@@ -74,7 +80,7 @@ pub(in crate::tenancy) async fn decode(
         json.len() <= super::store::MAX_RECEIPT && private.len() <= super::store::MAX_DISPOSITION,
         "ordered receipt bytes"
     );
-    let receipt: ExecutionReceiptV2 = serde_json::from_str(&json)?;
+    let receipt: ExecutionReceipt = serde_json::from_str(&json)?;
     receipt.validate()?;
     ensure!(
         &receipt.installation_id == installation
@@ -99,7 +105,7 @@ pub(in crate::tenancy) async fn decode(
             statuses: disposition.statuses,
             auxiliary_digest: disposition.auxiliary_digest,
         },
-        evidence.document,
+        serde_json::from_str(&evidence.json)?,
     )?;
     ensure!(
         candidate.json == json && candidate.private_json == private,

@@ -106,16 +106,15 @@ pub(in crate::tenancy) async fn check_in(
     reference: &ResourceRef,
 ) -> std::result::Result<(), bitrouter_ai::tenancy::operation::ErrorCode> {
     use bitrouter_ai::tenancy::operation::ErrorCode;
-    if let Some(record) = exact(db, installation, reference)
+    let record = exact(db, installation, reference)
         .await
         .map_err(|_| ErrorCode::StorageUnavailable)?
-    {
-        if record.authority_revision > authority {
-            return Err(ErrorCode::AuthorityUnavailable);
-        }
-        if record.revoked {
-            return Err(ErrorCode::Forbidden);
-        }
+        .ok_or(ErrorCode::AuthorityUnavailable)?;
+    if record.authority_revision > authority {
+        return Err(ErrorCode::AuthorityUnavailable);
+    }
+    if record.revoked {
+        return Err(ErrorCode::Forbidden);
     }
     Ok(())
 }
@@ -251,6 +250,31 @@ pub(in crate::tenancy) async fn head(
         .transpose()
 }
 
+/// A fresh verifier requires lifecycle metadata for each independently approved
+/// revision and a usable current head. Its inventory separately proves coverage.
+pub(in crate::tenancy) async fn inspect_fresh_in(
+    db: &impl ConnectionTrait,
+    installation: &InstallationId,
+    authority: AuthorityRevision,
+    reference: &ResourceRef,
+) -> Result<()> {
+    let record = exact(db, installation, reference)
+        .await?
+        .context("fresh resource lifecycle missing")?;
+    ensure!(
+        !record.revoked && record.authority_revision <= authority,
+        "fresh resource lifecycle is revoked or outside approved authority"
+    );
+    let head = head(db, installation, &reference.key())
+        .await?
+        .context("fresh resource lifecycle has no head")?;
+    ensure!(
+        !head.revoked && head.authority_revision <= authority,
+        "fresh resource head is revoked or outside approved authority"
+    );
+    Ok(())
+}
+
 /// Upsert exactly one revision inside the single writer's caller-owned transaction.
 /// Rotation demotes the old head before inserting the new one; revocation supplies
 /// the exact revision's existing head flag. Immutable contents are never mutated.
@@ -323,25 +347,12 @@ mod tests {
     use crate::tenancy::{configuration_store, store::startup};
     use bitrouter_ai::tenancy::authority::{OwnerKind, ResourceKind};
     use sea_orm::{DatabaseConnection, Statement, TransactionTrait};
-    use sea_orm_migration::{MigratorTrait, SchemaManager};
     use serde_json::json;
 
     async fn database() -> Result<DatabaseConnection> {
         let db = crate::db::connect("sqlite::memory:").await?;
-        let manager = SchemaManager::new(&db);
-        for migration in crate::db::migration::Migrator::migrations() {
-            if [
-                "m20240101_000028_",
-                "m20240101_000029_",
-                "m20240101_000039_",
-            ]
-            .iter()
-            .any(|prefix| migration.name().starts_with(prefix))
-            {
-                migration.up(&manager).await?;
-            }
-        }
-        sql(&db, "INSERT INTO tenancy_installation (singleton,installation_id,schema_version,authority_revision,operation_ids,safety_operation_ids,saturated,created_at) VALUES (1,'installation',2,3,0,0,0,'2026-01-01T00:00:00Z')").await?;
+        crate::db::run_migrations(&db).await?;
+        sql(&db, "INSERT INTO tenancy_installation (singleton,installation_id,schema_version,authority_revision,operation_ids,safety_operation_ids,saturated,created_at) VALUES (1,'installation',5,3,0,0,0,'2026-01-01T00:00:00Z')").await?;
         Ok(db)
     }
 
@@ -394,6 +405,48 @@ mod tests {
     async fn sql(db: &impl ConnectionTrait, sql: &str) -> Result<()> {
         db.execute(Statement::from_string(DatabaseBackend::Sqlite, sql))
             .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fresh_verifier_requires_current_unrevoked_lifecycle_and_unique_head() -> Result<()> {
+        let db = database().await?;
+        let installation = "installation".try_into()?;
+        let allowed = 3.try_into()?;
+        let head = record("v1")?;
+        let mut second = record("v2")?;
+        second.is_head = false;
+        retain(&db, &head).await?;
+        retain(&db, &second).await?;
+        ensure!(
+            inspect_fresh_in(&db, &installation, allowed, &head.reference)
+                .await
+                .is_err()
+        );
+        write(&db, &installation, &head).await?;
+        write(&db, &installation, &second).await?;
+        inspect_fresh_in(&db, &installation, allowed, &head.reference).await?;
+        inspect_fresh_in(&db, &installation, allowed, &second.reference).await?;
+        ensure!(
+            inspect_fresh_in(&db, &installation, 0.try_into()?, &head.reference)
+                .await
+                .is_err()
+        );
+        for statement in [
+            "UPDATE tenancy_resource_lifecycle SET revoked=1 WHERE revision_id='v1'",
+            "UPDATE tenancy_resource_lifecycle SET is_head=0 WHERE revision_id='v1'",
+            "UPDATE tenancy_resource_lifecycle SET is_head=1 WHERE revision_id='v2'",
+        ] {
+            let tx = db.begin().await?;
+            sql(&tx, statement).await?;
+            ensure!(
+                inspect_fresh_in(&tx, &installation, allowed, &second.reference)
+                    .await
+                    .is_err()
+            );
+            tx.rollback().await?;
+        }
+        db.close().await?;
         Ok(())
     }
 

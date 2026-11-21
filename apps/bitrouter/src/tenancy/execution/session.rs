@@ -1,10 +1,10 @@
 //! Checked, lease-free authority for the in-process native harness.
 use std::sync::{
-    Arc, Mutex,
+    Arc,
     atomic::{AtomicBool, Ordering},
 };
 
-use bitrouter_ai::core::protocol::{CoreError, ErrorCode as CoreCode, OwnershipGrant};
+use crate::managed_contract::protocol::{CoreError, ErrorCode as CoreCode, OwnershipGrant};
 use bitrouter_ai::tenancy::{
     authority::{GrantScope, Permission},
     configuration::ResourceRef,
@@ -48,7 +48,6 @@ pub(crate) struct Binding {
     descriptor: Descriptor,
     grant: OwnershipGrant,
     closing: Arc<AtomicBool>,
-    paid_source: Arc<Mutex<Option<Arc<crate::tenancy::experiment::store::completed::Edge>>>>,
     recovery: std::sync::OnceLock<Arc<crate::tenancy::session::recovery::CheckedRecovery>>,
 }
 
@@ -77,7 +76,7 @@ impl Service {
                 == bitrouter_ai::tenancy::configuration::LearningMode::Off;
         let mut required = Vec::new();
         let mut choices = Vec::new();
-        let mut experiments = Vec::new();
+        let experiments = Vec::new();
         for reference in &retained.document().routes {
             let route = retained
                 .select_native(
@@ -88,16 +87,6 @@ impl Service {
             recovery_profile &= route.stopped_recovery_profile();
             if let Some(profile) = route.choice_profile() {
                 choices.push(profile);
-            }
-            if route.policy().is_some_and(|policy| {
-                policy
-                    .document()
-                    .policies
-                    .get(policy.name())
-                    .and_then(|definition| definition.optimization.as_ref())
-                    .is_some_and(|optimization| optimization.active.is_some())
-            }) {
-                experiments.push(reference.resource_id.to_string());
             }
             for dependency in route.dependencies() {
                 if !required.contains(dependency) {
@@ -190,9 +179,6 @@ impl Authority {
     pub(crate) fn caller(&self) -> crate::gateway::caller::CallerContext {
         self.host.caller()
     }
-    pub(crate) fn database(&self) -> &sea_orm::DatabaseConnection {
-        &self.service().db
-    }
     pub(crate) fn service(&self) -> &Service {
         self.host.service()
     }
@@ -270,7 +256,6 @@ impl Authority {
             descriptor,
             grant,
             closing: Arc::new(AtomicBool::new(false)),
-            paid_source: Arc::new(Mutex::new(None)),
             recovery: Default::default(),
         }))
     }
@@ -317,7 +302,6 @@ impl Binding {
         }
         Ok(Arc::new(StepBinding {
             binding: self.clone(),
-            origin,
             parent: Default::default(),
         }))
     }
@@ -358,39 +342,6 @@ impl Binding {
                 Ok(())
             })
             .map_err(|code| core_error(code.into()))
-    }
-    pub(in crate::tenancy) fn assessment_check(&self) -> Result<(), ErrorCode> {
-        self.authority
-            .host
-            .with_guard(|guard| self.assessment_guard(guard))
-    }
-    pub(in crate::tenancy) fn assessment_guard(
-        &self,
-        guard: &mut crate::tenancy::authority::live::ReadGuard<'_>,
-    ) -> Result<(), ErrorCode> {
-        if self.closing.load(Ordering::Acquire)
-            || self.authority.service().host_stop().is_cancelled()
-            || self
-                .recovery
-                .get()
-                .is_some_and(|checked| !checked.retired())
-        {
-            return Err(ErrorCode::AuthorityUnavailable);
-        }
-        self.authority
-            .host
-            .in_guard(guard, &self.authority.required, |effective| {
-                if !effective.permits(Permission::EvaluationSubmit)
-                    || !effective.permits(Permission::ResourceRead)
-                    || !effective.permits(Permission::CredentialUse)
-                    || !effective.covers(&GrantScope::Tenant {
-                        operator_pools: Vec::new(),
-                    })
-                {
-                    return Err(ErrorCode::Forbidden);
-                }
-                Ok(())
-            })
     }
 
     pub(crate) fn ownership_grant(&self) -> &OwnershipGrant {
@@ -452,18 +403,12 @@ pub(crate) fn core_error(error: Failure) -> CoreError {
 /// One actual Core model step. Idle sessions retain no execution or cache pin.
 pub(crate) struct StepBinding {
     binding: Arc<Binding>,
-    origin: Arc<crate::harness::resources::managed::store::model::Origin>,
     parent: std::sync::OnceLock<(
         std::sync::Weak<TenantExecution>,
         Arc<crate::gateway::pipeline::owned_tasks::OwnedTasks>,
     )>,
 }
 impl StepBinding {
-    pub(in crate::tenancy) fn origin(
-        &self,
-    ) -> &Arc<crate::harness::resources::managed::store::model::Origin> {
-        &self.origin
-    }
     pub(super) fn binding(&self) -> &Binding {
         &self.binding
     }
@@ -543,97 +488,5 @@ impl StepBinding {
             }
         }
         super::choice::AdmittedChoice::admit(&parent, route)
-    }
-}
-
-pub(in crate::tenancy) struct PaidSourcePin {
-    holder: Arc<Mutex<Option<Arc<crate::tenancy::experiment::store::completed::Edge>>>>,
-    source: Arc<crate::tenancy::experiment::store::completed::Edge>,
-}
-impl Drop for PaidSourcePin {
-    fn drop(&mut self) {
-        if let Ok(mut slot) = self.holder.lock()
-            && slot
-                .as_ref()
-                .is_some_and(|value| Arc::ptr_eq(value, &self.source))
-        {
-            *slot = None;
-        }
-    }
-}
-impl Binding {
-    pub(in crate::tenancy) fn pin_paid_source(
-        &self,
-        edge: crate::tenancy::experiment::store::completed::Edge,
-    ) -> Result<PaidSourcePin, ErrorCode> {
-        let expected = crate::storage::scope::Scope::for_session(self.authority())
-            .0
-            .physical_key(
-                crate::storage::scope::KeyDomain::NativeSession,
-                "",
-                &[
-                    self.descriptor().principal.as_str(),
-                    &self.descriptor().name,
-                ],
-            )
-            .map_err(|_| ErrorCode::AuthorityUnavailable)?;
-        if edge.session != expected || edge.head.execution_epoch != self.grant.execution_epoch {
-            return Err(ErrorCode::AuthorityUnavailable);
-        }
-        let mut slot = self
-            .paid_source
-            .lock()
-            .map_err(|_| ErrorCode::AuthorityUnavailable)?;
-        if slot.is_some() {
-            return Err(ErrorCode::CapacityExceeded);
-        }
-        let source = Arc::new(edge);
-        *slot = Some(source.clone());
-        Ok(PaidSourcePin {
-            holder: self.paid_source.clone(),
-            source,
-        })
-    }
-    pub(crate) fn has_paid_source(&self) -> Result<bool, ErrorCode> {
-        self.paid_source
-            .lock()
-            .map(|slot| slot.is_some())
-            .map_err(|_| ErrorCode::AuthorityUnavailable)
-    }
-    pub(in crate::tenancy) fn check_paid_journal(
-        &self,
-        journal: &[u8],
-        budget: &crate::storage::operation_budget::OperationBudget<'_>,
-    ) -> anyhow::Result<()> {
-        let source = self
-            .paid_source
-            .lock()
-            .map_err(|_| anyhow::anyhow!("native source pin unavailable"))?
-            .clone();
-        let Some(source) = source else {
-            return Ok(());
-        };
-        budget.charge(
-            1,
-            journal
-                .len()
-                .checked_mul(3)
-                .and_then(|n| n.checked_add(8192))
-                .ok_or(crate::storage::operation_budget::Error::Capacity)?,
-        )?;
-        let proposed =
-            crate::harness::resources::managed::store::model::completed::CompletedRun::proposed(
-                self, journal, budget,
-            )?;
-        anyhow::ensure!(
-            proposed.run() == source.run
-                && proposed.checkpoint() == source.checkpoint
-                && proposed.packet().prefix_digest == source.prefix
-                && proposed.head().execution_epoch == source.head.execution_epoch
-                && proposed.head().state_revision >= source.head.state_revision
-                && proposed.head().event_seq >= source.head.event_seq,
-            crate::storage::operation_budget::Error::Rejected(ErrorCode::RevisionConflict)
-        );
-        Ok(())
     }
 }

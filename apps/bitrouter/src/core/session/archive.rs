@@ -2,11 +2,11 @@
 //! hydrates and validates the complete evidence before using any lifecycle fact.
 
 use super::*;
-use crate::storage::checkpoint::serialized_bytes;
-use base64::{Engine, engine::general_purpose::STANDARD};
-use bitrouter_ai::core::protocol::{
+use crate::managed_contract::protocol::{
     ArtifactRef, RunActivityReconciliation, ToolObservation, ToolResultLimits, ToolStatus,
 };
+use crate::storage::checkpoint::serialized_bytes;
+use base64::{Engine, engine::general_purpose::STANDARD};
 
 const MEDIA_TYPE: &str = "application/vnd.bitrouter.recovery+json";
 

@@ -1,7 +1,7 @@
 use super::*;
+use bitrouter::managed_contract::checkpoint::ToolStartFence;
+use bitrouter::managed_contract::protocol::{ToolObservation, ToolStatus};
 use bitrouter::storage::checkpoint::CheckpointBatchExt;
-use bitrouter_ai::core::checkpoint::ToolStartFence;
-use bitrouter_ai::core::protocol::{ToolObservation, ToolStatus};
 
 fn observation(command: &ToolExecute, status: ToolStatus) -> ToolObservation {
     ToolObservation {
@@ -745,7 +745,7 @@ async fn tool_status_repeated_restoration_cannot_erase_started_or_stopped_eviden
             restored
                 .err()
                 .and_then(|error| error
-                    .downcast::<bitrouter_ai::core::protocol::CoreError>()
+                    .downcast::<bitrouter::managed_contract::protocol::CoreError>()
                     .ok())
                 .map(|error| error.code),
             Some(ErrorCode::OperationConflict)

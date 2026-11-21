@@ -751,7 +751,7 @@ impl AuthorityFault {
         let original: String = row.try_get("", "body")?;
         let revision: i64 = row.try_get("", "revision")?;
         let mut invalid: Value = serde_json::from_str(&original)?;
-        ensure!(invalid["format"] == 1);
+        ensure!(invalid["format"] == 2);
         invalid["format"] = json!(0);
         Ok(Self {
             revision,

@@ -3,8 +3,8 @@ use anyhow::{Context, Result, ensure};
 
 use super::Charge;
 
-pub(super) const MAX_PAYLOAD: usize =
-    super::super::MAX_RECEIPT + bitrouter_ai::tenancy::usage_evidence::MAX_BYTES;
+pub(super) const MAX_PAYLOAD: usize = super::super::MAX_RECEIPT
+    + bitrouter_ai::tenancy::usage_evidence::EvidenceBudget::STRICT.max_bytes;
 // These are codec workspace allowances, not history or directory limits.
 const ENCODE_WORKSPACE: usize = 8 * 1024 * 1024;
 const DECODE_WORKSPACE: usize = 256 * 1024;
@@ -20,7 +20,9 @@ pub(super) struct Encoded {
 pub(super) fn plaintext_len(receipt: usize, usage: Option<usize>) -> Result<usize> {
     ensure!(
         (1..=super::super::MAX_RECEIPT).contains(&receipt)
-            && usage.is_none_or(|n| (1..=bitrouter_ai::tenancy::usage_evidence::MAX_BYTES).contains(&n)),
+            && usage.is_none_or(|n| (1
+                ..=bitrouter_ai::tenancy::usage_evidence::EvidenceBudget::STRICT.max_bytes)
+                .contains(&n)),
         "receipt archive component bounds"
     );
     receipt

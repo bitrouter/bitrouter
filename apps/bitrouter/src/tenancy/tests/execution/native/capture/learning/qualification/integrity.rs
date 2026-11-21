@@ -5,7 +5,7 @@ const CHILD: &str = "tenancy::tests::execution::native::capture::learning::quali
 async fn exercise(path: &Path) -> Result<()> {
     let provider = Provider::start(false).await?;
     let mut judge = Judge::new(true).await?;
-    let ready = file_ready(path, &provider.url, &judge.url).await?;
+    let ready = file_ready(path, &provider.url, &judge.url, None).await?;
     let (a, ap) = ready.port_pair().await?;
     let (b, bp) = ready.port_pair().await?;
     ensure!(a.association().session_key(native())? != b.association().session_key(native())?);

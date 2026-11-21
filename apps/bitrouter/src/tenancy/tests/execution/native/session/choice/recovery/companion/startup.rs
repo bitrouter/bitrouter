@@ -45,7 +45,7 @@ pub(super) async fn cancelled_startup_retains_pool_and_transaction(root: &Path) 
             ..Default::default()
         };
         let continuations = crate::config::ContinuationConfig::default();
-        let mut opening = Box::pin(Service::open_owned_profile(
+        let mut opening = Box::pin(Service::open_owned_bro_profile(
             database,
             &config,
             &continuations,

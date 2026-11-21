@@ -155,14 +155,13 @@ impl BuildMetadata {
     /// Package the same identity when a cross-compiled executable cannot run on
     /// the build host. The application contract test checks this representation
     /// against the compiled typed expression, including optional field presence.
-    pub fn artifact_json(&self, handoff_build_id: &str) -> serde_json::Value {
+    pub fn artifact_json(&self) -> serde_json::Value {
         serde_json::json!({
             "version": self.version,
             "source_revision": self.source_revision,
             "target": self.target,
             "features": self.selection.features,
             "profile": self.selection.wire_profile,
-            "handoff_build_id": handoff_build_id,
         })
     }
 
@@ -181,7 +180,7 @@ impl BuildMetadata {
         Ok(())
     }
 
-    pub fn render(&self, handoff_build_id: &str) -> String {
+    pub fn render(&self) -> String {
         let revision = match &self.source_revision {
             Some(revision) => format!("Some({revision:?}.to_owned())"),
             None => "None".to_owned(),
@@ -201,7 +200,6 @@ impl BuildMetadata {
                  target: {target:?}.to_owned(),\n\
                  features: vec![{features}],\n\
                  profile: DistributionProfile::{profile},\n\
-                 handoff_build_id: {handoff_build_id:?}.to_owned(),\n\
              }}\n",
             version = self.version,
             target = self.target,

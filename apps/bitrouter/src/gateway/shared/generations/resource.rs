@@ -108,7 +108,7 @@ impl Resource {
         *build = Build::Running(runtime.spawn(async move {
             let requirements = crate::gateway::shared::capture::Requirements::from_config(
                 &input.config,
-                input.policy_lock.as_ref(),
+                input.model_policy.as_ref(),
             )?;
             let continuation = registration.open().await?;
             let inputs = SharedAssembly {
@@ -117,7 +117,7 @@ impl Resource {
                 auth_appliers: input.auth_appliers,
                 correlation_key: input.correlation_key,
                 policies: input.policies,
-                policy_lock: input.policy_lock,
+                model_policy: input.model_policy,
             };
             let assembled = build_shared_app(&input.config, &inputs).await?;
             let tasks = assembled

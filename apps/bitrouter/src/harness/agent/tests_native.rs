@@ -97,7 +97,7 @@ async fn oversized_tool_evidence_survives_replay_and_is_readable_only_in_its_tas
         )
         .await;
     assert_eq!(report.status, RunStatus::Completed, "{}", report.detail);
-    let reference: bitrouter_ai::core::protocol::ArtifactRef = report
+    let reference: crate::managed_contract::protocol::ArtifactRef = report
         .events
         .iter()
         .find_map(|event| match event {
@@ -142,7 +142,8 @@ async fn oversized_tool_evidence_survives_replay_and_is_readable_only_in_its_tas
                 .and_then(|work| work.values_mut().next())
             {
                 work["text"] = serde_json::json!("rewritten earlier task");
-                *batch = bitrouter_ai::core::checkpoint::CheckpointBatch::encode(&payload, limits)?;
+                *batch =
+                    crate::managed_contract::checkpoint::CheckpointBatch::encode(&payload, limits)?;
                 changed = true;
                 break;
             }
@@ -398,7 +399,8 @@ async fn native_subscription_reservation_survives_configuration_restore()
 #[tokio::test]
 async fn native_output_budget_follows_the_effort_eligible_route()
 -> Result<(), Box<dyn std::error::Error>> {
-    use bitrouter_ai::types::{ReasoningEffort, ReasoningEffortConfig};
+    use crate::gateway::model::capabilities::ReasoningEffortConfig;
+    use bitrouter_ai::types::ReasoningEffort;
     for (ineligible, eligible) in [(128_000, 32_000), (32_000, 128_000)] {
         let workspace = TempDir::new()?;
         let executor = Arc::new(Recording {
@@ -596,7 +598,7 @@ async fn native_agent_uses_full_context_without_calling_the_configured_decision_
         .iter()
         .filter_map(|record| match record {
             ExecutionRecord::CoreCheckpoint { batch, .. } => {
-                Some(batch.decode(&bitrouter_ai::core::protocol::Limits {
+                Some(batch.decode(&crate::managed_contract::protocol::Limits {
                     input_bytes: 1024 * 1024,
                     checkpoint_bytes: 16 * 1024 * 1024,
                     unacknowledged_bytes: 32 * 1024 * 1024,

@@ -1,11 +1,11 @@
 use super::*;
-use bitrouter_ai::tenancy::ordered::{CandidateManifestV1, GenerationProtocol};
+use bitrouter_ai::tenancy::ordered::{CandidateManifest, GenerationProtocol};
 
 async fn manifest(
     fixture: &Fixture,
     route: &ResourceRef,
     revision: &RevisionId,
-) -> Result<CandidateManifestV1> {
+) -> Result<CandidateManifest> {
     fixture
         .service
         .candidate_manifest(

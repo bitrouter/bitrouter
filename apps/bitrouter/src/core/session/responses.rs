@@ -772,10 +772,10 @@ pub(super) fn validate(state: &SessionSnapshot, binding: &Bind) -> Result<(), Co
                         )
                     }) || tool_status::observed(
                         call,
-                        bitrouter_ai::core::protocol::ToolStatus::Running,
+                        crate::managed_contract::protocol::ToolStatus::Running,
                     ) || tool_status::observed(
                         call,
-                        bitrouter_ai::core::protocol::ToolStatus::Stopped,
+                        crate::managed_contract::protocol::ToolStatus::Stopped,
                     )))
             {
                 return Err(conflict("tool executed before its exchange completion"));

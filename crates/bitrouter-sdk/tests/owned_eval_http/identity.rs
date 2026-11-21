@@ -1,6 +1,116 @@
 use super::*;
 
 #[tokio::test]
+async fn model_policy_subject_preserves_resource_revision_and_literal_name() -> TestResult {
+    for (wire, version) in protocols() {
+        let mut value = subject_value("eval-1");
+        value["identity"] = json!({
+            "profile":"tenant_model_policy","installation_id":"installation","tenant_id":"tenant",
+            "configuration_revision":"configuration-r1",
+            "policy":{"owner_kind":"tenant","owner_id":"tenant","resource_kind":"policy","resource_id":"policy-a","revision_id":"policy-r1"},
+            "name":"auto:cost","source_digest":digest('a'),"classifier_digest":digest('c')
+        });
+        let server = server::serve(
+            wire,
+            vec![
+                Some(reply(
+                    200,
+                    json!({"eval_id":"eval-1","outcome":"inserted"}),
+                )?),
+                Some(reply(200, value.clone())?),
+            ],
+        )
+        .await?;
+        let client = client(&server, version)?;
+        let (installation, tenant) = namespace()?;
+        let subject: EvalSubject = serde_json::from_value(value.clone())?;
+        client
+            .put_eval_subject(&installation, &tenant, &subject)
+            .await?;
+        assert_eq!(
+            client
+                .eval_subject(&installation, &tenant, "eval-1")
+                .await?,
+            subject
+        );
+        let records = server.records.lock().await;
+        assert_eq!(records.len(), 2);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&records[0].body)?["identity"],
+            value["identity"]
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn subject_responses_refuse_old_versions_foreign_namespaces_and_gateway_profiles()
+-> TestResult {
+    for (wire, version) in protocols() {
+        let mut old = subject_value("eval-1");
+        old["schema_version"] = 1.into();
+        let mut foreign = subject_value("eval-1");
+        foreign["identity"]["tenant_id"] = "other-tenant".into();
+        let mut gateway = subject_value("eval-1");
+        gateway["identity"] = json!({"profile":"gateway_generic"});
+        let server = server::serve(
+            wire,
+            vec![
+                Some(reply(200, old)?),
+                Some(reply(200, foreign)?),
+                Some(reply(200, gateway)?),
+            ],
+        )
+        .await?;
+        let client = client(&server, version)?;
+        let (installation, tenant) = namespace()?;
+        for _ in 0..3 {
+            let error = client
+                .eval_subject(&installation, &tenant, "eval-1")
+                .await
+                .err()
+                .ok_or("invalid subject accepted")?;
+            assert!(matches!(
+                failure(error)?.body_error,
+                Some(Error::Response(_))
+            ));
+        }
+        assert_eq!(server.records.lock().await.len(), 3);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn subject_post_refuses_foreign_or_gateway_identity_before_dispatch() -> TestResult {
+    for (wire, version) in protocols() {
+        let server = server::serve(wire, Vec::new()).await?;
+        let client = client(&server, version)?;
+        let (installation, tenant) = namespace()?;
+        let mut input = subject()?;
+        input.identity = bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {};
+        assert!(matches!(
+            client
+                .put_eval_subject(&installation, &tenant, &input)
+                .await,
+            Err(Error::Request(_))
+        ));
+        input.identity = bitrouter_ai::eval::EvalSubjectIdentity::TenantGeneric {
+            installation_id: installation.clone(),
+            tenant_id: "foreign".try_into()?,
+            execution: None,
+        };
+        assert!(matches!(
+            client
+                .put_eval_subject(&installation, &tenant, &input)
+                .await,
+            Err(Error::Request(_))
+        ));
+        assert!(server.records.lock().await.is_empty());
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn explicit_freeze_timestamp_is_preserved_and_mismatch_is_unknown() -> TestResult {
     for (wire, version) in protocols() {
         let explicit = "2026-10-25T00:00:00.000+00:00";

@@ -32,7 +32,7 @@ fn profile(revision: &str) -> Result<Value> {
     Ok(
         json!({"reference":reference(ResourceKind::Policy,"profile",revision)?,
         "definition":{"kind":"admission_profile","profile":{"schema_version":1,
-            "rate":{"rate_group_id":"shared","member_rpm":0},"health":null,"fallback":"stop"}}}),
+            "rate":{"rate_group_id":"shared","member_rpm":0},"health":null,"health_group_id":null,"fallback":"stop"}}}),
     )
 }
 
@@ -217,7 +217,7 @@ async fn profile_configuration_authenticates_new_subtype_and_exact_dependencies(
         )
         .await
         .map_err(|error| anyhow::anyhow!("compile: {error:?}"))?;
-    ensure!(compiled.compiler_version == super::super::PROFILED_COMPILER_VERSION);
+    ensure!(compiled.compiler_version == super::super::SHARED_HEALTH_COMPILER_VERSION);
     ensure!(compiled.dependencies.len() == 3);
     let tenant: bitrouter_ai::tenancy::identity::TenantId = "tenant".try_into()?;
     let revision: bitrouter_ai::tenancy::identity::RevisionId = "config-v1".try_into()?;
@@ -237,7 +237,7 @@ async fn profile_configuration_authenticates_new_subtype_and_exact_dependencies(
             .context("key")?
             .open_bound("configuration", &binding, &sealed)?;
     let envelope: super::super::Envelope = serde_json::from_slice(&bytes)?;
-    ensure!(envelope.format == 4 && bytes.len() <= super::super::MAX_ARTIFACT_BYTES);
+    ensure!(envelope.format == 5 && bytes.len() <= super::super::MAX_ARTIFACT_BYTES);
     ensure!(envelope.routes.is_empty());
     let row = crate::tenancy::resources::tests::validation::stored(document, compiled)?;
     resources

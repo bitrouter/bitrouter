@@ -2,7 +2,7 @@
 use super::*;
 use crate::tenancy::{command::Command, model::Caller, tests::issued};
 use bitrouter_ai::tenancy::{
-    admission::{AdmissionProfileV1, AvailabilityObservation, HealthObservation},
+    admission::{AdmissionProfile, AvailabilityObservation, HealthObservation},
     authority::{BindingPut, GrantScope, TenantRole},
     operation::{DispatchState, ErrorCode},
 };
@@ -111,17 +111,18 @@ pub(super) async fn draft_profiles(
     }
 }
 
-pub(super) fn rules(rpm: u32, health: bool) -> Result<AdmissionProfileV1> {
+pub(super) fn rules(rpm: u32, health: bool) -> Result<AdmissionProfile> {
     Ok(serde_json::from_value(json!({"schema_version":1,
         "rate":{"rate_group_id":"shared-rpm","member_rpm":rpm},
         "health": if health { json!({"rules":"availability_v1","failure_threshold":1,"transient_cooldown_seconds":60,
             "persistent_cooldown_seconds":120,"probe_lease_seconds":5}) } else { Value::Null },
+        "health_group_id":if health {json!("profile")} else {Value::Null},
         "fallback":"ordered_terminal_rejections_v1"}))?)
 }
 
 async fn manifest(
     harness: &OrderedHarness,
-) -> Result<bitrouter_ai::tenancy::ordered::CandidateManifestV1> {
+) -> Result<bitrouter_ai::tenancy::ordered::CandidateManifest> {
     Ok(harness
         .control(true, HttpVersion::Http1Only)?
         .candidate_manifest(
@@ -164,7 +165,7 @@ async fn profiled_exact_orders_charge_only_actual_reached_hops_and_retain_ordina
             receipt
                 .attempts
                 .iter()
-                .map(|attempt| attempt.candidate_index)
+                .filter_map(|attempt| attempt.candidate_index)
                 .collect::<Vec<_>>()
                 == order
         );
@@ -244,7 +245,7 @@ async fn profiled_local_zero_then_terminal_rejection_falls_back_without_inventin
         receipt
             .attempts
             .iter()
-            .map(|attempt| attempt.candidate_index)
+            .filter_map(|attempt| attempt.candidate_index)
             .collect::<Vec<_>>()
             == [1, 0]
     );
@@ -644,7 +645,7 @@ async fn profiled_persistent_status_respects_exact_fallback_rule_and_later_circu
             )
             .await?;
         let receipt = harness.receipt(&id).await?;
-        ensure!(receipt.attempts.len() == 1 && receipt.attempts[0].candidate_index == 0);
+        ensure!(receipt.attempts.len() == 1 && receipt.attempts[0].candidate_index == Some(0));
         harness.fixture.service.shutdown().await?;
     }
     Ok(())

@@ -7,10 +7,10 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use bitrouter_ai::catalog::types::{CanonicalModel, RegistryProvider};
+use self::types::{CanonicalModel, RegistryProvider};
 use store::{CatalogSnapshot, CatalogStore, Durability, MemoryCatalogStore, StoreError};
 
-/// Application-owned admitted snapshot and its legacy UI projections. The
+/// Application-owned admitted snapshot and its UI projections. The
 /// lightweight public AI contracts do not depend on the exact JSON engine.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RegistryData {
@@ -30,6 +30,7 @@ pub mod execution;
 pub mod fetch;
 pub(crate) mod refresh;
 pub mod store;
+pub mod types;
 
 /// Failures leave the catalog's previous complete snapshot available.
 #[derive(Debug, thiserror::Error)]

@@ -484,10 +484,11 @@ async fn unresolved_post_stop_calls_stay_unknown_only_through_their_native_inter
     Ok(())
 }
 
+#[cfg(feature = "harness")]
 #[tokio::test]
 async fn missing_handshake_disables_new_trials_and_cannot_be_repaired_retroactively() -> Result<()>
 {
-    let fixture = fixture(false).await?;
+    let fixture = bro_fixture(false).await?;
     let runtime = &fixture.assembled.evolution;
     runtime
         .register("local", definition("coding", "candidate"))

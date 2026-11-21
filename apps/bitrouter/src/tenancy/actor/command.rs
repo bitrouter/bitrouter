@@ -256,7 +256,9 @@ impl Worker {
         // Original operations replay above after current authorization, expiry
         // and digest checks. Transport availability only gates new V3 writes,
         // after their ordinary prepare authorization and before any mutation.
-        if matches!(command, Command::ResourceV3(..)) && !native_adapter_configured {
+        if matches!(command, Command::Resource(_, input) if matches!(&input.definition, bitrouter_ai::tenancy::resources::Definition::ProfiledRoute { attachments, .. } if attachments.iter().any(|item| item.inbound_protocol == bitrouter_ai::tenancy::ordered::GenerationProtocol::GenerateContent)))
+            && !native_adapter_configured
+        {
             return Err(ErrorCode::CapabilityMismatch.into());
         }
         if let Some(configuration) = &prepared.configuration {

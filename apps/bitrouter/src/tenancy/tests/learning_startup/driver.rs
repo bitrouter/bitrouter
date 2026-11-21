@@ -1,5 +1,6 @@
 //! No builds or global environment mutation; each profile supplies its own binary.
 use super::*;
+use base64::Engine;
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio_util::task::AbortOnDropHandle;
@@ -13,7 +14,7 @@ enum Role<'a> {
     Consumer(&'a str),
 }
 
-async fn child(binary: &Path, root: &Path, role: Role<'_>) -> Result<()> {
+async fn child(binary: &Path, root: &Path, key: &[u8; 32], role: Role<'_>) -> Result<()> {
     let (selector, mode, profile) = match role {
         Role::Producer(mode) => (PRODUCER, mode, ""),
         Role::Consumer(profile) => (CONSUMER, "", profile),
@@ -29,6 +30,7 @@ async fn child(binary: &Path, root: &Path, role: Role<'_>) -> Result<()> {
         .env(ROOT, root)
         .env(MODE, mode)
         .env(PROFILE, profile)
+        .env(KEY, base64::engine::general_purpose::STANDARD.encode(key))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -124,14 +126,15 @@ async fn campaign(profile: &str, variable: &str) -> Result<()> {
     ensure!(binary.is_absolute() && binary.is_file());
     let root = tempfile::tempdir()?;
     let producer = std::env::current_exe()?;
-    child(&producer, root.path(), Role::Producer("clean")).await?;
-    child(&producer, root.path(), Role::Producer("pending")).await?;
+    let key = rand::random();
+    child(&producer, root.path(), &key, Role::Producer("clean")).await?;
+    child(&producer, root.path(), &key, Role::Producer("pending")).await?;
     for name in ["clean", "pending"] {
         let path = root.path().join(format!("{name}.db"));
         ensure!(std::fs::metadata(&path)?.len() > 0);
         drop(ownership::acquire_path(&path, false)?);
     }
-    child(&binary, root.path(), Role::Consumer(profile)).await?;
+    child(&binary, root.path(), &key, Role::Consumer(profile)).await?;
     // libtest zero matches also exits zero; only the real consumer can emit this.
     ensure!(
         std::fs::read(root.path().join("consumer-ack"))?

@@ -8,6 +8,8 @@ use super::*;
 mod bounds;
 mod checkpoint;
 mod core_choice;
+#[cfg(unix)]
+mod cutover;
 mod execution;
 mod format;
 mod native_generate_content;
@@ -54,7 +56,7 @@ async fn import(resources: &Resources, db: &DatabaseConnection, rows: Vec<Value>
         .provision_bytes(
             db,
             &serde_json::to_vec(&json!({
-                "format":1, "installation_id":resources.installation, "resources":rows
+                "format": if rows.iter().any(|row| row["definition"]["kind"] == "policy" || !row["definition"]["policy"].is_null()) { 4 } else { 1 }, "installation_id":resources.installation, "resources":rows
             }))?,
         )
         .await
@@ -96,7 +98,7 @@ fn decrypt(
         &resources.installation,
         &tenant,
         &revision,
-        COMPILER_VERSION,
+        compiled.compiler_version.as_str(),
         document,
         &compiled.dependencies,
     );
@@ -387,25 +389,13 @@ async fn configuration_ciphertext_binds_full_ids_revision_document_and_dependenc
 }
 
 fn policy(owner: &str, id: &str) -> Result<Value> {
-    let mut document = crate::policy_lock::PolicyLock::default();
-    document.policies.insert(
-        "selected".into(),
-        crate::policy_lock::PolicyDefinition {
-            tiers: [
-                (
-                    "economy".into(),
-                    bitrouter_ai::routing::PolicyModelTarget::model_only("fixture:cheap".into()),
-                ),
-                (
-                    "strong".into(),
-                    bitrouter_ai::routing::PolicyModelTarget::model_only("fixture:strong".into()),
-                ),
-            ]
-            .into(),
-            default_tier: Some("economy".into()),
-            ..Default::default()
-        },
-    );
+    policy_with_economy(owner, id, "fixture:cheap")
+}
+
+fn policy_with_economy(owner: &str, id: &str, economy: &str) -> Result<Value> {
+    let document = crate::model_policy::parse(
+        &json!({"spec_version":"policy/1.0.0-beta.1", "policies":{"selected":{"tiers":{"economy":{"model":economy},"strong":{"model":"fixture:strong"}},"default_tier":"economy"}}}),
+    )?;
     Ok(
         json!({"reference":reference(owner, ResourceKind::Policy, id)?,
         "definition":{"kind":"policy", "name":"selected", "document":document}}),

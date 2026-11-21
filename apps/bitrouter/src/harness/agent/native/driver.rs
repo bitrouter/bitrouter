@@ -5,16 +5,16 @@ use crate::core::session::CoreSession;
 use crate::harness::agent::Agent;
 use crate::harness::agent::RunChannels;
 use crate::harness::agent::RunReport;
+use crate::managed_contract::checkpoint::DurableHead;
+use crate::managed_contract::harness::agent::RunStatus;
+use crate::managed_contract::protocol::{
+    Bind, Capabilities, ContextMode, HarnessManifest, HarnessTool, Limits, OwnershipGrant,
+    RoutingSettings, ServerMessage, TaskInput, ToolEffect,
+};
 use crate::storage::checkpoint::CheckpointBatchExt;
 use crate::storage::checkpoint::snapshot::context::FEATURE;
 use crate::storage::checkpoint::snapshot::{RunStatus as CoreStatus, SessionSnapshot};
 use crate::storage::checkpoint::validation::HarnessManifestExt;
-use bitrouter_ai::core::checkpoint::DurableHead;
-use bitrouter_ai::core::protocol::{
-    Bind, Capabilities, ContextMode, HarnessManifest, HarnessTool, Limits, OwnershipGrant,
-    RoutingSettings, ServerMessage, TaskInput, ToolEffect,
-};
-use bitrouter_ai::harness::agent::RunStatus;
 use bitrouter_ai::types::{Message, Role, Tool};
 use futures::{StreamExt, stream::FuturesUnordered};
 use std::sync::Arc;
@@ -116,7 +116,7 @@ impl Agent {
             execution_epoch: 1,
         };
         let mut capabilities = Capabilities {
-            version: bitrouter_ai::core::protocol::VERSION,
+            version: crate::managed_contract::protocol::VERSION,
             core_instance_id: grant.core_instance_id.clone(),
             operations: vec![
                 FEATURE.into(),
@@ -402,7 +402,7 @@ impl Agent {
                     loop {
                         let revision = core.head().await.state_revision;
                         match core.cancel_run(&uuid::Uuid::new_v4().to_string(), revision, &run_id).await {
-                            Err(error) if error.code == bitrouter_ai::core::protocol::ErrorCode::StaleRevision => continue,
+                            Err(error) if error.code == crate::managed_contract::protocol::ErrorCode::StaleRevision => continue,
                             result => { result.map_err(|error| error.message)?; break; }
                         }
                     }
@@ -561,7 +561,7 @@ async fn initialization_failed(
             .flat_map(|turn| &turn.invocations)
             .all(|call| {
                 call.result.as_ref().is_some_and(|result| {
-                    result.status != bitrouter_ai::core::protocol::ToolOutcome::EffectUnknown
+                    result.status != crate::managed_contract::protocol::ToolOutcome::EffectUnknown
                 })
             })
     }) {
@@ -627,7 +627,8 @@ async fn apply_inputs(
                 .await
             {
                 Err(error)
-                    if error.code == bitrouter_ai::core::protocol::ErrorCode::StaleRevision =>
+                    if error.code
+                        == crate::managed_contract::protocol::ErrorCode::StaleRevision =>
                 {
                     continue;
                 }

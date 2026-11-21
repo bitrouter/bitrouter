@@ -15,9 +15,6 @@ pub(crate) trait StatusReportRuntime: Sized {
     fn with_local_versions(
         self,
         daemon_version: Option<String>,
-        protocol: Option<u32>,
-        build_id: Option<String>,
-        activity: Option<bitrouter_ai::control::status::HandoffActivity>,
         cli_owned: Option<bool>,
         artifact: Option<bitrouter_ai::artifact::ArtifactIdentity>,
     ) -> Self;
@@ -27,51 +24,12 @@ impl StatusReportRuntime for StatusReport {
     fn with_local_versions(
         mut self,
         daemon_version: Option<String>,
-        protocol: Option<u32>,
-        build_id: Option<String>,
-        activity: Option<bitrouter_ai::control::status::HandoffActivity>,
         cli_owned: Option<bool>,
         artifact: Option<bitrouter_ai::artifact::ArtifactIdentity>,
     ) -> Self {
         self.installed_version = Some(crate::VERSION.to_string());
         let installed = crate::artifact::current();
-        self.compatibility = if !self.running {
-            None
-        } else if protocol != Some(crate::upgrade::HANDOFF_PROTOCOL)
-            || !artifact.as_ref().is_some_and(|artifact| {
-                Some(artifact.version.as_str()) == daemon_version.as_deref()
-                    && Some(artifact.handoff_build_id.as_str()) == build_id.as_deref()
-            })
-        {
-            Some("legacy_unknown".to_string())
-        } else if !artifact
-            .as_ref()
-            .is_some_and(|resident| crate::upgrade::same_capabilities(&installed, resident))
-        {
-            Some("profile_mismatch".to_string())
-        } else if daemon_version.as_deref() == Some(crate::VERSION)
-            && build_id.as_deref() == Some(crate::HANDOFF_BUILD_ID)
-        {
-            Some("compatible".to_string())
-        } else if cli_owned != Some(true) {
-            Some("externally_managed".to_string())
-        } else {
-            let candidate = semver::Version::parse(crate::VERSION);
-            let resident = daemon_version.as_deref().map(semver::Version::parse);
-            Some(
-                match (candidate, resident) {
-                    (Ok(candidate), Some(Ok(resident))) if candidate >= resident => {
-                        "handoff_required"
-                    }
-                    _ => "daemon_newer",
-                }
-                .to_string(),
-            )
-        };
         self.daemon_version = daemon_version;
-        self.handoff_protocol = protocol;
-        self.handoff_build_id = build_id;
-        self.handoff_activity = activity;
         self.daemon_cli_owned = cli_owned;
         self.installed_artifact = Some(installed);
         self.daemon_artifact = artifact;
@@ -145,9 +103,6 @@ async fn report_over(socket: &Path, source: Option<&ConfigSource>) -> anyhow::Re
             pid,
             daemon_version,
             artifact,
-            handoff_protocol,
-            handoff_build_id,
-            handoff_activity,
             cli_owned,
             listen,
             models,
@@ -156,6 +111,7 @@ async fn report_over(socket: &Path, source: Option<&ConfigSource>) -> anyhow::Re
             running_routers,
             router_restart_required,
             config_state,
+            ..
         }) => Ok(StatusReport::running(
             pid,
             listen,
@@ -166,14 +122,7 @@ async fn report_over(socket: &Path, source: Option<&ConfigSource>) -> anyhow::Re
         )
         .with_router_views(saved_routers, running_routers, router_restart_required)
         .with_config_state(config_state.map(|state| *state))
-        .with_local_versions(
-            daemon_version,
-            handoff_protocol,
-            handoff_build_id,
-            handoff_activity,
-            cli_owned,
-            artifact,
-        )),
+        .with_local_versions(daemon_version, cli_owned, artifact)),
         Ok(DaemonResponse::Error { message }) => Err(anyhow::anyhow!(message)),
         Ok(other) => Err(anyhow::anyhow!("unexpected response: {other:?}")),
         // No daemon listening on the socket → report stopped, not error. The
@@ -193,7 +142,7 @@ async fn report_over(socket: &Path, source: Option<&ConfigSource>) -> anyhow::Re
             Ok(StatusReport::stopped(socket.display().to_string(), spend)
                 .with_router_views(saved_routers, None, None)
                 .with_config_state(config_state)
-                .with_local_versions(None, None, None, None, None, None))
+                .with_local_versions(None, None, None))
         }
         Err(e) => Err(e),
     }
@@ -256,74 +205,6 @@ impl StatusQuery for DaemonStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn local_status_keeps_legacy_and_external_ownership_unknown_or_explicit() {
-        let base = || {
-            StatusReport::running(
-                7,
-                "127.0.0.1:4356".into(),
-                0,
-                Vec::new(),
-                "/tmp/bitrouter.sock".into(),
-                None,
-            )
-        };
-        let legacy = base().with_local_versions(None, None, None, None, None, None);
-        assert_eq!(legacy.compatibility.as_deref(), Some("legacy_unknown"));
-        let matching = base().with_local_versions(
-            Some(crate::VERSION.into()),
-            Some(crate::upgrade::HANDOFF_PROTOCOL),
-            Some(crate::HANDOFF_BUILD_ID.into()),
-            None,
-            Some(true),
-            Some(crate::artifact::current()),
-        );
-        assert_eq!(matching.compatibility.as_deref(), Some("compatible"));
-        let mut different = crate::artifact::current();
-        different.features.push("future-capability".into());
-        different.features.sort();
-        different.profile = bitrouter_ai::artifact::DistributionProfile::Custom;
-        let mismatch = base().with_local_versions(
-            Some(crate::VERSION.into()),
-            Some(crate::upgrade::HANDOFF_PROTOCOL),
-            Some(crate::HANDOFF_BUILD_ID.into()),
-            None,
-            Some(true),
-            Some(different.clone()),
-        );
-        assert!(mismatch.running);
-        assert_eq!(mismatch.compatibility.as_deref(), Some("profile_mismatch"));
-        assert_eq!(mismatch.daemon_artifact, Some(different));
-        assert_eq!(
-            mismatch.installed_artifact,
-            Some(crate::artifact::current())
-        );
-        let mut earlier = crate::artifact::current();
-        earlier.version = "1.0.0-alpha.1".into();
-        earlier.handoff_build_id = "another-build".into();
-        let older = base().with_local_versions(
-            Some("1.0.0-alpha.1".into()),
-            Some(crate::upgrade::HANDOFF_PROTOCOL),
-            Some("another-build".into()),
-            None,
-            Some(true),
-            Some(earlier.clone()),
-        );
-        assert_eq!(older.compatibility.as_deref(), Some("handoff_required"));
-        let external = base().with_local_versions(
-            Some("1.0.0-alpha.1".into()),
-            Some(crate::upgrade::HANDOFF_PROTOCOL),
-            Some("another-build".into()),
-            None,
-            Some(false),
-            Some(earlier),
-        );
-        assert_eq!(
-            external.compatibility.as_deref(),
-            Some("externally_managed")
-        );
-    }
 
     /// A config whose metering database exists on disk, so `open_readonly`
     /// has something to open. No daemon is started: spend is not a liveness

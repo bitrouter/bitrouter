@@ -2,9 +2,8 @@
 //!
 //! SQLite always runs against a temporary file. The ignored server test requires
 //! an explicit BITROUTER_TEST_DATABASE_URL pointing to a DEDICATED TEST DATABASE.
-//! It applies all pending migrations and writes fixtures: never use a production
-//! database. Existing migrated test databases and the known partially applied
-//! migration-12/28 states are supported; other interrupted migrations are not covered.
+//! It initializes or validates the current schema and writes fixtures: never use
+//! a production database. Old and partially initialized stores are refused.
 //! No database is dropped, no table is truncated, and existing fixtures are not
 //! deleted. Each invocation uses UUID-scoped identities and leaves server fixtures
 //! intact, so repeated runs do not depend on an empty database.
@@ -21,7 +20,6 @@ use anyhow::{Context, Result, ensure};
 use bitrouter::auth::db::{self as auth_db, NewApiKey};
 use bitrouter::auth::entities::users;
 use bitrouter::auth::keys::hash_key;
-use bitrouter::db::migration::m20240101_000012_create_trajectory_ledger;
 use bitrouter::db::{self, migration::Migrator};
 use bitrouter::metering::db::{MeteringSessionIdentity, ReconciliationStatus, RequestMetric};
 use bitrouter::metering::entities::requests;
@@ -39,8 +37,8 @@ use bitrouter::trajectory::types::{
 };
 use bitrouter_ai::types::{Usage, UsageOrigin};
 use chrono::Utc;
-use sea_orm::{DatabaseConnection, EntityTrait};
-use sea_orm_migration::{MigrationTrait, MigratorTrait, SchemaManager};
+use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, EntityTrait, Statement};
+use sea_orm_migration::MigratorTrait;
 use uuid::Uuid;
 
 #[path = "database_backends/tenancy.rs"]
@@ -86,11 +84,46 @@ async fn exercise_bounded(database_url: &str) -> Result<()> {
         .context("database backend regression exceeded its two-minute deadline")?
 }
 
+async fn existing_ledger(db: &DatabaseConnection) -> Result<Option<Vec<(String, i64)>>> {
+    let backend = db.get_database_backend();
+    let exists = match backend {
+        DatabaseBackend::Sqlite => {
+            "SELECT 1 FROM main.sqlite_schema WHERE type='table' AND name='seaql_migrations'"
+        }
+        DatabaseBackend::Postgres => {
+            "SELECT 1 FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='seaql_migrations' AND table_type='BASE TABLE'"
+        }
+        DatabaseBackend::MySql => {
+            "SELECT 1 FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='seaql_migrations' AND table_type='BASE TABLE'"
+        }
+    };
+    if db
+        .query_one(Statement::from_string(backend, exists))
+        .await?
+        .is_none()
+    {
+        return Ok(None);
+    }
+    // Migrator::get_migration_models installs a ledger as a side effect. The
+    // pre-initialization observation must leave a genuinely empty store empty.
+    let rows = db
+        .query_all(Statement::from_string(
+            backend,
+            "SELECT version,applied_at FROM seaql_migrations ORDER BY version LIMIT 2",
+        ))
+        .await?;
+    Ok(Some(
+        rows.into_iter()
+            .map(|row| Ok((row.try_get("", "version")?, row.try_get("", "applied_at")?)))
+            .collect::<Result<_>>()?,
+    ))
+}
+
 async fn exercise(database_url: &str) -> Result<()> {
     let connection = db::connect(database_url).await?;
     let fixture = Fixture::new();
     let result = async {
-        let previous_ledger = Migrator::get_migration_models(&connection).await?;
+        let previous_ledger = existing_ledger(&connection).await?;
         db::run_migrations(&connection).await?;
         let ledger = Migrator::get_migration_models(&connection).await?;
         let expected: Vec<String> = Migrator::migrations()
@@ -98,15 +131,24 @@ async fn exercise(database_url: &str) -> Result<()> {
             .map(|migration| migration.name().to_owned())
             .collect();
         let actual: Vec<String> = ledger.iter().map(|row| row.version.clone()).collect();
-        ensure!(!expected.is_empty(), "the migrator must contain migrations");
+        ensure!(
+            expected.len() == 1,
+            "the store must have one current baseline"
+        );
         ensure!(
             actual == expected,
             "migration ledger does not match the complete migrator order"
         );
-        ensure!(
-            previous_ledger.iter().all(|row| ledger.contains(row)),
-            "migration changed a previously applied ledger entry"
-        );
+        if let Some(previous) = previous_ledger {
+            let current = ledger
+                .iter()
+                .map(|row| (row.version.clone(), row.applied_at))
+                .collect::<Vec<_>>();
+            ensure!(
+                previous == current,
+                "current baseline validation changed an existing ledger entry"
+            );
+        }
         ensure!(
             Migrator::get_pending_migrations(&connection)
                 .await?
@@ -125,17 +167,6 @@ async fn exercise(database_url: &str) -> Result<()> {
         let trajectory = read_trajectory(&connection, &fixture).await?;
         check_trajectory(&trajectory, &fixture)?;
         tenancy::exercise(&connection).await?;
-
-        // Invoke the migration itself: the ledger would otherwise skip its index
-        // existence checks. In particular, MySQL cannot rely on CREATE INDEX
-        // IF NOT EXISTS. This must preserve already populated trajectory tables.
-        m20240101_000012_create_trajectory_ledger::Migration
-            .up(&SchemaManager::new(&connection))
-            .await?;
-        ensure!(
-            read_trajectory(&connection, &fixture).await? == trajectory,
-            "direct migration 12 rerun changed trajectory records"
-        );
 
         db::run_migrations(&connection).await?;
         ensure!(

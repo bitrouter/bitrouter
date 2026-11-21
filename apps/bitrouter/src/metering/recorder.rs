@@ -16,8 +16,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::gateway::error::Result;
+use crate::gateway::observability::event::PipelineEvent;
 use crate::gateway::pipeline::settlement::{SettlementContext, SettlementRecorder};
-use bitrouter_ai::event::PipelineEvent;
 use bitrouter_ai::types::{FinishReason, UsageOrigin};
 use serde::Serialize;
 
@@ -220,9 +220,11 @@ impl SettlementRecorder for MeteringRecorder {
             .get_event::<bitrouter_ai::routing::RouterRequestIdentity>()
             .cloned();
         if let Some(event) = &session_event {
-            ctx.emit(bitrouter_ai::observe::span_attributes::SpanAttributes(
-                session_span_attributes(event),
-            ));
+            ctx.emit(
+                crate::gateway::observability::span_attributes::SpanAttributes(
+                    session_span_attributes(event),
+                ),
+            );
         }
         let metric = RequestMetric {
             request_id: ctx.request_id.clone(),

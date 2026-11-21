@@ -1,9 +1,11 @@
-//! Evaluator-agnostic evidence exchange and policy compilation control plane.
+//! Evaluator-agnostic evidence exchange, independent of experimental execution.
 
 pub mod admission;
 pub mod api;
 pub mod compiler;
+#[cfg(feature = "core")]
 pub mod publisher;
+#[cfg(feature = "core")]
 pub mod settlement;
 pub mod store;
 

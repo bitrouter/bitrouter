@@ -170,8 +170,10 @@ impl Ready {
         mode: LearningMode,
         maximum: u32,
     ) -> Result<Self> {
+        let resources =
+            Arc::new(Resources::fixture_key(&fixture.installation, None)?.for_bro_capture());
         Self::from_fixture_tracked(
-            fixture,
+            (fixture, resources),
             owner,
             (subject_url, judge_url),
             profile,
@@ -182,7 +184,7 @@ impl Ready {
         .await
     }
     pub async fn from_fixture_tracked(
-        mut fixture: Fixture,
+        (mut fixture, resources): (Fixture, Arc<Resources>),
         owner: Option<crate::tenancy::ownership::Lease>,
         endpoints: (&str, &str),
         profile: bool,
@@ -192,7 +194,6 @@ impl Ready {
     ) -> Result<Self> {
         let (subject_url, judge_url) = endpoints;
         fixture.service.shutdown().await?;
-        let resources = Resources::with_key(fixture.installation.clone(), [29; 32])?;
         let reference = |kind, name: &str| -> Result<ResourceRef> {
             Ok(ResourceRef {
                 owner_kind: OwnerKind::Tenant,
@@ -221,8 +222,7 @@ impl Ready {
                 {"reference":judge_slot,"definition":{"kind":"credential","credential":{"type":"api_key","data":{"value":"explicit-judge-secret"}}}}]}))?).await?;
         let snapshot = store::load(&fixture.db, Utc::now()).await?;
         fixture.service =
-            Service::start_prepared(fixture.db.clone(), owner, snapshot, Arc::new(resources))
-                .await?;
+            Service::start_prepared(fixture.db.clone(), owner, snapshot, resources).await?;
         started(&fixture.service);
         let credential = fixture
             .issue(&format!("assessment-client-{}", fixture.tenant))
@@ -331,11 +331,10 @@ impl Ready {
     }
     pub async fn restart(&mut self) -> Result<()> {
         self.fixture.service.shutdown().await?;
-        let resources = Resources::with_key(self.fixture.installation.clone(), [29; 32])?;
+        let resources = self.fixture.service.resources.clone();
         let snapshot = store::load(&self.fixture.db, Utc::now()).await?;
         self.fixture.service =
-            Service::start_prepared(self.fixture.db.clone(), None, snapshot, Arc::new(resources))
-                .await?;
+            Service::start_prepared(self.fixture.db.clone(), None, snapshot, resources).await?;
         self.fixture
             .service
             .dispatch_test_ready

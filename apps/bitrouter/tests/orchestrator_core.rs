@@ -9,13 +9,13 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use bitrouter::core::session::{CoreSession, HarnessPort};
 use bitrouter::gateway::caller::CallerContext;
-use bitrouter::storage::checkpoint::sha256;
-use bitrouter::storage::checkpoint::snapshot::RunStatus;
-use bitrouter_ai::core::checkpoint::{CheckpointAck, CheckpointBatch, DurableHead};
-use bitrouter_ai::core::protocol::{
+use bitrouter::managed_contract::checkpoint::{CheckpointAck, CheckpointBatch, DurableHead};
+use bitrouter::managed_contract::protocol::{
     Bind, Capabilities, ContextMode, CoreError, DiscardableHistory, ErrorCode, HarnessManifest,
     Limits, MaterialRef, OwnershipGrant, RoutingSettings, ServerMessage, SignalUpdate, TaskInput,
 };
+use bitrouter::storage::checkpoint::sha256;
+use bitrouter::storage::checkpoint::snapshot::RunStatus;
 use bitrouter_ai::types::Role;
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
@@ -49,7 +49,7 @@ struct Harness {
 impl HarnessPort for Harness {
     async fn read_artifact(
         &self,
-        _reference: &bitrouter_ai::core::protocol::ArtifactRef,
+        _reference: &bitrouter::managed_contract::protocol::ArtifactRef,
         _offset: u64,
         _max_bytes: u64,
     ) -> std::result::Result<Vec<u8>, CoreError> {
@@ -376,7 +376,7 @@ models:
             "SELECT estimated_charge_micro_usd, charge_status, charge_evidence_json FROM requests",
         ))
         .await?;
-    let bitrouter_ai::core::evidence::NativeTokenCost::ConfiguredEstimate {
+    let bitrouter::managed_contract::evidence::NativeTokenCost::ConfiguredEstimate {
         pricing_version,
         normalized_usage,
         ..
@@ -397,31 +397,68 @@ models:
 
 #[tokio::test]
 async fn core_keeps_named_policy_and_learn_receipts_without_semantic_decisions() -> Result<()> {
-    use bitrouter::policy_lock::{PolicyDefinition, PolicyLock};
+    use axum::{Json, Router, http::StatusCode, routing::post};
+    use bitrouter::managed_contract::harness::agent::ModelMode;
     use bitrouter::storage::checkpoint::snapshot::context::FEATURE;
-    use bitrouter_ai::core::protocol::ModelMode;
+    use bitrouter::trajectory::{
+        canonical::Canonicalizer,
+        correlation::{CorrelatedRequest, TrajectoryRuntime},
+        store::TrajectoryStore,
+        types::{RequestStatus, TrajectoryEventKind},
+    };
     use bitrouter_ai::eval::EvalScope;
+    use bitrouter_ai::policy::{Document, Policy, SpecVersion, Target};
+    use bitrouter_ai::types::ApiProtocol;
+    use sea_orm::EntityTrait;
+
+    #[derive(Clone)]
+    struct Observation {
+        body: Value,
+        request_id: String,
+        correlation: CorrelatedRequest,
+    }
+
     let home = tempfile::tempdir()?;
-    let upstream = MockServer::start().await;
-    Mock::given(method("POST")).and(path("/chat/completions"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "id":"core-fixture", "object":"chat.completion", "model":"strong",
-            "choices":[{"index":0,"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}],
-            "usage":{"prompt_tokens":10,"completion_tokens":1,"total_tokens":11}
-        }))).mount(&upstream).await;
-    let mut lock = PolicyLock::default();
-    lock.policies.insert("auto".into(), PolicyDefinition {
-        tiers:BTreeMap::from([("strong".into(), "mock:strong".into()), ("cheap".into(), "mock:cheap".into())]),
-        routes:BTreeMap::from([("semantic_route/v1|code:generation|implement|normal".into(), "cheap".into())]),
-        default_tier:Some("strong".into()),
-        tool_use_tier:Some("strong".into()), tool_safe_tiers:vec!["strong".into(),"cheap".into()],
-        progress_guard:Some(serde_json::from_value(json!({"escalation_tier":"strong","protected_tiers":["strong"],"max_consecutive_unprotected":10,"hold_for_requests":1,"incomplete_history":"observe"}))?),
-        ..PolicyDefinition::default()
-    });
-    decision::certify_routes(&mut lock);
+    let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let upstream_uri = format!("http://{}", upstream.local_addr()?);
+    let mut source = Document {
+        spec_version: SpecVersion::Beta1,
+        policies: BTreeMap::from([(
+            "auto".into(),
+            Policy {
+                tiers: BTreeMap::from([
+                    (
+                        "strong".into(),
+                        Target {
+                            model: "mock:strong".into(),
+                            effort: None,
+                        },
+                    ),
+                    (
+                        "cheap".into(),
+                        Target {
+                            model: "mock:cheap".into(),
+                            effort: None,
+                        },
+                    ),
+                ]),
+                routes: BTreeMap::from([(
+                    "code:generation|implement|normal".parse()?,
+                    "cheap".into(),
+                )]),
+                classifier_digest: None,
+                default_tier: "strong".into(),
+                tool_use_tier: Some("strong".into()),
+                tool_safe_tiers: vec!["strong".into(), "cheap".into()],
+            },
+        )]),
+    };
+    decision::pin_classifier(&mut source);
+    // Native Core does not run semantic assessment; the current source's
+    // conservative default still selects strong and retains the routing receipt.
     std::fs::write(
-        home.path().join("policy-lock.yaml"),
-        bitrouter::policy_lock::deterministic_yaml(&lock)?,
+        home.path().join("policy.yaml"),
+        bitrouter::policy_lock::deterministic_yaml(&source)?,
     )?;
     let mut config = bitrouter::config::parse_with(
         &format!(
@@ -442,9 +479,9 @@ routers:
   auto:
     selection: {{kind: policy, policy: auto, base_model: 'mock:strong'}}
 policy:
-  path: './policy-lock.yaml'
+  path: './policy.yaml'
 "#,
-            upstream.uri()
+            upstream_uri
         ),
         |_| None,
     )?;
@@ -454,7 +491,65 @@ policy:
     .await?;
     let assembled =
         bitrouter::build_app_with_path(&config, Some(&home.path().join("bitrouter.yaml"))).await?;
-    let store = bitrouter::core::eval::store::EvalStore::new(assembled.db.clone());
+    let store = bitrouter::eval::store::EvalStore::new(assembled.db.clone());
+    // Model-only Policy does not start episodes. An independent observer owns
+    // the actual request identity/input before the provider returns its outcome.
+    let trajectory = TrajectoryStore::new(assembled.db.clone());
+    let observer = Arc::new(TrajectoryRuntime::new(
+        trajectory.clone(),
+        Canonicalizer::new(bitrouter::paths::get_or_create_correlation_key(
+            home.path(),
+        )?),
+    ));
+    let observed_requests = Arc::new(Mutex::new(Vec::new()));
+    let captured = observed_requests.clone();
+    let upstream_router = Router::new().route(
+        "/chat/completions",
+        post(move |headers: http::HeaderMap, Json(body): Json<Value>| {
+            let observer = observer.clone();
+            let captured = captured.clone();
+            async move {
+                let request_id = headers
+                    .get("x-bitrouter-request-id")
+                    .and_then(|value| value.to_str().ok())
+                    .ok_or(StatusCode::BAD_REQUEST)?;
+                let prompt = bitrouter::gateway::model::protocol::inbound_adapter_for(
+                    &ApiProtocol::ChatCompletions,
+                )
+                .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?
+                .parse_request(body.clone())
+                .map_err(|_| StatusCode::BAD_REQUEST)?;
+                let correlated = observer
+                    .begin_request(
+                        "local",
+                        request_id,
+                        ApiProtocol::ChatCompletions,
+                        &prompt,
+                        &chrono::Utc::now().to_rfc3339(),
+                    )
+                    .await
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                captured.lock().await.push(Observation {
+                    body,
+                    request_id: request_id.to_owned(),
+                    correlation: correlated,
+                });
+                Ok::<_, StatusCode>(Json(json!({
+                    "id":"core-fixture", "object":"chat.completion", "model":"strong",
+                    "choices":[{"index":0,"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}],
+                    "usage":{"prompt_tokens":10,"completion_tokens":1,"total_tokens":11}
+                })))
+            }
+        }),
+    );
+    let stop = tokio_util::sync::CancellationToken::new();
+    let _stop_guard = stop.clone().drop_guard();
+    let stopped = stop.clone();
+    let upstream_task = tokio::spawn(async move {
+        axum::serve(upstream, upstream_router)
+            .with_graceful_shutdown(stopped.cancelled_owned())
+            .await
+    });
     let publisher = assembled
         .trajectory_outbox_publisher
         .clone()
@@ -525,15 +620,10 @@ policy:
         .context("committed plan")?;
     assert_eq!(plan.effective_model, "mock:strong");
     assert!(state.context_store.decisions.is_empty());
-    let requests = upstream
-        .received_requests()
-        .await
-        .context("generation capture")?;
+    let requests = observed_requests.lock().await.clone();
     assert_eq!(requests.len(), 1);
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&requests[0].body)?["model"],
-        "strong"
-    );
+    assert_eq!(requests[0].body["model"], "strong");
+    assert_eq!(requests[0].request_id, plan.request_id);
     assert_eq!(
         backend
             .received_requests()
@@ -546,8 +636,56 @@ policy:
         .context("pipeline")?
         .drain_required_pending_settlements()
         .await?;
+    let observed = &requests[0];
+    let metered =
+        bitrouter::metering::entities::requests::Entity::find_by_id(observed.request_id.as_str())
+            .one(&assembled.db)
+            .await?
+            .context("actual Core metering")?;
+    assert_eq!(metered.model_id, "strong");
+    assert_eq!(metered.prompt_tokens, 10);
+    assert_eq!(metered.completion_tokens, 1);
+    assert!(metered.error.is_none());
+    let correlated = trajectory
+        .request("local", &observed.correlation.request_id)
+        .await?
+        .context("independently observed request")?;
+    let events = trajectory
+        .events_for_episode("local", &observed.correlation.episode_id)
+        .await?;
+    assert_eq!(
+        correlated.status,
+        RequestStatus::Settled,
+        "real metering must settle the independently observed request: {events:?}"
+    );
+    assert_eq!(events.len(), 2, "observation needs no guard route intent");
+    assert_eq!(events[0].kind, TrajectoryEventKind::RequestStarted);
+    assert_eq!(events[1].kind, TrajectoryEventKind::RequestSettled);
+    assert_eq!(
+        events[1].request_id.as_deref(),
+        Some(correlated.request_id.as_str())
+    );
+    assert_eq!(
+        events[1]
+            .evidence
+            .structural
+            .get("settlement.prompt_tokens"),
+        Some(&10)
+    );
+    assert_eq!(
+        events[1]
+            .evidence
+            .structural
+            .get("settlement.completion_tokens"),
+        Some(&1)
+    );
     assert_eq!(publisher.drain_after_active_worker().await?.failed, 0);
     let subjects = store.list_subjects().await?;
+    assert_eq!(
+        subjects.len(),
+        1,
+        "one observed request owns one episode subject"
+    );
     assert!(
         !subjects
             .iter()
@@ -558,6 +696,11 @@ policy:
         .iter()
         .find(|subject| subject.scope == EvalScope::Episode)
         .context("episode eval")?;
+    assert_eq!(episode.subject_id, observed.correlation.episode_id);
+    assert!(matches!(
+        episode.identity,
+        bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {}
+    ));
     assert!(
         !episode
             .evidence
@@ -584,5 +727,9 @@ policy:
         selected.attributes.get("model").map(String::as_str),
         Some("mock:strong")
     );
+    assert_eq!(publisher.drain_after_active_worker().await?.failed, 0);
+    assert_eq!(store.list_subjects().await?, subjects);
+    stop.cancel();
+    upstream_task.await??;
     Ok(())
 }

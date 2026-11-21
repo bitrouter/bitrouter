@@ -5,9 +5,6 @@ use sea_orm_migration::prelude::*;
 
 use super::m20240101_000028_resource_tenancy::identity;
 
-#[derive(DeriveMigrationName)]
-pub struct Migration;
-
 const TABLE: &str = "tenancy_resource_lifecycle";
 
 pub(super) fn definition(backend: DatabaseBackend) -> TableCreateStatement {
@@ -49,109 +46,14 @@ pub(super) fn definition(backend: DatabaseBackend) -> TableCreateStatement {
     table.primary_key(&mut primary).to_owned()
 }
 
-#[async_trait::async_trait]
-impl MigrationTrait for Migration {
-    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        if manager.has_table(TABLE).await? {
-            return Err(DbErr::Custom(
-                "migration039 resource lifecycle object already exists".into(),
-            ));
-        }
-        manager
-            .create_table(definition(manager.get_database_backend()))
-            .await
+/// DDL-only component of the fresh current baseline; never accepts an old dataset.
+pub(super) async fn initialize_current(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
+    if manager.has_table(TABLE).await? {
+        return Err(DbErr::Custom(
+            "migration039 resource lifecycle object already exists".into(),
+        ));
     }
-
-    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        if manager.has_table(TABLE).await? {
-            return Err(DbErr::Custom(
-                "migration039 requires verified-backup rollback".into(),
-            ));
-        }
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use anyhow::{Context, Result, ensure};
-    use sea_orm::{ConnectionTrait, Statement};
-
-    #[test]
-    fn portable_ddl_uses_exact_identities_and_only_lifecycle_metadata() -> Result<()> {
-        for backend in [
-            DatabaseBackend::Sqlite,
-            DatabaseBackend::Postgres,
-            DatabaseBackend::MySql,
-        ] {
-            let sql = backend.build(&definition(backend)).to_string();
-            ensure!(!sql.contains("IF NOT EXISTS") && !sql.contains("FOREIGN KEY"));
-            ensure!(sql.contains("PRIMARY KEY") && sql.contains("authority_revision"));
-            let collation = match backend {
-                DatabaseBackend::Sqlite => "COLLATE BINARY",
-                DatabaseBackend::Postgres => "COLLATE \"C\"",
-                DatabaseBackend::MySql => "COLLATE utf8mb4_0900_bin",
-            };
-            ensure!(sql.matches(collation).count() == 6);
-            for forbidden in ["payload", "secret", "definition", "content", "digest"] {
-                ensure!(!sql.contains(forbidden));
-            }
-        }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn migration_refuses_existing_tables_and_never_drops_history() -> Result<()> {
-        let db = crate::db::connect("sqlite::memory:").await?;
-        let manager = SchemaManager::new(&db);
-        Migration.down(&manager).await?;
-        Migration.up(&manager).await?;
-        ensure!(Migration.up(&manager).await.is_err());
-        ensure!(Migration.down(&manager).await.is_err());
-        db.execute(Statement::from_string(DatabaseBackend::Sqlite,
-            "INSERT INTO tenancy_resource_lifecycle VALUES('tenant','owner','credential','slot','v1','installation',1,1,7)")).await?;
-        ensure!(Migration.up(&manager).await.is_err());
-        ensure!(Migration.down(&manager).await.is_err());
-        let row = db
-            .query_one(Statement::from_string(
-                DatabaseBackend::Sqlite,
-                "SELECT is_head,revoked,authority_revision FROM tenancy_resource_lifecycle",
-            ))
-            .await?
-            .context("lost lifecycle history")?;
-        ensure!(row.try_get::<bool>("", "is_head")? && row.try_get::<bool>("", "revoked")?);
-        ensure!(row.try_get::<i64>("", "authority_revision")? == 7);
-        let columns = db
-            .query_all(Statement::from_string(
-                DatabaseBackend::Sqlite,
-                "PRAGMA table_info('tenancy_resource_lifecycle')",
-            ))
-            .await?;
-        ensure!(columns.len() == 9);
-        for column in columns {
-            ensure!(column.try_get::<i64>("", "notnull")? == 1);
-        }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn incompatible_table_is_not_adopted_or_changed() -> Result<()> {
-        let db = crate::db::connect("sqlite::memory:").await?;
-        let original = "CREATE TABLE tenancy_resource_lifecycle(untrusted BLOB)";
-        db.execute(Statement::from_string(DatabaseBackend::Sqlite, original))
-            .await?;
-        let manager = SchemaManager::new(&db);
-        ensure!(Migration.up(&manager).await.is_err());
-        ensure!(Migration.down(&manager).await.is_err());
-        let row = db
-            .query_one(Statement::from_string(
-                DatabaseBackend::Sqlite,
-                "SELECT sql FROM sqlite_schema WHERE name='tenancy_resource_lifecycle'",
-            ))
-            .await?
-            .context("missing original table")?;
-        ensure!(row.try_get::<String>("", "sql")? == original);
-        Ok(())
-    }
+    manager
+        .create_table(definition(manager.get_database_backend()))
+        .await
 }

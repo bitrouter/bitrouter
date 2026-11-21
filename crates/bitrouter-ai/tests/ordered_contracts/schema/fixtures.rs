@@ -43,7 +43,7 @@ fn strict<T: DeserializeOwned + Serialize + Validate + JsonSchema>(
             false,
             false,
         );
-        if !entry.is_null() {
+        if !entry.is_null() && key != "candidate_index" {
             let mut null = value.clone();
             null[key] = Value::Null;
             push::<T>(cases, &format!("{name}:null:{key}"), null, false, false);
@@ -109,7 +109,7 @@ fn selection_cases(cases: &mut Vec<Case>) -> TestResult {
     for count in [0, 1, 8, 9, 64, 65] {
         let value = serde_json::to_value(selected((0..count).collect())?)?;
         let expected = (1..=64).contains(&count);
-        push::<OrderedCandidateSelectionV1>(
+        push::<OrderedCandidateSelection>(
             cases,
             &format!("selection count {count}"),
             value,
@@ -126,7 +126,7 @@ fn selection_cases(cases: &mut Vec<Case>) -> TestResult {
         json!([null]),
         json!(["0"]),
     ] {
-        mutated::<OrderedCandidateSelectionV1>(
+        mutated::<OrderedCandidateSelection>(
             cases,
             &selection,
             "/candidate_indices",
@@ -136,7 +136,7 @@ fn selection_cases(cases: &mut Vec<Case>) -> TestResult {
         )?;
     }
     for replacement in [json!(0), json!(2), json!(1.5), json!("1")] {
-        mutated::<OrderedCandidateSelectionV1>(
+        mutated::<OrderedCandidateSelection>(
             cases,
             &selection,
             "/schema_version",
@@ -145,7 +145,7 @@ fn selection_cases(cases: &mut Vec<Case>) -> TestResult {
             false,
         )?;
     }
-    mutated::<OrderedCandidateSelectionV1>(
+    mutated::<OrderedCandidateSelection>(
         cases,
         &selection,
         "/route/resource_kind",
@@ -162,7 +162,7 @@ fn selection_cases(cases: &mut Vec<Case>) -> TestResult {
         "custom",
     ] {
         let expected = !matches!(protocol, "decisions" | "custom");
-        mutated::<AcceptedSelectionV2>(
+        mutated::<AcceptedSelection>(
             cases,
             &accepted,
             "/inbound_protocol",
@@ -172,7 +172,7 @@ fn selection_cases(cases: &mut Vec<Case>) -> TestResult {
         )?;
     }
     for count in [0, 1, 256, 257] {
-        push::<CandidateManifestV1>(
+        push::<CandidateManifest>(
             cases,
             &format!("manifest count {count}"),
             serde_json::to_value(selection::manifest(count)?)?,
@@ -188,15 +188,15 @@ fn selection_cases(cases: &mut Vec<Case>) -> TestResult {
         ("/route/resource_kind", json!("credential")),
         ("/authority_revision", json!(9007199254740992_u64)),
     ] {
-        mutated::<CandidateManifestV1>(cases, &manifest, pointer, replacement, false, false)?;
+        mutated::<CandidateManifest>(cases, &manifest, pointer, replacement, false, false)?;
     }
     for pointer in ["/route/owner_id", "/candidates/0/credential/owner_id"] {
-        mutated::<CandidateManifestV1>(cases, &manifest, pointer, json!("foreign"), true, false)?;
+        mutated::<CandidateManifest>(cases, &manifest, pointer, json!("foreign"), true, false)?;
     }
     let caps = serde_json::to_value(selection::capabilities()?)?;
     for limit in [0, 1, 8, 9, 64, 65] {
         let expected = (1..=64).contains(&limit);
-        mutated::<OrderedCapabilitiesV2>(
+        mutated::<OrderedCapabilities>(
             cases,
             &caps,
             "/attempt_limit",
@@ -205,13 +205,13 @@ fn selection_cases(cases: &mut Vec<Case>) -> TestResult {
             expected,
         )?;
     }
-    mutated::<OrderedCapabilitiesV2>(cases, &caps, "/contract_version", json!(1), false, false)?;
+    mutated::<OrderedCapabilities>(cases, &caps, "/contract_version", json!(1), false, false)?;
     for guarantee in [
         "revision_bound_dispatch",
         "strict_receipts",
         "dispatch_enabled",
     ] {
-        mutated::<OrderedCapabilitiesV2>(
+        mutated::<OrderedCapabilities>(
             cases,
             &caps,
             &format!("/{guarantee}"),
@@ -225,7 +225,7 @@ fn selection_cases(cases: &mut Vec<Case>) -> TestResult {
         "correlation".try_into()?,
         selected(vec![0])?,
     )?)?;
-    mutated::<OrderedDispatchBindingV2>(
+    mutated::<OrderedDispatchBinding>(
         cases,
         &binding,
         "/Bitrouter-Tenancy-Version",
@@ -233,7 +233,7 @@ fn selection_cases(cases: &mut Vec<Case>) -> TestResult {
         false,
         false,
     )?;
-    mutated::<OrderedDispatchBindingV2>(
+    mutated::<OrderedDispatchBinding>(
         cases,
         &binding,
         "/Bitrouter-Receipt-Mode",
@@ -246,7 +246,7 @@ fn selection_cases(cases: &mut Vec<Case>) -> TestResult {
 
 fn receipt_cases(cases: &mut Vec<Case>) -> TestResult {
     for count in [1, 8, 9, 64] {
-        push::<ExecutionReceiptV2>(
+        push::<ExecutionReceipt>(
             cases,
             &format!("receipt {count}"),
             serde_json::to_value(receipt(count)?)?,
@@ -257,27 +257,27 @@ fn receipt_cases(cases: &mut Vec<Case>) -> TestResult {
     let mut receipt = receipt(1)?;
     let base = serde_json::to_value(&receipt)?;
     for limit in [0, 65] {
-        mutated::<ExecutionReceiptV2>(cases, &base, "/attempt_limit", json!(limit), false, false)?;
-    }
-    for version in [0, 1, 3] {
-        mutated::<ExecutionReceiptV2>(
+        mutated::<ExecutionReceipt>(
             cases,
             &base,
-            "/schema_version",
-            json!(version),
+            "/dispatch/attempt_limit",
+            json!(limit),
             false,
             false,
         )?;
     }
-    mutated::<ExecutionReceiptV2>(
+    for version in [0, 1, 3] {
+        mutated::<ExecutionReceipt>(cases, &base, "/dispatch/mode", json!(version), false, false)?;
+    }
+    mutated::<ExecutionReceipt>(
         cases,
         &base,
-        "/accepted_selection/route/owner_id",
+        "/dispatch/accepted_selection/route/owner_id",
         json!("foreign"),
         true,
         false,
     )?;
-    mutated::<ExecutionReceiptV2>(
+    mutated::<ExecutionReceipt>(
         cases,
         &base,
         "/attempts",
@@ -301,7 +301,7 @@ fn receipt_cases(cases: &mut Vec<Case>) -> TestResult {
     ] {
         receipt.attempts[0].observed_http_status = status;
         let expected = status.is_none_or(|status| (200..=299).contains(&status));
-        push::<ExecutionReceiptV2>(
+        push::<ExecutionReceipt>(
             cases,
             &format!("completed status {status:?}"),
             serde_json::to_value(&receipt)?,
@@ -318,7 +318,7 @@ fn receipt_cases(cases: &mut Vec<Case>) -> TestResult {
         ReceiptState::Unknown,
     ] {
         receipt.state = state;
-        push::<ExecutionReceiptV2>(
+        push::<ExecutionReceipt>(
             cases,
             &format!("unknown state {state:?}"),
             serde_json::to_value(&receipt)?,
@@ -345,7 +345,7 @@ fn evidence_cases(cases: &mut Vec<Case>) -> TestResult {
         value.frames = (0..frames)
             .map(|index| frame(&receipt, index, index % usize::from(count)))
             .collect();
-        push::<ExecutionUsageEvidenceV2>(
+        push::<ExecutionUsageEvidence>(
             cases,
             &format!("evidence {count}/{frames}"),
             serde_json::to_value(value)?,
@@ -358,7 +358,7 @@ fn evidence_cases(cases: &mut Vec<Case>) -> TestResult {
     value.frames.push(frame(&receipt, 0, 0));
     let base = serde_json::to_value(&value)?;
     for (pointer, replacement) in [
-        ("/schema_version", json!(1)),
+        ("/dispatch/mode", json!(1)),
         ("/extractor_version", json!(2)),
         ("/frames/0/protocol", json!("decisions")),
         ("/frames/0/source", json!("chat_chunk")),
@@ -373,7 +373,7 @@ fn evidence_cases(cases: &mut Vec<Case>) -> TestResult {
             json!(vec![base["frames"][0]["quantities"][0].clone(); 33]),
         ),
     ] {
-        mutated::<ExecutionUsageEvidenceV2>(cases, &base, pointer, replacement, false, false)?;
+        mutated::<ExecutionUsageEvidence>(cases, &base, pointer, replacement, false, false)?;
     }
     for pointer in [
         "/estimate",
@@ -388,42 +388,41 @@ fn evidence_cases(cases: &mut Vec<Case>) -> TestResult {
             .as_object_mut()
             .ok_or("object")?
             .remove(key);
-        push::<ExecutionUsageEvidenceV2>(
-            cases,
-            &format!("missing {pointer}"),
-            missing,
-            false,
-            false,
-        );
+        push::<ExecutionUsageEvidence>(cases, &format!("missing {pointer}"), missing, false, false);
     }
     let mut invalid = base.clone();
     invalid["frames"][0]["invalid"] = json!(true);
     invalid["frames"][0]["quantities"][0]["value"] = Value::Null;
-    push::<ExecutionUsageEvidenceV2>(cases, "invalid explicit null", invalid, true, true);
-    mutated::<ExecutionUsageEvidenceV2>(
+    push::<ExecutionUsageEvidence>(cases, "invalid explicit null", invalid, true, true);
+    mutated::<ExecutionUsageEvidence>(cases, &base, "/frames/0/quantities", json!([]), true, true)?;
+    mutated::<ExecutionUsageEvidence>(
         cases,
         &base,
-        "/frames/0/quantities",
-        json!([]),
-        true,
-        true,
-    )?;
-    mutated::<ExecutionUsageEvidenceV2>(
-        cases,
-        &base,
-        "/accepted_selection/route/owner_id",
+        "/dispatch/accepted_selection/route/owner_id",
         json!("foreign"),
         true,
         false,
     )?;
-    for field in ["parent_execution_id", "child_execution_ids", "auxiliary"] {
+    let mut extra = base.clone();
+    extra["auxiliary"] = Value::Null;
+    push::<ExecutionUsageEvidence>(cases, "forbidden auxiliary", extra, false, false);
+    for (field, linked) in [
+        ("parent_execution_id", json!("parent")),
+        ("child_execution_ids", json!(["child"])),
+    ] {
         let mut extra = base.clone();
-        extra[field] = Value::Null;
-        push::<ExecutionUsageEvidenceV2>(cases, &format!("forbidden {field}"), extra, false, false);
+        extra[field] = linked;
+        push::<ExecutionUsageEvidence>(
+            cases,
+            &format!("ordered linkage {field}"),
+            extra,
+            false,
+            false,
+        );
     }
     value.truncated = true;
     value.dropped_frames = 1;
-    push::<ExecutionUsageEvidenceV2>(
+    push::<ExecutionUsageEvidence>(
         cases,
         "truncated prefix",
         serde_json::to_value(value)?,

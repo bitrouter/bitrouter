@@ -49,53 +49,10 @@ impl Working {
 
 #[derive(Subcommand)]
 pub(crate) enum Action {
-    /// Upgrade a stopped legacy count-saturated authority with explicit acknowledgment.
-    UpgradeCapacity {
-        #[arg(long)]
-        database: PathBuf,
-        #[arg(long)]
-        expected_installation_id: String,
-        #[arg(long)]
-        expected_authority_revision: u64,
-        #[arg(long)]
-        operation_id: String,
-        #[arg(long)]
-        acknowledge_legacy_count_saturation: bool,
-        #[arg(long, default_value_t = 32)]
-        validation_page_rows: usize,
-        #[arg(long, default_value_t = 67_108_864)]
-        validation_bytes: usize,
-    },
     /// Verify retired evidence and fresh provisioning read-only; never release ingress.
     Recover {
         #[arg(long)]
         plan: PathBuf,
-        #[arg(long)]
-        report: PathBuf,
-        #[command(flatten)]
-        working: Working,
-    },
-    /// Inspect bounded Legacy Eval partitions, without copying or granting ownership.
-    #[cfg(feature = "core")]
-    EvalInventory {
-        #[arg(long)]
-        bundle: PathBuf,
-        #[arg(long)]
-        evidence_digest: String,
-        #[arg(long)]
-        source_kind: String,
-        #[arg(long)]
-        report: PathBuf,
-        #[command(flatten)]
-        working: Working,
-    },
-    /// Apply one anchored four-table Eval graph to a stopped fresh target.
-    #[cfg(feature = "core")]
-    EvalBackfill {
-        #[arg(long)]
-        plan: PathBuf,
-        #[arg(long)]
-        plan_digest: String,
         #[arg(long)]
         report: PathBuf,
         #[command(flatten)]
@@ -182,28 +139,6 @@ pub(super) async fn run(action: &Action, context: Option<&str>, output: &Output)
         .into());
     }
     match action {
-        Action::UpgradeCapacity {
-            database,
-            expected_installation_id,
-            expected_authority_revision,
-            operation_id,
-            acknowledge_legacy_count_saturation,
-            validation_page_rows,
-            validation_bytes,
-        } => output.emit(
-            &bitrouter::offline::upgrade_capacity(
-                database,
-                expected_installation_id,
-                *expected_authority_revision,
-                operation_id,
-                *acknowledge_legacy_count_saturation,
-                bitrouter::offline::ValidationBudget {
-                    rows: *validation_page_rows,
-                    bytes: *validation_bytes,
-                },
-            )
-            .await?,
-        )?,
         Action::Recover {
             plan,
             report,
@@ -222,44 +157,6 @@ pub(super) async fn run(action: &Action, context: Option<&str>, output: &Output)
                 &bitrouter::offline::recover_with_budget(plan, report, working.validation())
                     .await?,
             )?,
-        },
-        #[cfg(feature = "core")]
-        Action::EvalInventory {
-            bundle,
-            evidence_digest,
-            source_kind,
-            report,
-            working,
-        } => match working.options() {
-            Some(options) => output.emit(
-                &bitrouter::offline::eval_inventory_with_options(
-                    bundle,
-                    evidence_digest,
-                    source_kind,
-                    report,
-                    options,
-                )
-                .await?,
-            )?,
-            None => output.emit(
-                &bitrouter::offline::eval_inventory(bundle, evidence_digest, source_kind, report)
-                    .await?,
-            )?,
-        },
-        #[cfg(feature = "core")]
-        Action::EvalBackfill {
-            plan,
-            plan_digest,
-            report,
-            working,
-        } => match working.options() {
-            Some(options) => output.emit(
-                &bitrouter::offline::eval_backfill_with_options(plan, plan_digest, report, options)
-                    .await?,
-            )?,
-            None => {
-                output.emit(&bitrouter::offline::eval_backfill(plan, plan_digest, report).await?)?
-            }
         },
         Action::Map {
             bundle,

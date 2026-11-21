@@ -52,7 +52,6 @@ struct Recorded {
     method: String,
     headers: axum::http::HeaderMap,
     credential: Option<String>,
-    beta: Option<String>,
     body: Vec<u8>,
 }
 struct Server {
@@ -87,11 +86,6 @@ async fn serve(replies: Vec<Reply>) -> TestResult<Server> {
                         .headers
                         .get("authorization")
                         .and_then(|v| v.to_str().ok())
-                        .map(str::to_owned),
-                    beta: parts
-                        .headers
-                        .get("bitrouter-beta")
-                        .and_then(|value| value.to_str().ok())
                         .map(str::to_owned),
                     body: body.to_vec(),
                 });
@@ -145,133 +139,6 @@ fn chat_response() -> Value {
     json!({"id":"c-1","object":"chat.completion","model":"route","choices":[{"index":0,"message":{"role":"assistant","content":"hello","extra_content":{"signature":"opaque"}},"finish_reason":"stop"}]})
 }
 
-fn managed_request(stream: bool) -> TestResult<bitrouter_ai::core::responses::CreateRequest> {
-    Ok(serde_json::from_value(json!({
-        "model":"route", "input":"inspect file", "stream":stream,
-        "multi_agent":{"enabled":true},
-        "bitrouter":{"version":1,"execution":"managed","session_id":"session",
-            "execution_epoch":1,"operation_id":"operation"}
-    }))?)
-}
-
-#[tokio::test]
-async fn managed_responses_negotiate_beta_and_preserve_typed_core_failures() -> TestResult {
-    use bitrouter_ai::core::protocol::{BETA, CommitStatus, ErrorCode};
-    let failure = json!({"error":{"code":"stale_epoch","message":"binding changed","commit_status":"unknown"}});
-    let server = serve(vec![
-        Reply {
-            status: 409,
-            headers: vec![("content-type", "application/json".into())],
-            chunks: vec![failure.to_string().into_bytes()],
-        },
-        Reply::sse(&format!(
-            "event: error\ndata: {}\n\n",
-            json!({"type":"error","sequence_number":0,"error":failure["error"]})
-        )),
-    ])
-    .await?;
-    let client = GatewayClient::new(&format!("{}/proxy/v1", server.url), Some("virtual-key"))?;
-    let Err(Error::Core(error)) = client.managed_responses(&managed_request(false)?).await else {
-        return Err("expected typed managed HTTP error".into());
-    };
-    assert_eq!(error.status, 409);
-    assert_eq!(
-        error.body.ok_or("missing core body")?.error.commit_status,
-        CommitStatus::Unknown
-    );
-    let mut stream = client
-        .stream_managed_responses(&managed_request(true)?)
-        .await?;
-    let Some(Err(Error::CoreStream(error))) = stream.next().await else {
-        return Err("expected typed managed SSE error".into());
-    };
-    assert_eq!(error.status, 200);
-    let error = error.body.ok_or("missing core stream body")?.error;
-    assert_eq!(error.code, ErrorCode::StaleEpoch);
-    assert_eq!(error.commit_status, CommitStatus::Unknown);
-    assert!(stream.next().await.is_none());
-    assert!(matches!(
-        client.managed_responses(&managed_request(true)?).await,
-        Err(Error::Request(_))
-    ));
-    assert!(matches!(
-        client
-            .stream_managed_responses(&managed_request(false)?)
-            .await,
-        Err(Error::Request(_))
-    ));
-    let records = server.records.lock().await;
-    assert_eq!(records.len(), 2, "managed calls must not retry");
-    for record in records.iter() {
-        assert_eq!(record.path, "/proxy/v1/responses");
-        assert_eq!(record.beta.as_deref(), Some(BETA));
-        assert_eq!(record.credential.as_deref(), Some("Bearer virtual-key"));
-        let body: Value = serde_json::from_slice(&record.body)?;
-        assert!(body.get("tools").is_none());
-        assert_eq!(body["bitrouter"]["operation_id"], "operation");
-        assert!(body["multi_agent"]["enabled"].as_bool().ok_or("enabled")?);
-    }
-    Ok(())
-}
-
-#[tokio::test]
-async fn managed_streams_enforce_bounds_and_require_a_terminal_response() -> TestResult {
-    let event =
-        "event: response.created\ndata: {\"type\":\"response.created\",\"sequence_number\":0}\n\n";
-    let server = serve(vec![Reply::sse(event), Reply::sse(event)]).await?;
-    let mut stream = GatewayClient::new(&server.url, None)?
-        .stream_managed_responses(&managed_request(true)?)
-        .await?;
-    assert_eq!(
-        stream.next().await.ok_or("missing event")??.data.kind,
-        "response.created"
-    );
-    assert!(matches!(
-        stream.next().await,
-        Some(Err(Error::IncompleteStream))
-    ));
-    assert!(stream.next().await.is_none());
-    let client = GatewayClient::with_options(
-        &server.url,
-        None,
-        TransportOptions {
-            max_event_bytes: 16,
-            ..TransportOptions::default()
-        },
-    )?;
-    let mut stream = client
-        .stream_managed_responses(&managed_request(true)?)
-        .await?;
-    assert!(matches!(stream.next().await, Some(Err(Error::Limit))));
-    assert!(stream.next().await.is_none());
-    Ok(())
-}
-
-#[tokio::test]
-async fn managed_stream_error_metadata_survives_an_unknown_envelope() -> TestResult {
-    let mut reply = Reply::sse(
-        "event: error\ndata: {\"type\":\"error\",\"error\":{\"code\":\"future_code\",\"message\":\"private detail\"}}\n\n",
-    );
-    reply
-        .headers
-        .push(("x-request-id", "managed-observer".into()));
-    let server = serve(vec![reply]).await?;
-    let mut stream = GatewayClient::new(&server.url, None)?
-        .stream_managed_responses(&managed_request(true)?)
-        .await?;
-    let Some(Err(Error::CoreStream(failure))) = stream.next().await else {
-        return Err("expected preserved core failure metadata".into());
-    };
-    assert_eq!(failure.status, 200);
-    assert_eq!(failure.headers["x-request-id"], "managed-observer");
-    assert!(failure.body.is_none());
-    assert!(matches!(failure.body_error, Some(Error::Response(_))));
-    assert!(!format!("{failure:?}").contains("private detail"));
-    assert!(stream.next().await.is_none());
-    assert_eq!(server.records.lock().await.len(), 1);
-    Ok(())
-}
-
 async fn first_stream_error<T>(
     mut stream: bitrouter_sdk::stream::EventStream<T>,
 ) -> TestResult<Error> {
@@ -293,7 +160,7 @@ async fn named_malformed_stream_errors_retain_metadata_without_replay() -> TestR
         r#"{"unexpected":"private-wrong-envelope"}"#,
         r#"["private-wrong-envelope"]"#,
     ] {
-        for protocol in ["chat", "messages", "responses", "managed"] {
+        for protocol in ["chat", "messages", "responses"] {
             let mut reply = Reply::sse(&format!("event: error\ndata: {data}\n\n"));
             reply.headers.extend([
                 ("x-request-id", "stream-request-id".into()),
@@ -314,23 +181,11 @@ async fn named_malformed_stream_errors_retain_metadata_without_replay() -> TestR
                     first_stream_error(client.stream_responses(&responses_request(true)?).await?)
                         .await?
                 }
-                "managed" => {
-                    first_stream_error(
-                        client
-                            .stream_managed_responses(&managed_request(true)?)
-                            .await?,
-                    )
-                    .await?
-                }
                 _ => return Err("unknown test protocol".into()),
             };
             assert!(!format!("{error:?}").contains("private-"));
             let (status, headers, body_error) = match error {
-                Error::CoreStream(failure) if protocol == "managed" => {
-                    assert!(failure.body.is_none());
-                    (failure.status, failure.headers, failure.body_error)
-                }
-                Error::Stream(failure) if protocol != "managed" => {
+                Error::Stream(failure) => {
                     assert!(failure.body.is_none());
                     (failure.status, failure.headers, failure.body_error)
                 }
@@ -354,12 +209,8 @@ async fn malformed_non_error_events_remain_protocol_errors() -> TestResult {
     ] {
         let server = serve(vec![Reply::sse(&format!("data: {data}\n\n"))]).await?;
         let client = GatewayClient::new(&server.url, None)?;
-        let error = first_stream_error(
-            client
-                .stream_managed_responses(&managed_request(true)?)
-                .await?,
-        )
-        .await?;
+        let error =
+            first_stream_error(client.stream_responses(&responses_request(true)?).await?).await?;
         assert!(matches!(error, Error::Response(_)));
         assert!(!format!("{error:?}").contains("private-"));
         assert_eq!(server.records.lock().await.len(), 1);
@@ -388,28 +239,6 @@ async fn stream_errors_keep_bare_details_and_explicit_raw_envelopes() -> TestRes
     Ok(())
 }
 
-#[tokio::test]
-async fn managed_streams_preserve_retained_extension_events() -> TestResult {
-    let extension = json!({"type":"bitrouter.agent.created", "sequence_number":0,
-        "agent":{"agent_name":"/root/worker"}, "event":{"kind":"agent.created","seq":7,"data":{"id":"worker"}}});
-    let terminal = json!({"type":"response.completed", "sequence_number":1, "response":{
-        "id":"response", "object":"response", "model":"route", "status":"completed",
-        "bitrouter":{"run_id":"run", "run_status":"completed", "state_revision":8}}});
-    let server = serve(vec![Reply::sse(&format!("event: bitrouter.agent.created\ndata: {extension}\n\nevent: response.completed\ndata: {terminal}\n\n"))]).await?;
-    let mut stream = GatewayClient::new(&server.url, None)?
-        .stream_managed_responses(&managed_request(true)?)
-        .await?;
-    assert_eq!(
-        serde_json::to_value(stream.next().await.ok_or("extension event")??.data)?,
-        extension
-    );
-    assert_eq!(
-        serde_json::to_value(stream.next().await.ok_or("terminal event")??.data)?,
-        terminal
-    );
-    assert!(stream.next().await.is_none());
-    Ok(())
-}
 fn chat_chunk() -> Value {
     json!({"id":"c-1","object":"chat.completion.chunk","model":"route","choices":[{"index":0,"delta":{"content":"你好"},"finish_reason":null}]})
 }
@@ -939,50 +768,5 @@ async fn nullable_native_data_and_diagnostics_remain_distinct() -> TestResult {
     let typed: GatewayErrorEnvelope = serde_json::from_value(error.clone())?;
     assert!(!format!("{typed:?}").contains("private-replay-proof"));
     assert_eq!(serde_json::to_value(typed)?, error);
-    Ok(())
-}
-
-#[tokio::test]
-async fn core_capability_http_uses_public_types_and_preserves_error_metadata() -> TestResult {
-    use bitrouter_ai::core::protocol::{Capabilities, Limits};
-    let capabilities = Capabilities {
-        version: 1,
-        core_instance_id: "fixture-core".into(),
-        operations: vec!["session.bind".into()],
-        transports: vec!["websocket".into()],
-        unsupported_features: vec![],
-        limits: Limits::default(),
-        max_sessions: 8,
-        max_host_model_attempts: 4,
-    };
-    let mut denied = Reply::json(
-        json!({"error":{"code":"unauthorized_scope","message":"denied","commit_status":"not_committed"}}),
-    );
-    denied.status = 401;
-    denied.headers.push(("www-authenticate", "Bearer".into()));
-    let server = serve(vec![
-        Reply::json(serde_json::to_value(&capabilities)?),
-        denied,
-    ])
-    .await?;
-    let client = GatewayClient::new(&format!("{}/proxy/v1", server.url), Some("core-key"))?;
-    assert_eq!(client.core_capabilities().await?, capabilities);
-    let error = client
-        .core_capabilities()
-        .await
-        .err()
-        .ok_or("missing authorization error")?;
-    let Error::Core(failure) = error else {
-        return Err("wrong error family".into());
-    };
-    assert_eq!(failure.status, 401);
-    assert_eq!(failure.headers["www-authenticate"], "Bearer");
-    assert!(failure.body.is_some());
-    let records = server.records.lock().await;
-    assert_eq!(records.len(), 2);
-    for record in records.iter() {
-        assert_eq!(record.path, "/proxy/v1/orchestrator/capabilities");
-        assert_eq!(record.credential.as_deref(), Some("Bearer core-key"));
-    }
     Ok(())
 }

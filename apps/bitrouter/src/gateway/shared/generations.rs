@@ -12,8 +12,8 @@ use crate::config::{Config, gateway_state::GatewayStateConfig};
 use crate::continuation::ContinuationKey;
 use crate::gateway::providers::auth::AuthAppliers;
 use crate::policy::Policy;
-use crate::policy_lock::PolicyLock;
 use crate::trajectory::canonical::CorrelationKey;
+use bitrouter_ai::policy::Document;
 
 use super::authority::{Authority, Revision};
 use super::continuation::registration::Registration;
@@ -32,7 +32,7 @@ pub(super) struct Input {
     pub correlation_key: CorrelationKey,
     pub auth_appliers: AuthAppliers,
     pub policies: Vec<Policy>,
-    pub policy_lock: Option<PolicyLock>,
+    pub model_policy: Option<Document>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

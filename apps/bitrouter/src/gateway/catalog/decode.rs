@@ -2,7 +2,7 @@
 //! Complete raw documents, rather than this projection, are retained in caches.
 
 use super::RegistryData;
-use bitrouter_ai::catalog::types::{CanonicalModel, RegistryProvider};
+use crate::gateway::catalog::types::{CanonicalModel, RegistryProvider};
 use bitrouter_registry::document::{Document, ReaderPolicy, integer};
 use registry_json as serde_json;
 use serde_json::json;

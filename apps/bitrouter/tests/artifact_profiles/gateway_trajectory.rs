@@ -1,11 +1,13 @@
-//! Durable gateway facts and deferred evaluation across real feature profiles.
+//! Explicit trajectory observation and durable gateway facts across profiles.
+//! The former service cost-guard escalation/hold positive is retired: model-only
+//! source has no guard. Explicit correlation preserves settlement/outbox coverage.
 
 use super::*;
 use crate::persistence::table_rows;
-use bitrouter::policy_lock::{PolicyDefinition, PolicyLock, deterministic_yaml};
-use bitrouter::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
+use bitrouter::policy_lock::deterministic_yaml;
 use bitrouter::trajectory::health::reduce;
-use bitrouter::trajectory::types::{TrajectoryEvent, TrajectorySnapshot};
+use bitrouter::trajectory::types::{TrajectoryEvent, TrajectoryEventKind, TrajectorySnapshot};
+use bitrouter_ai::policy::{Document, Policy, SpecVersion, Target};
 use sea_orm::{ConnectionTrait, DbBackend, Statement};
 use std::collections::BTreeMap;
 
@@ -25,6 +27,7 @@ struct TrajectoryFacts {
 }
 
 fn trajectory_facts(fixture: &Fixture) -> Result<TrajectoryFacts> {
+    seed::assert_no_blocks(fixture)?;
     fixture.runtime.block_on(async {
         let db = bitrouter::db::connect(&database_url(fixture)).await?;
         let mut records = BTreeMap::new();
@@ -47,6 +50,10 @@ fn trajectory_facts(fixture: &Fixture) -> Result<TrajectoryFacts> {
                 let raw: String = row.try_get("", "event_json")?;
                 Ok(serde_json::from_str::<TrajectoryEvent>(&raw)?)
             }).collect::<Result<Vec<_>>>()?;
+        for event in &events {
+            ensure!(event.kind != TrajectoryEventKind::GuardActivated,
+                "model-only source activated a progress guard");
+        }
         let health = reduce(&events, &BTreeSet::from(["strong".into()]))?;
         db.close().await?;
         Ok(TrajectoryFacts { records, outbox, evaluation, health })
@@ -67,37 +74,43 @@ fn configuration(fixture: &Fixture, upstream: &str) -> Result<()> {
     let raw = seed::configuration(fixture, upstream, false)?;
     let mut config: Value = serde_saphyr::from_str(&raw)?;
     config["trajectory"] = json!({"enabled":true});
-    config["presets"]["coding"]["policy"] = json!("coding");
+    config["policy"] = json!({"path":"./policy.yaml"});
+    config["routers"]["coding"]["selection"] = json!({
+        "kind":"policy", "policy":"coding", "base_model":"fixture:strong",
+    });
     fs::write(&fixture.config, serde_saphyr::to_string(&config)?)?;
-    let mut lock = PolicyLock::default();
-    lock.policies.insert(
-        "coding".into(),
-        PolicyDefinition {
-            tiers: BTreeMap::from([
-                ("cheap".into(), "fixture:cheap".into()),
-                ("strong".into(), "fixture:strong".into()),
-            ]),
-            default_tier: Some("cheap".into()),
-            tool_use_tier: Some("strong".into()),
-            tool_safe_tiers: vec!["strong".into()],
-            progress_guard: Some(ProgressGuardPolicy {
-                escalation_tier: "strong".into(),
-                protected_tiers: BTreeSet::from(["strong".into()]),
-                max_consecutive_unprotected: None,
-                max_same_projection_unprotected: None,
-                max_recovery_count: None,
-                max_episode_requests: None,
-                max_episode_elapsed_ms: None,
-                max_episode_cost_micro_usd: Some(10),
-                hold_for_requests: 2,
-                incomplete_history: IncompleteHistoryAction::Observe,
-            }),
-            ..PolicyDefinition::default()
-        },
-    );
+    let source = Document {
+        spec_version: SpecVersion::Beta1,
+        policies: BTreeMap::from([(
+            "coding".into(),
+            Policy {
+                tiers: BTreeMap::from([
+                    (
+                        "cheap".into(),
+                        Target {
+                            model: "fixture:cheap".into(),
+                            effort: None,
+                        },
+                    ),
+                    (
+                        "strong".into(),
+                        Target {
+                            model: "fixture:strong".into(),
+                            effort: None,
+                        },
+                    ),
+                ]),
+                default_tier: "cheap".into(),
+                classifier_digest: None,
+                routes: BTreeMap::new(),
+                tool_use_tier: Some("strong".into()),
+                tool_safe_tiers: vec!["strong".into()],
+            },
+        )]),
+    };
     fs::write(
-        fixture.directory.path().join("policy-lock.yaml"),
-        deterministic_yaml(&lock)?,
+        fixture.directory.path().join("policy.yaml"),
+        deterministic_yaml(&source)?,
     )?;
     // Let the full gateway commit a real terminal fact/outbox while its separate
     // consumer fails. No synthetic settlement or delivery receipt is inserted.
@@ -105,6 +118,38 @@ fn configuration(fixture: &Fixture, upstream: &str) -> Result<()> {
         fixture,
         "CREATE TRIGGER fixture_reject_eval BEFORE INSERT ON eval_subjects BEGIN SELECT RAISE(FAIL, 'fixture consumer unavailable'); END",
     )
+}
+
+/// An explicit observer owns correlation. Gateway model selection cannot start
+/// progress guards; its real terminal settlement still owns the facts/outbox.
+fn track_request(fixture: &Fixture, id: &str, messages: &[Value]) -> Result<()> {
+    use bitrouter::gateway::model::protocol::inbound_adapter_for;
+    use bitrouter::trajectory::canonical::Canonicalizer;
+    use bitrouter::trajectory::correlation::TrajectoryRuntime;
+    use bitrouter::trajectory::store::TrajectoryStore;
+    use bitrouter_ai::types::ApiProtocol;
+
+    fixture.runtime.block_on(async {
+        let db = bitrouter::db::connect(&database_url(fixture)).await?;
+        let key = bitrouter::paths::get_or_create_correlation_key(fixture.directory.path())?;
+        let runtime =
+            TrajectoryRuntime::new(TrajectoryStore::new(db.clone()), Canonicalizer::new(key));
+        let adapter = inbound_adapter_for(&ApiProtocol::ChatCompletions)
+            .context("chat adapter unavailable")?;
+        let prompt =
+            adapter.parse_request(json!({"model":"bitrouter/coding", "messages":messages}))?;
+        runtime
+            .begin_request(
+                "local",
+                id,
+                ApiProtocol::ChatCompletions,
+                &prompt,
+                &chrono::Utc::now().to_rfc3339(),
+            )
+            .await?;
+        db.close().await?;
+        Ok(())
+    })
 }
 
 fn infer(
@@ -115,6 +160,7 @@ fn infer(
     messages: &[Value],
     model: &str,
 ) -> Result<()> {
+    track_request(fixture, id, messages)?;
     let before = upstream_count(fixture, upstream)?;
     fixture.runtime.block_on(async {
         let response = reqwest::Client::builder()
@@ -123,14 +169,14 @@ fn infer(
             .build()?
             .post(format!("http://{listen}/v1/chat/completions"))
             .header("x-bitrouter-request-id", id)
-            .json(&json!({"model":"@coding","messages":messages}))
+            .json(&json!({"model":"bitrouter/coding","messages":messages}))
             .send()
             .await?;
         let status = response.status();
         let body: Value = response.json().await?;
         ensure!(
             status.is_success(),
-            "guarded request failed: {status}: {body}"
+            "model-policy request failed: {status}: {body}"
         );
         let calls = upstream
             .received_requests()
@@ -138,7 +184,17 @@ fn infer(
             .context("upstream log missing")?;
         ensure!(calls.len() == before + 1);
         let sent: Value = serde_json::from_slice(&calls.last().context("dispatch missing")?.body)?;
-        ensure!(sent["model"] == model, "wrong guarded model: {sent}");
+        ensure!(sent["model"] == model, "wrong selected model: {sent}");
+        ensure!(
+            sent["messages"].as_array().is_some_and(|items| {
+                items.len() == messages.len() + 1
+                    && items[0]["content"] == "Use recorded requirements."
+                    && items[1..].iter().zip(messages).all(|(sent, original)| {
+                        sent["role"] == original["role"] && sent["content"] == original["content"]
+                    })
+            }),
+            "model selection changed conversation context: {sent}"
+        );
         let db = bitrouter::db::connect(&database_url(fixture)).await?;
         let metered = requests::Entity::find_by_id(id)
             .one(&db)
@@ -165,7 +221,6 @@ fn exercise_trajectory(fixture: &mut Fixture, full: &Path, minimum: &Path) -> Re
             && full_identity.source_revision == minimum_identity.source_revision
             && full_identity.target == minimum_identity.target
             && full_identity.version == minimum_identity.version
-            && full_identity.handoff_build_id != minimum_identity.handoff_build_id
     );
     let upstream = fixture.runtime.block_on(async {
         let upstream = MockServer::start().await;
@@ -181,6 +236,8 @@ fn exercise_trajectory(fixture: &mut Fixture, full: &Path, minimum: &Path) -> Re
         upstream
     });
     configuration(fixture, &upstream.uri())?;
+    seed::assert_no_blocks(fixture)?;
+    let source_bytes = fs::read(fixture.directory.path().join("policy.yaml"))?;
     let (pid, listen) = start(fixture, full, &full_identity)?;
     let mut messages = vec![json!({"role":"user","content":"Make a small change."})];
     infer(
@@ -223,7 +280,7 @@ fn exercise_trajectory(fixture: &mut Fixture, full: &Path, minimum: &Path) -> Re
         &listen,
         "trajectory-second",
         &messages,
-        "strong",
+        "cheap",
     )?;
     let pending = trajectory_facts(fixture)?;
     ensure!(pending.records["trajectory_episodes"].len() == 1);
@@ -232,10 +289,10 @@ fn exercise_trajectory(fixture: &mut Fixture, full: &Path, minimum: &Path) -> Re
         pending.health.health.request_count == 2
             && pending.health.health.settled_request_count == 2
     );
-    ensure!(pending.health.health.settled_cost_micro_usd == Some(42));
+    ensure!(pending.health.health.settled_cost_micro_usd == Some(28));
     ensure!(
-        pending.health.active_hold_remaining > 0,
-        "cost escalation did not create a hold"
+        pending.health.active_hold_remaining == 0,
+        "model-only source must not create a progress-guard hold"
     );
     ensure!(pending.outbox.len() == 2 && pending.outbox.contains(&original.outbox[0]));
     ensure!(
@@ -280,12 +337,13 @@ fn exercise_trajectory(fixture: &mut Fixture, full: &Path, minimum: &Path) -> Re
     ensure!(fs::read(fixture.directory.path().join("correlation.key"))? == key);
     fixture.stop_resident(pid)?;
     ensure!(trajectory_facts(fixture)? == delivered);
+    ensure!(fs::read(fixture.directory.path().join("policy.yaml"))? == source_bytes);
     Ok(())
 }
 
 #[test]
 #[ignore = "requires separately built immutable full and minimum gateway artifacts"]
-fn trajectory_cost_guard_and_outbox_survive_full_minimum_full() -> Result<()> {
+fn explicit_trajectory_facts_and_outbox_survive_full_minimum_full() -> Result<()> {
     let full = artifact_path("BITROUTER_TEST_FULL_BINARY")?;
     let minimum = artifact_path("BITROUTER_TEST_GATEWAY_BINARY")?;
     ensure!(full != minimum);

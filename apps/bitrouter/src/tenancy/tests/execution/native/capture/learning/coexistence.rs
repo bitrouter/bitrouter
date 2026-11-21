@@ -20,7 +20,7 @@ async fn combined(
     let db = crate::db::connect_tenancy(&url, &lease).await?;
     let mut fixture = Fixture::with_database(db, &mut |_| {}).await?;
     fixture.service.shutdown().await?;
-    let resources = Resources::with_key(fixture.installation.clone(), [29; 32])?;
+    let resources = Resources::fixture_key(&fixture.installation, None)?.for_bro_capture();
     let reference = |kind, id: &str| -> Result<ResourceRef> {
         Ok(ResourceRef {
             owner_kind: OwnerKind::Tenant,
@@ -207,6 +207,7 @@ async fn restart(owner: &mut Option<Bound>, root: &Path) -> Result<()> {
         revision,
     } = owner.take().context("closed combined owner")?;
     let Fixture {
+        wrapping_key,
         service,
         db,
         operator,
@@ -218,16 +219,16 @@ async fn restart(owner: &mut Option<Bound>, root: &Path) -> Result<()> {
     } = fixture;
     // Pool clones retain the file lease even after close. Drop the old Service
     // and its last test-side pool handle before acquiring a fresh owner.
+    let resources = service.resources.clone();
     drop((service, db));
     let lease = crate::tenancy::ownership::acquire(&url)?;
     let db = crate::db::connect_tenancy(&url, &lease).await?;
-    let resources = Resources::with_key(installation.clone(), [29; 32])?;
     let snapshot = store::load(&db, Utc::now()).await?;
-    let service =
-        Service::start_prepared(db.clone(), Some(lease), snapshot, Arc::new(resources)).await?;
+    let service = Service::start_prepared(db.clone(), Some(lease), snapshot, resources).await?;
     service.dispatch_test_ready.store(true, Ordering::Release);
     *owner = Some(Bound {
         fixture: Fixture {
+            wrapping_key,
             service,
             db,
             operator,

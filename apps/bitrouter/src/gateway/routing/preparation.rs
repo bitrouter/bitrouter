@@ -29,7 +29,7 @@ pub struct Receipt {
     pub usage: Option<DecisionUsage>,
 }
 
-impl bitrouter_ai::event::PipelineEvent for Receipt {
+impl crate::gateway::observability::event::PipelineEvent for Receipt {
     fn event_name(&self) -> &'static str {
         "routing.assessed"
     }

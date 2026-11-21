@@ -11,8 +11,8 @@ use tokio_util::sync::CancellationToken;
 
 use self::shell::Interpreter;
 use crate::harness::agent::RunEvent;
-use bitrouter_ai::harness::agent::ToolMode;
-use bitrouter_ai::harness::runtime::EffectStatus;
+use crate::managed_contract::harness::agent::ToolMode;
+use crate::managed_contract::harness::runtime::EffectStatus;
 
 mod edit;
 mod glob;

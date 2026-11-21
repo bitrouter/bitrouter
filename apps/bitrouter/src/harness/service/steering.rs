@@ -11,11 +11,11 @@ use super::unknown_turn;
 use crate::harness::storage::ExecutionRecord;
 use crate::harness::thread::ThreadTarget;
 use crate::harness::turn::SteeringRequest;
-use bitrouter_ai::harness::runtime::ErrorCode;
-use bitrouter_ai::harness::turn::SteeringReceipt;
-use bitrouter_ai::harness::turn::SteeringStatus;
-use bitrouter_ai::harness::turn::TurnEvent;
-use bitrouter_ai::harness::turn::TurnEventPayload;
+use crate::managed_contract::harness::runtime::ErrorCode;
+use crate::managed_contract::harness::turn::SteeringReceipt;
+use crate::managed_contract::harness::turn::SteeringStatus;
+use crate::managed_contract::harness::turn::TurnEvent;
+use crate::managed_contract::harness::turn::TurnEventPayload;
 
 pub(super) struct SteeringInput {
     pub(super) receipt: SteeringReceipt,

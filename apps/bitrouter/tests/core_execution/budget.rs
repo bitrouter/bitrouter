@@ -1,8 +1,8 @@
 use super::*;
+use bitrouter::managed_contract::checkpoint::ToolStartFence;
+use bitrouter::managed_contract::harness::inspection::AgentStatus;
+use bitrouter::managed_contract::protocol::{ToolObservation, ToolStatus};
 use bitrouter::storage::checkpoint::CheckpointBatchExt;
-use bitrouter_ai::core::checkpoint::ToolStartFence;
-use bitrouter_ai::core::protocol::{ToolObservation, ToolStatus};
-use bitrouter_ai::harness::inspection::AgentStatus;
 
 fn task() -> TaskInput {
     TaskInput {

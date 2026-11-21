@@ -61,41 +61,6 @@ impl SharedAdmission {
         self.custody.record_pipeline_outcome(successful_terminal);
     }
 
-    pub(crate) async fn begin_guarded(
-        &self,
-        protocol: &bitrouter_ai::types::ApiProtocol,
-        prompt: &bitrouter_ai::types::Prompt,
-        captured_at: &str,
-        route: crate::trajectory::store::GuardedRouteInput,
-    ) -> Result<(
-        crate::trajectory::correlation::CorrelatedRequest,
-        crate::trajectory::store::GuardedRouteResult,
-    )> {
-        self.engine
-            .guarded_route(
-                &self.key_hash,
-                &self.execution_id,
-                &super::engine::guard::Input {
-                    owner: &self.principal.user_id,
-                    protocol,
-                    prompt,
-                    captured_at,
-                    route,
-                },
-            )
-            .await
-            .map_err(|error| {
-                if error
-                    .downcast_ref::<crate::trajectory::correlation::InvalidCorrelationEvidence>()
-                    .is_some()
-                {
-                    BitrouterError::bad_request(error.to_string())
-                } else {
-                    public_error(error)
-                }
-            })
-    }
-
     pub(crate) fn retain_policy(
         &self,
         name: &str,

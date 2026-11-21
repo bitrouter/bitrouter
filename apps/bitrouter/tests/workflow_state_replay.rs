@@ -14,7 +14,6 @@ use bitrouter::core::adequacy::reliability::{
     ReliabilityEvent, ReliabilityKey, ReliabilityObservation,
 };
 use bitrouter::core::adequacy::store::AdequacyStore;
-use bitrouter::core::eval::store::EvalStore;
 use bitrouter::core::workflow_state::archive::{
     CloudUsageRecord, RequestTransportOutcome, SemanticSettlementOutcome, TraceArchive,
     WorkflowRunArtifact,
@@ -28,6 +27,7 @@ use bitrouter::core::workflow_state::real_trace::{
 use bitrouter::core::workflow_state::replay::ReplayEvaluator;
 use bitrouter::core::workflow_state::reward::BenchmarkOutcomeRecord;
 use bitrouter::core::workflow_state::shadow_policy::{ShadowPolicyEvaluator, TierName};
+use bitrouter::eval::store::EvalStore;
 use bitrouter::gateway::routing::workflow::decision::{
     PolicyDecisionRecord, PolicyDecisionSummary, ingress_request_id_sha256,
 };
@@ -37,7 +37,7 @@ use bitrouter::metering::{
     ChargeEvidence, ChargeStatus, EffectivePricingRates, PricingSource, ReconciliationStatus,
 };
 use bitrouter_ai::eval::AdmissionStatus;
-use bitrouter_ai::harness::inspection::NextStepRole;
+use bitrouter_ai::policy::NextStep;
 use bitrouter_ai::types::{NormalizedUsage, ReasoningEffort, UsageOrigin};
 use http::HeaderValue;
 use serde_json::json;
@@ -82,7 +82,7 @@ fn classifier_research_slices_have_a_frozen_manifest() {
     }
     assert_eq!(
         manifest.dataset_digest,
-        "sha256:258286f7ff692a8d2eb4c661d7b136a0c710ae11eb475d3779240fdcf597c737"
+        "sha256:7d53ce56cd93f65c3f2c8dd71b0026a960d5cbf2968d347a949bd06883a124d1"
     );
     assert_eq!(manifest.current_predictor_exact_count, 1);
     assert_eq!(manifest.current_predictor_mismatch_count, 9);
@@ -200,30 +200,14 @@ fn fixture_root() -> PathBuf {
 }
 
 #[tokio::test]
-async fn reliability_report_cli_replays_persisted_events_without_mutating_database()
+async fn local_reliability_report_replays_persisted_events_without_mutating_database()
 -> anyhow::Result<()> {
     let root = temp_path("reliability-report");
     std::fs::create_dir_all(&root)?;
     let database_path = root.join("bitrouter.db");
     let database_url = format!("sqlite://{}", database_path.display());
-    let config_path = root.join("bitrouter.yaml");
     let first_output = root.join("reliability-first.json");
     let second_output = root.join("reliability-second.json");
-    std::fs::write(&config_path, "policy:\n  path: './policy-lock.yaml'\n")?;
-    let mut lock = bitrouter::policy_lock::PolicyLock::default();
-    let mut policy = bitrouter::policy_lock::PolicyDefinition::default();
-    policy.tiers.insert("strong".into(), "mock:strong".into());
-    policy.default_tier = Some("strong".into());
-    policy.adequacy.enabled = true;
-    policy.adequacy.reliability_window_size = 23;
-    policy.adequacy.reliability_consecutive_failures = 2;
-    policy.adequacy.reliability_error_rate_percent = 35;
-    policy.adequacy.reliability_cooldown_secs = 300;
-    lock.policies.insert("auto".into(), policy);
-    std::fs::write(
-        root.join("policy-lock.yaml"),
-        bitrouter::policy_lock::deterministic_yaml(&lock)?,
-    )?;
     let db = bitrouter::db::connect(&database_url).await?;
     bitrouter::db::run_migrations(&db).await?;
     let store = AdequacyStore::new(db.clone());
@@ -245,27 +229,14 @@ async fn reliability_report_cli_replays_persisted_events_without_mutating_databa
         .await?;
 
     for output_path in [&first_output, &second_output] {
-        let output = std::process::Command::new(env!("CARGO_BIN_EXE_bro"))
-            .args([
-                "workflow-state",
-                "reliability-report",
-                "--database-url",
-                &database_url,
-                "--config",
-                config_path
-                    .to_str()
-                    .ok_or_else(|| anyhow::anyhow!("fixture path is not UTF-8"))?,
-                "--output",
-                output_path
-                    .to_str()
-                    .ok_or_else(|| anyhow::anyhow!("fixture path is not UTF-8"))?,
-            ])
-            .output()?;
-        assert!(
-            output.status.success(),
-            "reliability report failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        // The independent local report consumes facts directly. The former
+        // Policy compiler CLI is no longer a report or activation backend.
+        let events = store.load_reliability_events().await?;
+        let report = bitrouter::core::adequacy::report::ReliabilityReport::build(
+            &bitrouter::config::AdequacyConfig::default(),
+            &events,
+        )?;
+        std::fs::write(output_path, serde_json::to_vec_pretty(&report)?)?;
     }
 
     let first = std::fs::read(&first_output)?;
@@ -493,7 +464,7 @@ fn reward_feedback_integrity_accepts_terminus_without_private_identity_headers()
 
 #[tokio::test]
 async fn equivalent_generic_and_terminus_rewards_enter_generic_eval_without_private_headers() {
-    let canonical_key = "semantic_route/v1|unknown|implement|normal";
+    let canonical_key = "unknown|implement|normal";
     let ledger_key = format!("coding\0{canonical_key}");
     let mut generic = benchmark_trace("req-reward-generic-merge");
     generic.headers.insert(
@@ -643,7 +614,7 @@ async fn equivalent_generic_and_terminus_rewards_enter_generic_eval_without_priv
     assert!(subjects.iter().all(|subject| {
         subject.decisions.len() == 1
             && subject.decisions[0].policy == "coding"
-            && subject.decisions[0].request_key == canonical_key
+            && subject.decisions[0].request_key.to_string() == canonical_key
     }));
     let admissions = eval_store.latest_admissions().await.unwrap();
     assert_eq!(admissions.len(), 2);
@@ -1069,35 +1040,35 @@ fn replay_keeps_observed_and_predictive_projections_separate_and_exact() {
             (
                 "predictive-near-done-finalize-001",
                 "agent_trace/v2|test|normal".to_string(),
-                "semantic_route/v1|unknown|finalize|normal".to_string(),
+                "unknown|finalize|normal".to_string(),
                 NextActionClass::AnswerOrSummarize,
                 Some(true),
             ),
             (
                 "predictive-opening-plan-001",
                 "agent_trace/v2|opening|normal".to_string(),
-                "semantic_route/v1|agent:multi_step_planning|orchestrate|normal".to_string(),
+                "agent:multi_step_planning|orchestrate|normal".to_string(),
                 NextActionClass::ReasonOrPlan,
                 Some(true),
             ),
             (
                 "predictive-post-edit-verify-001",
                 "agent_trace/v2|edit|normal".to_string(),
-                "semantic_route/v1|code:debugging|verify|normal".to_string(),
+                "code:debugging|verify|normal".to_string(),
                 NextActionClass::ExecuteOrTest,
                 Some(true),
             ),
             (
                 "predictive-post-read-implement-001",
                 "agent_trace/v2|tool_followup|normal".to_string(),
-                "semantic_route/v1|unknown|implement|normal".to_string(),
+                "unknown|implement|normal".to_string(),
                 NextActionClass::Mutate,
                 Some(true),
             ),
             (
                 "predictive-repeated-failure-replan-001",
                 "agent_trace/v2|test|guarded".to_string(),
-                "semantic_route/v1|unknown|orchestrate|guarded".to_string(),
+                "unknown|orchestrate|guarded".to_string(),
                 NextActionClass::ReasonOrPlan,
                 Some(true),
             ),
@@ -1135,11 +1106,11 @@ fn old_fixture_without_prediction_remains_readable_and_replays_both_routes() {
     );
     assert_eq!(
         summary.records[0].predictive_projection.next_step_role,
-        NextStepRole::Orchestrate
+        NextStep::Orchestrate
     );
     assert_eq!(
         summary.records[0].predictive_route_key.as_str(),
-        "semantic_route/v1|unknown|orchestrate|normal"
+        "unknown|orchestrate|normal"
     );
     assert_eq!(summary.records[0].prediction_matches_expected, None);
 }
@@ -1178,7 +1149,7 @@ fn new_fixture_prediction_is_compared_exactly() {
     assert_eq!(summary.records[0].prediction_matches_expected, Some(false));
     assert_eq!(
         summary.records[0].predictive_route_key,
-        "semantic_route/v1|unknown|orchestrate|normal"
+        "unknown|orchestrate|normal"
     );
 }
 
@@ -2071,8 +2042,8 @@ fn run_artifact_bundle_includes_policy_decision_summary() {
         input_model: "gpt-5.5".to_string(),
         input_effort: None,
         key_strategy: "agent_trace".to_string(),
-        route_projection: Some("semantic_route/v1|code:generation|implement|normal".to_string()),
-        request_key: "semantic_route/v1|unknown|implement|normal".to_string(),
+        route_projection: Some("code:generation|implement|normal".to_string()),
+        request_key: "unknown|implement|normal".to_string(),
         ledger_key: None,
         policy: None,
         policy_digest: None,
@@ -2214,8 +2185,8 @@ fn run_artifact_attributes_failed_task_to_policy_transition() {
         input_model: "gpt-5.5".to_string(),
         input_effort: None,
         key_strategy: "agent_trace".to_string(),
-        route_projection: Some("semantic_route/v1|code:generation|implement|normal".to_string()),
-        request_key: "semantic_route/v1|unknown|implement|normal".to_string(),
+        route_projection: Some("code:generation|implement|normal".to_string()),
+        request_key: "unknown|implement|normal".to_string(),
         ledger_key: None,
         policy: None,
         policy_digest: None,
@@ -2351,9 +2322,9 @@ fn run_artifact_attributes_successful_task_to_policy_transition() -> anyhow::Res
         input_model: "gpt-5.5".to_string(),
         input_effort: None,
         key_strategy: "agent_trace".to_string(),
-        route_projection: Some("semantic_route/v1|code:generation|implement|normal".to_string()),
-        request_key: "semantic_route/v1|unknown|implement|normal".to_string(),
-        ledger_key: Some("coding\0semantic_route/v1|unknown|implement|normal".to_string()),
+        route_projection: Some("code:generation|implement|normal".to_string()),
+        request_key: "unknown|implement|normal".to_string(),
+        ledger_key: Some("coding\0unknown|implement|normal".to_string()),
         policy: Some("coding".to_string()),
         policy_digest: Some(
             "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
@@ -2433,15 +2404,12 @@ fn run_artifact_attributes_successful_task_to_policy_transition() -> anyhow::Res
     );
     assert_eq!(
         candidate.route_projection,
-        "semantic_route/v1|code:generation|implement|normal"
+        "code:generation|implement|normal"
     );
-    assert_eq!(
-        candidate.request_key,
-        "semantic_route/v1|unknown|implement|normal"
-    );
+    assert_eq!(candidate.request_key, "unknown|implement|normal");
     assert_eq!(
         candidate.ledger_key.as_deref(),
-        Some("coding\0semantic_route/v1|unknown|implement|normal")
+        Some("coding\0unknown|implement|normal")
     );
     assert_eq!(
         candidate.tier_transition.as_deref(),

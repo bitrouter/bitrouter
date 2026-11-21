@@ -1,10 +1,10 @@
 //! Gateway conversion admission and projection rules.
 
-use crate::gateway::model::error::{ModelError, Result};
-use bitrouter_ai::conversion::{
+use crate::gateway::conversion_report::{
     ConversionDisposition, ConversionEffect, ConversionIssue, ConversionLocation, ConversionReason,
     ConversionReport, ConversionStage,
 };
+use crate::gateway::model::error::{ModelError, Result};
 use bitrouter_ai::types::{
     ApiProtocol, Content, Prompt, ResponseFormat, Role, Tool, ToolResultContentPart,
     ToolResultOutput, provider_namespace,

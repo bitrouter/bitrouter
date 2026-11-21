@@ -19,39 +19,45 @@ use super::{
 #[serde(rename_all = "snake_case")]
 pub enum AdmissionMode {
     /// Existing static ordered execution without operational profiles.
-    Legacy,
+    Unprofiled,
     /// Every actual candidate is bound to an installation-managed profile.
-    ProfiledV1,
+    Profiled,
 }
 
-/// Immutable rules with a live, independently rotatable member RPM ceiling.
+/// Immutable shared-health membership with an independently rotatable member RPM.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct AdmissionProfileV1 {
-    /// Profile format, exactly one.
+pub struct AdmissionProfile {
+    /// Current profile format, exactly one. Health membership is explicit.
     #[serde(deserialize_with = "super::number::integer")]
     #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 1)))]
     pub schema_version: u8,
-    /// Null disables rate admission; a zero ceiling refuses locally.
+    /// Null disables charging; a zero member ceiling refuses locally.
     #[serde(deserialize_with = "nullable")]
     #[cfg_attr(
         feature = "schema",
         schemars(with = "super::resources::schema::RequiredNullable<RateProfileV1>")
     )]
     pub rate: Option<RateProfileV1>,
-    /// Optional read-only group in this profile's operator-pool namespace.
-    /// Does not enable rate admission, charge a timestamp or consult a circuit.
+    /// Optional read-only rate group in this profile's operator pool.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observe_rate_group_id: Option<ResourceId>,
-    /// Null disables the availability circuit.
+    /// Null disables health admission and observation. Requires a null group.
     #[serde(deserialize_with = "nullable")]
     #[cfg_attr(
         feature = "schema",
         schemars(with = "super::resources::schema::RequiredNullable<HealthProfileV1>")
     )]
     pub health: Option<HealthProfileV1>,
-    /// Explicit permission to advance after a proven terminal HTTP rejection.
+    /// Installation/operator-pool-scoped circuit identity; present exactly when health is enabled.
+    #[serde(deserialize_with = "nullable")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "super::resources::schema::RequiredNullable<ResourceId>")
+    )]
+    pub health_group_id: Option<ResourceId>,
+    /// Explicit permission to advance after a qualified terminal rejection.
     pub fallback: FallbackRule,
 }
 
@@ -110,9 +116,13 @@ pub enum FallbackRule {
     OrderedTerminalRejectionsV1,
 }
 
-impl Validate for AdmissionProfileV1 {
+impl Validate for AdmissionProfile {
     fn validate(&self) -> Result<(), ValidationError> {
         require(self.schema_version == 1, "admission profile version")?;
+        require(
+            self.health.is_some() == self.health_group_id.is_some(),
+            "admission health group association",
+        )?;
         if let (Some(rate), Some(observed)) = (&self.rate, &self.observe_rate_group_id) {
             require(
                 &rate.rate_group_id == observed,
@@ -131,10 +141,11 @@ impl Validate for AdmissionProfileV1 {
     }
 }
 
-impl AdmissionProfileV1 {
-    /// Whether a new live revision preserves all rules except the RPM ceiling.
+impl AdmissionProfile {
+    /// Whether a same-key successor preserves every rule except member RPM.
     pub fn permits_rotation_to(&self, next: &Self) -> bool {
         self.schema_version == next.schema_version
+            && self.health_group_id == next.health_group_id
             && self.health == next.health
             && self.fallback == next.fallback
             && self.observe_rate_group_id == next.observe_rate_group_id
@@ -147,10 +158,8 @@ impl AdmissionProfileV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct AdmissionAttachmentV1 {
+pub struct AdmissionAttachment {
     /// Actual ingress protocol, not the target's upstream protocol.
-    #[serde(deserialize_with = "legacy_protocol")]
-    #[cfg_attr(feature = "schema", schemars(with = "LegacyGenerationProtocol"))]
     pub inbound_protocol: GenerationProtocol,
     /// Original root ordinal, below 256.
     #[serde(deserialize_with = "super::number::integer")]
@@ -162,12 +171,8 @@ pub struct AdmissionAttachmentV1 {
     pub profile: ResourceRef,
 }
 
-impl Validate for AdmissionAttachmentV1 {
+impl Validate for AdmissionAttachment {
     fn validate(&self) -> Result<(), ValidationError> {
-        require(
-            self.inbound_protocol != GenerationProtocol::GenerateContent,
-            "v1 admission protocol",
-        )?;
         require(
             usize::from(self.candidate_index) < MAX_CANDIDATES,
             "admission ordinal",
@@ -285,36 +290,4 @@ pub enum AvailabilityObservation {
     AuthorityDenied,
     /// Bounded operational state cannot admit another entry.
     CapacityDenied,
-}
-
-// The new private ingress must not widen format-one resource authority or schemas.
-#[derive(Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum LegacyGenerationProtocol {
-    ChatCompletions,
-    Messages,
-    Responses,
-}
-
-fn legacy_protocol<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<GenerationProtocol, D::Error> {
-    Ok(match LegacyGenerationProtocol::deserialize(deserializer)? {
-        LegacyGenerationProtocol::ChatCompletions => GenerationProtocol::ChatCompletions,
-        LegacyGenerationProtocol::Messages => GenerationProtocol::Messages,
-        LegacyGenerationProtocol::Responses => GenerationProtocol::Responses,
-    })
-}
-
-#[cfg(feature = "schema")]
-impl schemars::JsonSchema for LegacyGenerationProtocol {
-    fn schema_name() -> std::borrow::Cow<'static, str> {
-        "GenerationProtocol".into()
-    }
-    fn schema_id() -> std::borrow::Cow<'static, str> {
-        "bitrouter_ai::tenancy::ordered::GenerationProtocol".into()
-    }
-    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        schemars::json_schema!({"type":"string","enum":["chat_completions","messages","responses"]})
-    }
 }

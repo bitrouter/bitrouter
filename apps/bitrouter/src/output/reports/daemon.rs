@@ -176,36 +176,6 @@ impl CliReport for StatusReport {
         if let Some(socket) = &self.socket {
             h.field("socket", socket)?;
         }
-        if let Some(compatibility) = &self.compatibility {
-            h.field("compatibility", compatibility)?;
-            if let Some(activity) = &self.handoff_activity {
-                h.field("active operations", activity.operations)?;
-                h.field(
-                    "supervised runs",
-                    activity
-                        .supervised_runs
-                        .map_or_else(|| "unknown".to_string(), |runs| runs.to_string()),
-                )?;
-                h.field("ACP route leases", activity.route_leases)?;
-                h.field(
-                    "ACP recordings",
-                    activity.acp_recordings.map_or_else(
-                        || "unknown".to_string(),
-                        |recordings| recordings.to_string(),
-                    ),
-                )?;
-            } else {
-                h.field("active work", "unknown")?;
-            }
-            match compatibility.as_str() {
-                "legacy_unknown" => h.note("Finish active work, then run `bro restart`; this daemon cannot prove it is idle.")?,
-                "externally_managed" => h.note("Restart this daemon with its service manager after active work finishes.")?,
-                "handoff_required" => h.note("The next supervised command attempts a safe handoff if idle and the database preflight passes.")?,
-                "daemon_newer" => h.note("Install a matching or newer bro binary before using this daemon.")?,
-                "profile_mismatch" => h.note("Common inspection remains available. Use the matching binary for execution, or explicitly restart with the intended profile after its work finishes.")?,
-                _ => {}
-            }
-        }
         render_configuration_state(self, h)?;
         render_router_state(self, h)?;
         render_spend(self.spend.as_ref(), h)
@@ -387,7 +357,6 @@ impl CliReport for RouteReport {
         if let Some(router) = &self.router {
             let source = match self.router_source {
                 Some(bitrouter_ai::control::models::RouterSource::User) => "user",
-                Some(bitrouter_ai::control::models::RouterSource::Legacy) => "legacy",
                 Some(bitrouter_ai::control::models::RouterSource::Default) => "default",
                 None => "unknown",
             };

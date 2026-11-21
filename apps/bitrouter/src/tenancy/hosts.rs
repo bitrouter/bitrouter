@@ -171,7 +171,7 @@ impl Service {
     }
     pub(crate) async fn host_resources_ready(
         &self,
-    ) -> Result<(), bitrouter_ai::core::protocol::CoreError> {
+    ) -> Result<(), crate::managed_contract::protocol::CoreError> {
         let gate = self.take_host_gate(HostBoundary::Resources)?;
         if let Some(gate) = gate {
             gate.reached().await;
@@ -181,7 +181,7 @@ impl Service {
     pub(crate) fn take_host_gate(
         &self,
         boundary: HostBoundary,
-    ) -> Result<Option<Arc<HostGate>>, bitrouter_ai::core::protocol::CoreError> {
+    ) -> Result<Option<Arc<HostGate>>, crate::managed_contract::protocol::CoreError> {
         let mut slot = self.hosts.resources_gate.lock().map_err(|_| {
             super::execution::session::core_error(ErrorCode::AuthorityUnavailable.into())
         })?;
@@ -253,30 +253,6 @@ impl Service {
                 .get_or_init(|| (caller, tokio::time::Instant::now()));
         }
         self.cleanup.quarantine();
-    }
-}
-
-/// A read fence on the existing host slot. Unknown native cleanup retains the
-/// original slot, so it cannot be replaced by a serialized released label.
-pub(in crate::tenancy) struct StoppedRead {
-    _permit: OwnedSemaphorePermit,
-}
-impl Service {
-    pub(in crate::tenancy) fn stopped_learner_source(&self) -> Result<Arc<StoppedRead>, Failure> {
-        let accepting = self
-            .accepting
-            .lock()
-            .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
-        if !*accepting || !self.live.load(std::sync::atomic::Ordering::Acquire) {
-            return Err(ErrorCode::AuthorityUnavailable.into());
-        }
-        let permit = self
-            .hosts
-            .slots
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| Failure::from(ErrorCode::CapacityExceeded))?;
-        Ok(Arc::new(StoppedRead { _permit: permit }))
     }
 }
 

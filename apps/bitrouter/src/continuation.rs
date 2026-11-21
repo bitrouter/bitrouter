@@ -7348,7 +7348,12 @@ mod tests {
         previous_response_id: Option<&str>,
         stream: bool,
     ) -> PipelineRequest {
-        let mut params = GenerationParams::default();
+        // Match the Responses parser's ownership so rendering retains the
+        // public parent ID before the executor substitutes its native ID.
+        let mut params = GenerationParams {
+            extra_protocol: Some(ApiProtocol::Responses),
+            ..Default::default()
+        };
         if let Some(previous_response_id) = previous_response_id {
             params.extra.insert(
                 "previous_response_id".into(),

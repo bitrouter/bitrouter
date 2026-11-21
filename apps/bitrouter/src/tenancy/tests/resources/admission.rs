@@ -1,6 +1,6 @@
 use super::*;
 use bitrouter_ai::tenancy::{
-    admission::AdmissionAttachmentV1, identity::RevisionId, ordered::GenerationProtocol,
+    admission::AdmissionAttachment, identity::RevisionId, ordered::GenerationProtocol,
 };
 use serde_json::json;
 
@@ -20,7 +20,7 @@ fn profile(
     value.expected_revision = expected;
     value.definition = Definition::AdmissionProfile {
         profile: serde_json::from_value(json!({"schema_version":1,
-        "rate":{"rate_group_id":"shared","member_rpm":rpm},"health":null,"fallback":"stop"}))?,
+        "rate":{"rate_group_id":"shared","member_rpm":rpm},"health":null,"health_group_id":null,"fallback":"stop"}))?,
     };
     Ok(value)
 }
@@ -183,7 +183,7 @@ async fn operator_only_profiled_route_protects_historical_configuration_after_re
             GenerationProtocol::Responses,
         ]
         .into_iter()
-        .map(|inbound_protocol| AdmissionAttachmentV1 {
+        .map(|inbound_protocol| AdmissionAttachment {
             inbound_protocol,
             candidate_index: 0,
             credential: slot.clone(),

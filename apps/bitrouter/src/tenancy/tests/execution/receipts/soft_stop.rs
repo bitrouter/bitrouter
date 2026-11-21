@@ -42,7 +42,7 @@ async fn ordinary_native_refusal_preserves_actual_gateway_receipt_maintenance() 
         .claim_owner("native-pressure")
         .await
         .map_err(anyhow::Error::msg)?;
-    let bitrouter_ai::harness::runtime::OwnerClaim::Acquired { owner } = claim else {
+    let crate::managed_contract::harness::runtime::OwnerClaim::Acquired { owner } = claim else {
         anyhow::bail!("native owner not acquired");
     };
     let client = Harness::client(false)?;

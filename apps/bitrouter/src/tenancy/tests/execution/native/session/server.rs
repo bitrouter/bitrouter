@@ -216,7 +216,10 @@ async fn campaign(
         db.clone(),
         None,
         store::load(db, Utc::now()).await?,
-        Arc::new(Resources::with_key(fixture.installation.clone(), [29; 32])?),
+        Arc::new(Resources::with_key(
+            fixture.installation.clone(),
+            fixture.wrapping_key,
+        )?),
     )
     .await
     .context("native backend: bootstrap after confirmed rollback")?;

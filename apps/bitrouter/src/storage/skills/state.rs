@@ -1,12 +1,12 @@
 //! Pure validation and projections of persisted skill decisions.
 
 use super::*;
+use crate::managed_contract::protocol::*;
 #[cfg(feature = "core")]
 use crate::storage::checkpoint::snapshot::AgentTurn;
 use crate::storage::checkpoint::snapshot::SessionSnapshot;
 #[cfg(feature = "core")]
 use crate::storage::checkpoint::snapshot::context::digest;
-use bitrouter_ai::core::protocol::*;
 #[cfg(feature = "core")]
 use bitrouter_ai::types::{Message, Role};
 #[cfg(feature = "core")]
@@ -32,7 +32,7 @@ pub(crate) fn skill_resource_failure(error: &CoreError) -> bool {
 pub(crate) fn consent_current(
     state: &SessionSnapshot,
     candidate: &SkillCandidate,
-    consent: &bitrouter_ai::core::skills::SkillConsent,
+    consent: &crate::managed_contract::skills::SkillConsent,
 ) -> Result<bool, CoreError> {
     let SkillSource::Mcp(source) = &candidate.source else {
         return Ok(false);
@@ -219,7 +219,7 @@ pub(crate) fn validate(state: &SessionSnapshot) -> Result<(), CoreError> {
                             "skill consent answer has no operation receipt",
                         )
                     })?;
-                    let answer = bitrouter_ai::core::skills::SkillConsentAnswer {
+                    let answer = crate::managed_contract::skills::SkillConsentAnswer {
                         session_id: state.session_id.clone(),
                         run_id: work.run_id.clone(),
                         agent_id: work.agent_id.clone(),

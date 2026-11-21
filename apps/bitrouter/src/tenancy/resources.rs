@@ -16,12 +16,11 @@
 
 pub(in crate::tenancy) mod admission;
 pub(crate) mod block;
-mod checkpoint;
+#[cfg(all(feature = "core", feature = "harness"))]
+mod bro;
 mod compiler;
 mod core_choice;
 pub(crate) mod execution;
-#[cfg(all(feature = "core", feature = "harness"))]
-pub(in crate::tenancy) mod learned;
 pub(in crate::tenancy) mod lifecycle;
 pub(in crate::tenancy) mod management;
 mod manifest;
@@ -53,7 +52,18 @@ use crate::{config::tenancy::TenancyConfig, runtime_crypto::DeploymentKey};
 
 use manifest::{Artifact, Definition, Manifest};
 
+fn qualify_model_policies(artifacts: &[Artifact]) -> std::result::Result<(), ErrorCode> {
+    for artifact in artifacts {
+        if let Definition::Policy { document, .. } = &artifact.definition {
+            crate::model_policy::compile(document).map_err(|_| ErrorCode::CapabilityMismatch)?;
+        }
+    }
+    Ok(())
+}
+
 pub(crate) const COMPILER_VERSION: &str = "tenancy-resources-v1";
+const MODEL_POLICY_COMPILER_VERSION: &str = "tenancy-model-policy-v1";
+const BRO_OBLIGATION_COMPILER_VERSION: &str = "tenancy-bro-obligation-v1";
 const PROFILED_COMPILER_VERSION: &str = "tenancy-admission-v1";
 const SHARED_HEALTH_COMPILER_VERSION: &str = "tenancy-admission-v2";
 const NATIVE_COMPILER_VERSION: &str = "tenancy-native-generate-content-v1";
@@ -68,6 +78,7 @@ pub(super) struct Resources {
     installation: InstallationId,
     key: Option<DeploymentKey>,
     approved_origins: Vec<String>,
+    bro_capture: bool,
 }
 
 /// Safe for configuration_store.compiled_json; definitions are ciphertext only.
@@ -99,13 +110,25 @@ impl Envelope {
     fn format(artifacts: &[Artifact]) -> u32 {
         if artifacts
             .iter()
+            .any(|artifact| artifact.definition.requires_envelope_v2())
+        {
+            return 8;
+        }
+        if artifacts
+            .iter()
+            .any(|artifact| artifact.definition.uses_model_policy())
+        {
+            return 7;
+        }
+        if artifacts
+            .iter()
             .any(|artifact| artifact.definition.is_native_route())
         {
             return 6;
         }
         if artifacts
             .iter()
-            .any(|artifact| artifact.definition.is_shared_profile())
+            .any(|artifact| artifact.definition.is_admission_profile())
         {
             return 5;
         }
@@ -115,20 +138,7 @@ impl Envelope {
         {
             return 4;
         }
-        if artifacts
-            .iter()
-            .any(|artifact| matches!(artifact.definition, Definition::Checkpoint { .. }))
-        {
-            return 3;
-        }
-        if artifacts
-            .iter()
-            .any(|artifact| artifact.definition.requires_envelope_v2())
-        {
-            2
-        } else {
-            1
-        }
+        1
     }
 
     fn persisted_bytes(&self) -> Result<Vec<u8>> {
@@ -148,12 +158,7 @@ impl Envelope {
         let profiled: HashSet<_> = self
             .artifacts
             .iter()
-            .filter(|artifact| {
-                matches!(
-                    artifact.definition,
-                    Definition::ProfiledRoute { .. } | Definition::NativeProfiledRouteV1 { .. }
-                )
-            })
+            .filter(|artifact| matches!(artifact.definition, Definition::ProfiledRoute { .. }))
             .map(|artifact| &artifact.reference)
             .collect();
         manifest::bounded_bytes(
@@ -179,6 +184,9 @@ impl Envelope {
             self.format == Self::format(&self.artifacts),
             "unsupported retained profile format"
         );
+        for artifact in &self.artifacts {
+            artifact.definition.validate_current_profile()?;
+        }
         Ok(())
     }
 }
@@ -194,21 +202,6 @@ impl Resources {
         self.key
             .clone()
             .map(|key| super::continuation::Crypto::new(self.installation.clone(), key))
-    }
-
-    #[cfg(feature = "core")]
-    pub(in crate::tenancy) fn trajectory_crypto(
-        &self,
-        installation: &InstallationId,
-    ) -> Result<crate::runtime_crypto::trajectory::TrajectoryCrypto> {
-        ensure!(
-            &self.installation == installation,
-            "trajectory installation mismatch"
-        );
-        self.key
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("explicit trajectory wrapping key unavailable"))?
-            .trajectory()
     }
 
     /// Authenticate a retained configuration, including integrity-only reads.
@@ -229,9 +222,9 @@ impl Resources {
         &self,
         stored: &super::configuration_store::StoredConfiguration,
     ) -> std::result::Result<(), ErrorCode> {
-        validation::compiled(self, stored)
-            .map_err(|_| ErrorCode::AuthorityUnavailable)?
-            .require_capabilities()
+        let mut validated =
+            validation::compiled(self, stored).map_err(|_| ErrorCode::AuthorityUnavailable)?;
+        self.qualify_execution(&mut validated)
     }
 
     /// Open the same authenticated typed decode used by retained-data checks.
@@ -240,8 +233,9 @@ impl Resources {
         &self,
         stored: &super::configuration_store::StoredConfiguration,
     ) -> std::result::Result<execution::RetainedExecutionRevision, ErrorCode> {
-        let validated =
+        let mut validated =
             validation::compiled(self, stored).map_err(|_| ErrorCode::AuthorityUnavailable)?;
+        self.qualify_execution(&mut validated)?;
         execution::RetainedExecutionRevision::new(
             self.installation.clone(),
             stored.revision.tenant_id.clone(),
@@ -254,12 +248,13 @@ impl Resources {
     /// Same authenticated decoder, charging the original borrowed bootstrap
     /// operation before each target/native expansion. It grants no authority.
     #[cfg(all(feature = "core", feature = "harness"))]
-    pub(in crate::tenancy) fn open_paid_recovery(
+    pub(in crate::tenancy) fn open_obligation_recovery(
         &self,
         stored: &super::configuration_store::StoredConfiguration,
         budget: &crate::storage::operation_budget::OperationBudget<'_>,
     ) -> Result<execution::RetainedExecutionRevision> {
         let validated = validation::compiled_with_operation(self, stored, Some(budget))?;
+        validated.require_obligation_capabilities()?;
         execution::RetainedExecutionRevision::new(
             self.installation.clone(),
             stored.revision.tenant_id.clone(),
@@ -323,6 +318,7 @@ impl Resources {
         Ok(Self {
             installation: installation.clone(),
             key,
+            bro_capture: false,
             approved_origins: config
                 .resource_origins
                 .iter()
@@ -333,6 +329,36 @@ impl Resources {
                 })
                 .collect::<Result<_>>()?,
         })
+    }
+
+    /// Select current paid capture under an explicit local BRO owner.
+    #[cfg(all(feature = "core", feature = "harness"))]
+    pub(in crate::tenancy) fn load_key_bro_capture(
+        installation: &InstallationId,
+        config: &TenancyConfig,
+    ) -> Result<Self> {
+        let mut resources = Self::load_key(installation, config)?;
+        resources.bro_capture = true;
+        Ok(resources)
+    }
+
+    #[cfg(all(test, feature = "core", feature = "harness"))]
+    pub(in crate::tenancy) fn for_bro_capture(mut self) -> Self {
+        self.bro_capture = true;
+        self
+    }
+
+    fn qualify_execution(
+        &self,
+        validated: &mut execution::ValidatedEnvelope,
+    ) -> std::result::Result<(), ErrorCode> {
+        if self.bro_capture {
+            validated.require_bro_capture()?;
+            validated.bro_capture = true;
+            Ok(())
+        } else {
+            validated.require_capabilities()
+        }
     }
 
     #[cfg(test)]
@@ -386,10 +412,18 @@ impl Resources {
                 let artifact = self.load(db, reference).await.map_err(|_| {
                     anyhow::anyhow!("retained tenancy resource authentication failed")
                 })?;
+                ensure!(
+                    lifecycle::exact(db, &self.installation, reference)
+                        .await?
+                        .is_some(),
+                    "current retained resource lacks lifecycle metadata"
+                );
                 self.authenticate_oauth(db, &artifact).await?;
             }
             after = page.last().cloned();
         }
+        self.inspect_all_configurations_in(db, 64 * 1024 * 1024, &|| Ok(()))
+            .await?;
         Ok(())
     }
 
@@ -399,7 +433,25 @@ impl Resources {
             installation,
             key: Some(DeploymentKey::from_bytes(secret)?),
             approved_origins: Vec::new(),
+            bro_capture: false,
         })
+    }
+
+    #[cfg(test)]
+    pub(super) fn fixture_key(
+        installation: &InstallationId,
+        key_env: Option<&str>,
+    ) -> Result<Self> {
+        match key_env {
+            Some(name) => Self::load_key(
+                installation,
+                &TenancyConfig {
+                    wrapping_key_env: Some(name.into()),
+                    ..Default::default()
+                },
+            ),
+            None => Self::with_key(installation.clone(), rand::random()),
+        }
     }
 
     pub(super) async fn read_import(path: Option<&Path>) -> Result<Option<Vec<u8>>> {
@@ -462,7 +514,7 @@ impl Resources {
         let manifest: Manifest = serde_json::from_slice(bytes)
             .map_err(|_| anyhow::anyhow!("invalid resource manifest"))?;
         ensure!(
-            matches!(manifest.format, 1..=3) && manifest.installation_id == self.installation,
+            matches!(manifest.format, 1..=4) && manifest.installation_id == self.installation,
             "resource manifest installation or format mismatch"
         );
         ensure!(
@@ -471,13 +523,18 @@ impl Resources {
         );
         let mut unique = HashSet::new();
         for resource in &manifest.resources {
+            if self.bro_capture {
+                resource.definition.require_bro_capture()?;
+            } else {
+                resource.definition.require_service()?;
+            }
             ensure!(
-                manifest.format == 3 || !resource.definition.is_native_route(),
-                "native route requires import format three"
+                manifest.format == 4 || !resource.definition.uses_model_policy(),
+                "model policy requires import format four"
             );
             ensure!(
-                matches!(manifest.format, 2 | 3) || !resource.definition.is_shared_profile(),
-                "shared health requires import format two"
+                matches!(manifest.format, 3 | 4) || !resource.definition.is_native_route(),
+                "native route requires import format three"
             );
             ensure!(
                 unique.insert(resource.reference.clone()),
@@ -518,8 +575,12 @@ impl Resources {
                 ),
                 None => None,
             };
-            let envelope = compiler::prepare_route(resource, policy.as_ref())
-                .map_err(|_| anyhow::anyhow!("invalid imported route closure"))?;
+            let envelope = if self.bro_capture {
+                compiler::prepare_bro_capture_route(resource, policy.as_ref())
+            } else {
+                compiler::prepare_route(resource, policy.as_ref())
+            }
+            .map_err(|_| anyhow::anyhow!("invalid imported route closure"))?;
             storage::retain(
                 self,
                 db,
@@ -584,8 +645,19 @@ impl Resources {
         {
             return Err(ErrorCode::Forbidden);
         }
+        qualify_model_policies(&artifacts)?;
+        for artifact in &artifacts {
+            if self.bro_capture {
+                artifact.definition.require_bro_capture()
+            } else {
+                artifact.definition.require_service()
+            }
+            .map_err(|_| ErrorCode::CapabilityMismatch)?;
+        }
         let routes = compiler::configuration_routes(document, &artifacts)?;
         let compiler_version = match Envelope::format(&artifacts) {
+            8 => BRO_OBLIGATION_COMPILER_VERSION,
+            7 => MODEL_POLICY_COMPILER_VERSION,
             6 => NATIVE_COMPILER_VERSION,
             5 => SHARED_HEALTH_COMPILER_VERSION,
             4 => PROFILED_COMPILER_VERSION,
@@ -623,14 +695,14 @@ impl Resources {
             // output before the caller can persist it. Consume the envelope
             // after serialization: validation does not change compiler-v1 bytes
             // or the authenticated binding, and needs no extra envelope clone.
-            let validated = execution::validate(envelope).map_err(|error| {
+            let mut validated = execution::validate(envelope).map_err(|error| {
                 if error.is::<ExecutionCapacityExceeded>() {
                     ErrorCode::CapacityExceeded
                 } else {
                     ErrorCode::InvalidRequest
                 }
             })?;
-            validated.require_capabilities()?;
+            self.qualify_execution(&mut validated)?;
             let key = self.key.as_ref().ok_or(ErrorCode::AuthorityUnavailable)?;
             let sealed = key
                 .seal_bound("configuration", &binding, &bytes)

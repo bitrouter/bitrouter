@@ -6,9 +6,9 @@ use crate::storage::checkpoint::snapshot::context::action::ContextAction;
 use bitrouter_ai::types::Tool;
 use serde_json::{Value, json};
 
+use crate::managed_contract::protocol::{CoreError, ErrorCode};
 use crate::storage::checkpoint::snapshot::SessionSnapshot;
 use crate::storage::checkpoint::snapshot::context::FEATURE;
-use bitrouter_ai::core::protocol::{CoreError, ErrorCode};
 
 pub fn declarations(enabled: bool) -> Vec<Tool> {
     if !enabled {

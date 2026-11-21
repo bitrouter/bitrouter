@@ -305,8 +305,7 @@ fn named_policy_accepts_explicit_model_effort_context_actions() -> crate::gatewa
     strong:
       model: openai-codex:gpt-5.6-sol
       effort: high
-      context: evidence
-    economy: { model: openai-codex:gpt-5.6-sol, context: evidence }
+    economy: { model: openai-codex:gpt-5.6-sol }
   default_tier: strong
 "#,
     )?;
@@ -335,7 +334,6 @@ fn policy_table_rejects_unknown_compound_target_fields() -> crate::gateway::erro
     strong:
       model: openai-codex:gpt-5.6-sol
       effort: high
-      context: evidence
       typo: ignored-would-be-unsafe
   default_tier: strong
 "#,
@@ -1011,26 +1009,6 @@ providers:
 }
 
 #[test]
-fn parses_presets_and_variants() {
-    let yaml = r#"
-presets:
-  careful:
-    model: gpt-5
-    system_prompt: "Reason carefully."
-    params: { temperature: 0.2 }
-    routing: { require_tags: [paid], sort: latency }
-variants:
-  free:
-    routing: { require_tags: [free] }
-"#;
-    let cfg = parse(yaml).unwrap();
-    let careful = cfg.presets.get("careful").unwrap();
-    assert_eq!(careful.model.as_deref(), Some("gpt-5"));
-    assert_eq!(careful.routing.require_tags, vec!["paid"]);
-    assert!(cfg.variants.contains_key("free"));
-}
-
-#[test]
 fn parses_strict_named_router_configuration() -> crate::gateway::error::Result<()> {
     let config = parse(
         r#"
@@ -1118,15 +1096,28 @@ fn default_config_does_not_implicitly_create_coding_router() {
 }
 
 #[test]
-fn auto_router_template_resolves_auto_and_cost_variant()
+fn auto_router_template_resolves_auto_and_explicit_cost_router()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../templates/auto-router/bitrouter.yaml");
-    let config = parse(&std::fs::read_to_string(path)?)?;
+    let mut config = parse(&std::fs::read_to_string(path)?)?;
     let auto = config.resolve_router("bitrouter/auto")?;
     assert_eq!(auto.clean_model, "openai-codex:gpt-5.6-sol");
     assert_eq!(auto.policy.as_deref(), Some("auto"));
-    let cost = config.resolve_router("bitrouter/auto:cost")?;
+    assert!(config.resolve_router("bitrouter/auto:cost").is_err());
+    let mut cost_router = config
+        .routers
+        .get("auto")
+        .ok_or("template auto router missing")?
+        .clone();
+    match &mut cost_router.selection {
+        super::router::RouterSelection::Policy { routing, .. } => {
+            routing.sort = Some(SortOrder::Cost);
+        }
+        _ => return Err("template auto router must select a Policy".into()),
+    }
+    config.routers.insert("auto-cost".into(), cost_router);
+    let cost = config.resolve_router("bitrouter/auto-cost")?;
     assert_eq!(cost.clean_model, auto.clean_model);
     assert_eq!(cost.policy, auto.policy);
     assert_eq!(cost.prefs.sort, SortOrder::Cost);
@@ -1136,74 +1127,24 @@ fn auto_router_template_resolves_auto_and_cost_variant()
 }
 
 #[test]
-fn policy_runtime_mode_defaults_to_frozen() -> crate::gateway::error::Result<()> {
-    let config = parse("")?;
-    let policy = serde_json::to_value(&config.policy)
-        .map_err(|error| crate::gateway::error::BitrouterError::internal(error.to_string()))?;
-
-    assert_eq!(policy["mode"], "frozen");
-    assert!(policy.get("writeback").is_none());
-    Ok(())
-}
-
-#[test]
-fn policy_runtime_mode_accepts_adaptive_and_legacy_writeback_values()
--> crate::gateway::error::Result<()> {
-    for (yaml, expected) in [
-        ("policy:\n  mode: adaptive\n", "adaptive"),
-        ("policy:\n  writeback: locked\n", "frozen"),
-        ("policy:\n  writeback: evolve\n", "adaptive"),
+fn policy_source_location_is_strict_and_modes_are_not_accepted() -> crate::gateway::error::Result<()>
+{
+    let config = parse("policy: {path: ./team.yaml}")?;
+    assert_eq!(
+        config.policy.path.as_deref(),
+        Some(std::path::Path::new("./team.yaml"))
+    );
+    for source in [
+        "policy: {mode: frozen}",
+        "policy: {mode: adaptive}",
+        "policy: {writeback: locked}",
+        "policy: {writeback: evolve}",
+        "policy: {unknown: value}",
+        "presets: {}",
+        "variants: {}",
     ] {
-        let config = parse(yaml)?;
-        let policy = serde_json::to_value(&config.policy)
-            .map_err(|error| crate::gateway::error::BitrouterError::internal(error.to_string()))?;
-        assert_eq!(policy["mode"], expected, "yaml: {yaml}");
-        assert!(policy.get("writeback").is_none(), "yaml: {yaml}");
+        assert!(parse(source).is_err(), "{source}");
     }
-    Ok(())
-}
-
-#[test]
-fn policy_runtime_mode_controls_effective_adequacy_flags() -> crate::gateway::error::Result<()> {
-    let config = AdequacyConfig {
-        enabled: false,
-        explore_enabled: false,
-        explore_tier: Some("economy".to_string()),
-        ..AdequacyConfig::default()
-    };
-
-    let frozen = PolicyRuntimeMode::Frozen.apply_to_adequacy(&config);
-    assert!(!frozen.enabled);
-    assert!(!frozen.explore_enabled);
-
-    let adaptive = PolicyRuntimeMode::Adaptive.apply_to_adequacy(&config);
-    assert!(!adaptive.enabled);
-    assert!(!adaptive.explore_enabled);
-
-    let without_explore_tier =
-        PolicyRuntimeMode::Adaptive.apply_to_adequacy(&AdequacyConfig::default());
-    assert!(!without_explore_tier.enabled);
-    assert!(!without_explore_tier.explore_enabled);
-    Ok(())
-}
-
-#[test]
-fn adaptive_runtime_mode_does_not_require_legacy_learner_configuration()
--> crate::gateway::error::Result<()> {
-    let config = parse(
-        r#"
-policy:
-  mode: adaptive
-"#,
-    )?;
-
-    assert_eq!(config.policy.mode, PolicyRuntimeMode::Adaptive);
-    let effective_adequacy = config
-        .policy
-        .mode
-        .apply_to_adequacy(&AdequacyConfig::default());
-    assert!(!effective_adequacy.enabled);
-    assert!(!effective_adequacy.explore_enabled);
     Ok(())
 }
 
@@ -1319,9 +1260,9 @@ fn policy_table_agent_trace_key_strategy_is_the_only_supported_strategy()
     let yaml = r#"
   key_strategy: agent_trace
   tiers:
-    cheap: { model: vendor/cheap, context: evidence }
+    cheap: { model: vendor/cheap }
   fingerprints:
-    "semantic_route/v1|unknown|orchestrate|normal": cheap
+    "unknown|orchestrate|normal": cheap
 "#;
     let cfg = parse_named_table(yaml)?;
     assert_eq!(cfg.key_strategy, PolicyKeyStrategy::AgentTrace);
@@ -1330,7 +1271,8 @@ fn policy_table_agent_trace_key_strategy_is_the_only_supported_strategy()
     assert!(serialized.contains("key_strategy: agent_trace"));
 
     let retired = parse_named_table(
-        "  key_strategy: workflow_state\n  tiers: { cheap: { model: vendor/cheap, context: evidence } }\n")
+        "  key_strategy: workflow_state\n  tiers: { cheap: { model: vendor/cheap } }\n",
+    )
     .expect_err("retired workflow_state strategy must fail");
     assert!(retired.to_string().contains("no longer supported"));
 
@@ -1350,7 +1292,8 @@ fn policy_key_strategy_serializes_as_the_only_canonical_strategy() {
 #[test]
 fn policy_table_rejects_legacy_fingerprint_strategy_with_migration_guidance() {
     let err = parse_named_table(
-        "  key_strategy: legacy_fingerprint\n  tiers: { cheap: { model: vendor/cheap, context: evidence } }\n")
+        "  key_strategy: legacy_fingerprint\n  tiers: { cheap: { model: vendor/cheap } }\n",
+    )
     .unwrap_err();
     assert!(
         err.to_string().contains(
@@ -1364,16 +1307,16 @@ fn policy_table_rejects_legacy_fingerprint_strategy_with_migration_guidance() {
 fn policy_table_rejects_retired_route_key_shapes() {
     for route_key in [
         "agent_trace/v2|edit|normal",
-        "semantic_route/v1|implement|normal",
+        "implement|normal",
         "semantic_route/v2|code:review|verify|normal",
-        "semantic_route/v1|code:review|developer|normal",
+        "code:review|developer|normal",
     ] {
         let yaml = format!(
-            "  tiers: {{ cheap: {{ model: vendor/cheap, context: evidence }} }}\n  fingerprints:\n    \"{route_key}\": cheap\n"
+            "  tiers: {{ cheap: {{ model: vendor/cheap }} }}\n  fingerprints:\n    \"{route_key}\": cheap\n"
         );
         let error = parse_named_table(&yaml).expect_err("retired route key must fail");
         assert!(
-            error.to_string().contains("canonical semantic_route/v1"),
+            error.to_string().contains("canonical"),
             "unexpected error for {route_key}: {error}"
         );
     }
@@ -1385,7 +1328,7 @@ fn inert_policy_table_still_rejects_retired_route_key_shapes() {
         .expect_err("an inert table must not hide a retired route key");
 
     assert!(
-        error.to_string().contains("canonical semantic_route/v1"),
+        error.to_string().contains("canonical"),
         "unexpected error: {error}"
     );
 }
@@ -1393,7 +1336,7 @@ fn inert_policy_table_still_rejects_retired_route_key_shapes() {
 #[test]
 fn policy_table_rejects_the_removed_session_downgrade_budget() {
     let err = parse_named_table(
-        "  tiers: { cheap: { model: vendor/cheap, context: evidence } }\n  adequacy:\n    max_downgraded_requests_per_session: 1\n")
+        "  tiers: { cheap: { model: vendor/cheap } }\n  adequacy:\n    max_downgraded_requests_per_session: 1\n")
     .unwrap_err();
     assert!(
         err.to_string().contains(
@@ -1433,11 +1376,11 @@ fn policy_schema_hides_the_removed_session_downgrade_budget() {
 fn parses_policy_table_section() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let yaml = r#"
   tiers:
-    cheap: { model: vendor/cheap, context: evidence }
-    flagship: { model: vendor/flagship, context: evidence }
+    cheap: { model: vendor/cheap }
+    flagship: { model: vendor/flagship }
   fingerprints:
-    "semantic_route/v1|unknown|orchestrate|normal": flagship
-    "semantic_route/v1|unknown|mechanical|normal": cheap
+    "unknown|orchestrate|normal": flagship
+    "unknown|mechanical|normal": cheap
   default_tier: flagship
   tool_use_tier: flagship
   tool_safe_tiers:
@@ -1445,12 +1388,12 @@ fn parses_policy_table_section() -> std::result::Result<(), Box<dyn std::error::
 "#;
     let cfg = parse_named_table(yaml)?;
     assert_eq!(
-        cfg.tiers.get("cheap").map(PolicyModelTarget::model),
+        cfg.tiers.get("cheap").map(Target::model),
         Some("vendor/cheap")
     );
     assert_eq!(
         cfg.fingerprints
-            .get("semantic_route/v1|unknown|orchestrate|normal")
+            .get("unknown|orchestrate|normal")
             .map(String::as_str),
         Some("flagship")
     );
@@ -1466,9 +1409,9 @@ fn policy_table_unknown_tier_is_a_400() {
     // not a silent fall-through.
     let yaml = r#"
   tiers:
-    cheap: { model: vendor/cheap, context: evidence }
+    cheap: { model: vendor/cheap }
   fingerprints:
-    "semantic_route/v1|unknown|orchestrate|normal": flagship
+    "unknown|orchestrate|normal": flagship
 "#;
     let err = parse_named_table(yaml).unwrap_err();
     assert!(
@@ -1483,8 +1426,8 @@ fn policy_table_tool_use_tier_must_be_tool_safe() {
     // clamps tool requests to is not actually safe.
     let yaml = r#"
   tiers:
-    cheap: { model: vendor/cheap, context: evidence }
-    capable: { model: vendor/capable, context: evidence }
+    cheap: { model: vendor/cheap }
+    capable: { model: vendor/capable }
   tool_use_tier: capable
   tool_safe_tiers:
     - cheap
@@ -1501,8 +1444,8 @@ fn policy_table_tool_use_tier_must_be_tool_safe() {
 fn parses_adequacy_section() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let yaml = r#"
   tiers:
-    cheap: { model: vendor/cheap, context: evidence }
-    capable: { model: vendor/capable, context: evidence }
+    cheap: { model: vendor/cheap }
+    capable: { model: vendor/capable }
   default_tier: capable
   adequacy:
     enabled: true
@@ -1532,7 +1475,7 @@ fn adequacy_defaults_when_section_omitted() -> std::result::Result<(), Box<dyn s
     // A `policy_table:` with no `adequacy:` block is off, with sane defaults.
     let yaml = r#"
   tiers:
-    cheap: { model: vendor/cheap, context: evidence }
+    cheap: { model: vendor/cheap }
 "#;
     let cfg = parse_named_table(yaml)?;
     let adequacy = &cfg.adequacy;
@@ -1553,7 +1496,7 @@ fn adequacy_defaults_when_section_omitted() -> std::result::Result<(), Box<dyn s
 fn invalid_reliability_window_is_a_400() {
     let yaml = r#"
   tiers:
-    cheap: { model: vendor/cheap, context: evidence }
+    cheap: { model: vendor/cheap }
   default_tier: cheap
   adequacy:
     enabled: true
@@ -1571,7 +1514,7 @@ fn invalid_reliability_window_is_a_400() {
 fn invalid_reliability_error_rate_is_a_400() {
     let yaml = r#"
   tiers:
-    cheap: { model: vendor/cheap, context: evidence }
+    cheap: { model: vendor/cheap }
   default_tier: cheap
   adequacy:
     enabled: true
@@ -1589,7 +1532,7 @@ fn invalid_reliability_error_rate_is_a_400() {
 fn adequacy_unknown_escalation_tier_is_a_400() {
     let yaml = r#"
   tiers:
-    cheap: { model: vendor/cheap, context: evidence }
+    cheap: { model: vendor/cheap }
   adequacy:
     enabled: true
     escalation_tier: capable
@@ -1608,7 +1551,7 @@ fn adequacy_enabled_without_escalation_target_is_a_400() {
     // have nowhere to escalate to.
     let yaml = r#"
   tiers:
-    cheap: { model: vendor/cheap, context: evidence }
+    cheap: { model: vendor/cheap }
   adequacy:
     enabled: true
 "#;
@@ -1623,8 +1566,8 @@ fn adequacy_enabled_without_escalation_target_is_a_400() {
 fn parses_exploration_section() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let yaml = r#"
   tiers:
-    cheap: { model: vendor/cheap, context: evidence }
-    capable: { model: vendor/capable, context: evidence }
+    cheap: { model: vendor/cheap }
+    capable: { model: vendor/capable }
   default_tier: capable
   adequacy:
     enabled: true
@@ -1652,7 +1595,7 @@ fn parses_exploration_section() -> std::result::Result<(), Box<dyn std::error::E
 fn exploration_defaults_when_omitted() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let yaml = r#"
   tiers:
-    cheap: { model: vendor/cheap, context: evidence }
+    cheap: { model: vendor/cheap }
 "#;
     let cfg = parse_named_table(yaml)?;
     let adequacy = &cfg.adequacy;
@@ -1666,7 +1609,7 @@ fn exploration_defaults_when_omitted() -> std::result::Result<(), Box<dyn std::e
 fn exploration_unknown_explore_tier_is_a_400() {
     let yaml = r#"
   tiers:
-    cheap: { model: vendor/cheap, context: evidence }
+    cheap: { model: vendor/cheap }
   default_tier: cheap
   adequacy:
     enabled: true
@@ -1684,7 +1627,7 @@ fn exploration_unknown_explore_tier_is_a_400() {
 fn exploration_enabled_without_target_is_a_400() {
     let yaml = r#"
   tiers:
-    cheap: { model: vendor/cheap, context: evidence }
+    cheap: { model: vendor/cheap }
   default_tier: cheap
   adequacy:
     enabled: true
@@ -1704,7 +1647,7 @@ fn exploration_requires_adequacy_enabled() {
     // only wired when learning is on) — reject it loudly.
     let yaml = r#"
   tiers:
-    cheap: { model: vendor/cheap, context: evidence }
+    cheap: { model: vendor/cheap }
   default_tier: cheap
   adequacy:
     explore_enabled: true

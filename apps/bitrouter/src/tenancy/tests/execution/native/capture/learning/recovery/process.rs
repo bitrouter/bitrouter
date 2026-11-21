@@ -11,6 +11,7 @@ impl Child {
         selector: &str,
         root: &Path,
         mode: &str,
+        key: &[u8; 32],
         urls: Option<(&str, &str)>,
     ) -> Result<Self> {
         let mut command = tokio::process::Command::new(std::env::current_exe()?);
@@ -24,10 +25,7 @@ impl Child {
             ])
             .env(ROOT, root)
             .env(MODE, mode)
-            .env(
-                KEY,
-                base64::engine::general_purpose::STANDARD.encode([29u8; 32]),
-            )
+            .env(KEY, base64::engine::general_purpose::STANDARD.encode(key))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

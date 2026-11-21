@@ -3576,7 +3576,7 @@ fn drain_telemetry_record(r: RequestCompleted) {
 pub struct LaunchOptions {
     /// Exact constraints for daemon-supervised skill delivery (local sources only).
     #[serde(default)]
-    pub skills: Option<bitrouter_ai::core::skills::SkillConstraints>,
+    pub skills: Option<crate::managed_contract::harness::skills::SkillConstraints>,
     /// Inherited environment names to remove before applying the explicit
     /// transport and launch overlays. This lets isolated callers prevent
     /// ambient credentials from crossing into an agent process while still

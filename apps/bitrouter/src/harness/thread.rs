@@ -1,13 +1,14 @@
 //! Durable conversation and input contracts. Transports supply authenticated
 //! callers and never select a workspace or permission grant on their behalf.
 
-use bitrouter_ai::harness::thread::{PermissionProfile, ThreadSnapshot};
+use crate::managed_contract::harness::thread::PermissionProfile;
+use crate::managed_contract::harness::thread::ThreadSnapshot;
 use std::path::PathBuf;
 
 use crate::gateway::caller::CallerContext;
 use serde::{Deserialize, Serialize};
 
-use bitrouter_ai::harness::agent::AgentConfig;
+use crate::managed_contract::harness::agent::AgentConfig;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThreadTarget {

@@ -1,18 +1,19 @@
 # BitRouter SDK
 
-The independently versioned `2.0.0-alpha.1` SDK preserves the HTTP client
-implementation already published in `1.0.0-alpha.36`, which remains available.
-Older releases such as `1.0.0-alpha.30` embedded server pipelines and expose an
-incompatible API. The explicit major-version boundary also lets Cargo resolve
-applications retaining old compatibility adapters while adopting the client.
-Public contracts remain in `bitrouter-ai` on its own version line; matching
-package version numbers are not required. The default User-Agent reflects the
-selected SDK version.
+The HTTP service SDK follows the shared BitRouter beta release line. To adopt
+it, update both Cargo dependencies together.
+
+```toml
+bitrouter-ai = "1.0.0-beta.1"
+bitrouter-sdk = "1.0.0-beta.1"
+```
+
+The default HTTP transport User-Agent reflects the selected SDK version.
 
 HTTP access to an independently running BitRouter gateway. Import request and
 response contracts from `bitrouter-ai`; the SDK supplies transport, bounded
-SSE consumption and optional managed WebSocket access. It does not discover configuration, start a daemon, select
-provider accounts or access server storage.
+SSE consumption. Configuration discovery, daemon lifecycle, provider selection
+and storage belong to the serving application.
 
 ```rust,no_run
 use bitrouter_ai::protocol::chat_completions::ChatRequest;
@@ -48,20 +49,18 @@ request's stream flag. They return `gateway::reply::Reply` with bounded,
 allowlisted metadata and a `Body::Json` or `Body::Stream`. The stream yields
 `bitrouter_ai::stream::StreamItem`, retaining explicit `ProtocolEnd` alongside
 typed data events. Its protocol end is not a receipt or settlement decision.
-The existing `stream_*` methods keep their event-only behavior; `ServerEvent`
-is owned by `bitrouter_ai::stream` so framework adapters use the same contract;
-the existing SDK path remains available as a compatibility type alias.
+The `stream_*` methods yield protocol-specific data events.
 
-Enable `bitrouter-ai`'s `axum` feature in the consuming application and compose
-its `axum::response::Reply` with your handlers. Map SDK errors to safe public
+Compose `bitrouter::gateway::http_adapter::response::Reply` with your handlers
+when embedding the application adapters. Map SDK errors to safe public
 errors yourself; neither headers nor private diagnostics are forwarded by the
 adapter. The SDK itself has no production Axum dependency.
 
-The [Axum gateway example](examples/axum_gateway.rs) demonstrates all three
+The [Axum gateway example](../../apps/bitrouter/examples/axum_gateway.rs) demonstrates all three
 generation protocols and Decisions using a shared connection pool:
 
 ```sh
-BITROUTER_URL=http://127.0.0.1:4356 cargo run -p bitrouter-sdk --example axum_gateway
+BITROUTER_URL=http://127.0.0.1:4356 cargo run -p bitrouter --example axum_gateway
 ```
 
 It listens on loopback port 4357; deployment identity, middleware and business
@@ -104,15 +103,13 @@ let client = GatewayClient::with_options(
 Use prior knowledge only for an endpoint known to support HTTP/2. There is no
 HTTP/1.1 Upgrade probe or retry using a different version on failure. JSON,
 submission and SSE methods share the selected protocol and connection pool;
-cloned clients share that pool. `HarnessClient` also honors `TransportOptions`,
-and `OperatorOptions::http_version` uses the same enum and default. With `core`,
-WebSocket upgrades retain a dedicated HTTP/1.1 client regardless of this setting.
+cloned clients share that pool. `OperatorOptions::http_version` uses the same
+enum and default.
 
 To disable HTTP/2, set `default-features = false` on the `bitrouter-sdk`
 dependency. `Auto` then uses HTTP/1.1 even if another dependency enables
-reqwest's HTTP/2 feature; `Http2PriorKnowledge` is unavailable. Optional `core`
-can still be enabled independently. A dependency that already disables SDK
-defaults must explicitly enable `bitrouter-sdk/http2` to opt in.
+reqwest's HTTP/2 feature. Enable `bitrouter-sdk/http2` explicitly to opt in
+when SDK defaults are disabled.
 
 The transport disables redirects and automatic retries. An interrupted request
 may already be executing. An SSE connection ending before its terminal marker
@@ -167,8 +164,8 @@ async fn submit(
 
 Submission options accept optional caller correlation and idempotency identities,
 each normalized to 1–256 textual bytes, and the fixed gateway v1 semantic header
-set. Credential/profile/framing overrides, managed Responses selectors and an
-extension-map `stream` field are rejected before dispatch. Use the typed `stream`
+set. Credential and framing overrides and an extension-map `stream` field
+are rejected before dispatch. Use the typed `stream`
 field to match the selected method. Duplicate semantic-header values retain their order
 and empty values. New submission methods use the stable `bitrouter-sdk`
 User-Agent by default; caller-supplied values replace it. Explicit retries must
@@ -303,9 +300,9 @@ snapshots are not additive. Inspect truncation, invalid/unsupported counters,
 terminal evidence and estimator coverage before interpreting quantities.
 Historical `not_captured` is distinct from installed capture with no reported
 counters and from `unavailable` observations lost during recovery. The client
-enforces the 256 KiB evidence limit on original response bytes, validates scope,
-and never reconstructs missing
-usage, combines child quantities or makes settlement decisions.
+enforces the evidence bound for the addressed receipt on the original response
+bytes and validates scope. It does not reconstruct missing usage, combine child
+quantities or make settlement decisions.
 
 ```rust,no_run
 use bitrouter_ai::control::action::Action;
@@ -323,8 +320,7 @@ async fn inspect_control(endpoint: &str, bearer: &str) -> bitrouter_sdk::error::
 
 Control calls perform protocol/version/capability checks before dispatch.
 Successful discovery is cached for thirty seconds; server instance changes and
-401/403/404 responses invalidate it. A legacy action list grants only its four
-original read actions. Status, models, route previews, request inspection,
+401/403/404 responses invalidate it. Status, models, route previews, request inspection,
 provider/agent inventory, policy, observation, configuration state and reload
 operations use the shared AI contracts. Capability discovery never bypasses
 server authorization.
@@ -340,11 +336,13 @@ report is not a completed reload. If submission or polling fails,
 starting another reload with a new identity. Callers that persist their own
 request identity can use `submit_reload` and `operation` directly.
 
-The existing evaluation exchange uses `GatewayClient` on the inference listener:
+The evaluation exchange uses `GatewayClient` on the inference listener:
 `put_eval_subject`, `eval_subjects`, `eval_subject`, `submit_eval_result`,
 `freeze_eval_snapshot`, `eval_snapshot` and `eval_status`. Inputs and receipts
-live in `bitrouter_ai::eval`. Supply a virtual service API key; a control bearer
-does not authorize these endpoints. Omit credentials only for a service
+live in `bitrouter_ai::eval`. The [Eval contract](../../docs/specs/eval/README.md)
+defines the required `spec_version` for subjects, results and frozen snapshots.
+Supply an inference credential. A control bearer does not authorize these
+endpoints. Omit credentials only for a service
 explicitly configured with `skip_auth`. The service owns tenant isolation,
 evidence validation, evaluator admission and snapshot identity; receiving a
 result receipt does not mean that the result was admitted. Inspect its status.
@@ -353,7 +351,6 @@ The SDK does not calculate policy/evidence digests or publish policy artifacts.
 Evaluation uses the same bounded HTTP transport and explicit proxy/retry policy
 as generation; it requires no extra client feature. `Error::Evaluation` preserves
 its distinct `{ "error": "message" }` envelope with HTTP status and headers.
-A server without core returns an unavailable endpoint, not an empty ledger.
 An interrupted mutation remains uncertain; the SDK never repeats it implicitly.
 Existing subject/result identities and the server's idempotency rules determine
 whether an explicit later submission is a duplicate.
@@ -366,8 +363,8 @@ arguments. The routes are `/control/v1/tenants/{tenant_id}/evals`: POST/GET
 an installation operator credential does not authorize these routes. Reads need
 current tenant-wide `resource.read`, writes need `evaluation.submit`, and freezing
 needs both. The service checks current authority and evaluator eligibility.
-The methods use existing `bitrouter_ai::eval` DTOs unchanged and require no
-additional SDK feature. Legacy `GatewayClient` routes remain `/v1/evals`.
+Both clients use the public `bitrouter_ai::eval` DTOs and require no
+additional SDK feature.
 
 Every owned Eval request, including POST, carries exactly one
 `Bitrouter-Installation-Id` header and `Cache-Control: no-store`. The SDK never
@@ -394,139 +391,6 @@ No management operation ID is invented, no automatic retry occurs, and freeze
 has no exactly-once recovery guarantee. Inspect the ledger with current authority
 before deciding whether to explicitly resubmit identical subject/result content.
 These client methods do not enable server endpoints or change capability flags.
-
-`GatewayClient::core_capabilities()` reads the existing core HTTP capability
-endpoint. Core requires an active virtual service key even when ordinary
-inference uses `skip_auth`. `Error::Core` retains its typed error envelope,
-HTTP status and headers, including failed WebSocket handshakes.
-
-Use `GatewayClient::managed_responses` and `stream_managed_responses` with
-`bitrouter_ai::core::responses::CreateRequest` for the managed Responses
-profile. These methods send the required beta negotiation and use the strict
-managed request contract; ordinary `responses` methods retain the inference
-profile. The response/event types retain `bitrouter` metadata, agent attribution
-and retained `bitrouter.*` events. `Error::CoreStream` preserves SSE core errors,
-including their commit status. HTTP and SSE methods are available without the
-SDK's `core` feature. They require an already bound session and a separate
-harness driving checkpoint persistence/ACKs; HTTP observation never sends an ACK.
-
-`FunctionOutput` and `ResultMetadata` in the same AI module describe explicit
-harness results for continuations. Supply the prior response ID and the original
-call/operation identities. The SDK does not execute those calls or infer a
-successful result from a dropped connection.
-
-```rust,no_run
-async fn observe_managed(
-    client: &bitrouter_sdk::gateway::GatewayClient,
-    request: &bitrouter_ai::core::responses::CreateRequest,
-) -> bitrouter_sdk::error::Result<bitrouter_ai::protocol::responses::ResponsesResponse> {
-    // The harness has already bound the session and is durably ACKing checkpoints.
-    client.managed_responses(request).await
-}
-```
-
-Enable the SDK's `core` feature for `core_channel(ChannelOptions)`. This adds
-client WebSocket framing only. It does not compile or start the server scheduler.
-The channel uses a dedicated HTTP/1 connection pool with the same service
-endpoint/prefix, credentials, TLS, explicit proxy policy and handshake deadlines
-as `GatewayClient`, with redirects and retries disabled. Ordinary HTTP calls
-retain their existing protocol selection. After upgrade, callers control operation deadlines.
-
-```rust,no_run
-# #[cfg(feature = "core")]
-async fn begin_core_bind(
-    endpoint: &str,
-    key: &str,
-    binding: &bitrouter_ai::core::protocol::ClientMessage,
-) -> bitrouter_sdk::error::Result<bitrouter_sdk::core::CoreChannel> {
-    let client = bitrouter_sdk::gateway::GatewayClient::new(endpoint, Some(key))?;
-    let mut channel = client
-        .core_channel(bitrouter_sdk::core::ChannelOptions::default())
-        .await?;
-    channel.send(binding).await?;
-    Ok(channel)
-}
-```
-
-The caller sends bind/restore before the service's initial-message deadline
-(currently 20 seconds) and completes the checkpoint acknowledgement protocol.
-`receive()` returns AI `ServerMessage` data. Validate and durably persist a
-checkpoint under the harness's ownership rules before explicitly sending its
-ACK. The SDK never persists sessions, executes tools or acknowledges messages
-automatically. Use `split()` to send while receiving events. Messages, including
-fragmented input, are bounded by `ChannelOptions::max_message_bytes` (16 MiB by
-default); outbound JSON is bounded during serialization.
-
-`close()` initiates the transport closing handshake; continue receiving until
-it completes. A peer that drops the connection without acknowledging closure
-produces a transport error. A receive error ends the reader and later reads
-return `None`. Cancelling a pending send or close invalidates both halves and
-drops their shared connection so later operations cannot flush retained commands.
-Bytes already dispatched before cancellation may still execute. A local
-serialization/size rejection happens before sending and leaves the channel usable.
-Neither EOF nor dropping/closing a channel completes or cancels a run. The SDK
-does not reconnect or replay commands after uncertain delivery. Use the core's
-existing operation inspection and recovery protocol to resolve that state.
-
-`harness::HarnessClient` accesses the existing opt-in `/agent/v2` Thread API.
-Pass its endpoint and dedicated execution bearer explicitly. Its `connect()`
-method discovers v2 capabilities and binds the client to that server instance.
-`capabilities()` returns that report without refreshing it. After a restart,
-connect a new client deliberately; the SDK never refreshes identity and repeats
-a mutation. This client does not change the server's loopback-only listener or
-workspace authorization policy, and cannot access local-only IPC/ACP operations.
-
-```rust,no_run
-use bitrouter_ai::harness::api::HistoryQuery;
-use bitrouter_sdk::harness::HarnessClient;
-
-async fn inspect_thread(endpoint: &str, execution_bearer: &str, thread: &str)
-    -> bitrouter_sdk::error::Result<()>
-{
-    let client = HarnessClient::connect(endpoint, execution_bearer).await?;
-    let view = client.read_thread(thread).await?;
-    let page = client.history(thread, &HistoryQuery {
-        after: 0, cutoff: None, limit: 128,
-    }).await?;
-    println!("{:?}: {} committed events", view.thread.status, page.events.len());
-    Ok(())
-}
-```
-
-The client supports create/read Thread, submit/read/cancel Turn, steering,
-explicit input answers, queue resume, history pages and observation. Use the
-request/response contracts under `bitrouter_ai::harness`. Every mutation takes a
-caller-owned idempotency key; the server decides whether an explicit repeated
-submission is a duplicate or conflict. JSON mutation bodies are bounded to the
-existing 64 KiB server limit before dispatch. `connect_with_options()` accepts
-the shared `gateway::TransportOptions`; prefixes are retained, redirects and
-automatic retries are disabled, and proxy discovery requires explicit opt-in.
-Use HTTPS or a local tunnel when crossing an untrusted network.
-
-Observation is a continuing `EventStream<ThreadObservation>`, with no protocol
-completion sentinel. A finished Turn does not end the attachment. Clean EOF
-means detached; a truncated frame is an error. Dropping it neither cancels work
-nor answers an approval. The client never reconnects, advances a durable cursor
-from volatile `live.after_cursor`, or commits a session. Callers handle
-`Snapshot { resynchronized, catchup, .. }` and explicit history pagination.
-Current snapshots and page envelopes must match the bound instance; historical
-committed events retain their original instance IDs, and durable sequence gaps
-are valid. A cancelled pending poll preserves the stream's partially read frame.
-
-`Error::Harness` retains the HTTP status, headers and optional `{error, code}`
-body; `Error::HarnessObservation` retains the distinct `{message, code}` SSE error.
-Malformed or oversized HTTP error bodies preserve their response metadata.
-Neither a transport failure nor a response-decoding failure proves that a
-mutation was rejected. Inspect the service's recorded state before choosing a
-recovery action. A harness-only server still supports stored inspection and
-observation, while unavailable local native mutations return its explicit
-capability error. The SDK does not provide a second executor for that profile.
-
-This package replaces the former server-framework SDK in an alpha breaking
-migration. Server assembly and advanced trusted host adapters have moved to the
-`bitrouter` application. The managed channel preserves the existing WebSocket
-surface; it does not establish complete core HTTP coverage or remote access to
-local-only harness operations.
 
 ## Shared gateway operator client
 

@@ -89,7 +89,7 @@ pub(crate) fn extras_for_protocol<'a>(
     let source_matches = params
         .extra_protocol
         .as_ref()
-        .is_none_or(|source| source == protocol);
+        .is_some_and(|source| source == protocol);
     params
         .extra
         .iter()
@@ -106,7 +106,7 @@ pub(crate) fn extra_value_for_protocol<'a>(
     let source_value = params
         .extra_protocol
         .as_ref()
-        .is_none_or(|source| source == protocol)
+        .is_some_and(|source| source == protocol)
         .then(|| params.extra.get(key))
         .flatten();
     source_value.or_else(|| params.supplemental_extra.get(key))

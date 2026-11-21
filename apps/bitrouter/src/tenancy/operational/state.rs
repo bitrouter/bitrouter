@@ -9,7 +9,6 @@ use std::{
 
 use bitrouter_ai::tenancy::{
     admission::{AvailabilityObservation, HealthObservation, HealthProfileV1, RateObservationV1},
-    authority::ResourceKey,
     configuration::ResourceRef,
     identity::{InstallationId, OwnerId, ResourceId},
 };
@@ -21,32 +20,25 @@ use super::{
 
 use crate::tenancy::resources::admission::profile::View as ProfileView;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-enum HealthScope {
-    ProfileLocal(ResourceKey),
-    SharedGroup(OwnerId, ResourceId),
-}
-
-type HealthKey = (InstallationId, HealthScope);
+type HealthKey = (InstallationId, OwnerId, ResourceId);
 
 fn health_binding<'a>(
     installation: &InstallationId,
     reference: &ResourceRef,
     profile: ProfileView<'a>,
 ) -> Result<Option<(HealthKey, &'a HealthProfileV1)>, Denial> {
-    let scope = match profile {
-        ProfileView::Local(_) => HealthScope::ProfileLocal(reference.key()),
-        ProfileView::Shared(profile) => match (&profile.health, &profile.health_group_id) {
-            (Some(_), Some(group)) => {
-                HealthScope::SharedGroup(reference.owner_id.clone(), group.clone())
-            }
-            (None, None) => return Ok(None),
-            _ => return Err(Denial::Unavailable),
-        },
-    };
-    Ok(profile
-        .health()
-        .map(|rules| ((installation.clone(), scope), rules)))
+    match (&profile.0.health, &profile.0.health_group_id) {
+        (Some(rules), Some(group)) => Ok(Some((
+            (
+                installation.clone(),
+                reference.owner_id.clone(),
+                group.clone(),
+            ),
+            rules,
+        ))),
+        (None, None) => Ok(None),
+        _ => Err(Denial::Unavailable),
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

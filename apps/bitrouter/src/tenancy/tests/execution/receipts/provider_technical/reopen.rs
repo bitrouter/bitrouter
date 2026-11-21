@@ -44,12 +44,16 @@ async fn child(root: &std::path::Path, role: &str) -> Result<()> {
             ),
         )
         .await?;
+        private(
+            &root.join("wrapping-key.private"),
+            &harness.fixture.wrapping_key,
+        )?;
         let checked:Result<()>=async {
             let client=Harness::client(false)?;
             let response=harness.send(&client).send().await?;
             ensure!(response.status()==StatusCode::OK);let id=execution_id(&response)?;response.bytes().await?;
             let facts=measured(&harness,&client,&id).await?.context("actual retained process facts")?;
-            let scoped=measured_v2(&harness,&client,&id).await?.context("actual retained process scope")?;
+            let scoped=measured(&harness,&client,&id).await?.context("actual retained process scope")?;
             ensure!(scoped.pipeline_scope.is_some());
             let original=store::lookup_terminal(&harness.fixture.db,&harness.fixture.installation,&harness.fixture.tenant,&id).await?.context("actual original terminal")?;
             private(&root.join("original.private.json"),&serde_json::to_vec(&json!({
@@ -89,11 +93,14 @@ async fn child(root: &std::path::Path, role: &str) -> Result<()> {
                 .await?;
         let initial = crate::tenancy::store::load(&db, chrono::Utc::now()).await?;
         let installation = initial.installation.clone();
+        let wrapping_key = std::fs::read(root.join("wrapping-key.private"))?
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("fixture wrapping key must be exactly 32 bytes"))?;
         let service = Service::start_prepared(
             db.clone(),
             Some(owner),
             initial,
-            Arc::new(Resources::with_key(installation.clone(), [29; 32])?),
+            Arc::new(Resources::with_key(installation.clone(), wrapping_key)?),
         )
         .await?;
         let checked: Result<()> = async {
@@ -111,7 +118,7 @@ async fn child(root: &std::path::Path, role: &str) -> Result<()> {
                 )
             };
             let bytes = read().await.map_err(failure)?;
-            let facts: ProviderTechnicalFactsV1 = serde_json::from_slice(&bytes)?;
+            let facts: ProviderTechnicalFacts = serde_json::from_slice(&bytes)?;
             facts.validate_against(&receipt)?;
             ensure!(
                 serde_json::to_string(&facts)?
@@ -121,12 +128,12 @@ async fn child(root: &std::path::Path, role: &str) -> Result<()> {
                 .read_receipt(
                     caller.clone(),
                     receipt.tenant_id.clone(),
-                    read::Request::ProviderTechnicalV2(id.clone()),
+                    read::Request::ProviderTechnical(id.clone()),
                 )
                 .await
                 .map_err(failure)?;
             let scoped: Option<
-                bitrouter_ai::tenancy::provider_technical_facts_v2::ProviderTechnicalFactsV2,
+                bitrouter_ai::tenancy::provider_technical_facts::ProviderTechnicalFacts,
             > = serde_json::from_slice(&scoped_bytes)?;
             let scoped = scoped.context("reopened scope")?;
             scoped.validate_against(&receipt)?;
@@ -134,7 +141,7 @@ async fn child(root: &std::path::Path, role: &str) -> Result<()> {
                 serde_json::to_string(&scoped)?
                     == original["scope"].as_str().context("retained scope")?
             );
-            ensure!(scoped.operation_view() == Some(facts));
+            ensure!(scoped == facts);
             ensure!(
                 service.archive_history_for_test().await.map_err(failure)?,
                 "actual original archive did not run"
@@ -148,12 +155,12 @@ async fn child(root: &std::path::Path, role: &str) -> Result<()> {
                     .read_receipt(
                         caller.clone(),
                         receipt.tenant_id.clone(),
-                        read::Request::ProviderTechnicalV2(id.clone())
+                        read::Request::ProviderTechnical(id.clone())
                     )
                     .await
                     .map_err(failure)?
                     == scoped_bytes,
-                "archive changed v2 scope bytes"
+                "archive changed technical facts bytes"
             );
             let loaded = store::lookup_terminal(&db, &installation, &receipt.tenant_id, &id)
                 .await?

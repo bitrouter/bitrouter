@@ -209,7 +209,8 @@ pub(in crate::tenancy::receipts) async fn usage_metadata(
             );
             let bytes = usize::try_from(row.try_get::<i64>("", "byte_count")?)?;
             ensure!(
-                (1..=bitrouter_ai::tenancy::usage_evidence::MAX_BYTES).contains(&bytes),
+                (1..=bitrouter_ai::tenancy::usage_evidence::EvidenceBudget::STRICT.max_bytes)
+                    .contains(&bytes),
                 "usage evidence archive length"
             );
             let inline = usize::try_from(row.try_get::<i64>("", "inline_bytes")?)?;

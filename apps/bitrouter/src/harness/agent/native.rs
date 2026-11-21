@@ -20,10 +20,10 @@ mod tools;
 #[cfg(test)]
 mod replay_tests;
 
+use crate::managed_contract::checkpoint::CheckpointBatch;
+use crate::managed_contract::protocol::{Limits, OwnershipGrant};
 use crate::storage::checkpoint::VerifiedBatch;
 use crate::storage::checkpoint::snapshot::SessionSnapshot;
-use bitrouter_ai::core::checkpoint::CheckpointBatch;
-use bitrouter_ai::core::protocol::{Limits, OwnershipGrant};
 use std::sync::Arc;
 
 /// Published only after the native driver and all workspace workers joined.
@@ -75,7 +75,7 @@ impl Saved {
         use base64::Engine;
         if let Some(saved) = saved {
             if let ExecutionRecord::ToolIntent { call, .. } = record
-                && call.origin == bitrouter_ai::harness::item::CallOrigin::Verification
+                && call.origin == crate::managed_contract::harness::item::CallOrigin::Verification
             {
                 saved.verification_calls.insert(call.item_id.clone());
             } else if matches!(

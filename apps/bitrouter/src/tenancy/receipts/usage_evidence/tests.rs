@@ -14,6 +14,7 @@ mod text_tokens;
 
 fn receipt() -> Result<ExecutionReceipt> {
     Ok(ExecutionReceipt {
+        dispatch: bitrouter_ai::tenancy::execution::Dispatch::Strict,
         installation_id: "installation".try_into()?,
         tenant_id: "tenant".try_into()?,
         principal_id: "principal".try_into()?,
@@ -166,7 +167,7 @@ fn bounds_are_sticky_and_keep_a_prefix_across_attempts() -> Result<()> {
             );
         }
     }
-    ensure!(global.frames.len() == MAX_FRAMES && global.dropped == 288);
+    ensure!(global.frames.len() == EvidenceBudget::STRICT.max_frames && global.dropped == 288);
     Ok(())
 }
 
@@ -176,7 +177,7 @@ fn ordered_capture_scales_only_with_the_accepted_selection() -> Result<()> {
     ensure!(Snapshot::ordered(65).is_err());
     for count in [1, 8, 9, 64] {
         let mut capture = Snapshot::ordered(count)?;
-        let budget = EvidenceBudgetV2::for_attempts(count)?;
+        let budget = EvidenceBudget::for_attempts(count)?;
         let retained = budget.max_frames.min(count * MAX_ATTEMPT_FRAMES);
         for sequence in 0..retained {
             capture.observe(

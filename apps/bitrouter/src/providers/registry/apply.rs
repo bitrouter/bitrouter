@@ -31,7 +31,7 @@ use crate::config::{
 use bitrouter_ai::types::ProtocolList;
 
 use crate::gateway::catalog::RegistryData;
-use bitrouter_ai::catalog::types::{
+use crate::gateway::catalog::types::{
     Billing, RegistryKind, RegistryPricing, RegistryProvider, RegistryRateLimits,
 };
 
@@ -688,11 +688,11 @@ fn map_pricing(p: &RegistryPricing) -> Option<PricingConfig> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anyhow::Context;
-    use bitrouter_ai::catalog::types::{
+    use crate::gateway::catalog::types::{
         CanonicalModel, InputTokenPricing, OutputTokenPricing, ProtocolSet, RegistryAccess,
         RegistryAuth, RegistryAuthKind, RegistryModel, RegistryProtocol, RequiredConfig,
     };
+    use anyhow::Context;
     use bitrouter_ai::types::{ApiProtocol, ChatTokenLimitField, ProtocolList};
 
     fn provider(name: &str) -> RegistryProvider {
@@ -729,7 +729,7 @@ mod tests {
             doc_url: None,
             community: false,
             access: Some(RegistryAccess::ApiKey),
-            byok: Some(true),
+
             billing: Billing::UsageToken,
         }
     }
@@ -779,7 +779,7 @@ mod tests {
             bitrouter_ai::types::Capability::Tools,
         ];
         registry_provider.models[0].reasoning_effort =
-            Some(bitrouter_ai::types::ReasoningEffortConfig {
+            Some(crate::gateway::model::capabilities::ReasoningEffortConfig {
                 levels: vec![
                     bitrouter_ai::types::ReasoningEffort::Low,
                     bitrouter_ai::types::ReasoningEffort::High,
@@ -1098,18 +1098,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_byok_false_still_resolves_to_private() -> anyhow::Result<()> {
-        // An older dist / cache carries the derived `byok` alias with no
-        // explicit `access`. `byok: false` must still be read as `private`.
-        let mut p = provider("legacyprivate");
-        p.access = None;
-        p.byok = Some(false);
-        assert_eq!(p.access(), RegistryAccess::Private);
-        assert!(!p.is_public());
-        Ok(())
-    }
-
-    #[test]
     fn empty_model_provider_does_not_auto_discover_from_registry() -> anyhow::Result<()> {
         with_env("GATEWAYPROV_API_KEY", Some("sk-test"), || {
             let mut config = Config::default();
@@ -1235,7 +1223,7 @@ mod tests {
             .insert(BITROUTER_CLOUD_ID.to_string(), ProviderConfig::default());
         let mut bitrouter = provider(BITROUTER_CLOUD_ID);
         bitrouter.display_name = Some("BitRouter Cloud".to_string());
-        bitrouter.kind = Some(bitrouter_ai::catalog::types::RegistryKind::Cloud);
+        bitrouter.kind = Some(crate::gateway::catalog::types::RegistryKind::Cloud);
         bitrouter.api_base = Some("https://api.bitrouter.ai/v1".to_string());
         bitrouter.models = Vec::new();
         bitrouter.auth = Some(RegistryAuth {
@@ -1356,7 +1344,7 @@ mod tests {
             .context("native override missing")?;
         assert_eq!(
             native.endpoint_profile,
-            Some(bitrouter_ai::catalog::types::PricingEndpointProfile::OpenaiGlobal)
+            Some(crate::gateway::catalog::types::PricingEndpointProfile::OpenaiGlobal)
         );
         assert_eq!(native.input_micro_usd_per_token, Some(0.1));
         assert_eq!(native.cache_read_micro_usd_per_token, None);

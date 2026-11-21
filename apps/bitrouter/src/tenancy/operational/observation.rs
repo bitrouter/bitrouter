@@ -7,7 +7,7 @@ use bitrouter_ai::tenancy::{
         RuntimeObservationV1,
     },
     operation::ErrorCode,
-    ordered::CandidateManifestV1,
+    ordered::CandidateManifest,
     validation::Validate,
 };
 
@@ -29,9 +29,9 @@ impl Service {
     pub(in crate::tenancy) fn observe_manifest(
         &self,
         state: &Snapshot,
-        manifest: &mut CandidateManifestV1,
+        manifest: &mut CandidateManifest,
     ) -> Result<(), ErrorCode> {
-        if manifest.admission_mode != AdmissionMode::ProfiledV1 {
+        if manifest.admission_mode != AdmissionMode::Profiled {
             return Ok(());
         }
         let operational = self.operational.snapshot();

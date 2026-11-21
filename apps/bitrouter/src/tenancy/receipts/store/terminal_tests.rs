@@ -110,6 +110,8 @@ async fn fresh_terminal_matches_eager_reconciliation_for_every_source_kind() -> 
             } else {
                 for (id, outcome) in [("first", Outcome::Failed), ("last", Outcome::Unknown)] {
                     receipt.attempts.push(Attempt {
+                        candidate_index: None,
+                        observed_http_status: None,
                         attempt_id: id.try_into()?,
                         target: None,
                         outcome,
@@ -896,7 +898,6 @@ async fn charged_lookup_preserves_logical_callbacks_and_refusal() -> Result<()> 
             .map(|s| s.len())
             .sum::<usize>();
         let mut expected = vec![
-            (1, 256),
             (0, 0),
             (1, 256),
             (1, bytes * 3),
@@ -955,16 +956,17 @@ async fn charged_lookup_preserves_logical_callbacks_and_refusal() -> Result<()> 
                     }
                 }
                 let body = reader.counts()?;
-                // Debit indices 3 and 10 precede the respective body SELECTs;
-                // later callback failures must not pretend those reads vanished.
-                let receipt_read = refuse.is_none_or(|index| index > 3);
-                let usage_read = captured && refuse.is_none_or(|index| index > 10);
+                // Allocation debits 2 and 9 precede the body SELECTs. Checkpoints
+                // 3 and 10 follow them: refusal there preserves transferred bytes.
+                let receipt_read = refuse.is_none_or(|index| index >= 3);
+                let usage_read = captured && refuse.is_none_or(|index| index >= 10);
                 ensure!(
                     body[0]
                         == (
                             usize::from(receipt_read),
                             if receipt_read { value.json.len() } else { 0 }
-                        )
+                        ),
+                    "receipt transfer at refusal {refuse:?}: {body:?}"
                 );
                 ensure!(
                     body[1]
@@ -980,7 +982,8 @@ async fn charged_lookup_preserves_logical_callbacks_and_refusal() -> Result<()> 
                             } else {
                                 0
                             }
-                        )
+                        ),
+                    "usage transfer at refusal {refuse:?}: {body:?}"
                 );
                 Ok(())
             }

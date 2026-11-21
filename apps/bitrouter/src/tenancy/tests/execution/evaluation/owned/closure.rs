@@ -167,18 +167,12 @@ impl ModelSelector for LostDecision {
     async fn prepare_selection(
         &self,
         policy: &str,
-        variant: Option<&str>,
         ctx: &mut PipelineContext,
     ) -> GatewayResult<()> {
-        self.inner.prepare_selection(policy, variant, ctx).await
+        self.inner.prepare_selection(policy, ctx).await
     }
-    async fn select_variant(
-        &self,
-        policy: &str,
-        variant: Option<&str>,
-        ctx: &mut PipelineContext,
-    ) -> GatewayResult<()> {
-        self.inner.select_variant(policy, variant, ctx).await?;
+    async fn select_policy(&self, policy: &str, ctx: &mut PipelineContext) -> GatewayResult<()> {
+        self.inner.select_policy(policy, ctx).await?;
         let invocation = ctx
             .extension::<EvalInvocation>()
             .ok_or_else(|| BitrouterError::internal("real selector emitted no invocation"))?;

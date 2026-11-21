@@ -276,7 +276,7 @@ impl Harness {
                 crate::tenancy::store::load(&fixture.db, chrono::Utc::now()).await?,
                 Arc::new(crate::tenancy::resources::Resources::with_key(
                     fixture.installation.clone(),
-                    [29; 32],
+                    fixture.wrapping_key,
                 )?),
             )
             .await?;
@@ -297,6 +297,7 @@ impl Harness {
                 &base,
                 protocol,
                 &mut |_| {},
+                None,
                 (
                     if additional_resources {
                         crate::telemetry::receipt_latency::Sink::default()

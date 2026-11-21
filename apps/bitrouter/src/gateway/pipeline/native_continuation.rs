@@ -1,6 +1,6 @@
 //! Host-authenticated Responses continuation for managed canonical history.
 
-use bitrouter_ai::core::evidence::{
+use crate::managed_contract::evidence::{
     ContinuationFailure, FullHistoryReason, NativeContinuationInput,
 };
 

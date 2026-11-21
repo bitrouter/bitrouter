@@ -418,10 +418,10 @@ fn ingress_preserves_encrypted_only_reasoning_and_native_array_order() -> TestRe
 
 #[test]
 fn admission_reports_source_locations_without_opaque_material() -> TestResult {
-    use bitrouter::gateway::model::conversion::request_admission;
-    use bitrouter_ai::conversion::{
+    use bitrouter::gateway::conversion_report::{
         ConversionDisposition, ConversionEffect, ConversionLocation, ConversionReason,
     };
+    use bitrouter::gateway::model::conversion::request_admission;
     use bitrouter_ai::types::ApiProtocol;
     let native = reasoning("rs-report-secret", "visible", json!("opaque-report-secret"));
     let source = ResponsesAdapter.parse_request(json!({"model":"fixture","input":[native.clone(),{"role":"user","content":"between"},native]}))?;
@@ -482,7 +482,9 @@ fn admission_reports_source_locations_without_opaque_material() -> TestResult {
         assert!(!serialized.to_string().contains("secret"));
         assert!(!format!("{report:?}").contains("visible"));
         assert_eq!(
-            serde_json::from_value::<bitrouter_ai::conversion::ConversionReport>(serialized)?,
+            serde_json::from_value::<bitrouter::gateway::conversion_report::ConversionReport>(
+                serialized
+            )?,
             report
         );
         assert!(matches!(

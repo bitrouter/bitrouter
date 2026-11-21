@@ -1,41 +1,34 @@
-//! Schema migrations, as `sea-orm-migration` Rust code.
+//! Fresh current schema construction and read-only storage validators.
 //!
-//! Each migration is a `MigrationTrait` impl that builds tables and
-//! indexes through sea-orm's schema API. Backend-specific extensions explicitly
-//! select their backend; SQLite receipt archives leave server schemas inline.
-//!
-//! Migration ordering is the order of the [`Migrator::migrations`] vec;
-//! applied migrations are recorded in the `seaql_migrations` table so a
-//! re-run is a no-op.
+//! The sole baseline is installed only on an empty dataset. Existing datasets
+//! must carry its exact marker and pass the current catalog validators before
+//! startup. Component builders do not participate in a historical ledger.
 
-pub mod m20240101_000001_create_auth_tables;
-pub mod m20240101_000002_create_metering_tables;
-pub mod m20240101_000003_rename_legacy_charge_column;
-pub mod m20240101_000004_create_adequacy_table;
-pub mod m20240101_000005_create_adequacy_exploration_table;
-pub mod m20240101_000006_create_adequacy_semantic_success_table;
-pub mod m20240101_000007_add_metering_evidence;
-pub mod m20240101_000008_add_metering_reconciliation;
-pub mod m20240101_000009_create_adequacy_reliability_events;
-pub mod m20240101_000010_create_eval_exchange;
-pub mod m20240101_000011_scope_eval_exchange;
-pub mod m20240101_000012_create_trajectory_ledger;
-pub mod m20240101_000013_create_continuation_registry;
-// 000014 is deliberately skipped: it was `add_continuation_publication_state`,
-// withdrawn before release and folded into 000013. Leaving the slot burned
-// keeps the sequence unambiguous for anyone reading git history.
-pub mod m20240101_000015_add_metering_launch_id;
-pub mod m20240101_000016_add_acp_metering_identity;
-pub mod m20240101_000017_add_metering_route_scope;
+mod m20240101_000001_create_auth_tables;
+mod m20240101_000002_create_metering_tables;
 
-pub mod m20240101_000018_create_acp_capture;
-pub mod m20240101_000019_create_acp_checkpoints;
-pub mod m20240101_000020_create_checkpoint_evolution;
-pub mod m20240101_000021_add_router_request_identity;
-pub mod m20240101_000022_create_bro_execution_records;
-pub mod m20240101_000023_create_bro_acceptance_keys;
-pub mod m20240101_000024_create_bro_runtime_ownership;
-pub mod m20240101_000025_create_bro_execution_index;
+mod m20240101_000004_create_adequacy_table;
+mod m20240101_000005_create_adequacy_exploration_table;
+mod m20240101_000006_create_adequacy_semantic_success_table;
+mod m20240101_000007_add_metering_evidence;
+mod m20240101_000008_add_metering_reconciliation;
+mod m20240101_000009_create_adequacy_reliability_events;
+mod m20240101_000010_create_eval_exchange;
+mod m20240101_000011_scope_eval_exchange;
+mod m20240101_000012_create_trajectory_ledger;
+mod m20240101_000013_create_continuation_registry;
+mod m20240101_000015_add_metering_launch_id;
+mod m20240101_000016_add_acp_metering_identity;
+mod m20240101_000017_add_metering_route_scope;
+
+mod m20240101_000018_create_acp_capture;
+mod m20240101_000019_create_acp_checkpoints;
+mod m20240101_000020_create_checkpoint_evolution;
+mod m20240101_000021_add_router_request_identity;
+mod m20240101_000022_create_bro_execution_records;
+mod m20240101_000023_create_bro_acceptance_keys;
+mod m20240101_000024_create_bro_runtime_ownership;
+mod m20240101_000025_create_bro_execution_index;
 mod m20240101_000026_bro_runtime_format;
 mod m20240101_000027_bro_managed_sessions;
 mod m20240101_000028_resource_tenancy;
@@ -50,105 +43,76 @@ mod m20240101_000036_native_harness_scope;
 mod m20240101_000037_owned_oauth;
 mod m20240101_000038_eval_import_provenance;
 mod m20240101_000039_resource_lifecycle;
-pub(crate) mod m20240101_000040_usage_evidence;
+mod m20240101_000040_usage_evidence;
 mod m20240101_000042_receipt_archive;
 mod m20240101_000043_unknown_obligations;
-pub(crate) mod m20240101_000044_capacity_upgrade;
+mod m20240101_000044_capacity_upgrade;
 
-pub(crate) mod m20240101_000045_ordered_receipts;
-mod m20240101_000046_profiled_authority;
-pub(crate) mod m20240101_000047_shared_admission_health;
-pub(crate) mod m20240101_000048_native_generate_content;
+mod m20240101_000045_ordered_receipts;
 
 // Optional diagnostic schema is deliberately outside Migrator::migrations.
 pub(crate) mod provider_technical;
 
+mod baseline;
+
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
 
-/// Read-only compatibility gate for the retired SQLite receipt reader.
+/// Validate the current SQLite receipt/archive catalog without writes.
 pub(crate) async fn validate_receipt_archive(
     db: &impl sea_orm::ConnectionTrait,
 ) -> Result<(), sea_orm::DbErr> {
-    m20240101_000035_execution_receipts::validate_archive(db).await
+    m20240101_000042_receipt_archive::validate(db).await
 }
 
-/// Compare the receipt table with the capacity-only predecessor's exact DDL.
-#[cfg(test)]
-pub(crate) async fn validate_capacity_receipt_shape(
-    db: &impl sea_orm::ConnectionTrait,
-) -> Result<(), sea_orm::DbErr> {
-    m20240101_000042_receipt_archive::catalog::validate_capacity_receipt_shape(db).await
-}
-
-/// Exact legacy or complete indexed SQLite OAuth/obligation storage profile.
+/// Validate the complete current SQLite OAuth and obligation storage catalog.
 pub(crate) async fn validate_owned_oauth(
     db: &impl sea_orm::ConnectionTrait,
 ) -> Result<(), sea_orm::DbErr> {
     m20240101_000037_owned_oauth::validate(db).await
 }
 
-/// Requires the complete SQLite obligation layout, without claiming backfill.
+/// Validate the current SQLite obligation layout without deriving facts.
 pub(crate) async fn validate_unknown_obligations(
     db: &impl sea_orm::ConnectionTrait,
 ) -> Result<(), sea_orm::DbErr> {
     m20240101_000043_unknown_obligations::validate(db).await
 }
 
-/// The bitrouter schema migrator — owns the ordered list of every
-/// migration the binary ships.
+/// Validate current usage evidence and its immutable receipt storage.
+pub(crate) async fn validate_usage_evidence(
+    db: &impl sea_orm::ConnectionTrait,
+) -> Result<(), sea_orm::DbErr> {
+    m20240101_000040_usage_evidence::validate(db).await
+}
+
+/// Validate the current authority catalog without changing authority state.
+pub(crate) async fn validate_authority(
+    db: &impl sea_orm::ConnectionTrait,
+) -> Result<(), sea_orm::DbErr> {
+    m20240101_000044_capacity_upgrade::validate_authority(db).await
+}
+
+/// Validate the current dispatch intent and receipt format catalog.
+pub(crate) async fn validate_ordered_receipts(
+    db: &impl sea_orm::ConnectionTrait,
+) -> Result<(), sea_orm::DbErr> {
+    m20240101_000045_ordered_receipts::validate(db).await
+}
+
+/// Installs the fresh baseline or validates an existing current dataset.
 pub struct Migrator;
 
 #[async_trait::async_trait]
 impl MigratorTrait for Migrator {
+    async fn up<'c, C>(db: C, _steps: Option<u32>) -> Result<(), sea_orm::DbErr>
+    where
+        C: sea_orm_migration::IntoSchemaManagerConnection<'c>,
+    {
+        baseline::open(db.into_schema_manager_connection()).await
+    }
+
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        vec![
-            Box::new(m20240101_000001_create_auth_tables::Migration),
-            Box::new(m20240101_000002_create_metering_tables::Migration),
-            Box::new(m20240101_000003_rename_legacy_charge_column::Migration),
-            Box::new(m20240101_000004_create_adequacy_table::Migration),
-            Box::new(m20240101_000005_create_adequacy_exploration_table::Migration),
-            Box::new(m20240101_000006_create_adequacy_semantic_success_table::Migration),
-            Box::new(m20240101_000007_add_metering_evidence::Migration),
-            Box::new(m20240101_000008_add_metering_reconciliation::Migration),
-            Box::new(m20240101_000009_create_adequacy_reliability_events::Migration),
-            Box::new(m20240101_000010_create_eval_exchange::Migration),
-            Box::new(m20240101_000011_scope_eval_exchange::Migration),
-            Box::new(m20240101_000012_create_trajectory_ledger::Migration),
-            Box::new(m20240101_000013_create_continuation_registry::Migration),
-            Box::new(m20240101_000015_add_metering_launch_id::Migration),
-            Box::new(m20240101_000016_add_acp_metering_identity::Migration),
-            Box::new(m20240101_000017_add_metering_route_scope::Migration),
-            Box::new(m20240101_000018_create_acp_capture::Migration),
-            Box::new(m20240101_000019_create_acp_checkpoints::Migration),
-            Box::new(m20240101_000020_create_checkpoint_evolution::Migration),
-            Box::new(m20240101_000021_add_router_request_identity::Migration),
-            Box::new(m20240101_000022_create_bro_execution_records::Migration),
-            Box::new(m20240101_000023_create_bro_acceptance_keys::Migration),
-            Box::new(m20240101_000024_create_bro_runtime_ownership::Migration),
-            Box::new(m20240101_000025_create_bro_execution_index::Migration),
-            Box::new(m20240101_000026_bro_runtime_format::Migration),
-            Box::new(m20240101_000027_bro_managed_sessions::Migration),
-            Box::new(m20240101_000028_resource_tenancy::Migration),
-            Box::new(m20240101_000029_tenancy_configurations::Migration),
-            Box::new(m20240101_000030_eval_storage_scope::Migration),
-            Box::new(m20240101_000031_native_continuation_epoch::Migration),
-            Box::new(m20240101_000032_trajectory_storage_scope::Migration),
-            Box::new(m20240101_000033_capture_legacy_scope::Migration),
-            Box::new(m20240101_000034_continuation_storage_scope::Migration),
-            Box::new(m20240101_000035_execution_receipts::Migration),
-            Box::new(m20240101_000036_native_harness_scope::Migration),
-            Box::new(m20240101_000037_owned_oauth::Migration),
-            Box::new(m20240101_000038_eval_import_provenance::Migration),
-            Box::new(m20240101_000039_resource_lifecycle::Migration),
-            Box::new(m20240101_000040_usage_evidence::Migration),
-            Box::new(m20240101_000042_receipt_archive::Migration),
-            Box::new(m20240101_000043_unknown_obligations::Migration),
-            Box::new(m20240101_000044_capacity_upgrade::Migration),
-            Box::new(m20240101_000045_ordered_receipts::Migration),
-            Box::new(m20240101_000046_profiled_authority::Migration),
-            Box::new(m20240101_000047_shared_admission_health::Migration),
-            Box::new(m20240101_000048_native_generate_content::Migration),
-        ]
+        vec![Box::new(baseline::Migration)]
     }
 }
 
@@ -156,17 +120,15 @@ impl MigratorTrait for Migrator {
 mod tests {
     use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
     use sea_orm_migration::prelude::{MysqlQueryBuilder, PostgresQueryBuilder, SqliteQueryBuilder};
-    use sea_orm_migration::{MigrationTrait, MigratorTrait, SchemaManager};
+    use sea_orm_migration::{MigratorTrait, SchemaManager};
 
     use super::Migrator;
 
     use super::m20240101_000012_create_trajectory_ledger::{
-        Migration, trajectory_outbox_delivery_order_index, trajectory_prefix_index_table,
+        trajectory_outbox_delivery_order_index, trajectory_prefix_index_table,
         trajectory_requests_owner_full_input_digest_index,
     };
-    use super::m20240101_000013_create_continuation_registry::{
-        Migration as ContinuationMigration, provider_continuations_table,
-    };
+    use super::m20240101_000013_create_continuation_registry::provider_continuations_table;
 
     #[tokio::test]
     async fn acp_metering_identity_columns_are_nullable_and_content_free() -> anyhow::Result<()> {
@@ -241,9 +203,8 @@ mod tests {
     async fn continuation_registry_migration_is_bounded_and_private() -> anyhow::Result<()> {
         let db = crate::db::connect("sqlite::memory:").await?;
         let manager = SchemaManager::new(&db);
-        let migration = ContinuationMigration;
 
-        migration.up(&manager).await?;
+        Migrator::up(&db, None).await?;
         assert!(manager.has_table("provider_continuations").await?);
         assert!(manager.has_table("provider_continuation_key_epoch").await?);
 
@@ -286,9 +247,9 @@ mod tests {
             .await?;
         assert_eq!(indexes.len(), 1);
 
-        migration.down(&manager).await?;
-        assert!(!manager.has_table("provider_continuations").await?);
-        assert!(!manager.has_table("provider_continuation_key_epoch").await?);
+        Migrator::up(&db, None).await?;
+        assert!(manager.has_table("provider_continuations").await?);
+        assert!(manager.has_table("provider_continuation_key_epoch").await?);
         Ok(())
     }
 
@@ -296,8 +257,7 @@ mod tests {
     async fn continuation_registry_rejects_illegal_state_and_empty_generation() -> anyhow::Result<()>
     {
         let db = crate::db::connect("sqlite::memory:").await?;
-        let manager = SchemaManager::new(&db);
-        ContinuationMigration.up(&manager).await?;
+        Migrator::up(&db, None).await?;
 
         let illegal_state = db
             .execute(Statement::from_string(
@@ -369,22 +329,8 @@ mod tests {
     async fn final_migrator_ends_with_the_authenticated_continuation_schema() -> anyhow::Result<()>
     {
         let migrations = Migrator::migrations();
-        // The guard is about one specific withdrawn migration, not about the
-        // sequence never growing again: `add_continuation_publication_state`
-        // was folded into 000013 before release and must never reappear.
-        // Asserting on its *name* keeps that promise while leaving the schema
-        // free to move forward.
-        assert!(
-            !migrations.iter().any(|migration| migration.name()
-                == "m20240101_000014_add_continuation_publication_state"),
-            "the unpublished state-only 014 migration must not survive in the final sequence"
-        );
-        assert!(
-            migrations.iter().any(
-                |migration| migration.name() == "m20240101_000013_create_continuation_registry"
-            ),
-            "the continuation registry migration carries that folded-in state"
-        );
+        assert_eq!(migrations.len(), 1);
+        assert_eq!(migrations[0].name(), crate::db::store_format::BASELINE);
 
         let db = crate::db::connect("sqlite::memory:").await?;
         Migrator::up(&db, None).await?;
@@ -417,20 +363,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn trajectory_ledger_migration_creates_and_removes_only_its_objects() -> anyhow::Result<()>
-    {
+    async fn current_trajectory_catalog_survives_restart() -> anyhow::Result<()> {
         let db = crate::db::connect("sqlite::memory:").await?;
         let manager = SchemaManager::new(&db);
-        let migration = Migration;
 
-        db.execute(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            "CREATE TABLE migration_test_sentinel (id TEXT PRIMARY KEY)".to_owned(),
-        ))
-        .await?;
-
-        migration.up(&manager).await?;
-        migration.up(&manager).await?;
+        Migrator::up(&db, None).await?;
+        Migrator::up(&db, None).await?;
 
         for table in [
             "trajectory_episodes",
@@ -459,25 +397,13 @@ mod tests {
                 .await?;
             assert_eq!(rows.len(), 1, "missing index {index}");
         }
-        migration.down(&manager).await?;
-        for table in [
-            "trajectory_episodes",
-            "trajectory_events",
-            "trajectory_requests",
-            "trajectory_prefix_index",
-            "trajectory_outbox",
-        ] {
-            assert!(!manager.has_table(table).await?);
-        }
-        assert!(manager.has_table("migration_test_sentinel").await?);
         Ok(())
     }
 
     #[tokio::test]
     async fn trajectory_prefix_lookup_uses_the_owner_digest_index() -> anyhow::Result<()> {
         let db = crate::db::connect("sqlite::memory:").await?;
-        let manager = SchemaManager::new(&db);
-        Migration.up(&manager).await?;
+        Migrator::up(&db, None).await?;
 
         let details = db
             .query_all(Statement::from_string(
@@ -500,8 +426,7 @@ mod tests {
     #[tokio::test]
     async fn trajectory_global_outbox_drain_uses_delivery_order_index() -> anyhow::Result<()> {
         let db = crate::db::connect("sqlite::memory:").await?;
-        let manager = SchemaManager::new(&db);
-        Migration.up(&manager).await?;
+        Migrator::up(&db, None).await?;
 
         let details = db
             .query_all(Statement::from_string(
@@ -528,8 +453,7 @@ mod tests {
     #[tokio::test]
     async fn trajectory_owner_outbox_inspection_keeps_its_owner_index() -> anyhow::Result<()> {
         let db = crate::db::connect("sqlite::memory:").await?;
-        let manager = SchemaManager::new(&db);
-        Migration.up(&manager).await?;
+        Migrator::up(&db, None).await?;
 
         let details = db
             .query_all(Statement::from_string(

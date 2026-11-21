@@ -8,10 +8,10 @@ use serde_json::json;
 #[cfg(feature = "core")]
 use super::SkillSelection;
 use super::{SkillCandidate, SkillSource, invalid};
+use crate::managed_contract::protocol::{CoreError, ErrorCode};
 use crate::storage::checkpoint::sha256;
 use crate::storage::checkpoint::snapshot::{AgentTurn, SessionSnapshot};
 use crate::storage::skills::state as skills;
-use bitrouter_ai::core::protocol::{CoreError, ErrorCode};
 
 pub const TOOL: &str = "skill_read";
 

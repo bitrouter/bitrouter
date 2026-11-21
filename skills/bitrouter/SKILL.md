@@ -19,7 +19,7 @@ BitRouter is a self-hosted Rust daemon at `http://127.0.0.1:4356` that routes Op
 
 `bro task managed` submits to the local daemon, which owns native tools/Core and the existing durable journal. Use `--request-id` for exact retries, `managed-status` for passive inspection, `managed-cancel` with the original boot/input key for cancellation, and `managed-answer` for explicit MCP skill consent; continuation requires confirmed release. Custom durable harness clients use the negotiated managed-core HTTP/WebSocket profile; see `references/managed-core.md` for binding, ACKs, results and current limits.
 
-For a stopped local SQLite DB, `bro tenancy offline snapshot/inventory/verify` produces DB-only evidence. Snapshot `--format v2` and an explicit private `--scratch-directory` process complete history with finite working memory; v1 remains the default. `offline restore` copies verified evidence into a new database path and preserves identity; normal startup and external recovery remain required. `offline audit` serves protected receipt reads. `offline upgrade-capacity` records only a verified legacy count-latch upgrade. See `references/cli.md` for identity, replay, resource-budget and writer-fence requirements.
+For a stopped local SQLite DB, `bro tenancy offline snapshot/inventory/verify` produces DB-only evidence. Snapshot `--format v2` and an explicit private `--scratch-directory` process complete history with finite working memory; v1 remains the default. `offline restore` copies verified evidence into a new database path and preserves identity; normal startup and external recovery remain required. `offline audit` serves protected receipt reads. Historical authority upgrades and Eval backfills are unavailable. See `references/cli.md` for identity, replay, resource-budget and writer-fence requirements.
 
 ## Activate in one pass
 ### 1. Probe
@@ -29,24 +29,18 @@ bro status             # liveness + `spend`; `running: false` when nothing is re
 bro providers list     # ID  MODELS  ACTIVE  API_BASE
 ```
 
-These emit JSON by default (`--human` is readable). Branch on the result:
-missing command → §2; no active providers → §3; stopped daemon → `start`; both ready → §5.
+These emit JSON by default (`--human` is readable). Branch on the result: missing command → §2; no active providers → §3; stopped daemon → `start`; both ready → §5.
 
 ### 2. Install
 ```bash
 curl --proto '=https' --tlsv1.2 -LsSf https://bitrouter.ai/install.sh | sh
 ```
 
-Official macOS distributions support Apple Silicon (`arm64`) only.
-macOS (Apple Silicon): `brew install bitrouter/tap/bitrouter`. Node: `npm install -g bitrouter`.
-Windows: `powershell -ExecutionPolicy Bypass -c "irm https://bitrouter.ai/install.ps1 | iex"`.
-Verify with `bro --version`; on failure read `references/diagnose.md`.
+Official macOS distributions support Apple Silicon (`arm64`) only. macOS (Apple Silicon): `brew install bitrouter/tap/bitrouter`. Node: `npm install -g bitrouter`.
+Windows: `powershell -ExecutionPolicy Bypass -c "irm https://bitrouter.ai/install.ps1 | iex"`. Verify with `bro --version`; on failure read `references/diagnose.md`.
 
 ### 3. Configure
-Bare `bro` ensures a ready background daemon and returns to the shell. Router config
-or detected credentials suffice; a verified running target needs neither current client credentials nor YAML. No chat agent is required. Missing setup needs
-stdin/stderr terminals. Menus use number/name or keyword + Enter; Enter accepts the
-shown default. Secrets are hidden; EOF/Ctrl-C cancels. Scripted setup:
+Bare `bro` ensures a ready background daemon and returns to the shell. Router config or detected credentials suffice; a verified running target needs neither current client credentials nor YAML. No chat agent is required. Missing setup needs stdin/stderr terminals. Menus use number/name or keyword + Enter; Enter accepts the shown default. Secrets are hidden; EOF/Ctrl-C cancels. Scripted setup:
 ```bash
 bro init --yes --use-detected --after exit
 bro                         # ensure readiness; idempotent on repeat
@@ -71,6 +65,7 @@ bro providers login openai-codex   # ChatGPT PKCE flow in a browser
 bro providers login bitrouter      # hosted; same sign-in as `cloud login`
 ```
 Auth is catalog-derived; `references/providers.md` lists each login method.
+
 **b. Hosted BitRouter for everything else.** Signing in adds a managed
 `bitrouter` provider to this daemon; it is not a second deployment.
 
@@ -78,14 +73,12 @@ Auth is catalog-derived; `references/providers.md` lists each login method.
 the daemon auto-enables every provider whose key is present, and
 `export ...; bro reload` rotates one without a restart.
 Detected vars: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY` (not `GOOGLE_API_KEY`), `OPENROUTER_API_KEY`, `OPENCODE_ZEN_API_KEY` (zen *and* go).
-
 `providers login` also takes `--api-key` / `--key-stdin`; `references/cloud-setup.md`
 covers hosted accounts, credits, and `brk_*` keys. Hosted BitRouter or BYOK supplements subscriptions.
 
 ### 5. Start the desired agent interface
 
-Use single-operation CLI controls or the harness's own native interface.
-Observing state never submits, approves, resumes or stops work:
+Use single-operation CLI controls or the harness's own native interface. Observing state never submits, approves, resumes or stops work:
 
 ```bash
 bro threads list           # authorized durable native Threads
@@ -112,8 +105,7 @@ Native Threads load global and ancestor `AGENTS.md` into durable user context, u
 survive hot unload. Lost instances/unknown effects never trigger automatic resubmission.
 Use `bro threads` for native controls and `bro agents pending/answer/show/events` for supervised ACP; read [CLI controls](references/cli.md#single-operation-native-and-acp-controls) for approvals, retries and recovery.
 Resident BRO daemons defer automatic replacement; finish work and use explicit `bro restart` after binary updates.
-Built-in ACP adapters require Node.js 22+ and `npx`. For the harness's native
-interface, use the reversible per-process launcher:
+Built-in ACP adapters require Node.js 22+ and `npx`. For the harness's native interface, use the reversible per-process launcher:
 
 ```bash
 bro claude
@@ -147,16 +139,11 @@ and the rollup reads `unreported` rather than `$0.00` when none does. Canonical
 ids use slashes and a pin uses a colon (`openrouter:openai/gpt-4o`);
 `references/diagnose.md` has the full spelling rules.
 
-For administration from another computer, use a named `--context`; see
-`references/remote-administration.md` for token scopes, tunnel setup, and host
-boundaries. Remote errors never fall back to this machine's configuration.
+For administration from another computer, use a named `--context`; see `references/remote-administration.md` for token scopes, tunnel setup, and host boundaries. Remote errors never fall back to this machine's configuration.
 
 ## References — read on demand
 
-Shared gateway deployments explicitly select `gateway_state.mode: shared` and
-use the `gateway-shared` distribution (`multi-instance` feature); a PostgreSQL
-URL alone retains local mode.
-See [shared gateway configuration](references/shared-gateway.md).
+Shared gateway deployments explicitly select `gateway_state.mode: shared` and use the `gateway-shared` distribution (`multi-instance` feature); a PostgreSQL URL alone retains local mode. See [shared gateway configuration](references/shared-gateway.md).
 
 | File | When to read |
 |---|---|
@@ -169,11 +156,13 @@ See [shared gateway configuration](references/shared-gateway.md).
 | `references/diagnose.md` | Install issues, daemon won't start, connection refused, model ids |
 | `references/harness-*.md` | Durable per-harness wiring instead of `launch`: `-claude-code`, `-codex`, `-hermes-agent`, `-openclaw`, `-terminus-2` |
 | `references/migrate-from-*.md` | Migrating off `-litellm`, `-openrouter`, `-openai-compatible` (Azure, Together, Groq, Ollama, LM Studio), `-anthropic-compatible` |
-| `references/adaptive-routing.md`, `references/workflow-optimization.md`, `references/metering.md` | `bitrouter/auto`, trace projections, policy locks; history-driven quality/cost optimization; cache-aware pricing, charge evidence, usage export |
+| `references/adaptive-routing.md`, `references/workflow-optimization.md`, `references/metering.md` | model-only source, explicit CAS updates and client evaluation; cache-aware pricing, charge evidence, usage export |
 | `references/sessions.md`, `references/updating.md` | ACP controller/supervisor (`acp serve`, foreground/background `run`, `agents`, native sessions, NDJSON, Code); `bro update` and channels |
 | `references/decision-native.md` | Explicit native context, evidence recall and the independent SDK routing boundary |
 
 ## Gotchas
+
+- Model routing uses `policy.yaml`. `policy show/status` default to active; use `--disk` offline. Publish/rollback require explicit `--expected-digest`; ACL files use `access-policy create`.
 
 - Request-check extensions use SDK ExtensionApi and the shared foreground host. Restart the same custom binary, not official `bro restart`. No HTTP service or probe; legacy `plugins.bitrouter-guardrails` blocks startup. See `references/guardrails.md`.
 - **A Skill does not grant command execution.** If the host cannot run local
@@ -204,8 +193,10 @@ See [shared gateway configuration](references/shared-gateway.md).
 - **`init --harness` only accepts `claude` and `codex`**; `launch <agent>`
   accepts the native facets listed by `launch --help`.
 - **`providers add/remove/use/test/stats` and `bro doctor` do not exist.** Manage
-  with `providers list|check|login|logout` + config/reload; diagnose via `status`, `route`, `models`, and logs.
-- **`bitrouter/<id>` selects a named router** before provider lookup; `auto` and
-  `fusion` retain compatibility behavior. See `references/cli.md` for details.
+  with `providers list|check|login|logout` and config/reload. Diagnose with
+  `status`, `route`, `models`, and logs.
+- **`bitrouter/<id>` selects a named router** before provider lookup. Unknown
+  router names fail. Model Policy retains full admitted context. See
+  `references/cli.md` for details.
 
 Offline `tenancy offline map` records bounded M0 mapping claims against verified snapshot evidence; it does not backfill or authorize cutover. See `references/cli.md`.

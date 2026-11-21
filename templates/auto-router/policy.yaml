@@ -1,0 +1,11 @@
+spec_version: policy/1.0.0-beta.1
+policies:
+  auto:
+    tiers:
+      balanced: {model: "bitrouter:moonshotai/kimi-k3"}
+      economy: {model: "bitrouter:deepseek/deepseek-v4-pro"}
+      strong: {model: "openai-codex:gpt-5.6-sol"}
+    routes: {}
+    default_tier: strong
+    tool_use_tier: strong
+    tool_safe_tiers: [strong, balanced, economy]

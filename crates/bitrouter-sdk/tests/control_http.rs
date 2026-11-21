@@ -117,9 +117,8 @@ fn capabilities(instance: &str, actions: &[Action]) -> Value {
         );
     }
     json!({
-        "protocol": "bitrouter-control", "protocol_version": 1,
+        "protocol": "bitrouter-control", "protocol_version": 2,
         "server_version": "fixture", "server_instance_id": instance,
-        "actions": actions.iter().map(|a| a.legacy_name()).collect::<Vec<_>>(),
         "action_descriptors": descriptors,
         "scopes": ["control:read", "control:reload"],
         "resources": {
@@ -164,39 +163,125 @@ fn endpoint_and_credentials_are_explicit_and_bounded() -> TestResult {
     Ok(())
 }
 
+async fn call_action(client: &ControlClient, action: Action) -> bitrouter_sdk::error::Result<()> {
+    use bitrouter_ai::control::{administration::PolicyInput, route::RouteInput};
+    match action {
+        Action::Status => {
+            client.status().await?;
+        }
+        Action::Models => {
+            client.models(None).await?;
+        }
+        Action::Route => {
+            client
+                .route(&RouteInput {
+                    model: "fixture/model".into(),
+                    prompt: None,
+                })
+                .await?;
+        }
+        Action::Requests => {
+            client.requests(None).await?;
+        }
+        Action::Providers => {
+            client.providers().await?;
+        }
+        Action::Observe => {
+            client.observe().await?;
+        }
+        Action::Agents => {
+            client.agents().await?;
+        }
+        Action::PolicyStatus => {
+            client.policy(&PolicyInput::default()).await?;
+        }
+        Action::PolicyShow => {
+            client
+                .policy(&PolicyInput {
+                    name: Some("auto".into()),
+                    ..Default::default()
+                })
+                .await?;
+        }
+        Action::Reload => {
+            client.reload().await?;
+        }
+    }
+    Ok(())
+}
+
 #[tokio::test]
-async fn legacy_discovery_never_infers_new_admin_or_mutation_grants() -> TestResult {
-    let server = serve(vec![
-        Reply::json(json!({
-            "protocol": "bitrouter-control", "protocol_version": 1, "server_version": "legacy",
-            "actions": ["status", "models", "route_preview", "requests", "reload", "providers_list"]
-        })),
-        Reply::json(json!({"running": true, "providers": []})),
-    ])
-    .await?;
-    let client = ControlClient::new(&server.endpoint, TOKEN)?;
+async fn direct_actions_never_fall_back_to_unversioned_names_or_wrong_grants() -> TestResult {
     for action in [
         Action::Status,
         Action::Models,
         Action::Route,
         Action::Requests,
+        Action::Providers,
+        Action::Observe,
+        Action::Agents,
+        Action::PolicyStatus,
+        Action::PolicyShow,
+        Action::Reload,
     ] {
-        assert!(client.can_action(action).await?);
+        for case in 0..8 {
+            let mut caps = capabilities(INSTANCE, &[action]);
+            match case {
+                0 => caps["protocol_version"] = json!(1),
+                1 => {
+                    caps.as_object_mut()
+                        .ok_or("capabilities object")?
+                        .remove("action_descriptors");
+                }
+                2 => caps["action_descriptors"] = json!({}),
+                3 => {
+                    caps["action_descriptors"][action.id()]["version"] = json!(action.version() + 1)
+                }
+                4 => {
+                    caps["action_descriptors"][action.id()]["required_scope"] =
+                        json!("control:tenancy")
+                }
+                5 => caps["scopes"] = json!([]),
+                6 => {
+                    caps["action_descriptors"][action.id()]["version"] = json!(action.version() - 1)
+                }
+                _ => caps["protocol"] = json!("foreign-control"),
+            }
+            caps["actions"] = json!(["status", "models", "route_preview", "requests", action.id()]);
+            let server = serve(vec![Reply::json(caps)]).await?;
+            let client = ControlClient::new(&server.endpoint, TOKEN)?;
+            assert!(
+                call_action(&client, action).await.is_err(),
+                "{action:?} case {case}"
+            );
+            let records = server.records.lock().await;
+            assert_eq!(records.len(), 1, "{action:?} case {case}");
+            assert_eq!(records[0].uri, "/control/v1/capabilities");
+            assert_eq!(
+                records[0].credential.as_deref(),
+                Some(format!("Bearer {TOKEN}").as_str())
+            );
+        }
     }
-    for action in [Action::Reload, Action::Providers, Action::PolicyShow] {
-        assert!(!client.can_action(action).await?);
-    }
-    assert!(client.status().await?.running);
-    let records = server.records.lock().await;
-    assert_eq!(
-        records.iter().map(|r| r.uri.as_str()).collect::<Vec<_>>(),
-        ["/control/v1/capabilities", "/control/v1/status"]
-    );
-    assert!(
-        records
-            .iter()
-            .all(|r| r.credential.as_deref() == Some(format!("Bearer {TOKEN}").as_str()))
-    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn old_protocol_is_reported_before_selecting_the_current_capability_reader() -> TestResult {
+    let server = serve(vec![Reply::json(json!({
+        "protocol":"bitrouter-control","protocol_version":1,"server_version":"old",
+        "actions":["status","models","route_preview","requests"]
+    }))])
+    .await?;
+    let result = ControlClient::new(&server.endpoint, TOKEN)?.status().await;
+    assert!(matches!(
+        result,
+        Err(Error::ControlProtocolVersion {
+            server: 1,
+            client: 2
+        })
+    ));
+    assert_eq!(server.records.lock().await.len(), 1);
     Ok(())
 }
 
@@ -217,7 +302,7 @@ async fn incompatible_protocol_descriptors_and_scopes_prevent_dispatch() -> Test
                 result,
                 Err(Error::ControlProtocolVersion {
                     server: 99,
-                    client: 1
+                    client: 2
                 })
             )),
             _ => assert!(matches!(
@@ -446,5 +531,82 @@ async fn explicit_reload_submission_and_recovery_keep_the_same_identity() -> Tes
             input.request_id
         )
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn direct_policy_show_returns_complete_typed_source_for_resubmission() -> TestResult {
+    use bitrouter_ai::control::administration::PolicyInput;
+    let source = json!({"spec_version":"policy/1.0.0-beta.1","policies":{
+        "auto":{"tiers":{"strong":{"model":"fixture/strong"}},"default_tier":"strong"},
+        "auto:cost":{"tiers":{"cheap":{"model":"fixture/cheap"}},"default_tier":"cheap"}
+    }});
+    let server = serve(vec![
+        Reply::json(capabilities(INSTANCE, &[Action::PolicyShow])),
+        Reply::json(json!({"view":"active","availability":"available",
+            "source_digest":"sha256:source","policies":["auto","auto:cost"],
+            "bindings":{"coding":"auto:cost"},"source":source})),
+    ])
+    .await?;
+    let report = ControlClient::new(&server.endpoint, TOKEN)?
+        .policy(&PolicyInput {
+            name: Some("auto:cost".into()),
+            ..Default::default()
+        })
+        .await?;
+    assert_eq!(
+        serde_json::to_value(report.source.ok_or("missing typed source")?)?,
+        source
+    );
+    assert_eq!(report.bindings["coding"], "auto:cost");
+    let records = server.records.lock().await;
+    assert_eq!(records.len(), 2);
+    assert_eq!(
+        records[1].uri,
+        "/control/v1/policy/show?view=active&name=auto%3Acost"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn direct_resources_and_reload_submission_validate_fixed_scopes_and_versions() -> TestResult {
+    use bitrouter_ai::control::reload::ReloadInput;
+    for resource in ["state", "operation"] {
+        for case in 0..3 {
+            let mut caps = capabilities(INSTANCE, &[Action::Reload]);
+            match case {
+                0 => caps["resources"][resource]["version"] = json!(2),
+                1 => caps["resources"][resource]["required_scope"] = json!("control:tenancy"),
+                _ => caps["scopes"] = json!(["control:reload"]),
+            }
+            let server = serve(vec![Reply::json(caps)]).await?;
+            let client = ControlClient::new(&server.endpoint, TOKEN)?;
+            let error = match resource {
+                "state" => client.state_report().await.err(),
+                _ => client.operation(NEXT_INSTANCE, INSTANCE).await.err(),
+            }
+            .ok_or("resource dispatched without validated descriptor")?;
+            assert!(matches!(error, Error::ControlResourceUnavailable { .. }));
+            assert_eq!(server.records.lock().await.len(), 1);
+        }
+    }
+    for case in 0..3 {
+        let mut caps = capabilities(INSTANCE, &[Action::Reload]);
+        match case {
+            0 => caps["protocol_version"] = json!(1),
+            1 => caps["action_descriptors"]["reload"]["version"] = json!(1),
+            _ => caps["scopes"] = json!(["control:reload"]),
+        }
+        let server = serve(vec![Reply::json(caps)]).await?;
+        let result = ControlClient::new(&server.endpoint, TOKEN)?
+            .submit_reload(&ReloadInput {
+                request_id: NEXT_INSTANCE.into(),
+                expected_server_instance_id: INSTANCE.into(),
+                expected_generation: 1,
+            })
+            .await;
+        assert!(result.is_err());
+        assert_eq!(server.records.lock().await.len(), 1);
+    }
     Ok(())
 }

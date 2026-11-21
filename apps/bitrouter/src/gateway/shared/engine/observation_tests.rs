@@ -24,7 +24,7 @@ use crate::gateway::shared::authority::Authority;
 use crate::gateway::shared::capture::{Inputs, Requirements};
 use crate::gateway::shared::ownership::Custody;
 use crate::gateway::shared::store::Store;
-use crate::policy_lock::{PolicyLock, PolicyRuntime};
+use crate::policy_lock::PolicyRuntime;
 use crate::runtime_crypto::DeploymentKey;
 
 struct Fixture {
@@ -56,9 +56,9 @@ impl Fixture {
             lease_ms: 30_000,
         };
         let config = crate::config::parse(
-            "inherit_defaults: false\npresets:\n  coding:\n    model: fixture:strong\n    policy: auto\n",
+            "inherit_defaults: false\nrouters:\n  coding:\n    selection:\n      kind: policy\n      base_model: fixture:strong\n      policy: auto\n",
         )?;
-        let document: PolicyLock =
+        let document: bitrouter_ai::policy::Document =
             serde_saphyr::from_str(include_str!("../../../../policy/default.yaml"))?;
         let pending = PendingEvalDecisionStore::default();
         let requirements = Requirements::from_config(&config, Some(&document))?;
@@ -100,10 +100,8 @@ impl Fixture {
         );
         admission.attach(&mut request);
         let mut context = PipelineContext::new(request);
-        runtime
-            .prepare_selection("auto", None, &mut context)
-            .await?;
-        runtime.select_variant("auto", None, &mut context).await?;
+        runtime.prepare_selection("auto", &mut context).await?;
+        runtime.select_policy("auto", &mut context).await?;
         admission.retain_routing(&context)?;
         admission.route_ready()?;
         let invocation = context

@@ -44,13 +44,33 @@ fn route_byte_budget_stops_before_resolving_later_selectors() -> Result<()> {
     let mut input = route("tenant", "expanded", "model")?;
     input["definition"]["routing"]["providers"]["fixture"]["headers"]["x-large"] =
         json!("x".repeat(16 * 1024));
-    let mut exploration: Vec<_> = (0..255).map(|n| format!("fixture:model-{n}")).collect();
-    // Resolution of this tail must never be reached after the 1 MiB budget.
-    exploration.push("bitrouter/missing-router".into());
-    input["definition"]["exploration"] = json!(exploration);
+    let policy_ref = reference("tenant", ResourceKind::Policy, "budget-policy")?;
+    input["definition"]["policy"] = serde_json::to_value(&policy_ref)?;
+    input["definition"]["selector"] = json!("bitrouter/budget");
+    input["definition"]["routing"]["routers"] = json!({"budget":{"selection":{"kind":"policy","policy":"selected","base_model":"fixture:model"}}});
+    let tiers: std::collections::BTreeMap<_, _> = (0..256)
+        .map(|n| {
+            (
+                format!("tier-{n:03}"),
+                json!({"model":format!("fixture:model-{n}")}),
+            )
+        })
+        .collect();
+    let document = crate::model_policy::parse(
+        &json!({"spec_version":"policy/1.0.0-beta.1","policies":{"selected":{"tiers":tiers,"default_tier":"tier-000"}}}),
+    )?;
+    let policy = Artifact {
+        reference: policy_ref,
+        definition: Definition::Policy {
+            document,
+            name: "selected".into(),
+            dependencies: Vec::new(),
+        },
+        envelope: None,
+    };
     let input: manifest::Import = serde_json::from_value(input)?;
     input.validate()?;
-    let error = compiler::prepare_route(&input, None)
+    let error = compiler::prepare_route(&input, Some(&policy))
         .err()
         .context("oversized route accepted")?;
     assert_eq!(error.to_string(), "route envelope byte capacity exceeded");

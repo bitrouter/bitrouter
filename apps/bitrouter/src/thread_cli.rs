@@ -2,8 +2,8 @@
 
 use std::path::PathBuf;
 
+use crate::managed_contract::harness::thread::ThreadRecoveryRequest;
 use anyhow::{Context, Result, ensure};
-use bitrouter_ai::harness::thread::ThreadRecoveryRequest;
 use clap::{Args, Subcommand, ValueEnum};
 
 use crate::client::agent_local::{self, Operation, ReplyResult, ThreadClient};
@@ -248,9 +248,9 @@ pub async fn run(command: Command, output: &Output) -> Result<()> {
                 workspace: workspace.canonicalize()?,
                 model,
                 model_mode: if model_policy {
-                    bitrouter_ai::core::protocol::ModelMode::Policy
+                    crate::managed_contract::harness::agent::ModelMode::Policy
                 } else {
-                    bitrouter_ai::core::protocol::ModelMode::Fixed
+                    crate::managed_contract::harness::agent::ModelMode::Fixed
                 },
                 effort,
                 max_output_tokens,

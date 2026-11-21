@@ -68,7 +68,7 @@ pub(super) async fn narrow_binding(harness: &OrderedHarness, credentials: &[usiz
 
 async fn reject_dispatch(
     harness: &OrderedHarness,
-    binding: &OrderedDispatchBindingV2,
+    binding: &OrderedDispatchBinding,
     status: u16,
     code: ErrorCode,
 ) -> Result<()> {
@@ -132,11 +132,11 @@ async fn selected_subset_survives_removal_of_unselected_credential_scope() -> Re
     // inference credential proves only the selected execution authorization.
     let receipt = harness
         .control(true, HttpVersion::Http1Only)?
-        .execution_v2(&harness.fixture.installation, &harness.fixture.tenant, &id)
+        .execution(&harness.fixture.installation, &harness.fixture.tenant, &id)
         .await?;
     ensure!(receipt.state == ReceiptState::Committed && receipt.outcome == Outcome::Completed);
-    ensure!(receipt.accepted_selection.candidate_indices == [0]);
-    ensure!(receipt.attempts.len() == 1 && receipt.attempts[0].candidate_index == 0);
+    ensure!(receipt_selection(&receipt)?.candidate_indices == [0]);
+    ensure!(receipt.attempts.len() == 1 && receipt.attempts[0].candidate_index == Some(0));
     ensure!(harness.observed()? == ["model-0"]);
     harness.fixture.service.shutdown().await?;
     Ok(())
@@ -411,17 +411,17 @@ async fn concurrent_scoped_callers_preserve_order_and_immutable_configuration() 
     ensure!(ids[0] != ids[1]);
     for (id, binding) in ids.iter().zip([&binding_a, &binding_b]) {
         let receipt = operator
-            .execution_v2(&fixture.installation, &fixture.tenant, id)
+            .execution(&fixture.installation, &fixture.tenant, id)
             .await?;
         ensure!(receipt.state == ReceiptState::Committed && receipt.outcome == Outcome::Completed);
         ensure!(receipt.correlation_id == binding.correlation_id);
         ensure!(receipt.execution_revision == harness.revision.revision_id);
-        ensure!(receipt.accepted_selection == binding.selection.accept(protocol)?);
+        ensure!(receipt_selection(&receipt)? == &binding.selection.accept(protocol)?);
         ensure!(
             receipt
                 .attempts
                 .iter()
-                .map(|attempt| attempt.candidate_index)
+                .filter_map(|attempt| attempt.candidate_index)
                 .collect::<Vec<_>>()
                 == binding.selection.candidate_indices
         );
@@ -433,7 +433,7 @@ async fn concurrent_scoped_callers_preserve_order_and_immutable_configuration() 
                 .collect::<Vec<_>>()
                 == [Some(503), Some(200)]
         );
-        let evidence = operator.usage_evidence_v2(&receipt).await?;
+        let evidence = operator.usage_evidence(&receipt).await?;
         evidence.validate_against(&receipt)?;
         ensure!(evidence.attempts.len() == 2);
     }

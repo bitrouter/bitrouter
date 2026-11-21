@@ -173,7 +173,6 @@ impl Write {
 }
 
 /// Actual prepared SQL values, without rendering literals or copying payloads.
-#[cfg(any(feature = "core", feature = "harness"))]
 pub(crate) fn statement_bytes(statement: &sea_orm::Statement) -> Result<usize> {
     use sea_orm::Value;
     let mut bytes = statement.sql.len();

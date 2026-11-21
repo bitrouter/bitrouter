@@ -207,7 +207,7 @@ async fn restart_uses_acknowledged_pin_and_retained_row_without_import_source() 
     let initial = crate::tenancy::store::load(&ready.fixture.db, chrono::Utc::now()).await?;
     let resources = crate::tenancy::resources::Resources::with_key(
         ready.fixture.installation.clone(),
-        [29; 32],
+        ready.fixture.wrapping_key,
     )?;
     ready.fixture.service = crate::tenancy::Service::start_prepared(
         ready.fixture.db.clone(),
@@ -246,11 +246,16 @@ async fn retained_http_row_rejects_replacement_epoch_before_catalog_import() -> 
     server.wire().await?;
     let (crypto, original) = retained(&ready, &public).await?;
     ready.fixture.service.shutdown().await?;
-    ready
-        .fixture
-        .db
+    // Model catalog source loss without leaving orphan lifecycle metadata.
+    // The retained configuration, continuation row and epoch remain unchanged.
+    let transaction = ready.fixture.db.begin().await?;
+    transaction
+        .execute_unprepared("DELETE FROM tenancy_resource_lifecycle")
+        .await?;
+    transaction
         .execute_unprepared("DELETE FROM tenancy_resource_revisions")
         .await?;
+    transaction.commit().await?;
     let initial = crate::tenancy::store::load(&ready.fixture.db, chrono::Utc::now()).await?;
     let import = serde_json::to_vec(
         &json!({"format":1,"installation_id":ready.fixture.installation,"resources":[{
@@ -258,9 +263,11 @@ async fn retained_http_row_rejects_replacement_epoch_before_catalog_import() -> 
             "definition":{"kind":"credential","credential":{"type":"api_key","data":{"value":"must-not-be-imported"}}}
         }]}),
     )?;
+    let mut wrong_key = ready.fixture.wrapping_key;
+    wrong_key[0] ^= 1;
     let wrong = crate::tenancy::resources::Resources::with_key(
         ready.fixture.installation.clone(),
-        [31; 32],
+        wrong_key,
     )?;
     ensure!(
         crate::tenancy::Service::start_resources(
@@ -298,7 +305,7 @@ async fn retained_http_row_rejects_replacement_epoch_before_catalog_import() -> 
         initial,
         Arc::new(crate::tenancy::resources::Resources::with_key(
             ready.fixture.installation.clone(),
-            [29; 32],
+            ready.fixture.wrapping_key,
         )?),
     )
     .await?;
@@ -317,7 +324,7 @@ async fn retained_http_row_rejects_replacement_epoch_before_catalog_import() -> 
             initial,
             Arc::new(crate::tenancy::resources::Resources::with_key(
                 ready.fixture.installation.clone(),
-                [29; 32]
+                ready.fixture.wrapping_key
             )?)
         )
         .await

@@ -33,7 +33,7 @@ pub enum BitrouterError {
     #[error("model conversion incompatible")]
     Incompatible {
         /// Content-free model diagnostics, preserved for trusted callers.
-        report: bitrouter_ai::conversion::ConversionReport,
+        report: crate::gateway::conversion_report::ConversionReport,
     },
     /// 400 — malformed request (bad JSON, unknown enum variant, …).
     #[error("bad request: {message}")]

@@ -125,8 +125,8 @@ fn fixed_resource_keys_use_sql_string_order_and_identity_padding_is_injective() 
             < format::resource_key(&reference(OwnerKind::Tenant, ResourceKind::Route)?)?
     );
     assert!(
-        format::resource_key(&reference(OwnerKind::Tenant, ResourceKind::Checkpoint)?)?
-            < format::resource_key(&reference(OwnerKind::Tenant, ResourceKind::Credential)?)?
+        format::resource_key(&reference(OwnerKind::Tenant, ResourceKind::Credential)?)?
+            < format::resource_key(&reference(OwnerKind::Tenant, ResourceKind::Policy)?)?
     );
     assert!(format::padded::<128>("a")? < format::padded::<128>("aa")?);
     assert_ne!(format::padded::<256>("é")?, format::padded::<256>("e")?);

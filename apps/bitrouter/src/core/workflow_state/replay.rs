@@ -273,7 +273,7 @@ mod tests {
                     "next_step_role": "implement",
                     "next_action_class": "mutate",
                     "route_risk": "normal",
-                    "task_family": "code_debugging"
+                    "task_family": "code:debugging"
                 }
             }
         }))
@@ -283,7 +283,7 @@ mod tests {
 
         assert_eq!(
             summary.records[0].predictive_route_key,
-            "semantic_route/v1|code:debugging|implement|normal"
+            "code:debugging|implement|normal"
         );
         assert_eq!(summary.records[0].prediction_matches_expected, Some(true));
     }

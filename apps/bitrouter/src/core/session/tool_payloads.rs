@@ -2,7 +2,7 @@
 //! limits prevent later signals or host policy from enlarging an admitted reply.
 
 use super::*;
-use bitrouter_ai::core::protocol::ToolResultLimits;
+use crate::managed_contract::protocol::ToolResultLimits;
 
 impl CoreSession {
     pub(super) fn admitted_tool_result_limits(
@@ -161,7 +161,7 @@ pub(super) fn validate_result(
 /// Each first essential status and each uncertain/definite result has an
 /// independent evidence allowance. Repeated optional reports need fresh room.
 pub(super) fn remaining_artifact_slots(call: &Invocation) -> u64 {
-    use bitrouter_ai::core::protocol::ToolStatus;
+    use crate::managed_contract::protocol::ToolStatus;
     if call
         .result
         .as_ref()

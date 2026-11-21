@@ -1,7 +1,7 @@
 use super::*;
+use bitrouter::managed_contract::protocol::{ToolObservation, ToolStatus};
 use bitrouter::storage::checkpoint::CheckpointBatchExt;
 use bitrouter::storage::checkpoint::snapshot::ResourceConstraint;
-use bitrouter_ai::core::protocol::{ToolObservation, ToolStatus};
 
 #[path = "capacity/tree_limits.rs"]
 mod tree_limits;
@@ -451,9 +451,10 @@ async fn saturated_tree_preserves_waits_pairing_and_child_delivery_after_ack_los
         assert!(done.agents.values().all(|agent| {
             agent.queue.is_empty()
                 && agent.turn.as_ref().is_some_and(|turn| {
-                    turn.status == bitrouter_ai::harness::inspection::AgentStatus::Interrupted
-                        && (agent.parent_id.is_none() || turn.notified)
-                        && turn.invocations.iter().all(|call| call.consumed)
+                    turn.status
+                    == bitrouter::managed_contract::harness::inspection::AgentStatus::Interrupted
+                    && (agent.parent_id.is_none() || turn.notified)
+                    && turn.invocations.iter().all(|call| call.consumed)
                 })
         }));
         assert!(done.waits.values().all(|wait| {
@@ -770,7 +771,7 @@ async fn cleanup_capacity_preserves_running_recovery_at_saturation() -> TestResu
 
 #[tokio::test]
 async fn capacity_failure_resolves_signal_fence_after_ack_or_reconnect() -> TestResult {
-    use bitrouter_ai::core::checkpoint::ToolStartFence;
+    use bitrouter::managed_contract::checkpoint::ToolStartFence;
     for lost_ack in [None, Some(false), Some(true)] {
         let mut fixture = Harness::new(None, None);
         fixture.wait_for_approval = true;
@@ -996,7 +997,7 @@ async fn capacity_failure_history_cannot_be_erased_or_reclassified() -> TestResu
             "cause" => run["resource_constraint"] = json!("active_time"),
             "event" => first.events[0].payload["message"] = json!("changed"),
             "repeat" => {
-                final_payload.events[0] = bitrouter_ai::core::checkpoint::DurableEvent {
+                final_payload.events[0] = bitrouter::managed_contract::checkpoint::DurableEvent {
                     event_seq: final_payload.events[0].event_seq,
                     ..first.events[0].clone()
                 }

@@ -193,9 +193,9 @@ async fn real_controller_passive_modes_freeze_owned_prefix_without_judge_or_lega
             session = Some(tokio::time::timeout(TIMEOUT, ControlledSession::open_authenticated(app.clone(), ingress.clone(), launch(&program, &marker, &listener.origin, None), CancellationToken::new())).await??);
             let current = session.as_ref().context("session")?;
             // Native036 and capture consume the SAME host slot, before workspace I/O.
-            let native = crate::harness::resources::managed::session::NativeSession::open_authenticated(app.clone(), ingress, "competing", directory.path(), bitrouter_ai::harness::agent::ToolMode::ReadOnly, &crate::harness::resources::HarnessConfig::default()).await;
+            let native = crate::harness::resources::managed::session::NativeSession::open_authenticated(app.clone(), ingress, "competing", directory.path(), crate::managed_contract::harness::agent::ToolMode::ReadOnly, &crate::harness::resources::HarnessConfig::default()).await;
             let denied = native.err().context("native consumer acquired a second host slot")?;
-            ensure!(denied.code == bitrouter_ai::core::protocol::ErrorCode::LimitExceeded, "native open did not refuse the shared host slot");
+            ensure!(denied.code == crate::managed_contract::protocol::ErrorCode::LimitExceeded, "native open did not refuse the shared host slot");
             let id = current.new_session(directory.path().to_path_buf()).await?;
             current.prompt(&id, "private task").await?;
             let observed = provider.receive().await?;

@@ -5,12 +5,32 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::gateway::routing::workflow::ir::WorkflowIdentity;
-use {
-    bitrouter_ai::eval::EvalExperimentRef, bitrouter_ai::eval::ExperimentArm,
-    bitrouter_ai::eval::ExperimentAssignmentUnit,
-};
 
 const ASSIGNMENT_DOMAIN: &str = "bitrouter.route-exploration.assignment.v1";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssignmentArm {
+    Control,
+    Challenger,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssignmentUnit {
+    Task,
+    Episode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RouteAssignment {
+    pub experiment_id: String,
+    pub arm: AssignmentArm,
+    pub assignment_unit: AssignmentUnit,
+    pub assignment_id_digest: String,
+    pub challenger_propensity_ppm: u32,
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "snake_case")]
@@ -54,7 +74,7 @@ impl RouteExploration {
     /// Assign one stable task or episode to the control or challenger arm.
     /// Missing stable identity deliberately produces no evidence and lets the
     /// caller retain the champion route.
-    pub fn assignment(&self, identity: &WorkflowIdentity) -> Result<Option<EvalExperimentRef>> {
+    pub fn assignment(&self, identity: &WorkflowIdentity) -> Result<Option<RouteAssignment>> {
         let benchmark_identity = identity
             .benchmark_run_id
             .as_deref()
@@ -65,12 +85,12 @@ impl RouteExploration {
                     .as_deref()
                     .filter(|trial| !trial.is_empty()),
             )
-            .map(|(run, trial)| (ExperimentAssignmentUnit::Task, format!("{run}\0{trial}")));
+            .map(|(run, trial)| (AssignmentUnit::Task, format!("{run}\0{trial}")));
         let parent_identity = identity
             .parent_session_id
             .as_deref()
             .filter(|parent| !parent.is_empty())
-            .map(|parent| (ExperimentAssignmentUnit::Episode, parent.to_owned()));
+            .map(|parent| (AssignmentUnit::Episode, parent.to_owned()));
         let Some((assignment_unit, assignment_id)) = benchmark_identity.or(parent_identity) else {
             return Ok(None);
         };
@@ -81,9 +101,9 @@ impl RouteExploration {
     /// establish the identity; this calculation does not confer authority.
     pub(crate) fn assignment_for(
         &self,
-        assignment_unit: ExperimentAssignmentUnit,
+        assignment_unit: AssignmentUnit,
         assignment_id: &str,
-    ) -> EvalExperimentRef {
+    ) -> RouteAssignment {
         let assignment_id_digest = digest(assignment_id);
         let bucket_digest = Sha256::digest(
             format!(
@@ -97,12 +117,12 @@ impl RouteExploration {
         let mut bucket_bytes = [0_u8; 8];
         bucket_bytes.copy_from_slice(&bucket_digest[..8]);
         let bucket = u64::from_be_bytes(bucket_bytes) % 1_000_000;
-        EvalExperimentRef {
+        RouteAssignment {
             experiment_id: self.experiment_id.clone(),
             arm: if bucket < u64::from(self.challenger_exposure_ppm) {
-                ExperimentArm::Challenger
+                AssignmentArm::Challenger
             } else {
-                ExperimentArm::Control
+                AssignmentArm::Control
             },
             assignment_unit,
             assignment_id_digest,
@@ -153,10 +173,10 @@ impl PolicyOptimizationState {
     }
 }
 
-fn assignment_unit_name(unit: ExperimentAssignmentUnit) -> &'static str {
+fn assignment_unit_name(unit: AssignmentUnit) -> &'static str {
     match unit {
-        ExperimentAssignmentUnit::Task => "task",
-        ExperimentAssignmentUnit::Episode => "episode",
+        AssignmentUnit::Task => "task",
+        AssignmentUnit::Episode => "episode",
     }
 }
 
@@ -174,7 +194,7 @@ mod tests {
     fn experiment() -> RouteExploration {
         RouteExploration {
             experiment_id: EXPERIMENT_ID.into(),
-            target_request_key: "semantic_route/v1|unknown|implement|normal".into(),
+            target_request_key: "unknown|implement|normal".into(),
             champion_tier: "strong".into(),
             challenger_tier: "economy".into(),
             challenger_exposure_ppm: 700_000,
@@ -189,25 +209,15 @@ mod tests {
     }
 
     #[test]
-    fn objective_is_signed_and_legacy_cost_gate_keeps_its_wire_identity() -> Result<()> {
+    fn objective_changes_the_experiment_content_identity() -> Result<()> {
         let mut gate = experiment().gate;
         let legacy = serde_json::to_value(&gate)?;
-        let cost_config =
-            crate::gateway::routing::experiment_identity::explore_compiler_config_digest(
-                "auto", "economy", 100_000, &gate,
-            )?;
         assert!(legacy.get("objective").is_none());
         assert_eq!(
             serde_json::from_value::<OptimizationGate>(legacy.clone())?,
             gate
         );
         gate.objective = OptimizationObjective::Latency;
-        assert_ne!(
-            cost_config,
-            crate::gateway::routing::experiment_identity::explore_compiler_config_digest(
-                "auto", "economy", 100_000, &gate,
-            )?
-        );
         let latency = serde_json::to_value(&gate)?;
         assert_eq!(latency["objective"], "latency");
         assert_ne!(
@@ -239,9 +249,9 @@ mod tests {
 
         // SHA-256 of `run-1\\0trial-1`, with a hand-derived assignment bucket
         // of 669455 at 700000 ppm, is challenger.
-        assert_eq!(assignment_a.arm, ExperimentArm::Challenger);
+        assert_eq!(assignment_a.arm, AssignmentArm::Challenger);
         assert_eq!(assignment_a, assignment_b);
-        assert_eq!(assignment_a.assignment_unit, ExperimentAssignmentUnit::Task);
+        assert_eq!(assignment_a.assignment_unit, AssignmentUnit::Task);
         assert_eq!(
             assignment_a.assignment_id_digest,
             "sha256:4a5ea7dc2692681fb41b00cf50a34656ee45727cfdabd1d7a77ef8221df1dcc5"
@@ -277,10 +287,7 @@ mod tests {
                 .assignment(&identity)?
                 .ok_or_else(|| anyhow::anyhow!("the parent episode identity must be usable"))?;
 
-            assert_eq!(
-                assignment.assignment_unit,
-                ExperimentAssignmentUnit::Episode
-            );
+            assert_eq!(assignment.assignment_unit, AssignmentUnit::Episode);
             assert_eq!(
                 assignment.assignment_id_digest,
                 "sha256:a1bdc27ac7582a7459555e91884123666722003a729ba3fbfc29676fc4f724c7"
@@ -300,11 +307,11 @@ mod tests {
     fn rejection_round_trips_full_treatment_and_policy_provenance() -> Result<()> {
         let raw = r#"{
             "experiment_id":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-            "target_request_key":"semantic_route/v1|unknown|implement|normal",
+            "target_request_key":"unknown|implement|normal",
             "treatment_context_digest":"sha256:123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0",
             "treatment":{
                 "experiment_id":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-                "target_request_key":"semantic_route/v1|unknown|implement|normal",
+                "target_request_key":"unknown|implement|normal",
                 "champion_tier":"strong",
                 "challenger_tier":"economy",
                 "challenger_exposure_ppm":100000,

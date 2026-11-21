@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::ThreadService;
-use bitrouter_ai::harness::turn::TurnStatus;
+use crate::managed_contract::harness::turn::TurnStatus;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerSnapshot {

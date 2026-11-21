@@ -3,8 +3,9 @@ pub(in crate::tenancy) mod capture_terminal;
 #[cfg(test)]
 mod history_tests;
 pub(in crate::tenancy::learning) mod namespace;
-pub(in crate::tenancy) mod native;
 pub(in crate::tenancy) mod recovery;
+#[cfg(test)]
+mod retirement_tests;
 pub(in crate::tenancy) mod stopped;
 use super::{
     entities::{heads, revisions},
@@ -55,13 +56,11 @@ pub(in crate::tenancy) struct Prepared {
 }
 pub(in crate::tenancy) enum PreparedSource {
     Capture(Summary),
-    Native(Box<super::native::PreparedSource>),
 }
 impl Prepared {
     fn capture_summary(&self) -> Result<&Summary> {
         match &self.source {
             PreparedSource::Capture(summary) => Ok(summary),
-            PreparedSource::Native(_) => anyhow::bail!("native paid source is not ACP"),
         }
     }
     pub(super) fn checkpoint(&self) -> &str {
@@ -99,8 +98,6 @@ struct Record {
     history_reservation: Option<HistoryReservation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     recovery: Option<super::recovery::Retained>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    native_evidence: Option<crate::core::evolution::evidence::EvidencePacket>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -118,25 +115,9 @@ enum ReservationState {
     ReleasedWithoutRevision,
 }
 fn valid_record(value: &Record) -> bool {
-    if (value.version == 4) != value.native_evidence.is_some() {
-        return false;
-    }
-    if let Some(packet) = &value.native_evidence
-        && (packet.projection_version != crate::core::evolution::evidence::NATIVE_EVIDENCE_VERSION
-            || packet.checkpoint_id != value.checkpoint
-            || packet.prefix_digest != value.prefix_digest
-            || !packet.gaps.is_empty()
-            || packet.items.is_empty()
-            || packet.items.len() > 4096)
-    {
-        return false;
-    }
     match (&value.recovery, value.version) {
-        (None, 1 | 2) => {}
-        (Some(recovery), 3 | 4) => {
-            if (value.version == 4) != recovery.seed.native.is_some() {
-                return false;
-            }
+        (None, 2) => {}
+        (Some(recovery), 3) => {
             let seed = &recovery.seed;
             if seed.validate().is_err()
                 || seed.job != value.job
@@ -177,11 +158,7 @@ fn valid_record(value: &Record) -> bool {
         _ => return false,
     }
     match (value.version, &value.history_reservation) {
-        (1, None) => matches!(
-            value.status,
-            Status::Completed | Status::Unselected | Status::Failed
-        ),
-        (2..=4, Some(reservation)) => {
+        (2..=3, Some(reservation)) => {
             reservation.checkpoint == value.checkpoint
                 && reservation.rows == 1
                 && reservation.bytes == history::REVISION_BYTES
@@ -215,12 +192,6 @@ fn record_revision(value: &Record) -> i64 {
             .as_ref()
             .is_some_and(|r| r.observed.is_some()),
     ) + i64::from(value.recovery.as_ref().is_some_and(|r| r.stopped.is_some()))
-        + i64::from(
-            value
-                .recovery
-                .as_ref()
-                .is_some_and(|r| r.native_cleanup.is_some()),
-        )
         + i64::from(value.status != Status::Accepted)
 }
 fn record_kind(value: &Record) -> &'static str {
@@ -492,12 +463,7 @@ pub(in crate::tenancy) async fn accept(
     recovery: Option<&super::recovery::Seed>,
     budget: &OperationBudget<'_>,
 ) -> Result<Option<Status>> {
-    let binding = match binding {
-        super::source::Binding::Capture(binding) => binding,
-        super::source::Binding::Native(native) => {
-            return super::native::accept(tx, native, p, execution, recovery, budget).await;
-        }
-    };
+    let super::source::Binding::Capture(binding) = binding;
     let a = binding.association();
     let profile = binding.assessment().context("assessment binding absent")?;
     ensure!(
@@ -609,12 +575,10 @@ pub(in crate::tenancy) async fn accept(
         accepted_at: p.accepted_at.clone(),
         output: None,
         assessment: None,
-        native_evidence: None,
         recovery: recovery.map(|seed| super::recovery::Retained {
             seed: seed.clone(),
             observed: None,
             stopped: None,
-            native_cleanup: None,
         }),
         history_reservation: Some(HistoryReservation {
             checkpoint: p.checkpoint().to_owned(),
@@ -649,12 +613,7 @@ pub(in crate::tenancy) async fn finish(
     select: bool,
     budget: &OperationBudget<'_>,
 ) -> Result<Status> {
-    let binding = match binding {
-        super::source::Binding::Capture(binding) => binding,
-        super::source::Binding::Native(native) => {
-            return super::native::finish(tx, native, p, execution, output, select, budget).await;
-        }
-    };
+    let super::source::Binding::Capture(binding) = binding;
     let a = binding.association();
     let profile = binding.assessment().context("assessment binding absent")?;
     ensure!(
@@ -1020,12 +979,7 @@ pub(in crate::tenancy) async fn observe(
     observation: &super::owner::Observation,
     budget: &OperationBudget<'_>,
 ) -> Result<()> {
-    let binding = match binding {
-        super::source::Binding::Capture(binding) => binding,
-        super::source::Binding::Native(native) => {
-            return super::native::observe(tx, native, p, execution, observation, budget).await;
-        }
-    };
+    let super::source::Binding::Capture(binding) = binding;
     let a = binding.association();
     a.connection_in(tx, budget).await?;
     let row = record(tx, a, JOB, &p.id, budget)

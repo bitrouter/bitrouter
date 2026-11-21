@@ -75,6 +75,7 @@ fn case() -> Result<Case> {
     // manufacture a model attempt or billed model counter.
     let receipt = Candidate::new(
         ExecutionReceipt {
+            dispatch: bitrouter_ai::tenancy::execution::Dispatch::Strict,
             installation_id: installation,
             tenant_id: "tenant".try_into()?,
             principal_id: "creator".try_into()?,

@@ -9,8 +9,8 @@ use crate::harness::storage::ExecutionRecord;
 use crate::harness::storage::ExecutionStore;
 use crate::harness::storage::MemoryExecutionStore;
 use crate::harness::turn::CancelTurnRequest;
-use bitrouter_ai::harness::runtime::EffectStatus;
-use bitrouter_ai::harness::turn::TurnStatus;
+use crate::managed_contract::harness::runtime::EffectStatus;
+use crate::managed_contract::harness::turn::TurnStatus;
 use rmcp::model::ProtocolVersion;
 use serde_json::json;
 use std::sync::Arc;
@@ -536,7 +536,7 @@ async fn checkpoint_continuation_reuses_results_and_refuses_changed_resources()
         // A stopped, joined source and a precise prefix isolate continuation;
         // this is not evidence that an abruptly lost owner can be retired.
         let memory = Arc::new(MemoryExecutionStore::default());
-        let bitrouter_ai::harness::runtime::OwnerClaim::Acquired { owner } =
+        let crate::managed_contract::harness::runtime::OwnerClaim::Acquired { owner } =
             memory.claim_owner(&source.inner.instance_id).await?
         else {
             return Err("owner".into());
@@ -573,7 +573,7 @@ async fn checkpoint_continuation_reuses_results_and_refuses_changed_resources()
             .recover_thread(
                 &target,
                 &caller,
-                bitrouter_ai::harness::thread::ThreadRecoveryRequest {
+                crate::managed_contract::harness::thread::ThreadRecoveryRequest {
                     source_server_instance_id: recovery.source_server_instance_id.clone(),
                     source_cursor: recovery.source_cursor,
                     idempotency_key: "continue".into(),

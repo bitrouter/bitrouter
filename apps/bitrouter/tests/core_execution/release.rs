@@ -99,7 +99,7 @@ async fn release_ack_fences_new_intents_but_preserves_reads_and_exact_replay() -
     let receipt = releasing.await??;
     assert_eq!(
         receipt.disposition,
-        bitrouter_ai::core::protocol::OperationDisposition::Applied
+        bitrouter::managed_contract::protocol::OperationDisposition::Applied
     );
     assert_eq!(
         starting

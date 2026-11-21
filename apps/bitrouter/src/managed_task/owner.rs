@@ -12,10 +12,12 @@ use crate::gateway::caller::CallerContext;
 use crate::harness::resources::HarnessConfig;
 use crate::harness::resources::managed::session::{NativeApproval, NativeSession, StoredSession};
 use crate::harness::resources::managed::store::NativeStore;
+use crate::managed_contract::harness::agent::ToolMode;
+use crate::managed_contract::protocol::{
+    CoreError, ErrorCode, OwnershipGrant, TaskInput, Verification,
+};
+use crate::managed_contract::skills::SkillConsentAnswer;
 use crate::storage::checkpoint::sha256;
-use bitrouter_ai::core::protocol::{CoreError, ErrorCode, OwnershipGrant, TaskInput, Verification};
-use bitrouter_ai::core::skills::SkillConsentAnswer;
-use bitrouter_ai::harness::agent::ToolMode;
 use sea_orm::DatabaseConnection;
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
@@ -36,7 +38,7 @@ struct HeadlessApproval;
 impl NativeApproval for HeadlessApproval {
     async fn approve(
         &self,
-        _: &bitrouter_ai::core::protocol::ToolExecute,
+        _: &crate::managed_contract::protocol::ToolExecute,
     ) -> Result<bool, CoreError> {
         // Preserve this explicit headless command's original permission policy.
         // NativeResources still enforce workspace, mode and declared tools.
@@ -45,7 +47,7 @@ impl NativeApproval for HeadlessApproval {
 
     async fn approve_skill(
         &self,
-        _: &bitrouter_ai::core::skills::SkillConsentRequest,
+        _: &crate::managed_contract::skills::SkillConsentRequest,
     ) -> Result<bool, CoreError> {
         // The original Core request remains pending until an exact operator
         // answer or cancellation. Headless command policy grants no consent.
@@ -144,7 +146,7 @@ impl Owner {
             effort: request.effort.map(|e| e.to_string()),
             max_output_tokens: request.max_output_tokens,
             context_limit_bytes: None,
-            routing: bitrouter_ai::core::protocol::RoutingSettings {
+            routing: crate::managed_contract::protocol::RoutingSettings {
                 model: model_mode,
                 skills: request.skills.clone(),
                 ..Default::default()
@@ -601,8 +603,8 @@ fn stored_report(name: &str, operation_id: Option<&str>, stored: &StoredSession)
 
 fn consent_projection(
     snapshot: &crate::storage::checkpoint::snapshot::SessionSnapshot,
-    receipt: Option<&bitrouter_ai::core::protocol::OperationReceipt>,
-) -> Vec<bitrouter_ai::core::skills::SkillConsentRequest> {
+    receipt: Option<&crate::managed_contract::protocol::OperationReceipt>,
+) -> Vec<crate::managed_contract::skills::SkillConsentRequest> {
     receipt
         .and_then(|receipt| receipt.assigned_ids.get("run_id"))
         .map_or_else(Vec::new, |run_id| snapshot.skill_consent_requests(run_id))
@@ -632,7 +634,7 @@ fn retained_skill_answer(
     snapshot: &crate::storage::checkpoint::snapshot::SessionSnapshot,
     operation_id: &str,
     answer: &SkillConsentAnswer,
-) -> Result<bitrouter_ai::core::protocol::OperationReceipt, CoreError> {
+) -> Result<crate::managed_contract::protocol::OperationReceipt, CoreError> {
     let receipt = snapshot.operations.get(operation_id).ok_or_else(|| error(ErrorCode::RecoveryRequired, "no live owner can accept a new skill answer; only an original committed answer may be inspected"))?;
     if receipt.request_sha256 != answer.fingerprint()? {
         return Err(error(

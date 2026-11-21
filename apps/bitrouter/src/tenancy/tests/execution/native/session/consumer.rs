@@ -196,8 +196,8 @@ async fn native_child_followup_reconnect_and_queued_root_inherit_the_fixed_owned
         if let Err(error) = core.drive().await {
             ensure!(matches!(
                 error.code,
-                bitrouter_ai::core::protocol::ErrorCode::UnauthorizedScope
-                    | bitrouter_ai::core::protocol::ErrorCode::CheckpointUnavailable
+                crate::managed_contract::protocol::ErrorCode::UnauthorizedScope
+                    | crate::managed_contract::protocol::ErrorCode::CheckpointUnavailable
             ));
         }
         session.close().await?;

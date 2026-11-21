@@ -1,9 +1,11 @@
 use crate::harness::resources::HarnessInventoryExt;
 #[cfg(feature = "core")]
 use crate::harness::resources::McpToolExt;
+use crate::managed_contract::harness::agent::AgentConfig;
 #[cfg(feature = "core")]
-use bitrouter_ai::harness::agent::EstimateRates;
-use bitrouter_ai::harness::agent::{AgentConfig, RunStatus, ToolMode};
+use crate::managed_contract::harness::agent::EstimateRates;
+use crate::managed_contract::harness::agent::RunStatus;
+use crate::managed_contract::harness::agent::ToolMode;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -30,12 +32,12 @@ const READ_ONLY_INSTRUCTIONS: &str = "You are BRO, a read-only coding agent. Ins
 pub trait AgentConfigExt: Sized {
     fn fixed(model: impl Into<String>, effort: Option<ReasoningEffort>) -> Self;
     fn read_only(self) -> Self;
-    fn with_model_mode(self, mode: bitrouter_ai::core::protocol::ModelMode) -> Self;
+    fn with_model_mode(self, mode: crate::managed_contract::harness::agent::ModelMode) -> Self;
     fn with_output_reservation(self, tokens: Option<u32>) -> Self;
     fn tool_mode(&self) -> ToolMode;
     fn with_skill_constraints(
         self,
-        skills: Option<bitrouter_ai::core::skills::SkillConstraints>,
+        skills: Option<crate::managed_contract::harness::skills::SkillConstraints>,
     ) -> Self;
 }
 
@@ -43,7 +45,7 @@ impl AgentConfigExt for AgentConfig {
     fn fixed(model: impl Into<String>, effort: Option<ReasoningEffort>) -> Self {
         Self {
             model: model.into(),
-            model_mode: bitrouter_ai::core::protocol::ModelMode::Fixed,
+            model_mode: crate::managed_contract::harness::agent::ModelMode::Fixed,
             effort,
             max_output_tokens: None,
             skills: None,
@@ -64,7 +66,7 @@ impl AgentConfigExt for AgentConfig {
         self
     }
 
-    fn with_model_mode(mut self, mode: bitrouter_ai::core::protocol::ModelMode) -> Self {
+    fn with_model_mode(mut self, mode: crate::managed_contract::harness::agent::ModelMode) -> Self {
         self.model_mode = mode;
         self
     }
@@ -76,7 +78,7 @@ impl AgentConfigExt for AgentConfig {
 
     fn with_skill_constraints(
         mut self,
-        skills: Option<bitrouter_ai::core::skills::SkillConstraints>,
+        skills: Option<crate::managed_contract::harness::skills::SkillConstraints>,
     ) -> Self {
         self.skills = skills;
         self
@@ -142,7 +144,7 @@ pub enum RunEvent {
 pub struct RunReport {
     pub(crate) native: Option<native::Saved>,
     pub(crate) cleanup_unconfirmed: bool,
-    pub resources: Option<bitrouter_ai::harness::resources::HarnessInventory>,
+    pub resources: Option<crate::managed_contract::harness::resources::HarnessInventory>,
     pub context_version: u64,
     pub status: RunStatus,
     pub final_answer: Option<String>,
@@ -184,8 +186,8 @@ pub(crate) struct RunInput {
     pub checkpoint: Option<RunReport>,
     pub complete_checkpoint: bool,
     pub restored_verification: Option<(
-        bitrouter_ai::harness::turn::VerificationStatus,
-        bitrouter_ai::harness::turn::VerificationEvidence,
+        crate::managed_contract::harness::turn::VerificationStatus,
+        crate::managed_contract::harness::turn::VerificationEvidence,
     )>,
 }
 
@@ -262,7 +264,7 @@ impl Agent {
                     .inventory
                     .tools
                     .iter()
-                    .map(bitrouter_ai::harness::resources::McpTool::declaration),
+                    .map(crate::managed_contract::harness::resources::McpTool::declaration),
             );
         }
         tools
@@ -635,11 +637,13 @@ impl Agent {
             u64::try_from(cleanup_started.elapsed().as_millis()).unwrap_or(u64::MAX),
         );
         let settlement = ExecutionRecord::Settled {
-            outcome: Some(bitrouter_ai::harness::runtime::SettlementOutcome {
-                status,
-                final_answer: report.final_answer.clone(),
-                detail: detail.clone(),
-            }),
+            outcome: Some(
+                crate::managed_contract::harness::runtime::SettlementOutcome {
+                    status,
+                    final_answer: report.final_answer.clone(),
+                    detail: detail.clone(),
+                },
+            ),
             context_version: report.context_version,
             messages: report.messages.clone(),
             model_steps: report.steps,

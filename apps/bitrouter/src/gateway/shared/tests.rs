@@ -5,7 +5,6 @@ use std::time::Duration;
 use anyhow::{Context, Result, ensure};
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 use serde::{Deserialize, Serialize};
-use sha2::Digest;
 
 use super::authority::Authority;
 use super::engine::{Admission, AdmissionResult, Engine, Rejection, TenantLimits};
@@ -20,7 +19,6 @@ mod metering;
 mod publication;
 mod races;
 mod refresh;
-mod trajectory;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 struct Counter {
@@ -407,7 +405,6 @@ async fn shared_attempts(
 
 async fn shared_recovery(first: &Store, second: &Store) -> Result<()> {
     use super::credentials::Credentials;
-    use super::engine::TrajectoryBinding;
     use crate::auth::db::{NewApiKey, insert_api_key, upsert_user};
     use crate::gateway::providers::auth::{credentials::Credential, store::CredentialKey};
     use bitrouter_ai::gateway::execution::{
@@ -482,15 +479,6 @@ async fn shared_recovery(first: &Store, second: &Store) -> Result<()> {
             }
         }
     }
-    let binding = TrajectoryBinding {
-        owner_user_id: tenant.clone(),
-        episode_id: uuid::Uuid::new_v4().to_string(),
-        request_id: "canonical-request".into(),
-        correlation_epoch: "fixture-epoch".into(),
-    };
-    let tx = first.begin().await?;
-    owner.bind_trajectory(&tx, &executions[3], &binding).await?;
-    tx.commit().await?;
     let complete = owner
         .prepare_attempt(&key_hash, &executions[3], &stamp)
         .await?;
@@ -514,19 +502,6 @@ async fn shared_recovery(first: &Store, second: &Store) -> Result<()> {
     owner
         .record_terminal(&executions[3], &complete.attempt_id, &terminal)
         .await?;
-    let early_fence_key = hex::encode(sha2::Sha256::digest(serde_json::to_vec(&(
-        "gateway-episode-fence-v1",
-        &tenant,
-        &binding.episode_id,
-    ))?));
-    let early_fence: Stored<serde_json::Value> = first
-        .get(Kind::EpisodeFence, &early_fence_key)
-        .await?
-        .context("projection fence missing before finish")?;
-    ensure!(
-        early_fence.value["pending"] == serde_json::json!([executions[3]]),
-        "provider permit was released without its cost barrier"
-    );
     ensure!(matches!(
         reconciler.query(&key_hash, &executions[3]).await?.state,
         ExecutionState::Running
@@ -596,16 +571,6 @@ async fn shared_recovery(first: &Store, second: &Store) -> Result<()> {
         .await?
         .context("terminal outbox event missing")?;
     ensure!(event.value["event"]["execution"]["execution_id"] == executions[3]);
-    let fence_key = hex::encode(sha2::Sha256::digest(serde_json::to_vec(&(
-        "gateway-episode-fence-v1",
-        &tenant,
-        &binding.episode_id,
-    ))?));
-    let fence: Stored<serde_json::Value> = first
-        .get(Kind::EpisodeFence, &fence_key)
-        .await?
-        .context("terminal projection fence missing")?;
-    ensure!(fence.value["pending"] == serde_json::json!([executions[3]]));
     // An original worker may deliver late evidence, without acquiring a new
     // owner lease or dispatching again. Repeated finalization stays idempotent.
     owner

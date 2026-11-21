@@ -5,21 +5,24 @@ use crate::skills::mcp::HeldMcpSkillExt;
 use crate::skills::mcp::SkillScopeExt;
 use std::collections::BTreeSet;
 
+use crate::skills::wire::GetSkillResult;
+use crate::skills::wire::SKILLS_EXTENSION_ID;
+use crate::skills::wire::SKILLS_GET_METHOD;
+use crate::skills::wire::SKILLS_LIST_METHOD;
+use crate::skills::wire::SkillEntry;
 use base64::Engine;
-use bitrouter_ai::protocol::mcp_skills::{GetSkillResult, SkillEntry};
-use bitrouter_ai::protocol::mcp_skills::{
-    SKILLS_EXTENSION_ID, SKILLS_GET_METHOD, SKILLS_LIST_METHOD,
-};
 use rmcp::model::{ClientRequest, CustomRequest, ReadResourceRequestParams, ServerResult};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 use super::BoundedMcpClient;
 const CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+use crate::managed_contract::harness::skills::HeldMcpSkill;
+use crate::managed_contract::harness::skills::McpSkillCatalog;
+use crate::managed_contract::harness::skills::McpSkillProblem;
+use crate::managed_contract::harness::skills::SkillOrigin;
+use crate::managed_contract::harness::skills::SkillScope;
 use crate::skills::mcp::{MAX_CATALOG_BYTES, SkillAccess, SkillRead, VerifiedSkillFile};
-use bitrouter_ai::harness::skills::{
-    HeldMcpSkill, McpSkillCatalog, McpSkillProblem, SkillOrigin, SkillScope,
-};
 
 impl BoundedMcpClient {
     fn skill_origin(

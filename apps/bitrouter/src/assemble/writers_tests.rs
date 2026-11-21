@@ -7,7 +7,7 @@ use anyhow::{Context, Result, ensure};
 use bitrouter_ai::types::{GenerationParams, Message, ModelOperation, Prompt, Role, UsageOrigin};
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
-use super::Assembled;
+use super::{Assembled, AssemblyScope};
 use crate::gateway::caller::CallerContext;
 use crate::gateway::pipeline::context::PipelineContext;
 use crate::gateway::pipeline::execution::Pipeline;
@@ -70,18 +70,29 @@ fn hook_types(pipeline: &Pipeline) -> Vec<TypeId> {
     ids
 }
 
-fn assert_writer_mode(pipeline: &Pipeline, shared: bool) {
+fn assert_writer_mode(pipeline: &Pipeline, shared: bool, scope: AssemblyScope) {
     let ids = hook_types(pipeline);
     for local in [
         TypeId::of::<super::MeteringRecorder>(),
         TypeId::of::<super::PolicySettlementRecorder>(),
         TypeId::of::<crate::gateway::observability::binding::CanonicalRequestBinding>(),
-        TypeId::of::<crate::gateway::routing::blocks::runtime::BlockPolicyRouter>(),
         TypeId::of::<crate::gateway::observability::requests::GatewayRequestTracker>(),
         TypeId::of::<crate::gateway::metering::judge::JudgeCosts>(),
     ] {
         assert_eq!(ids.contains(&local), !shared);
     }
+    let block_expected = match scope {
+        AssemblyScope::Gateway => false,
+        #[cfg(all(feature = "core", feature = "harness"))]
+        AssemblyScope::BroHarness => !shared,
+    };
+    assert_eq!(
+        ids.contains(&TypeId::of::<
+            crate::gateway::routing::blocks::runtime::BlockPolicyRouter,
+        >()),
+        block_expected,
+        "Block routing must follow the actual host assembly scope"
+    );
     assert_eq!(pipeline.native_cost_source.is_some(), !shared);
     assert_eq!(pipeline.native_cost_estimator.is_some(), !shared);
     for operation in [ModelOperation::Generation, ModelOperation::Decisions] {
@@ -125,16 +136,32 @@ async fn record(assembled: &Assembled, context: &mut PipelineContext) -> Result<
 
 #[tokio::test]
 async fn local_assembly_keeps_durable_hooks_and_metering() -> Result<()> {
+    exercise_local_assembly(AssemblyScope::Gateway).await
+}
+
+#[cfg(all(feature = "core", feature = "harness"))]
+#[tokio::test]
+async fn bro_assembly_keeps_block_hook_durable_writers_and_metering() -> Result<()> {
+    exercise_local_assembly(AssemblyScope::BroHarness).await
+}
+
+async fn exercise_local_assembly(scope: AssemblyScope) -> Result<()> {
     let home = tempfile::tempdir()?;
     let config = crate::config::parse_with(
-        "inherit_defaults: false\nregistry:\n  enabled: false\ndatabase:\n  url: 'sqlite::memory:'\n",
+        "inherit_defaults: false\nregistry:\n  enabled: false\nserver:\n  listen: '127.0.0.1:0'\ndatabase:\n  url: 'sqlite::memory:'\n",
         |_| None,
     )?;
-    let assembled =
-        super::build_app_with_path(&config, Some(&home.path().join("bitrouter.yaml"))).await?;
+    let config_path = home.path().join("bitrouter.yaml");
+    let assembled = match scope {
+        AssemblyScope::Gateway => super::build_app_with_path(&config, Some(&config_path)).await?,
+        #[cfg(all(feature = "core", feature = "harness"))]
+        AssemblyScope::BroHarness => {
+            super::build_scoped_app(&config, Some(&config_path), |_| Ok(()), scope).await?
+        }
+    };
     let result = async {
         let pipeline = assembled.app.language_model().context("pipeline missing")?;
-        assert_writer_mode(pipeline, false);
+        assert_writer_mode(pipeline, false, scope);
         let mut request = context("local-writer-positive", "vendor:model");
         record(&assembled, &mut request).await?;
         let row = assembled
@@ -173,11 +200,10 @@ mod shared {
     use crate::gateway::pipeline::routing::ModelSelector;
     use crate::gateway::shared::continuation::SharedContinuationDb;
     use crate::gateway::shared::telemetry::Telemetry;
-    use crate::policy_lock::{PolicyDefinition, PolicyLock};
     use futures::FutureExt as _;
     use sea_orm::{ConnectOptions, Database, DatabaseConnection};
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::{collections::BTreeMap, panic::AssertUnwindSafe, sync::Arc, time::Duration};
+    use std::{panic::AssertUnwindSafe, sync::Arc, time::Duration};
     use tokio::time::Instant;
 
     #[tokio::test]
@@ -261,10 +287,12 @@ providers:
         pricing:
           input_micro_usd_per_token: 1.0
           output_micro_usd_per_token: 2.0
-presets:
+routers:
   coding:
-    model: vendor:model
-    policy: coding
+    selection:
+      kind: policy
+      base_model: vendor:model
+      policy: coding
 "#
             ),
             |_| None,
@@ -272,19 +300,10 @@ presets:
         .map_err(Into::into)
     }
 
-    fn lock() -> PolicyLock {
-        let mut document = PolicyLock::default();
-        document.policies.insert(
-            "coding".into(),
-            PolicyDefinition {
-                tiers: BTreeMap::from([("economy".into(), "vendor:model".into())]),
-                default_tier: Some("economy".into()),
-                tool_use_tier: Some("economy".into()),
-                tool_safe_tiers: vec!["economy".into()],
-                ..Default::default()
-            },
-        );
-        document
+    fn model_policy() -> Result<bitrouter_ai::policy::Document> {
+        Ok(serde_saphyr::from_str(
+            "spec_version: policy/1.0.0-beta.1\npolicies:\n  coding:\n    tiers:\n      economy: {model: vendor:model}\n    default_tier: economy\n    tool_use_tier: economy\n    tool_safe_tiers: [economy]\n",
+        )?)
     }
 
     async fn counts(db: &DatabaseConnection) -> Result<Vec<i64>> {
@@ -319,7 +338,7 @@ presets:
 
     async fn exercise(assembled: &Assembled, config: &Config) -> Result<()> {
         let pipeline = assembled.app.language_model().context("pipeline missing")?;
-        assert_writer_mode(pipeline, true);
+        assert_writer_mode(pipeline, true, AssemblyScope::Gateway);
         ensure!(pipeline.settlement_recorders.len() == 1);
         ensure!(pipeline.settlement_recorders[0].type_id == TypeId::of::<DiscardPending>());
         ensure!(pipeline.pre_resolution_hooks[0].type_id == TypeId::of::<RequestScope>());
@@ -330,11 +349,11 @@ presets:
         let mut ctx = context("shared-writer-fixture", "vendor:model");
         assembled
             .policy_runtime
-            .prepare_selection("coding", None, &mut ctx)
+            .prepare_selection("coding", &mut ctx)
             .await?;
         assembled
             .policy_runtime
-            .select_variant("coding", None, &mut ctx)
+            .select_policy("coding", &mut ctx)
             .await?;
         ensure!(ctx.model() == "vendor:model");
         let invocation = ctx
@@ -479,7 +498,7 @@ presets:
                 rand::random(),
             )?,
             policies: Vec::new(),
-            policy_lock: Some(lock()),
+            model_policy: Some(model_policy()?),
         };
         let config = config(capability.namespace(), trajectory)?;
         // Construction is not inside a cancellable exercise timeout. Shared

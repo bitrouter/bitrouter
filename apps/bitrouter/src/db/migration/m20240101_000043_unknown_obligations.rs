@@ -1,20 +1,13 @@
-//! SQLite obligation layout and one-time canonical backfill.
+//! Current SQLite obligation schema and reusable read-only validation.
 //!
-//! OAuth lookup columns are backfilled without rewriting canonical bytes. The
-//! same exclusive migration transaction validates/backfills obligations before
-//! its ledger entry commits. This enables no ongoing writer, maintenance driver,
-//! authority format, or admission accounting. Normal startup only validates.
+//! Current producers record lookup scalars and obligation facts atomically.
+//! Startup validates their schema without deriving or rewriting stored facts.
 use super::m20240101_000028_resource_tenancy::identity;
-use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseTransaction, TransactionTrait};
+use sea_orm::{ConnectionTrait, DatabaseBackend};
 use sea_orm_migration::prelude::*;
 
-mod backfill;
 pub(super) mod catalog;
-#[cfg(test)]
-mod tests;
 
-#[derive(DeriveMigrationName)]
-pub struct Migration;
 const TABLE: &str = "tenancy_unknown_obligations";
 const SLOTS: &str = "tenancy_oauth_slots";
 const AUXILIARY: &str = "tenancy_receipt_auxiliary";
@@ -25,7 +18,7 @@ const PENDING_COLUMNS: [&str; 2] = ["pending_tenant_id", "pending_execution_id"]
 fn incompatible() -> DbErr {
     DbErr::Custom("migration043 incompatible unknown obligation storage".into())
 }
-fn definition() -> TableCreateStatement {
+pub(super) fn definition() -> TableCreateStatement {
     let mut table = Table::create();
     table.table(Alias::new(TABLE));
     for name in ["installation_id", "tenant_id", "execution_id"] {
@@ -66,7 +59,7 @@ fn definition() -> TableCreateStatement {
         )
         .to_owned()
 }
-fn pending_column(name: &str) -> ColumnDef {
+pub(super) fn pending_column(name: &str) -> ColumnDef {
     identity(DatabaseBackend::Sqlite, name, 128, true)
 }
 fn index(name: &str, table: &str, columns: &[&str]) -> IndexCreateStatement {
@@ -77,7 +70,7 @@ fn index(name: &str, table: &str, columns: &[&str]) -> IndexCreateStatement {
     }
     value.to_owned()
 }
-fn pending_index() -> IndexCreateStatement {
+pub(super) fn pending_index() -> IndexCreateStatement {
     index(
         PENDING,
         SLOTS,
@@ -89,7 +82,7 @@ fn pending_index() -> IndexCreateStatement {
         ],
     )
 }
-fn due_index() -> IndexCreateStatement {
+pub(super) fn due_index() -> IndexCreateStatement {
     index(
         DUE,
         TABLE,
@@ -108,17 +101,13 @@ pub(super) async fn validate(db: &impl ConnectionTrait) -> Result<(), DbErr> {
     if db.get_database_backend() != DatabaseBackend::Sqlite {
         return Err(incompatible());
     }
-    catalog::validate(db, true).await
+    catalog::validate(db).await
 }
-async fn upgrade(tx: &DatabaseTransaction) -> Result<(), DbErr> {
-    let manager = SchemaManager::new(tx);
-    let db = manager.get_connection();
-    if catalog::present(db).await? {
-        return Err(incompatible());
+/// Create only the current empty layout. No OAuth or receipt facts are inferred.
+pub(super) async fn initialize_current(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
+    if manager.get_database_backend() != DatabaseBackend::Sqlite {
+        return Ok(());
     }
-    super::m20240101_000037_owned_oauth::validate_legacy(db).await?;
-    // SQLite preserves canonical row bytes while adding nullable scalar columns.
-    // https://www.sqlite.org/lang_altertable.html#alter_table_add_column
     for name in PENDING_COLUMNS {
         manager
             .alter_table(
@@ -129,40 +118,8 @@ async fn upgrade(tx: &DatabaseTransaction) -> Result<(), DbErr> {
             )
             .await?;
     }
-    backfill::run(db).await?;
     manager.create_index(pending_index()).await?;
     manager.create_table(definition()).await?;
     manager.create_index(due_index()).await?;
-    validate(db).await?;
-    crate::tenancy::receipts::store::obligations::backfill_migration(tx)
-        .await
-        .map_err(|error| {
-            DbErr::Custom(format!(
-                "migration043 canonical obligation backfill: {error}"
-            ))
-        })
-}
-#[async_trait::async_trait]
-impl MigrationTrait for Migration {
-    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        if manager.get_database_backend() != DatabaseBackend::Sqlite {
-            return Ok(());
-        }
-        let tx = manager.get_connection().begin().await?;
-        match upgrade(&tx).await {
-            Ok(()) => tx.commit().await,
-            Err(error) => {
-                tx.rollback().await?;
-                Err(error)
-            }
-        }
-    }
-    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        if manager.get_database_backend() != DatabaseBackend::Sqlite {
-            return Ok(());
-        }
-        Err(DbErr::Custom(
-            "migration043 rollback requires a verified compatible backup".into(),
-        ))
-    }
+    validate(manager.get_connection()).await
 }

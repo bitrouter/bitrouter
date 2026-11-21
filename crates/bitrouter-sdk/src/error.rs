@@ -63,14 +63,6 @@ pub enum Error {
         #[source]
         source: Box<Error>,
     },
-    #[error("core service returned HTTP status {}", .0.status)]
-    Core(Box<ServiceFailure<bitrouter_ai::core::protocol::ErrorEnvelope>>),
-    #[error("core reported a managed response stream failure; execution may still be running")]
-    CoreStream(Box<ServiceFailure<bitrouter_ai::core::protocol::ErrorEnvelope>>),
-    #[error("harness returned HTTP status {}", .0.status)]
-    Harness(Box<ServiceFailure<bitrouter_ai::harness::api::ErrorResponse>>),
-    #[error("harness observation failed; execution may still be running")]
-    HarnessObservation(Box<ServiceFailure<bitrouter_ai::harness::api::ObservationError>>),
     #[error("shared operator request rejected ({0:?})")]
     OperatorRejected(bitrouter_ai::gateway::operator::ErrorCode),
     #[error("operator outcome is unknown; query operation {operation_id} before retrying")]
@@ -80,9 +72,6 @@ pub enum Error {
         #[source]
         source: Box<Error>,
     },
-    #[cfg(feature = "core")]
-    #[error("core channel failed: {0}; execution may still be running")]
-    CoreChannel(&'static str),
     #[error(
         "remote control protocol version {server} is incompatible with client version {client}"
     )]

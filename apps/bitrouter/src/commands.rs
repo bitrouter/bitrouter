@@ -49,10 +49,11 @@ database:
   # startup, so `./bitrouter.db` always lands alongside the config.
   url: "sqlite://./bitrouter.db"
 
-# Routing policies are opt-in and live in a sibling policy-lock.yaml.
-# `bro policy init <name> --preset <preset> --strong <model>
-# --economy <model>` creates the lock and preset binding. With no binding,
-# model routing behaves exactly as it does in zero-config mode.
+# `bitrouter/auto` uses the bundled model-only policy. To customize routing,
+# `bro policy init <name> --router <id> --strong <model> --economy <model>`
+# creates policy.yaml and an explicit named router binding.
+# `bro policy show --disk` exports source; publish changes with an explicit
+# --expected-digest. Access-control files use `bro access-policy create`.
 
 # Built-in providers auto-enable when their env var is set. An entry
 # with `inherit_defaults: true` (the workspace default) plus an empty
@@ -311,7 +312,7 @@ fn validate_policy_id(id: &str) -> Result<()> {
     Ok(())
 }
 
-/// `bro policy create` — write a starter policy file into `policy_dir`.
+/// `bro access-policy create` — write a starter ACL file into `policy_dir`.
 /// Refuses to overwrite an existing policy of the same id. The `id` must be a
 /// plain filename (no path separators, no `..`, no leading dot) so the joined
 /// path cannot escape `policy_dir`.
@@ -550,7 +551,7 @@ pub async fn login_provider_with_options(
 
 /// Onboarding uses the exact registry entry shown in its provider list.
 pub(crate) async fn login_registry_provider(
-    provider: &bitrouter_ai::catalog::types::RegistryProvider,
+    provider: &crate::gateway::catalog::types::RegistryProvider,
 ) -> Result<LoginOutcome> {
     let entry = crate::providers::builtin::entry_from_registry(provider)?;
     login_entry(
@@ -1222,7 +1223,7 @@ mod tests {
     /// and openai-codex are no longer compiled-in built-ins, so `login` resolves
     /// their auth shape from the fetched registry via `entry_from_registry`.
     fn entry_for(json: serde_json::Value) -> crate::providers::entry::ProviderEntry {
-        let p: bitrouter_ai::catalog::types::RegistryProvider =
+        let p: crate::gateway::catalog::types::RegistryProvider =
             serde_json::from_value(json).expect("valid registry-provider fixture");
         crate::providers::builtin::entry_from_registry(&p).expect("maps to an entry")
     }

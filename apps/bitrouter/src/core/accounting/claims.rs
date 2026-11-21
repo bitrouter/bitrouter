@@ -3,9 +3,9 @@
 use crate::gateway::pipeline::native_accounting::NativeCostBasis;
 use crate::gateway::pipeline::native_accounting::NativeCostObservation;
 use crate::gateway::pipeline::native_accounting::NativeCostScope;
+use crate::managed_contract::protocol::{CoreError, ErrorCode, validate_id};
 use crate::storage::checkpoint::sha256;
 use crate::storage::checkpoint::snapshot::accounting::work::{CostWorkKind, RunCostWork};
-use bitrouter_ai::core::protocol::{CoreError, ErrorCode, validate_id};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// A source's bill belongs to one request and run across every evidence basis.

@@ -37,6 +37,11 @@ impl TenancyClient {
         tenant: &TenantId,
         subject: &EvalSubject,
     ) -> Result<PutSubjectReport> {
+        subject
+            .validate_reply()
+            .map_err(|_| Error::Request("invalid evaluation subject profile"))?;
+        subject_namespace(subject, installation, tenant)
+            .map_err(|_| Error::Request("evaluation subject namespace differs from request"))?;
         self.owned_eval_post(
             installation,
             self.owned_eval_url(tenant, "subjects", None)?,
@@ -60,7 +65,11 @@ impl TenancyClient {
         self.owned_eval_get(
             installation,
             self.owned_eval_url(tenant, "subjects", None)?,
-            |_| Ok(()),
+            |subjects: &Vec<EvalSubject>| {
+                subjects
+                    .iter()
+                    .try_for_each(|subject| subject_namespace(subject, installation, tenant))
+            },
         )
         .await
     }
@@ -79,7 +88,10 @@ impl TenancyClient {
         self.owned_eval_get(
             installation,
             self.owned_eval_url(tenant, "subjects", Some(eval_id))?,
-            |subject: &EvalSubject| matching(subject.eval_id == eval_id),
+            |subject: &EvalSubject| {
+                matching(subject.eval_id == eval_id)?;
+                subject_namespace(subject, installation, tenant)
+            },
         )
         .await
     }
@@ -248,4 +260,12 @@ fn matching(matches: bool) -> Result<()> {
             "evaluation response identity differs from request",
         ))
     }
+}
+
+fn subject_namespace(
+    subject: &EvalSubject,
+    installation: &InstallationId,
+    tenant: &TenantId,
+) -> Result<()> {
+    matching(subject.identity.tenant_namespace() == Some((installation, tenant)))
 }

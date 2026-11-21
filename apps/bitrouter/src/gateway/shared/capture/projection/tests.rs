@@ -1,16 +1,9 @@
 use super::*;
 use crate::metering::shared::tests::{fixture, no_dispatch, resolve};
 
-pub(in crate::gateway::shared) fn selected(
-    record: &Record,
-    decision: EvalDecisionRef,
-    guarded: bool,
-) -> Result<Inputs> {
+fn selected(record: &Record, decision: EvalDecisionRef) -> Result<Inputs> {
     let mut requirements = Requirements::fixture();
-    requirements.policy_lock_digest = Some(decision.policy_digest.clone());
-    if guarded {
-        requirements.trajectory = TrajectoryRequirement::GuardedPolicies;
-    }
+    requirements.source_digest = Some(decision.policy_digest.clone());
     let inputs = Inputs {
         requirements,
         execution_id: record.event.execution.execution_id.clone(),
@@ -20,7 +13,6 @@ pub(in crate::gateway::shared) fn selected(
         policy: Policy::Evaluated {
             policy: decision.policy.clone(),
             digest: decision.policy_digest.clone(),
-            guarded,
             treatment: Some(Box::new(Treatment {
                 decision,
                 preset: None,
@@ -43,16 +35,15 @@ pub(in crate::gateway::shared) fn untracked(record: &Record) -> Result<Inputs> {
             decision_id: format!("decision:{}", record.event.execution.execution_id),
             policy: "auto:cost".into(),
             policy_digest: format!("sha256:{}", "a".repeat(64)),
-            route_projection: "opening".into(),
-            request_key: "opening".into(),
+            route_projection: "unknown|unknown|normal".parse().expect("valid route class"),
+            request_key: "unknown|unknown|normal".parse().expect("valid route class"),
             selected_tier: "economy".into(),
             selected_effort: None,
             baseline_tier: Some("strong".into()),
             baseline_effort: None,
-            experiment: None,
+
             route_measurement: None,
         },
-        false,
     )
 }
 

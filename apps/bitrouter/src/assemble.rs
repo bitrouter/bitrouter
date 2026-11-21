@@ -90,17 +90,15 @@ use crate::telemetry::exporter::{OtelExporter, OtelObserveHook};
 
 use crate::auth::AuthHook;
 use crate::continuation::{ContinuationKeySource, ContinuationRegistry, ContinuationRuntime};
-#[cfg(feature = "core")]
-use crate::core::eval::EvalService;
-#[cfg(feature = "core")]
-use crate::core::eval::publisher::TrajectoryOutboxPublisher;
-#[cfg(feature = "core")]
-use crate::core::eval::settlement::EvalSettlementRecorder;
-#[cfg(feature = "core")]
-use crate::core::eval::store::EvalStore;
 #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
 use crate::daemon::ObserveStatusPayload;
 use crate::daemon::{NoopObserveStatus, ObserveStatusProvider};
+use crate::eval::EvalService;
+#[cfg(feature = "core")]
+use crate::eval::publisher::TrajectoryOutboxPublisher;
+#[cfg(feature = "core")]
+use crate::eval::settlement::EvalSettlementRecorder;
+use crate::eval::store::EvalStore;
 use crate::gateway::observability::decision::PendingEvalDecisionStore;
 use crate::gateway::observability::prediction::PredictiveResponseObserver;
 use crate::gateway::observability::settlement::PolicySettlementRecorder;
@@ -131,7 +129,7 @@ pub struct Assembled {
     /// [`PolicyStore::reload`] alongside the routing-table reload — reload
     /// must not affect in-flight requests.
     pub policy_store: Arc<PolicyStore>,
-    /// Live named routing policies loaded from `policy-lock.yaml`. The model
+    /// Live named routing policies loaded from current `policy.yaml` source. The model
     /// selector and daemon reloader share this last-known-good registry.
     pub policy_runtime: Arc<crate::policy_lock::PolicyRuntime>,
     /// Canonical checkpoint evolution. Mode is owner-scoped and disabled until
@@ -141,7 +139,6 @@ pub struct Assembled {
     /// Canonical gateway request tracking; capture registration shares its runtime epoch.
     pub gateway_requests: crate::gateway::observability::requests::GatewayRequestTracker,
     /// Generic eval exchange used by the local CLI and REST control plane.
-    #[cfg(feature = "core")]
     pub eval_service: EvalService,
     /// Always-active encrypted provider continuation registry.
     pub continuation_registry: ContinuationRegistry,
@@ -197,7 +194,7 @@ pub(crate) struct SharedAssembly {
     pub auth_appliers: AuthAppliers,
     pub correlation_key: crate::trajectory::canonical::CorrelationKey,
     pub policies: Vec<crate::policy::Policy>,
-    pub policy_lock: Option<crate::policy_lock::PolicyLock>,
+    pub model_policy: Option<bitrouter_ai::policy::Document>,
 }
 
 #[cfg(feature = "multi-instance")]
@@ -215,7 +212,14 @@ pub(crate) async fn build_shared_app(
         shared.namespace == inputs.continuation.namespace(),
         "shared assembly namespace differs from its injected authority"
     );
-    assemble_app(config, None, Default::default(), Some(inputs)).await
+    assemble_app(
+        config,
+        None,
+        Default::default(),
+        Some(inputs),
+        AssemblyScope::Gateway,
+    )
+    .await
 }
 
 #[cfg(feature = "multi-instance")]
@@ -599,9 +603,15 @@ fn renamed_env_warnings(is_set: impl Fn(&str) -> bool) -> Vec<String> {
         .collect()
 }
 
-/// Assemble an [`App`] from a parsed config: connect the database, run the
-/// host's migrations, build the routing table + executor, and wire the
-/// builtin hooks onto the `language_model` pipeline.
+/// Code-owned product boundary, never selected by configuration or HTTP.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AssemblyScope {
+    Gateway,
+    #[cfg(all(feature = "core", feature = "harness"))]
+    BroHarness,
+}
+
+/// Assemble the gateway, storage and builtin inference hooks from a configuration.
 pub async fn build_app(config: &Config) -> Result<Assembled> {
     build_app_with_path(config, None).await
 }
@@ -625,6 +635,15 @@ pub async fn build_app_with_extensions(
     config_path: Option<&std::path::Path>,
     register: impl FnOnce(&mut crate::gateway::extensions::registry::ExtensionApi) -> Result<()>,
 ) -> Result<Assembled> {
+    build_scoped_app(config, config_path, register, AssemblyScope::Gateway).await
+}
+
+pub(crate) async fn build_scoped_app(
+    config: &Config,
+    config_path: Option<&std::path::Path>,
+    register: impl FnOnce(&mut crate::gateway::extensions::registry::ExtensionApi) -> Result<()>,
+    scope: AssemblyScope,
+) -> Result<Assembled> {
     let mut extensions = crate::gateway::extensions::registry::ExtensionApi::new();
     register(&mut extensions).context("registering extensions")?;
     let native = extensions
@@ -636,6 +655,7 @@ pub async fn build_app_with_extensions(
         native,
         #[cfg(feature = "multi-instance")]
         None,
+        scope,
     )
     .await
 }
@@ -648,6 +668,7 @@ async fn assemble_app(
         crate::gateway::extensions::registry::registration::Registration,
     >,
     #[cfg(feature = "multi-instance")] shared: Option<&SharedAssembly>,
+    scope: AssemblyScope,
 ) -> Result<Assembled> {
     #[cfg(feature = "multi-instance")]
     let is_shared = shared.is_some();
@@ -661,6 +682,16 @@ async fn assemble_app(
             ),
         "shared gateway requires the managed shared serving lifecycle"
     );
+    #[cfg(all(feature = "core", feature = "harness"))]
+    if scope == AssemblyScope::BroHarness {
+        anyhow::ensure!(
+            !is_shared,
+            "local BRO harness cannot use shared gateway authority"
+        );
+        validate_local_harness_listeners(config)?;
+    }
+    #[cfg(not(all(feature = "core", feature = "harness")))]
+    let _ = scope;
     let mut effective_config = config.clone();
     crate::policy_lock::apply_defaults(&mut effective_config, config_path);
     let config = &effective_config;
@@ -1174,9 +1205,7 @@ async fn assemble_app(
         );
     }
     let pending_eval_decisions = PendingEvalDecisionStore::default();
-    #[cfg(feature = "core")]
     let eval_store = EvalStore::new(db.clone()).with_storage_budget(metering_storage.clone());
-    #[cfg(feature = "core")]
     let eval_service = EvalService::new(eval_store.clone(), config.eval.clone());
     #[cfg(feature = "core")]
     let mut trajectory_outbox_publisher = None;
@@ -1273,7 +1302,7 @@ async fn assemble_app(
         .map(|inputs| {
             crate::policy_lock::PolicyRuntime::from_document(
                 config,
-                inputs.policy_lock.clone(),
+                inputs.model_policy.clone(),
                 pending_eval_decisions.clone(),
                 trajectory_runtime.clone(),
             )
@@ -1291,7 +1320,7 @@ async fn assemble_app(
             trajectory_runtime,
         )
         .await
-        .context("loading policy-lock.yaml")?,
+        .context("loading model Policy source")?,
     };
     let policy_runtime_for_selector = policy_runtime.clone();
     #[cfg(feature = "core")]
@@ -1301,14 +1330,21 @@ async fn assemble_app(
         policy_runtime.clone(),
     )
     .with_storage_budget(metering_storage.clone());
-    let block_policies = (!is_shared).then(|| {
-        crate::gateway::routing::blocks::runtime::BlockPolicyRouter::new(
-            db.clone(),
-            routing_table.clone(),
-            policy_runtime.clone(),
-        )
-        .with_storage_budget(metering_storage.clone())
-    });
+    // Experimental adoption must never override a mature gateway's published
+    // source, including when its database retains unrelated local Block state.
+    let block_policies: Option<crate::gateway::routing::blocks::runtime::BlockPolicyRouter> =
+        match scope {
+            #[cfg(all(feature = "core", feature = "harness"))]
+            AssemblyScope::BroHarness if !is_shared => Some(
+                crate::gateway::routing::blocks::runtime::BlockPolicyRouter::new(
+                    db.clone(),
+                    routing_table.clone(),
+                    policy_runtime.clone(),
+                )
+                .with_storage_budget(metering_storage.clone()),
+            ),
+            _ => None,
+        };
     let canonical_binding = (!is_shared).then(|| {
         let binding = crate::gateway::observability::binding::CanonicalRequestBinding::new(
             db.clone(),
@@ -1587,6 +1623,16 @@ async fn assemble_app(
     // Start the authority actor only after every other fallible assembly step.
     // Failed startup must not leave a detached owner behind during a retry.
     let tenancy = match tenancy_database {
+        #[cfg(all(feature = "core", feature = "harness"))]
+        Some(database) if scope == AssemblyScope::BroHarness => Some(
+            crate::tenancy::Service::open_owned_bro_profile_observed(
+                database,
+                &config.tenancy,
+                &config.continuation,
+                receipt_observer,
+            )
+            .await?,
+        ),
         Some(database) if receipt_observer.enabled() => Some(
             crate::tenancy::Service::open_owned_profile_observed(
                 database,
@@ -1637,7 +1683,6 @@ async fn assemble_app(
         #[cfg(feature = "core")]
         evolution,
         gateway_requests,
-        #[cfg(feature = "core")]
         eval_service,
         continuation_registry,
         #[cfg(test)]
@@ -3162,10 +3207,6 @@ mod server_tools_tests {
 
 #[cfg(test)]
 mod trajectory_assembly_tests {
-    use std::collections::BTreeMap;
-    #[cfg(feature = "core")]
-    use std::collections::BTreeSet;
-
     use crate::gateway::caller::CallerContext;
     use crate::gateway::pipeline::types::PipelineRequest;
     use bitrouter_ai::types::{ApiProtocol, GenerationParams, Message, Prompt, Role};
@@ -3173,42 +3214,24 @@ mod trajectory_assembly_tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::{Config, build_app_with_path};
-    use crate::gateway::routing::workflow::predictive::compiled_predictor_contract;
-    use crate::policy_lock::{
-        CertificateSource, PolicyCertificate, PolicyDefinition, PolicyLock, PromotionVerdict,
-        RouteOwner, deterministic_yaml, semantic_digest,
-    };
-    #[cfg(feature = "core")]
-    use crate::trajectory::guard::IncompleteHistoryAction;
-    use crate::trajectory::guard::ProgressGuardPolicy;
     #[cfg(feature = "core")]
     use bitrouter_ai::eval::EvalScope;
 
     async fn assemble_named_policy(
         trajectory_enabled: bool,
-        progress_guard: Option<ProgressGuardPolicy>,
     ) -> anyhow::Result<(super::Assembled, String)> {
         let upstream = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "id": "chatcmpl-eval-compat",
-                "object": "chat.completion",
-                "model": "economy-model",
-                "choices": [{
-                    "index": 0,
-                    "message": {"role": "assistant", "content": "complete"},
-                    "finish_reason": "stop"
-                }],
-                "usage": {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18}
-            })))
-            .mount(&upstream)
-            .await;
-
+                "id":"model-policy-request", "object":"chat.completion", "model":"economy-model",
+                "choices":[{"index":0,"message":{"role":"assistant","content":"complete"},"finish_reason":"stop"}],
+                "usage":{"prompt_tokens":11,"completion_tokens":7,"total_tokens":18}
+            }))).expect(1).mount(&upstream).await;
         let home = tempfile::tempdir()?;
         let config_path = home.path().join("bitrouter.yaml");
         let yaml = format!(
-            r#"
+            r#"inherit_defaults: false
 server:
   skip_auth: true
 database:
@@ -3216,8 +3239,7 @@ database:
 trajectory:
   enabled: {trajectory_enabled}
 policy:
-  path: "./policy-lock.yaml"
-  mode: frozen
+  path: ./policy.yaml
 providers:
   vendor:
     api_base: "{upstream_uri}"
@@ -3227,72 +3249,37 @@ providers:
     models:
       - id: economy-model
       - id: strong-model
-presets:
+routers:
   coding:
-    model: "vendor:strong-model"
-    policy: coding
+    selection:
+      kind: policy
+      base_model: vendor:strong-model
+      policy: coding
 "#,
-            upstream_uri = upstream.uri(),
+            upstream_uri = upstream.uri()
         );
         let config = crate::config::parse_with(&yaml, |_| None)?;
-        let guarded = progress_guard.is_some();
-        const ROUTE_KEY: &str = "semantic_route/v1|unknown|unknown|guarded";
-        const TEST_DIGEST: &str =
-            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-        let policy = PolicyDefinition {
-            tiers: BTreeMap::from([
-                ("economy".into(), "vendor:economy-model".into()),
-                ("strong".into(), "vendor:strong-model".into()),
-            ]),
-            routes: if guarded {
-                BTreeMap::new()
-            } else {
-                BTreeMap::from([(ROUTE_KEY.into(), "economy".into())])
-            },
-            default_tier: Some(if guarded { "economy" } else { "strong" }.into()),
-            tool_use_tier: Some("strong".into()),
-            tool_safe_tiers: vec!["strong".into()],
-            progress_guard,
-            predictor: (!guarded).then(compiled_predictor_contract),
-            ..PolicyDefinition::default()
-        };
-        let mut lock = PolicyLock::default();
-        if !guarded {
-            lock.certificates.insert(
-                "coding".into(),
-                BTreeMap::from([(
-                    ROUTE_KEY.into(),
-                    PolicyCertificate {
-                        classifier_digest: None,
-                        owner: RouteOwner::Operator,
-                        selected_tier: "economy".into(),
-                        baseline_tier: Some("strong".into()),
-                        source: CertificateSource::Operator,
-                        eligible_episodes: 0,
-                        independent_tasks: 0,
-                        quality: None,
-                        economics: None,
-                        latency: None,
-                        critical_violations: 0,
-                        verdict: PromotionVerdict::Promote,
-                        evaluator_config_digest: None,
-                        compiler_config_digest: TEST_DIGEST.into(),
-                        evidence_digest: TEST_DIGEST.into(),
-                    },
-                )]),
-            );
-        }
-        lock.policies.insert("coding".into(), policy);
-        let digest = semantic_digest(&lock)?;
+        let document: bitrouter_ai::policy::Document = serde_saphyr::from_str(
+            r#"spec_version: policy/1.0.0-beta.1
+policies:
+  coding:
+    tiers:
+      economy: {model: vendor:economy-model}
+      strong: {model: vendor:strong-model}
+    default_tier: economy
+    tool_use_tier: strong
+    tool_safe_tiers: [strong]
+"#,
+        )?;
+        let digest = crate::policy_lock::semantic_digest(&document)?;
         tokio::fs::write(
-            home.path().join("policy-lock.yaml"),
-            deterministic_yaml(&lock)?,
+            home.path().join("policy.yaml"),
+            crate::policy_lock::deterministic_yaml(&document)?,
         )
         .await?;
         let assembled = build_app_with_path(&config, Some(&config_path)).await?;
-
         let prompt = Prompt {
-            model: "@coding".into(),
+            model: "bitrouter/coding".into(),
             system: None,
             system_provider_metadata: Default::default(),
             messages: vec![Message::text(Role::User, "generic request")],
@@ -3302,20 +3289,27 @@ presets:
             tool_choice: None,
             stream: false,
         };
-        let mut request = PipelineRequest::new("@coding", CallerContext::local(), prompt);
-        request.request_id = "request-eval-compat".into();
+        let mut request = PipelineRequest::new("bitrouter/coding", CallerContext::local(), prompt);
+        request.request_id = "request-eval-current".into();
         request.inbound_protocol = Some(ApiProtocol::ChatCompletions);
         assembled
             .app
             .language_model()
-            .ok_or_else(|| anyhow::anyhow!("assembled App has no language model pipeline"))?
+            .ok_or_else(|| anyhow::anyhow!("language model pipeline absent"))?
             .execute(request)
             .await?;
+        let requests = upstream
+            .received_requests()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("upstream request recording absent"))?;
+        assert_eq!(requests.len(), 1);
+        let body: serde_json::Value = serde_json::from_slice(&requests[0].body)?;
+        assert_eq!(body["model"], "economy-model");
+        assert_eq!(body["messages"][0]["content"], "generic request");
         #[cfg(feature = "core")]
         if let Some(publisher) = &assembled.trajectory_outbox_publisher {
             publisher.wait_for_idle().await;
         }
-
         Ok((assembled, digest))
     }
 
@@ -3325,7 +3319,7 @@ presets:
         use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
         for trajectory_enabled in [false, true] {
-            let (assembled, _) = assemble_named_policy(trajectory_enabled, None).await?;
+            let (assembled, _) = assemble_named_policy(trajectory_enabled).await?;
             assert!(assembled.pending_eval_decisions.is_empty());
             assert_eq!(assembled.response_observer.buffered_request_count(), 0);
             let row = assembled.db.query_one(Statement::from_string(
@@ -3340,7 +3334,7 @@ presets:
     #[cfg(feature = "core")]
     #[tokio::test]
     async fn disabled_trajectory_preserves_named_policy_request_eval() -> anyhow::Result<()> {
-        let (assembled, digest) = assemble_named_policy(false, None).await?;
+        let (assembled, digest) = assemble_named_policy(false).await?;
 
         let subjects = assembled
             .eval_service
@@ -3350,13 +3344,17 @@ presets:
         assert_eq!(subjects.len(), 1);
         let subject = &subjects[0];
         assert_eq!(subject.scope, EvalScope::Request);
-        assert_eq!(subject.policy_digest, digest);
+        assert!(matches!(
+            subject.identity,
+            bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {}
+        ));
         assert_eq!(subject.decisions.len(), 1);
+        assert_eq!(subject.decisions[0].policy_digest, digest);
         assert_eq!(subject.decisions[0].policy, "coding");
         assert_eq!(subject.decisions[0].selected_tier, "economy");
         assert_eq!(
             subject.decisions[0].baseline_tier.as_deref(),
-            Some("strong")
+            Some("economy")
         );
         assert!(
             assembled
@@ -3373,7 +3371,7 @@ presets:
     #[tokio::test]
     async fn unguarded_policy_preserves_request_eval_when_trajectory_is_enabled()
     -> anyhow::Result<()> {
-        let (assembled, digest) = assemble_named_policy(true, None).await?;
+        let (assembled, digest) = assemble_named_policy(true).await?;
 
         let subjects = assembled
             .eval_service
@@ -3382,63 +3380,17 @@ presets:
             .await?;
         assert_eq!(subjects.len(), 1);
         assert_eq!(subjects[0].scope, EvalScope::Request);
-        assert_eq!(subjects[0].policy_digest, digest);
+        assert!(matches!(
+            subjects[0].identity,
+            bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {}
+        ));
         assert_eq!(subjects[0].decisions.len(), 1);
-        assert_eq!(subjects[0].decisions[0].policy, "coding");
-        assert_eq!(subjects[0].decisions[0].selected_tier, "economy");
-        assert_eq!(
-            subjects[0].decisions[0].baseline_tier.as_deref(),
-            Some("strong")
-        );
-        assert!(assembled.pending_eval_decisions.is_empty());
-        assert_eq!(assembled.response_observer.buffered_request_count(), 0);
-        Ok(())
-    }
-
-    #[cfg(feature = "core")]
-    #[tokio::test]
-    async fn guarded_policy_emits_only_episode_eval_without_pending_decision() -> anyhow::Result<()>
-    {
-        let guard = ProgressGuardPolicy {
-            escalation_tier: "strong".into(),
-            protected_tiers: BTreeSet::from(["strong".into()]),
-            max_consecutive_unprotected: Some(3),
-            max_same_projection_unprotected: None,
-            max_recovery_count: None,
-            max_episode_requests: None,
-            max_episode_elapsed_ms: None,
-            max_episode_cost_micro_usd: None,
-            hold_for_requests: 2,
-            incomplete_history: IncompleteHistoryAction::Observe,
-        };
-        let (assembled, digest) = assemble_named_policy(true, Some(guard)).await?;
-
-        let subjects = assembled
-            .eval_service
-            .store()
-            .list_subjects_for_owner("local")
-            .await?;
-        assert_eq!(subjects.len(), 1);
-        assert_eq!(subjects[0].scope, EvalScope::Episode);
-        assert_eq!(subjects[0].policy_digest, digest);
-        assert_eq!(subjects[0].decisions.len(), 1);
+        assert_eq!(subjects[0].decisions[0].policy_digest, digest);
         assert_eq!(subjects[0].decisions[0].policy, "coding");
         assert_eq!(subjects[0].decisions[0].selected_tier, "economy");
         assert_eq!(
             subjects[0].decisions[0].baseline_tier.as_deref(),
             Some("economy")
-        );
-        let observation = subjects[0]
-            .evidence
-            .iter()
-            .find(|evidence| evidence.kind == "routing.prediction_observation")
-            .ok_or_else(|| anyhow::anyhow!("guarded response observation evidence missing"))?;
-        assert_eq!(
-            observation
-                .attributes
-                .get("observed_action")
-                .map(String::as_str),
-            Some("answer_or_summarize")
         );
         assert!(assembled.pending_eval_decisions.is_empty());
         assert_eq!(assembled.response_observer.buffered_request_count(), 0);
@@ -3455,9 +3407,9 @@ presets:
             build_app_with_path(&config, Some(&disabled_home.path().join("bitrouter.yaml")))
                 .await?;
 
-        assert!(!disabled.policy_runtime.trajectory_is_active());
         #[cfg(feature = "core")]
         assert!(disabled.trajectory_outbox_publisher.is_none());
+        drop(disabled);
         assert!(!disabled_home.path().join("correlation.key").exists());
 
         let enabled_home = tempfile::tempdir()?;
@@ -3466,7 +3418,6 @@ presets:
         let enabled =
             build_app_with_path(&config, Some(&enabled_home.path().join("bitrouter.yaml"))).await?;
 
-        assert!(enabled.policy_runtime.trajectory_is_active());
         #[cfg(feature = "core")]
         assert_eq!(
             enabled
@@ -3475,114 +3426,8 @@ presets:
                 .map(|publisher| publisher.configured_batch_size()),
             Some(7)
         );
+        drop(enabled);
         assert!(enabled_home.path().join("correlation.key").is_file());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn enabled_guarded_policy_persists_its_first_route_atomically() -> anyhow::Result<()> {
-        use std::collections::{BTreeMap, BTreeSet};
-
-        use crate::config::PresetConfig;
-        use crate::gateway::caller::CallerContext;
-        use crate::gateway::pipeline::context::PipelineContext;
-        use crate::gateway::pipeline::routing::ModelSelector;
-        use crate::gateway::pipeline::types::PipelineRequest;
-        use bitrouter_ai::types::{ApiProtocol, GenerationParams, Message, Prompt, Role};
-
-        use crate::policy_lock::{PolicyDefinition, PolicyLock, deterministic_yaml};
-        use crate::trajectory::correlation::CorrelatedRequest;
-        use crate::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
-        use crate::trajectory::store::TrajectoryStore;
-
-        let home = tempfile::tempdir()?;
-        let config_path = home.path().join("bitrouter.yaml");
-        let mut config = Config::default();
-        config.database.url = "sqlite::memory:".into();
-        config.trajectory.enabled = true;
-        config.presets.insert(
-            "coding".into(),
-            PresetConfig {
-                model: Some("vendor:strong".into()),
-                policy: Some("coding".into()),
-                ..PresetConfig::default()
-            },
-        );
-        let mut lock = PolicyLock::default();
-        lock.policies.insert(
-            "coding".into(),
-            PolicyDefinition {
-                tiers: BTreeMap::from([
-                    ("economy".into(), "vendor:economy".into()),
-                    ("strong".into(), "vendor:strong".into()),
-                ]),
-                default_tier: Some("economy".into()),
-                tool_use_tier: Some("strong".into()),
-                tool_safe_tiers: vec!["strong".into()],
-                progress_guard: Some(ProgressGuardPolicy {
-                    escalation_tier: "strong".into(),
-                    protected_tiers: BTreeSet::from(["strong".into()]),
-                    max_consecutive_unprotected: Some(3),
-                    max_same_projection_unprotected: None,
-                    max_recovery_count: None,
-                    max_episode_requests: Some(4),
-                    max_episode_elapsed_ms: None,
-                    max_episode_cost_micro_usd: None,
-                    hold_for_requests: 2,
-                    incomplete_history: IncompleteHistoryAction::Observe,
-                }),
-                ..PolicyDefinition::default()
-            },
-        );
-        tokio::fs::write(
-            home.path().join("policy-lock.yaml"),
-            deterministic_yaml(&lock)?,
-        )
-        .await?;
-
-        let assembled = build_app_with_path(&config, Some(&config_path)).await?;
-        let prompt = Prompt {
-            model: "vendor:strong".into(),
-            system: None,
-            system_provider_metadata: Default::default(),
-            messages: vec![Message::text(Role::User, "generic request")],
-            tools: Vec::new(),
-            params: GenerationParams::default(),
-            response_format: None,
-            tool_choice: None,
-            stream: false,
-        };
-        let mut request = PipelineRequest::new(
-            "vendor:strong",
-            CallerContext::new("local-key", "local"),
-            prompt,
-        );
-        request.request_id = "request-first".into();
-        request.inbound_protocol = Some(ApiProtocol::ChatCompletions);
-        let mut context = PipelineContext::new(request);
-        assembled
-            .policy_runtime
-            .select_variant("coding", None, &mut context)
-            .await?;
-        let correlated = context
-            .extension::<CorrelatedRequest>()
-            .ok_or_else(|| anyhow::anyhow!("enabled guarded request was not correlated"))?;
-        let events = TrajectoryStore::new(assembled.db)
-            .events_for_episode("local", &correlated.episode_id)
-            .await?;
-        assert_eq!(events.len(), 2);
-        assert_eq!(
-            events[0].request_id.as_deref(),
-            Some(correlated.request_id.as_str())
-        );
-        assert_eq!(
-            events[1]
-                .evidence
-                .categorical
-                .get("route.policy")
-                .map(String::as_str),
-            Some("coding")
-        );
         Ok(())
     }
 
@@ -3706,4 +3551,23 @@ presets:
         );
         Ok(())
     }
+}
+
+#[cfg(all(feature = "core", feature = "harness"))]
+fn validate_local_harness_listeners(config: &Config) -> Result<()> {
+    for address in std::iter::once(config.server.listen.as_str()).chain(
+        config
+            .control
+            .enabled
+            .then_some(config.control.listen.as_str()),
+    ) {
+        let address: std::net::SocketAddr = address
+            .parse()
+            .context("local BRO harness requires explicit loopback listener addresses")?;
+        anyhow::ensure!(
+            address.ip().is_loopback(),
+            "local BRO harness requires loopback listeners"
+        );
+    }
+    Ok(())
 }

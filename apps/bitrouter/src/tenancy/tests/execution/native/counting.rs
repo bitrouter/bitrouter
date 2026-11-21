@@ -1,15 +1,13 @@
 //! Actual controlled count -> generation and the same terminal writer/Registry.
 use super::*;
+use crate::managed_contract::evidence::NativeInputCount;
 use crate::tenancy::receipts::{
     auxiliary::{Snapshot, count::Envelope},
     store as receipts,
 };
-use bitrouter_ai::{
-    core::evidence::NativeInputCount,
-    tenancy::{
-        execution::{ExecutionReceipt, Provenance},
-        identity::ExecutionId,
-    },
+use bitrouter_ai::tenancy::{
+    execution::{ExecutionReceipt, Provenance},
+    identity::ExecutionId,
 };
 use sea_orm::{
     ConnectionTrait,

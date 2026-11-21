@@ -4,11 +4,10 @@ use crate::gateway::pipeline::{
     native_context::{ORIGIN_FIELD, ORIGIN_NAMESPACE, metadata, metadata_mut},
     native_continuation::{CONTINUATION_FIELD, NativeContinuationSource},
 };
+use crate::managed_contract::evidence::{NativeContinuationInput, NativeContinuationOutput};
 use crate::tenancy::store::StoredResponse;
-use bitrouter_ai::{
-    core::evidence::{NativeContinuationInput, NativeContinuationOutput},
-    types::GenerateResult,
-};
+use crate::tenancy::tests::execution::provision_protocol_with_fixture;
+use bitrouter_ai::types::GenerateResult;
 
 #[derive(Clone)]
 struct Endpoint {
@@ -90,7 +89,7 @@ async fn observed_native_stream_resumes_as_sse_and_json_with_evidence_and_usage(
         ensure!(matches!(
             first_report.continuation.input,
             NativeContinuationInput::FullHistory {
-                reason: bitrouter_ai::core::evidence::FullHistoryReason::NoHandle,
+                reason: crate::managed_contract::evidence::FullHistoryReason::NoHandle,
             }
         ));
         ensure!(matches!(
@@ -343,7 +342,10 @@ async fn two_turn_resume_survives_caller_rotation_and_restart_without_import_sou
         };
         fixture.service.shutdown().await?;
         // Fresh resources and cache, same explicit key, no import path/environment.
-        let resources = Arc::new(Resources::with_key(fixture.installation.clone(), [29; 32])?);
+        let resources = Arc::new(Resources::with_key(
+            fixture.installation.clone(),
+            fixture.wrapping_key,
+        )?);
         let initial = store::load(&fixture.db, chrono::Utc::now()).await?;
         fixture.service =
             Service::start_prepared(fixture.db.clone(), None, initial, resources).await?;
@@ -456,9 +458,18 @@ async fn another_principal(
 #[tokio::test]
 async fn principal_installation_and_message_transplants_reject_before_send() -> Result<()> {
     let mut server = Server::start().await?;
-    let (fixture, route, _) = provision_protocol(&server.url, "responses").await?;
-    let (other, other_route, _) = provision_protocol(&server.url, "responses").await?;
+    let first_fixture = Fixture::new().await?;
+    let mut other_fixture = Fixture::new().await?;
+    other_fixture.wrapping_key = first_fixture.wrapping_key;
+    let (fixture, route, _) =
+        provision_protocol_with_fixture(first_fixture, &server.url, "responses", &mut |_| {})
+            .await?;
+    let (other, other_route, _) =
+        provision_protocol_with_fixture(other_fixture, &server.url, "responses", &mut |_| {})
+            .await?;
     let checked = async {
+        ensure!(fixture.wrapping_key == other.wrapping_key);
+        ensure!(fixture.installation != other.installation);
         let (ingress, _) = ready(&fixture, &route).await?;
         let revision = ingress
             .get("Bitrouter-Execution-Revision")
@@ -678,7 +689,10 @@ async fn chain(
     separate: bool,
 ) -> Result<ResourceRef> {
     fixture.service.shutdown().await?;
-    let resources = Arc::new(Resources::with_key(fixture.installation.clone(), [29; 32])?);
+    let resources = Arc::new(Resources::with_key(
+        fixture.installation.clone(),
+        fixture.wrapping_key,
+    )?);
     let mut route = route.clone();
     route.revision_id = "chain-v1".try_into()?;
     let mut other_slot = slot.clone();

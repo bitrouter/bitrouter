@@ -141,6 +141,7 @@ pub(super) async fn tenant_b(a: &mut Ready, subject: &str, judge: &str) -> Resul
             .map_err(failure)?,
     )?;
     let fixture = Fixture {
+        wrapping_key: a.fixture.wrapping_key,
         service: a.fixture.service.clone(),
         db: a.fixture.db.clone(),
         operator: a.fixture.operator.clone(),
@@ -150,15 +151,16 @@ pub(super) async fn tenant_b(a: &mut Ready, subject: &str, judge: &str) -> Resul
         binding,
         binding_result,
     };
-    // No live producers exist while the fixture adds the second immutable catalog.
-    let b = Ready::from_fixture(
-        fixture,
+    // Both catalogs use the installation key that protects the first tenant's rows.
+    let resources = a.fixture.service.resources.clone();
+    let b = Ready::from_fixture_tracked(
+        (fixture, resources),
         None,
-        subject,
-        judge,
+        (subject, judge),
         true,
         LearningMode::Observe,
         1,
+        &mut |_| {},
     )
     .await?;
     a.fixture.service = b.fixture.service.clone();

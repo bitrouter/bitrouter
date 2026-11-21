@@ -2,10 +2,11 @@
 use super::*;
 use crate::core::context_router::owned::CompileOptions;
 use crate::gateway::model::decision::types::Answer;
+use crate::managed_contract::harness::agent::ModelMode;
+use crate::managed_contract::protocol::ContextMode;
 use crate::storage::checkpoint::snapshot::context::{
     action::ContextAction, evidence::SourceSpan, view::ContextRepresentation,
 };
-use bitrouter_ai::core::protocol::{ContextMode, ModelMode};
 use wiremock::{
     Mock, MockServer, Request, ResponseTemplate,
     matchers::{method, path},
@@ -164,12 +165,12 @@ async fn expanding(
                 response, decision_id: Some(decision.decision_id.clone()), reason: "boundary_check", hard_limit_bytes: limit };
             let routed = decision.candidates.compile(&state.context_store, &original, options(Some(response)));
             ensure!(routed.err().context("routed representation unexpectedly fits")?.code
-                == bitrouter_ai::core::protocol::ErrorCode::NoFeasibleRoute);
+                == crate::managed_contract::protocol::ErrorCode::NoFeasibleRoute);
             let full = decision.candidates.compile(&state.context_store, &original, options(None));
             let turn = state.agents.get(&state.agent_id).and_then(|agent| agent.turn.as_ref()).context("bounded turn")?;
             ensure!(turn.steps.len() == 1, "fallback started another model step");
             if too_small {
-                ensure!(full.err().context("full unexpectedly fits")?.code == bitrouter_ai::core::protocol::ErrorCode::NoFeasibleRoute);
+                ensure!(full.err().context("full unexpectedly fits")?.code == crate::managed_contract::protocol::ErrorCode::NoFeasibleRoute);
                 ensure!(run.status == RunStatus::Failed && generation.calls() == 1);
                 ensure!(decision.view_ids.is_empty() && turn.steps[0].plan.is_none());
                 ensure!(turn.terminal_reason.as_deref().is_some_and(|reason| reason.contains("no context candidate fits the prompt byte limit")));

@@ -294,7 +294,7 @@ impl Campaign {
         })?;
         let facts = self.facts(attempt).await?;
         let receipt: ExecutionReceipt = serde_json::from_slice(&facts.0)?;
-        let evidence: ExecutionUsageEvidenceV1 = serde_json::from_slice(&facts.1)?;
+        let evidence: ExecutionUsageEvidence = serde_json::from_slice(&facts.1)?;
         ensure!(
             receipt.execution_id == *attempt.execution.id()
                 && receipt.principal_id == self.fixture.principal
@@ -1429,7 +1429,7 @@ async fn real_tenant_fresh_direct_json_missing_registration_drains_its_own_lifec
         wait_until(|| Ok(fresh.execution.receipt_owner()?.durable())).await?;
         let facts = campaign.facts(&fresh).await?;
         let receipt: ExecutionReceipt = serde_json::from_slice(&facts.0)?;
-        let evidence: ExecutionUsageEvidenceV1 = serde_json::from_slice(&facts.1)?;
+        let evidence: ExecutionUsageEvidence = serde_json::from_slice(&facts.1)?;
         ensure!(
             receipt.execution_id == *fresh.execution.id()
                 && receipt.outcome != Outcome::Completed

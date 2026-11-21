@@ -2,6 +2,7 @@
 use super::*;
 use anyhow::{Context, Result, ensure};
 use sea_orm::Statement;
+use sea_orm::sqlx::{self, Connection as _};
 use std::cell::Cell;
 
 async fn fixture() -> Result<(tempfile::TempDir, OwnedDatabase)> {
@@ -47,31 +48,29 @@ async fn new_schema_refusal_precedes_even_migration_ledger_creation() -> Result<
 #[tokio::test]
 async fn pending_migration_estimates_the_current_wal_visible_image_before_writing() -> Result<()> {
     let (_directory, owned) = fixture().await?;
-    let previous = migration::Migrator::migrations()
-        .iter()
-        .position(|migration| migration.name() == "m20240101_000044_capacity_upgrade")
-        .context("capacity migration")?;
-    migration::Migrator::up(&owned.db, Some(u32::try_from(previous)?)).await?;
-    owned
-        .db
-        .execute_unprepared("PRAGMA wal_autocheckpoint=0")
-        .await?;
-    owned
-        .db
-        .query_one(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            "PRAGMA wal_checkpoint(PASSIVE)",
-        ))
-        .await?
-        .context("checkpoint result")?;
-    owned
-        .db
-        .execute_unprepared("CREATE TABLE preflight_payload (payload BLOB NOT NULL)")
-        .await?;
-    owned
-        .db
-        .execute_unprepared("INSERT INTO preflight_payload VALUES (zeroblob(1048576))")
-        .await?;
+    {
+        let mut connection = owned.db.get_sqlite_connection_pool().acquire().await?;
+        // Keep the scratch writes on the connection where autocheckpoint is
+        // disabled. The new main file starts much smaller than the test image.
+        connection.clear_cached_statements().await?;
+        sqlx::raw_sql("PRAGMA wal_autocheckpoint=0")
+            .execute(&mut *connection)
+            .await?;
+        // Leave a genuinely empty catalog with a large WAL-visible freelist.
+        // No checkpoint follows these writes: the current baseline is pending
+        // without constructing or adopting an older schema.
+        for sql in [
+            "CREATE TABLE preflight_payload (payload BLOB NOT NULL)",
+            "INSERT INTO preflight_payload VALUES (zeroblob(1048576))",
+            "DROP TABLE preflight_payload",
+        ] {
+            sqlx::raw_sql(sql)
+                .execute(&mut *connection)
+                .await
+                .with_context(|| format!("building WAL fixture: {sql}"))?;
+        }
+    }
+    ensure!(store_format::inspect(&owned.db).await? == store_format::State::Empty);
     let row = owned.db.query_one(Statement::from_string(DatabaseBackend::Sqlite,
         "SELECT page_count AS pages,page_size AS size FROM pragma_page_count(),pragma_page_size()"))
         .await?.context("page inventory")?;
@@ -81,29 +80,22 @@ async fn pending_migration_estimates_the_current_wal_visible_image_before_writin
         image > std::fs::metadata(&owned.owner.path)?.len(),
         "fixture must retain uncheckpointed pages"
     );
-    let before = migration::Migrator::get_migration_models(&owned.db).await?;
     let seen = Cell::new(0);
+    let calls = Cell::new(0);
     ensure!(
         owned
             .migrate_with(|encoded| {
+                calls.set(calls.get() + 1);
                 seen.set(encoded);
                 anyhow::bail!("injected insufficient free space")
             })
             .await
             .is_err()
     );
+    ensure!(calls.get() == 1);
     ensure!(seen.get() == image + 1024 * 1024);
-    ensure!(migration::Migrator::get_migration_models(&owned.db).await? == before);
-    ensure!(
-        owned
-            .db
-            .query_one(Statement::from_string(
-                DatabaseBackend::Sqlite,
-                "SELECT 1 FROM main.sqlite_schema WHERE name='tenancy_capacity_upgrades'"
-            ))
-            .await?
-            .is_none()
-    );
+    ensure!(!has_ledger(&owned.db).await?);
+    ensure!(store_format::inspect(&owned.db).await? == store_format::State::Empty);
     owned.db.clone().close().await?;
     Ok(())
 }

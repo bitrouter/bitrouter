@@ -95,9 +95,6 @@ pub struct TenancyConfig {
     /// Privileged JSON manifest imported before listeners open. Relative paths
     /// are relative to the server process's working directory, never a tenant.
     pub resource_import: Option<PathBuf>,
-    /// Optional local learning registration manifest, authenticated after H bootstrap.
-    /// Omission preserves startup behavior and does not erase durable schedules.
-    pub learning_registrations: Option<PathBuf>,
     /// Operator environment variable containing a stable base64 32-byte key.
     /// The secret itself is never part of configuration or resource reports.
     pub wrapping_key_env: Option<String>,
@@ -131,7 +128,6 @@ impl Default for TenancyConfig {
             ordered_native_controls: false,
             private_adapter: None,
             resource_import: None,
-            learning_registrations: None,
             wrapping_key_env: None,
             resource_origins: Vec::new(),
             submission_timeout_secs: default_submission_timeout(),
@@ -191,10 +187,7 @@ impl TenancyConfig {
             );
         }
         ensure!(
-            self.enabled
-                || (self.resource_import.is_none()
-                    && self.wrapping_key_env.is_none()
-                    && self.learning_registrations.is_none()),
+            self.enabled || (self.resource_import.is_none() && self.wrapping_key_env.is_none()),
             "tenancy resource provisioning requires tenancy.enabled"
         );
         ensure!(
@@ -211,16 +204,6 @@ impl TenancyConfig {
             ensure!(
                 valid_env_name(name),
                 "invalid tenancy wrapping key environment name"
-            );
-        }
-        if let Some(path) = &self.learning_registrations {
-            ensure!(
-                !path.as_os_str().is_empty(),
-                "learning registration path is empty"
-            );
-            ensure!(
-                cfg!(all(feature = "core", feature = "harness")),
-                "owned learning requires core and harness"
             );
         }
         if !self.enabled {
@@ -298,6 +281,14 @@ impl TenancyConfig {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn retired_route_learner_registration_is_rejected_before_startup() {
+        assert!(
+            crate::config::parse("tenancy:\n  learning_registrations: registrations.json\n")
+                .is_err()
+        );
+    }
+
     #[test]
     fn private_adapter_requires_exact_https_urls_at_one_origin() -> anyhow::Result<()> {
         let mut adapter = super::PrivateAdapterConfig {

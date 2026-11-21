@@ -2,8 +2,6 @@
 
 mod inventory;
 mod io;
-#[cfg(feature = "core")]
-mod json;
 mod phase;
 pub(crate) mod sort;
 mod workspace;
@@ -31,14 +29,6 @@ pub(crate) type Workspace = workspace::Workspace;
 pub(crate) type Charge = workspace::Charge;
 pub(crate) type Source = io::Source;
 pub(crate) type Inspected = inventory::Inspected;
-
-#[cfg(feature = "core")]
-pub(crate) fn encode_json(
-    value: &impl serde::Serialize,
-    workspace: &Workspace,
-) -> anyhow::Result<(Vec<u8>, Charge)> {
-    json::encode(value, workspace)
-}
 
 /// Probe the actual publication volume after temporary storage has been removed.
 pub(crate) fn probe(path: &std::path::Path, floor: u64, next: u64) -> anyhow::Result<()> {

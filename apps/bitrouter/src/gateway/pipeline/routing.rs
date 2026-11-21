@@ -22,7 +22,7 @@ use crate::gateway::pipeline::stream::UsagePricing;
 use crate::gateway::pipeline::types::RoutingTarget;
 use bitrouter_ai::types::{ApiProtocol, Capability, ModelOperation};
 
-/// Routing preferences distilled from `@preset` / `:variant`.
+/// Routing preferences resolved from an explicit named router.
 /// Feeds both explicit-virtual-model endpoint selection and auto-cascade
 /// ordering / filtering.
 #[derive(Debug, Clone, Default)]
@@ -57,22 +57,20 @@ pub struct RoutingPrefs {
 }
 
 /// One-time resolution of the request's raw model selector. Config-backed
-/// tables use this to resolve a named router or legacy `@preset` / `:variant`
-/// compatibility address before app-level model selectors run, preserving
+/// tables resolve an explicit named router before model selection, preserving
 /// request defaults and routing preferences even when a policy chooses a
 /// different effective model.
 #[derive(Debug, Clone)]
 pub struct ModelResolution {
-    /// Model after router/preset selection and variant removal.
+    /// Upstream model after named-router resolution.
     pub clean_model: String,
-    /// Routing preferences contributed by the named definition and variant.
+    /// Routing preferences contributed by the named router.
     pub prefs: RoutingPrefs,
     /// Prompt defaults contributed by the named definition.
     pub overrides: PromptOverrides,
     /// Optional app-owned policy name bound to the named definition.
     pub policy: Option<String>,
-    /// Optional known preset/model variant selected in Stage 0.
-    pub variant: Option<String>,
+
     /// Named router identity, absent for bare and provider-pinned model routes.
     pub router: Option<RouterRequestIdentity>,
     /// Ordered entry-request checkers frozen with this named-router binding.
@@ -88,37 +86,32 @@ impl ModelResolution {
             prefs: RoutingPrefs::default(),
             overrides: PromptOverrides::default(),
             policy: None,
-            variant: None,
+
             router: None,
             request_checks: Vec::new(),
         }
     }
 }
 
-/// App-level effective-model selection after Stage-0 preset resolution and
-/// before the normal Strategy 1/2/3 routing table. Implementations may inspect
-/// the canonical prompt and authenticated caller, but only run for a preset
-/// carrying an explicit policy binding.
+/// Effective-model selection after named-router resolution. Implementations
+/// may inspect the canonical prompt and authenticated caller, and run only for
+/// an explicit literal policy binding.
 #[async_trait]
 pub trait ModelSelector: Send + Sync {
+    /// Require complete admitted context even when native execution pins a model
+    /// and bypasses selection. This is a constraint, not a context transformation.
+    fn preserves_context(&self) -> bool {
+        false
+    }
+
     /// Freeze and validate named-policy inputs after entry admission and before
     /// paid semantic inference. Selection must consume this same snapshot.
-    async fn prepare_selection(
-        &self,
-        _policy: &str,
-        _variant: Option<&str>,
-        _ctx: &mut PipelineContext,
-    ) -> Result<()> {
+    async fn prepare_selection(&self, _policy: &str, _ctx: &mut PipelineContext) -> Result<()> {
         Ok(())
     }
 
-    /// Select the model for a named policy and known Stage-0 variant.
-    async fn select_variant(
-        &self,
-        policy: &str,
-        variant: Option<&str>,
-        ctx: &mut PipelineContext,
-    ) -> Result<()>;
+    /// Select the model for the exact bound policy name.
+    async fn select_policy(&self, policy: &str, ctx: &mut PipelineContext) -> Result<()>;
 }
 
 /// Resolves a model name into a fallback chain. v1 has no single-target
@@ -128,7 +121,7 @@ pub trait ModelSelector: Send + Sync {
 #[async_trait]
 pub trait RoutingTable: Send + Sync {
     /// Resolve a raw model selector once before app-level model selection.
-    /// Tables without named routers or legacy presets return a passthrough
+    /// Tables without named routers return a passthrough
     /// resolution.
     async fn resolve_model(&self, model: &str) -> Result<ModelResolution> {
         Ok(ModelResolution::passthrough(model))

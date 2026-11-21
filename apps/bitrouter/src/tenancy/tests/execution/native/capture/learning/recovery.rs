@@ -153,19 +153,21 @@ async fn producer() -> Result<()> {
     let database = crate::db::connect_owned_tenancy(&url(&root)).await?;
     let db = database.database().clone();
     let fixture = Fixture::with_database(db.clone(), &mut |_| {}).await?;
-    let mut ready = Ready::from_fixture(
-        fixture,
+    let resources =
+        Arc::new(Resources::fixture_key(&fixture.installation, Some(KEY))?.for_bro_capture());
+    let mut ready = Ready::from_fixture_tracked(
+        (fixture, resources),
         None,
-        &std::env::var(SUBJECT)?,
-        &std::env::var(JUDGE)?,
+        (&std::env::var(SUBJECT)?, &std::env::var(JUDGE)?),
         true,
         LearningMode::Observe,
         2,
+        &mut |_| {},
     )
     .await?;
     ready.fixture.service.shutdown().await?;
     // The same originally leased pool is consumed once, before real admission.
-    ready.fixture.service = Service::open_owned_profile(
+    ready.fixture.service = Service::open_owned_bro_profile(
         database,
         &config(),
         &crate::config::ContinuationConfig::default(),

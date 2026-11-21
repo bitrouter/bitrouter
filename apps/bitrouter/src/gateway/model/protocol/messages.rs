@@ -866,8 +866,10 @@ fn render_stop_details(details: &StopDetails) -> serde_json::Value {
 /// Detect content that is omitted or flattened on request ingestion. Output
 /// parsing retains its separate contract; in particular these rules do not
 /// reinterpret provider SSE control events as request content.
-fn ingress_admission(body: &serde_json::Value) -> bitrouter_ai::conversion::ConversionReport {
-    use bitrouter_ai::conversion::{
+fn ingress_admission(
+    body: &serde_json::Value,
+) -> crate::gateway::conversion_report::ConversionReport {
+    use crate::gateway::conversion_report::{
         ConversionEffect, ConversionLocation, ConversionReason, ConversionReport,
     };
     let mut report = ConversionReport::default();
@@ -2852,7 +2854,7 @@ impl DeferredToolTail {
             .map_err(|_| invalid_tool_stream("cannot measure Messages tool stream"))?
             .len();
         self.bytes = self.bytes.saturating_add(bytes);
-        if self.bytes > bitrouter_ai::wire::DEFAULT_JSON_LIMIT
+        if self.bytes > crate::gateway::wire::DEFAULT_JSON_LIMIT
             || self.parts.len() >= MAX_DEFERRED_TOOL_PARTS
         {
             return Err(invalid_tool_stream(

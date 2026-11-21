@@ -707,7 +707,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter"
-version = "1.0.0-alpha.36"
+version = "1.0.0-beta.1"
 dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-conductor",
@@ -740,6 +740,7 @@ dependencies = [
  "hmac 0.13.0",
  "http",
  "http-body",
+ "http-body-util",
  "httpdate",
  "hyper",
  "hyper-util",
@@ -799,12 +800,8 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-ai"
-version = "1.0.0-alpha.36"
+version = "1.0.0-beta.1"
 dependencies = [
- "axum",
- "futures-core",
- "futures-util",
- "http-body-util",
  "schemars 1.2.1",
  "serde",
  "serde_json",
@@ -812,14 +809,12 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "toml",
- "tower",
 ]
 
 [[package]]
 name = "bitrouter-guardrails"
-version = "1.0.0-alpha.36"
+version = "1.0.0-beta.1"
 dependencies = [
- "bitrouter-ai",
  "futures",
  "regex",
  "schemars 1.2.1",
@@ -830,7 +825,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-registry"
-version = "1.0.0-alpha.36"
+version = "1.0.0-beta.1"
 dependencies = [
  "chrono",
  "granit-parser",
@@ -855,7 +850,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-sdk"
-version = "2.0.0-alpha.1"
+version = "1.0.0-beta.1"
 dependencies = [
  "async-stream",
  "axum",
@@ -872,7 +867,6 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
- "tokio-tungstenite",
  "url",
  "uuid",
 ]
@@ -1618,7 +1612,7 @@ dependencies = [
 
 [[package]]
 name = "dist-helper"
-version = "1.0.0-alpha.36"
+version = "1.0.0-beta.1"
 dependencies = [
  "anyhow",
  "bitrouter-ai",

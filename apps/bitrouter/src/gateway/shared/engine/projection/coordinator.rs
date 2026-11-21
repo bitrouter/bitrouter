@@ -8,24 +8,20 @@ use bitrouter_ai::gateway::execution::GatewayTerminalEvent;
 use sea_orm::DatabaseTransaction;
 use serde::{Deserialize, Serialize};
 
-use super::super::{Engine, EpisodeFence, Execution, TrajectoryBinding};
+use super::super::{Engine, Execution, TrajectoryBinding};
 use crate::gateway::shared::capture::Inputs;
 use crate::gateway::shared::capture::projection::{EvaluationInput, NoEvaluation};
 use crate::gateway::shared::store::{Kind, NewRecord, Store, Stored};
 use crate::metering::shared::{SharedMetering, record::Record};
-use crate::storage::evaluation::shared::SharedAdmission;
 use crate::storage::evaluation::{canonical_digest, subject_digest};
-use crate::trajectory::shared::SharedTrajectory;
 
 mod complete;
-mod settlement;
 #[cfg(test)]
 mod tests;
 
 struct Terminal {
     record: Record,
     inputs: Box<Inputs>,
-    binding: Option<TrajectoryBinding>,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,19 +43,6 @@ struct Projection {
 enum Evaluation {
     None { reason: NoEvaluation },
     Request { eval_id: String, digest: String },
-    Trajectory { reference: TrajectoryReference },
-}
-
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct TrajectoryReference {
-    settlement_id: String,
-    settlement_digest: String,
-    outbox_id: String,
-    outbox_digest: String,
-    subject_id: String,
-    subject_digest: String,
-    result_digest: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -74,11 +57,14 @@ struct Receipt {
 enum Completion {
     None,
     Request,
-    Trajectory { admission: SharedAdmission },
 }
 
 impl Receipt {
     fn validate(&self, status: &str) -> Result<()> {
+        ensure!(
+            self.projection.format == 1 && self.projection.binding.is_none(),
+            "retired or unsupported projection receipt"
+        );
         ensure!(
             matches!(
                 (status, &self.completion),
@@ -92,13 +78,38 @@ impl Receipt {
                     (&self.projection.evaluation, completion),
                     (Evaluation::None { .. }, Completion::None)
                         | (Evaluation::Request { .. }, Completion::Request)
-                        | (Evaluation::Trajectory { .. }, Completion::Trajectory { .. })
                 ),
                 "projection receipt completion has the wrong sink"
             );
         }
         Ok(())
     }
+}
+
+pub(super) async fn preflight_receipts(store: &Store, tx: &DatabaseTransaction) -> Result<()> {
+    let mut after = String::new();
+    loop {
+        let page = store
+            .record_page::<Receipt>(tx, Kind::ProjectionReceipt, &after)
+            .await?;
+        if page.is_empty() {
+            break;
+        }
+        for receipt in page {
+            ensure!(
+                receipt.key() > after.as_str(),
+                "shared projection receipt key order"
+            );
+            receipt.value.validate(receipt.status())?;
+            ensure!(
+                receipt.value.projection.namespace == store.namespace()
+                    && receipt.value.projection.event_id == receipt.key(),
+                "shared projection receipt identity mismatch"
+            );
+            after = receipt.key().to_owned();
+        }
+    }
+    Ok(())
 }
 
 impl Engine {
@@ -109,63 +120,12 @@ impl Engine {
                 let tx = self.store().begin().await?;
                 self.authority.fence(&tx).await?;
                 let terminal = self.terminal_in(&tx, event).await?;
-                let mut fence = match &terminal.binding {
-                    Some(binding) => Some(
-                        self.episode_fence(&tx, binding, Store::now(&tx).await?)
-                            .await?,
-                    ),
-                    None => None,
-                };
-                self.project_in(&tx, &terminal, fence.as_mut()).await?;
+                self.project_in(&tx, &terminal).await?;
                 tx.commit().await?;
                 Ok(())
             })
             .await?;
         self.complete_projection(event).await
-    }
-
-    /// Called only after a guard transaction holds its episode fence. Terminal
-    /// reads are immutable; taking an execution/outbox lock here would reverse
-    /// finalization's execution -> episode order. The outer transaction owns
-    /// rollback/retry, and an unresolved member rejects the new guard decision.
-    pub(in crate::gateway::shared::engine) async fn catch_up_in(
-        &self,
-        tx: &DatabaseTransaction,
-        fence: &mut Stored<EpisodeFence>,
-    ) -> Result<()> {
-        ensure!(
-            fence.value.pending.len() <= 8,
-            "episode projection catch-up count budget exceeded"
-        );
-        let pending = fence.value.pending.iter().cloned().collect::<Vec<_>>();
-        let mut bytes = 0usize;
-        for id in pending {
-            let event_id = format!("gateway-terminal-{id}");
-            let record = self.metering_record_in(tx, &event_id).await?;
-            let terminal = self.terminal_in(tx, &record.event).await?;
-            let binding = terminal
-                .binding
-                .as_ref()
-                .context("pending execution lost trajectory binding")?;
-            ensure!(
-                binding.owner_user_id == fence.value.owner_user_id
-                    && binding.episode_id == fence.value.episode_id,
-                "pending execution belongs to another episode"
-            );
-            bytes = bytes
-                .checked_add(serde_json::to_vec(&terminal.record)?.len())
-                .context("projection catch-up byte overflow")?;
-            ensure!(
-                bytes <= 8 * 1024 * 1024,
-                "episode projection catch-up byte budget exceeded"
-            );
-            self.project_in(tx, &terminal, Some(fence)).await?;
-        }
-        ensure!(
-            fence.value.pending.is_empty(),
-            "episode has unresolved projection evidence"
-        );
-        Ok(())
     }
 
     async fn terminal_in(
@@ -191,39 +151,20 @@ impl Engine {
             .value
             .projection
             .context("original projection requirements are missing")?;
-        inputs.evaluation(&record, execution.value.trajectory.is_some())?;
-        if let Some(binding) = &execution.value.trajectory {
-            ensure!(
-                binding.owner_user_id == event.tenant_id
-                    && record.request_id.as_ref() == Some(&binding.request_id),
-                "terminal trajectory owner mismatch"
-            );
-        }
-        Ok(Terminal {
-            record,
-            inputs,
-            binding: execution.value.trajectory,
-        })
+        ensure!(
+            execution.value.trajectory.is_none(),
+            "retired guarded execution binding"
+        );
+        inputs.evaluation(&record, false)?;
+        Ok(Terminal { record, inputs })
     }
 
     async fn project_in(
         &self,
         tx: &DatabaseTransaction,
         terminal: &Terminal,
-        fence: Option<&mut Stored<EpisodeFence>>,
     ) -> Result<Projection> {
         let event = &terminal.record.event;
-        ensure!(
-            terminal.binding.is_some() == fence.is_some(),
-            "projection episode fence is missing"
-        );
-        if let (Some(binding), Some(fence)) = (&terminal.binding, &fence) {
-            ensure!(
-                binding.owner_user_id == fence.value.owner_user_id
-                    && binding.episode_id == fence.value.episode_id,
-                "projection episode fence mismatch"
-            );
-        }
         let prior: Option<Stored<Receipt>> = self
             .store()
             .read(tx, Kind::ProjectionReceipt, &event.event_id)
@@ -258,49 +199,12 @@ impl Engine {
         } else {
             metering.apply_in(tx, &terminal.record).await?;
         }
-        let evaluation = match terminal
-            .inputs
-            .evaluation(&terminal.record, terminal.binding.is_some())?
-        {
+        let evaluation = match terminal.inputs.evaluation(&terminal.record, false)? {
             EvaluationInput::None(reason) => Evaluation::None { reason },
             EvaluationInput::Request(subject) => Evaluation::Request {
                 eval_id: subject.eval_id.clone(),
                 digest: subject_digest(&subject)?,
             },
-            EvaluationInput::Trajectory => {
-                let binding = terminal
-                    .binding
-                    .as_ref()
-                    .context("missing bound trajectory")?;
-                let trajectory = SharedTrajectory::new(self.store().namespace())?;
-                if let Some(prior) = &prior {
-                    let Evaluation::Trajectory { reference } = &prior.value.projection.evaluation
-                    else {
-                        anyhow::bail!("projection receipt changed required sink");
-                    };
-                    let request = trajectory
-                        .request_in(tx, &event.tenant_id, &binding.request_id)
-                        .await?
-                        .context("projection receipt lost trajectory request")?;
-                    ensure!(
-                        request.settlement_event_id.as_ref() == Some(&reference.settlement_id),
-                        "projection receipt lost original settlement"
-                    );
-                }
-                let settlement = trajectory
-                    .settle_in(
-                        tx,
-                        &event.tenant_id,
-                        &binding.request_id,
-                        |request, events, sequence| {
-                            settlement::build(terminal, request, events, sequence)
-                        },
-                    )
-                    .await?;
-                Evaluation::Trajectory {
-                    reference: settlement::reference(&settlement)?,
-                }
-            }
         };
         let projection = Projection {
             format: 1,
@@ -308,7 +212,7 @@ impl Engine {
             event_id: event.event_id.clone(),
             tenant_id: event.tenant_id.clone(),
             execution_id: event.execution.execution_id.clone(),
-            binding: terminal.binding.clone(),
+            binding: None,
             source_digest: source_digest(self.store().namespace(), terminal)?,
             metering_digest: canonical_digest(&terminal.record)?,
             evaluation,
@@ -339,23 +243,6 @@ impl Engine {
                 "projection receipt appeared concurrently"
             );
         }
-        if let Some(fence) = fence {
-            let removed = fence.value.pending.remove(&event.execution.execution_id);
-            ensure!(
-                removed || prior.is_some(),
-                "terminal projection lost its pending episode fence"
-            );
-            if removed {
-                let status = if fence.value.pending.is_empty() {
-                    "ready"
-                } else {
-                    "pending"
-                };
-                self.store()
-                    .save(tx, fence, status, None, Store::now(tx).await?)
-                    .await?;
-            }
-        }
         Ok(projection)
     }
 }
@@ -366,6 +253,6 @@ fn source_digest(namespace: &str, terminal: &Terminal) -> Result<String> {
         namespace,
         &terminal.record,
         &terminal.inputs,
-        &terminal.binding,
+        &Option::<TrajectoryBinding>::None,
     ))
 }

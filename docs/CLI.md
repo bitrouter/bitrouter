@@ -54,15 +54,17 @@ Gateway server-side tools require `server-tools` (included by default and enabli
 without that feature fails at startup, reload and profile preflight. Saved loop
 tuning with no selected tool remains readable and does not activate execution.
 
-Evidence and learning commands require the application's `core` feature:
-`eval`, `optimize`, `workflow-state`, and `policy compile`, `publish`, `verify`
-and `evolve`, plus `acp evolution` and checkpoint `judge`, `judge-job` and
-`rubric` operations. Without core they report the requirement before opening
-inputs or stores. Nonempty `BITROUTER_WORKFLOW_TRACE_JSONL` also requires core.
+BRO research and learning commands require the application's `core` feature:
+`workflow-state`, `acp evolution`, and checkpoint `judge`, `judge-job` and
+`rubric` operations. Nonempty `BITROUTER_WORKFLOW_TRACE_JSONL` also requires core;
 `serve`, `start` and `restart` reject it before creating runtime files or stopping
-a resident daemon. Published-policy loading/enforcement, ordinary
-policy inspection/reload/rollback, request metering and trajectory inspection,
-replay and pruning remain available without the learning runtime.
+a resident daemon when that feature is unavailable.
+
+Model-only Policy initialization, validation, inspection, publication, reload and
+rollback, plus the Eval evidence exchange, are available without `core` or
+`harness`. Evaluation runs in a client or external evaluator. Evidence submission
+and freezing do not activate a Policy revision. Request metering and trajectory
+inspection, replay and pruning also remain available in the gateway build.
 
 `bro <subcommand> [flags]`
 
@@ -78,7 +80,7 @@ is a custom selection, not the official full profile.
 
 ## Output format
 
-Every command prints a single **formatted JSON object** to **stdout** — success or failure — so output is machine-parseable by default (agent-native first). Global flags:
+Reporting commands print a single **formatted JSON object** to **stdout** for success or runtime failure, so output is machine-parseable by default (agent-native first). Argument parsing, help and version output follow the normal CLI parser channels. Global flags:
 
 - `-j`, `--json` — force JSON (the default).
 - `--human` — render a human-readable view to stdout instead of JSON.
@@ -88,17 +90,20 @@ Every command prints a single **formatted JSON object** to **stdout** — succes
 - `-H` before the subcommand (for example, `bro -H cloud whoami`) — compatibility spelling for `--human`. Under `bro cloud api`, `-H` means `--header`, matching `gh api`.
 - `-h`, `--help` — unchanged (`-h` is **not** human output).
 
-All diagnostics — progress, warnings, internal logs, and a human echo of errors — go to **stderr** (colored when stderr is a TTY; honors `NO_COLOR`). So:
+Progress, warnings and diagnostic logs use **stderr** (colored when stderr is a TTY; honors `NO_COLOR`). Ordinary runtime failures are reported through stdout and can leave stderr empty. For reporting commands:
 
 ```
 bro <cmd> 2>/dev/null | jq .
 ```
 
-always yields one clean JSON value. A failed command emits a uniform error envelope to stdout and exits non-zero:
+yields one clean JSON value. A failed reporting command emits a uniform error envelope to stdout and exits non-zero:
 
 ```json
 { "error": { "kind": "not_found", "message": "…", "context": ["…"], "hint": "…" } }
 ```
+
+Scripts inspect stdout's `error.message` and `error.context` for the failure and
+its recovery details, including source restoration after a rejected publication.
 
 `kind` is a stable taxonomy (`bad_request` / `unauthorized` / `forbidden` / `not_found` / `upstream` / `internal` / …). Under `--human`, the result (success object or error block) is rendered to stdout in the human form and no JSON is printed.
 
@@ -188,7 +193,7 @@ bro threads create --workspace /path/to/project --model bitrouter/auto
 bro threads show THREAD_ID
 ```
 
-`task run` starts or connects to the local `bro serve` process through its
+`task run` starts or connects to the local BRO harness process through its
 owner-restricted native socket. The client creates a Thread, starts one Turn,
 and waits for that Turn's result. Each call uses its own stable durable
 acceptance key. A lost reply is retried once with the original key and server
@@ -493,7 +498,7 @@ Most targets are Rust module paths (`bitrouter`, `bitrouter_sdk`, …), so `RUST
 These use `::` separators (not `_`) precisely because they are not module paths: they are stable selectors that survive the code moving between crates. Two consequences for operators:
 
 - **`RUST_LOG=bitrouter_observe=debug` selects nothing at all.** There is no `bitrouter-observe` crate; the exporter lives in application telemetry, so that is a dead selector rather than a narrower one — and the module-path fallback would be `bitrouter::telemetry::…`, which is exactly what the pins below exist to make irrelevant. The pinned `bitrouter::observe::*` targets below are the stable way to reach this instrumentation: use `RUST_LOG=bitrouter::observe::http=debug` (or a plain `info` default, which includes it).
-- **Turn on `bitrouter::observe::span_attributes` when a forwarded attribute does not appear on a span.** A deployment can attach its own attributes to the root `chat` span, but the span schema reserves its own vocabulary: keys under `bitrouter.` or `gen_ai.`, and any key the schema already declares (`$screen_name`, `error.type`, `server.address`, …), are **dropped rather than stamped**, so one deployment cannot redefine what an attribute means for everyone else. The drop is deliberate and per-request, hence DEBUG rather than WARN: `RUST_LOG=info,bitrouter::observe::span_attributes=debug` names each dropped key. The full reserved region is `crates/bitrouter-ai/span-schema.json`.
+- **Turn on `bitrouter::observe::span_attributes` when a forwarded attribute does not appear on a span.** A deployment can attach its own attributes to the root `chat` span, but the span schema reserves its own vocabulary: keys under `bitrouter.` or `gen_ai.`, and any key the schema already declares (`$screen_name`, `error.type`, `server.address`, …), are **dropped rather than stamped**, so one deployment cannot redefine what an attribute means for everyone else. The drop is deliberate and per-request, hence DEBUG rather than WARN: `RUST_LOG=info,bitrouter::observe::span_attributes=debug` names each dropped key. The full reserved region is `apps/bitrouter/span-schema.json`.
 - **`RUST_LOG` no longer affects tracing.** This used to be the opposite, and the reversal is worth stating because the old advice is still in circulation: the ingress span was a `tracing` span bridged into OpenTelemetry, so a filter that dropped `bitrouter::observe::http` at INFO also dropped the SERVER span, and every `chat` span exported as an orphan root with no error reported anywhere. A blanket `RUST_LOG=warn` was enough to do it. The ingress span is now an OpenTelemetry span in its own right and never passes through the `tracing` subscriber, so **no filter can suppress it**. Set `RUST_LOG` for the logs you want; traces are unaffected either way.
 
 ## Ignored configuration
@@ -582,8 +587,14 @@ environment, or metering state.
 
 Remote read actions are `status`, `requests`, `models`, `route`, `providers
 list`, `observe status`, `policy status`, `policy show`, and `agents list`.
-A remote policy command defaults to `--view active`; local policy reads default
-to `--view disk`.
+Policy reads default to `--view active` for both local and remote targets.
+Select `--disk` or `--view disk` explicitly for saved source, including offline
+local inspection. An unavailable active instance never silently becomes a disk
+read. `policy show [NAME]` returns the complete resubmittable `source` document;
+view, availability, `source_digest`, names and bindings stay in the outer report.
+The control handshake requires protocol 2 and compatible action descriptors;
+Policy show/status use descriptor version 2. Unsupported peers are rejected
+before an action, without legacy action-name fallback.
 
 `agents list` is a catalog read only. `agents list --remote`, agent checks and
 launches, ACP sessions, and native execution commands stay local. The
@@ -752,12 +763,15 @@ The key is also required on subsequent restarts while retained resources exist,
 even if the manifest path has been removed. A missing/wrong key fails startup.
 No key is generated implicitly, and changing it is not a key-rotation operation.
 
-The manifest's `format: 1`, `installation_id`, and `resources` identify an
-explicit installation catalog. Each resource contains its qualified `reference`
-and a route, policy, or credential `definition`. Routes retain their complete
-routing source, selector and explicit provider/account credential references;
-policies retain a policy-lock document and named entry. The initial importer
-accepts static API-key credentials with generation zero; OAuth/ambient stores
+The manifest's format, `installation_id`, and `resources` identify an explicit
+installation catalog. Use the format discriminator required by its resource
+kinds; a format number is not an instruction to migrate existing data. Each
+resource contains its qualified `reference` and typed `definition`. Routes retain
+their routing source, literal selector and explicit provider/account credential
+references. Routing Policies retain the public model-only `policy::Document`
+and its exact selected name. Context actions and experimental route members
+cannot obtain mature service execution authority. The initial importer accepts
+static API-key credentials with generation zero; OAuth/ambient stores
 and native request-check definitions remain unsupported. The manifest is
 privileged secret-bearing input: tenant configuration requests only name
 references and cannot supply provider endpoints, keys, files or executables.
@@ -918,7 +932,7 @@ each retained surface preserves one JSON shape.
 | `source` / `saved` | file or generated defaults; available, generated, missing, invalid, or unavailable saved input |
 | `running` | `in_sync`, `reload_required`, `restart_required`, `mixed`, or `unknown` for the inspected configuration sources |
 | `reload_required_fields` / `restart_required_fields` | safe field categories that differ; no configuration values or secret-derived digests |
-| `named_policy` / `access_policies` | separate evidence for policy-lock and access-policy files; unchanged YAML alone does not establish synchronization |
+| `named_policy` / `access_policies` | separate evidence for model-policy source and access-policy files; unchanged YAML alone does not establish synchronization |
 | `server_instance_id` / `generation` / `last_reload` | serving process and coordinated reload evidence, when available |
 | `mixed_state_history` | retained partial/interrupted outcomes that explain a mixed runtime, even after a later preparation failure |
 
@@ -972,41 +986,33 @@ Portable — there is no terminal-only path left to gate.
 
 ## Config
 
-### `bro config migrate-routers`
-
-Preview conversion of block-form `presets:` into named `routers:` without
-changing the source. The candidate preserves comments, request defaults,
-provider preferences and policy bindings. Policy-lock contents, credentials,
-`chat.model` and runtime mode stay unchanged.
+### `bro config validate`
 
 ```bash
-bro config migrate-routers -c bitrouter.yaml --candidate routers.candidate.yaml
-# Review the candidate diff, then use source_digest from the preview report:
-bro config migrate-routers -c bitrouter.yaml --candidate routers.candidate.yaml \
-  --apply --source-digest 'sha256:...'
+bro config validate --config bitrouter.yaml
 ```
 
-Apply rejects a changed source or edited candidate, keeps a separate backup,
-and replaces the source atomically. Restart the daemon to activate new routers.
-Candidate and backup files can contain the same secrets as the original config;
-they are local files, not included in report JSON. Unsupported YAML layouts,
-invalid legacy names, or incompatible existing routers need an explicit manual
-edit; migration never silently renames a caller-visible address.
-Pass the actual file path for symlink-backed configs. CRLF is preserved; mixed
-line endings must be normalized before migration.
-Existing `@name[:variant]` calls continue to work during the compatibility
-window. New callers should use `bitrouter/name`; canonical addresses do not
-accept variants, except the existing `bitrouter/auto` compatibility entry.
+Validation runs the real configuration parser, provider inheritance, upstream
+URL checks and referenced model-policy source validation. It reports named-router
+counts and exits nonzero for invalid input. Unset environment references appear
+as warnings using validation placeholders; recheck those values in the actual
+runtime environment before activation.
 
-Router authorization retains the existing requested-selector contract. An
-access policy that grants `bitrouter/coding` delegates model choice to coding;
-granting only a physical model does not grant the router alias. The current
-pipeline does not recheck the model allowlist after router selection.
+Define named routers under `routers` and address them as `bitrouter/<id>`.
+A router explicitly selects a fixed model or a literal named policy and base
+model. Old preset/variant configuration, compatibility router addresses and
+Policy mode fields are rejected. There is no automatic router conversion.
+Plain provider/model identifiers and provider-qualified model pins keep their
+normal meanings.
 
-`bro config validate` reports named-router counts and legacy migration guidance.
-The routing binding digest in diagnostics excludes prompt and parameter values;
-it cannot identify changes confined to those values. It is distinct from the
-policy artifact digest and from the exact-file checksum used by migration.
+Router authorization uses the requested selector. An access policy granting
+`bitrouter/coding` delegates model choice to that router; granting only a
+physical model does not authorize the router alias. The pipeline does not
+recheck the model allowlist after router selection.
+
+The routing binding digest excludes prompt and parameter values, so it cannot
+identify edits confined to those values. It is distinct from the model-policy
+source digest and immutable service resource/configuration revisions.
 
 `bro models` adds a router inventory alongside the compatible model catalog.
 `bro status` distinguishes `saved_routers`, `running_routers`, and the optional
@@ -1200,7 +1206,9 @@ Reads one configured provider and requests its model list. Local HTTP and
 online HTTPS use the same check. The command resolves that provider's endpoint
 and credential reference, then GETs the catalog for its existing protocol
 (Chat Completions, Responses, and Messages use `{api_base}/models`) with the
-gateway's authentication, static headers, and upstream timeouts.
+configured API key, static headers, and upstream timeouts. Providers that use
+stored login credentials need a configured API key or static authentication
+header for this check. A redirect returns its original HTTP status.
 
 The result is one connection, or one per account when the provider has
 accounts. `--account` checks a single label. JSON is the default. Each object
@@ -1660,7 +1668,7 @@ without `chat.model` or `--model`. Requests marked by the maintained adapter
 map declared native model names to the Codex subscription at gateway ingress;
 the CLI retains its native model metadata and picker. Generic API requests do
 not opt into subscriptions this way. Explicit provider/canonical model names,
-presets and user-defined virtual models are preserved. Reloading the daemon
+named routers and user-defined virtual models are preserved. Reloading the daemon
 updates the native-model mapping along with the active provider catalog.
 
 At ACP session startup, BitRouter probes local CLIs with `--version` (two-second
@@ -1728,143 +1736,94 @@ compatibility forms keep stdout reserved for ACP frames.
 
 ```text
 bro policy init NAME [--router ROUTER] --economy MODEL \
-  [--economy-effort LEVEL] [--strong MODEL] [--strong-effort LEVEL]
-bro policy init NAME --preset PRESET --economy MODEL [--economy-effort LEVEL] \
-  [--strong MODEL] [--strong-effort LEVEL] # legacy compatibility
-bro policy check|status|show [--config PATH]
-bro policy compile --output FILE [--eval-snapshot SHA256] [--snapshot-time UNIX_MS]
+  [--economy-effort LEVEL] [--strong MODEL] [--strong-effort LEVEL] [--config PATH]
+bro policy check [--config PATH]
+bro policy status [--disk | --view active|disk] [--config PATH] [--socket PATH]
+bro policy show [NAME] [--disk | --view active|disk] [--config PATH] [--socket PATH]
 bro policy diff ACTIVE CANDIDATE
-bro policy publish CANDIDATE [--config PATH] [--socket PATH]
-bro policy verify --evidence [--config PATH]
-bro policy evolve [--config PATH] [--apply | --output FILE]
+bro policy publish CANDIDATE --expected-digest SHA256 [--config PATH] [--socket PATH]
 bro policy reload [--config PATH] [--socket PATH]
-bro policy rollback DIGEST [--config PATH] [--socket PATH]
+bro policy rollback DIGEST --expected-digest SHA256 [--config PATH] [--socket PATH]
 ```
 
-The BitRouter process, not the policy lock, owns adaptive behavior:
+Routing Policy uses the public model-only source contract. The conventional file
+is `policy.yaml`; an explicit `policy.path` may select another filename containing
+the same source format. Explicit missing or invalid files fail without falling
+back to the bundled source. A zero-config local installation uses the bundled
+`bitrouter/auto` source: three model tiers, strong default, tool-safe fallback,
+and no learned routes.
 
 ```yaml
 policy:
-  path: ./policy-lock.yaml
-  mode: frozen # or adaptive
+  path: ./policy.yaml
 ```
 
 ```bash
 bro policy init coding \
   --strong provider:strong-model \
-  --economy provider:economy-model
+  --economy provider:economy-model \
+  --config bitrouter.yaml
+bro policy check --config bitrouter.yaml
+bro policy show coding --disk --config bitrouter.yaml
 ```
 
-This creates the `coding` policy and router, addressed as `bitrouter/coding`.
-Omitting both binding flags defaults `--router` to `coding`; another router
-requires `--router ID`. The command never chooses either model or provider. A
-new router requires both model arguments, while a compatible existing policy
-router supplies its recorded strong base model when `--strong` is omitted.
+Initialization creates the named policy and router, addressed as
+`bitrouter/coding`. `--router` defaults to `coding`; pass another id explicitly.
+The command does not choose a provider or model. A new router requires both
+model arguments; a compatible existing policy router may supply its strong base
+model when `--strong` is omitted. Explicit effort is part of the target identity.
+`--strong-effort` requires an explicit `--strong`. Initialization, check,
+publication and rollback require a file-backed `bitrouter.yaml`; run `bro init`
+first if no configuration file exists.
+Initialization preserves unrelated chat and harness settings and reports
+`config_activation: saved_only`; explicitly reload or start before relying on
+saved settings in a running instance.
 
-Router initialization preserves the existing `policy.mode` and all chat or
-harness settings. With no explicit mode, the configuration remains `frozen`.
-Live routes use only the signed lock; Eval rows never change request routing on
-their own. Operators can set `mode: adaptive` when explicit publication is
-allowed. Invoking `optimize run` is explicit authorization to activate adaptive
-mode and autonomously publish its successor when the controller decides to do
-so. Dry-run compilation and candidate export remain available. The mode
-controls write authority, not request-time learning.
+Each source document has `spec_version: policy/1.0.0-beta.1` and named `policies`.
+Targets contain a model and optional effort. Omitted effort preserves caller
+effort. Policy selection preserves all admitted context and does not run tools,
+activate context treatments or guards, or publish learning results. Classified
+routes require the matching `classifier_digest`; absent classifications fall
+back to the source's default tier. Router bindings select names literally,
+without request variants or fallback to a different policy name.
 
-`--preset PRESET` is the compatibility initializer for legacy `@preset`
-configuration. It remains mutually exclusive with `--router`, can infer the
-strong model from an existing preset, and retains its historical behavior of
-setting `policy.mode: adaptive`.
-
-`policy publish` promotes the exact compiled v3 candidate after validating its
-parent digest, certificates, and current config. A stale candidate or frozen
-process leaves the active bytes unchanged. `policy evolve --apply` remains the
-legacy migration shortcut; use `compile` + `publish` whenever an eval snapshot
-is part of the candidate lineage.
-
-The lock contains deterministic routes, tiers, and learning thresholds, but no activation or freeze switch. Older `policy.writeback: locked|evolve` input remains readable as `frozen|adaptive`; newly written configuration uses `policy.mode`. The old `policy lock`, `policy unlock`, and `policy evolve --freeze` surfaces have been removed.
-
-### `bro optimize`
-
-```text
-bro optimize run [--policy auto] [--candidate-tier TIER] \
-  [--objective cost|latency] \
-  [--exploration-ppm 100000] [--minimum-tasks 3] [--maximum-tasks 20] \
-  [--minimum-pass-rate-ppm 900000] \
-  [--evaluator-config-digest sha256:...] \
-  [--config bitrouter.yaml] [--socket PATH]
-bro optimize status [--policy auto] [--config bitrouter.yaml]
-```
-
-Optimization is driven by history from normal use, not by a bundled workflow
-runner. Initialize a policy, run a coding agent or Terminal Bench normally,
-submit externally evaluated results, and advance the controller one step:
+`status` and `show` default to the selected instance's active state. `--disk`
+conflicts with `--view`; use either `--disk` or `--view disk` for saved source.
+A remote disk read refers to that host's saved files. `show` checks an optional
+name but exports the complete document in `source`, including all named policies.
+The surrounding `source_digest` and view/availability metadata are not source
+fields. Extract `source` to a separate YAML or JSON file for resubmission.
 
 ```bash
-bro policy init auto --router auto \
-  --strong provider:strong-model --economy provider:economy-model
-# run the coding agent or Terminal Bench normally through bitrouter/auto
-bro eval result submit result.json --config bitrouter.yaml
-bro optimize run --policy auto --config bitrouter.yaml
-bro optimize status --policy auto --config bitrouter.yaml
+bro policy diff policy.yaml candidate.yaml
+bro policy publish candidate.yaml --expected-digest <current-source-digest> --config bitrouter.yaml
+bro policy rollback <previous-source-digest> --expected-digest <current-source-digest> --config bitrouter.yaml
 ```
 
-Repeat normal traced work, external Eval submission, and `optimize run` until
-that command reports the controller decision `converged`. Use `optimize status`
-to observe the signed policy state without changing files or the database: it
-reports `exploring` while an experiment is active and `idle` otherwise, but
-does not infer convergence from Eval history. Calling `optimize run` grants
-autonomous authority for exactly one deterministic controller step: it may
-publish `explore`, `promote`, or `retreat`, or leave the lock unchanged for
-`hold` or `converged`. There is no separate review or publish approval.
-Publication uses the current policy digest as a compare-and-swap parent and
-reloads a reachable daemon; a stale parent or failed reload leaves or restores
-the prior active state. When `--candidate-tier` is omitted, the controller uses
-the signed policy's `adequacy.explore_tier`; pass `--candidate-tier TIER` only
-to override it for that step.
+Publication validates the separate candidate against current configuration and
+uses the explicit expected digest as compare-and-swap. The source never supplies
+its own parent digest or publication authority. Rollback selects a previously
+retained current-format source and uses the same explicit CAS discipline. Stale
+operations refuse to overwrite newer source. Local writes use file/process
+permissions; service revision creation and activation retain their independent
+authentication, scopes and CAS checks.
 
-The first run can cold-start signed exploration from champion-only history.
-That history ranks opportunities by request frequency and cost contribution,
-but cannot prove an unexecuted challenger is better and therefore cannot
-promote one directly. Later runs use complete `task` or `episode` cohorts for
-quality and cost. Request subjects help rank the next opportunity but never
-enter the gate. Promotion requires the configured quality/pass gate, no hard
-violation, and a lower mean complete-unit cost for the challenger. Complete
-cost prefers `trajectory.cost.usd_micros` and accepts evaluator-authored
-`cost.usd_micros` in micro-USD; per-request price does not gate promotion.
+Successful publication and rollback reload a reachable local daemon. An explicit
+`--socket` must be reached. If reload is rejected, recovery restores the previous
+source with CAS and attempts to reload it; concurrent winners are preserved and
+recovery failures are reported. `policy reload` explicitly reloads saved config
+and source through the daemon, preserving the last valid runtime snapshot on
+validation failure. Offline publication does not establish runtime activation.
 
-For unpriced subscriptions, `--objective latency` instead minimizes complete
-task wall time with the same quality and hard-violation gates. The conclusive
-task evaluator must report `latency.wall_ms` in `milliseconds` for every eligible
-unit in both arms, including failures, measured from admission through
-verification under comparable conditions. Missing or invalid measurements and
-per-request `latency.ms` do not authorize promotion. The objective is signed
-into exploration; later commands cannot change an active experiment's objective.
-Omitting the flag retains the existing `cost` objective.
-
-During exploration, router-authored decision evidence contains an optional
-signed `experiment` reference with the experiment id, `control` or
-`challenger` arm, `task` or `episode` assignment unit, assignment-id digest,
-and challenger propensity. Evaluators must copy that object verbatim and must
-never invent or edit it. Optimizer cohort membership comes from this router
-evidence, not the evaluator-owned `cohort` string.
-
-Router-authored decisions may also contain `route_measurement`. This versioned
-object records every tier/model/effort target declared by the same immutable
-policy snapshot, the semantic action chosen before tool, progress, or
-continuation guards, and its logging probability in integer ppm. The ordinary
-`selected_*` fields remain the effective post-guard route. Deterministic routes
-use one million ppm; assigned experiments use the signed arm probabilities. If
-an experiment lacks a stable task or episode identity, the router records a
-deterministic champion action instead of inventing randomized evidence.
-
-The generic Eval Exchange and low-level `policy compile`, `policy diff`,
-`policy publish`, `policy rollback`, and `policy verify` commands remain
-available for independent evaluation, migration, audit, and operator-managed
-policy workflows. They are not extra approval stages for `optimize run`.
+Evaluation and snapshot freezing leave active routing unchanged. Clients author
+new source from exact-revision evidence, then explicitly publish or create a new
+service revision and independently activate it. Experimental BRO algorithms use
+separate objects and entry points. ACL creation is independent and uses
+[`access-policy create`](#bro-access-policy-create-id).
 
 ### `bro trajectory`
 
-Durable trajectory progress control is an explicit local opt-in:
+Durable trajectory capture and retention are an explicit local opt-in:
 
 ```yaml
 trajectory:
@@ -1875,23 +1834,14 @@ trajectory:
 
 `enabled` defaults to `false`; `retention_days` defaults to `30` and must be
 positive; `outbox_batch_size` defaults to `100` and must be between 1 and 1000.
-A signed policy lock containing any `progress_guard` is rejected unless
-trajectory capture is enabled. Every trajectory setting is restart-only:
+Every trajectory setting is restart-only:
 changing `enabled`, `retention_days`, or `outbox_batch_size` during reload is
 rejected while the last-known-good runtime remains active. Restart the daemon
 to apply any trajectory setting change.
 
-Progress-guard clauses have two timing models. `max_recovery_count` is an edge
-trigger: it compares the prospective cumulative recovery count only when the
-current request enters `recovery` from another projection. Consecutive
-`recovery` projections remain protected but do not count or activate again; the
-configured hold, not the cumulative counter by itself, determines how long the
-escalation persists. The episode request, elapsed-time, and known-cost
-thresholds are monotonic once reached.
-Every genuine trigger activates hold. If the current candidate is any declared
-protected tier, it is preserved exactly; otherwise the escalation tier is
-selected. An active hold uses the same selection rule without resetting its
-duration. Unknown cost remains unknown and cannot satisfy a cost threshold.
+Model-only Policy source cannot configure progress guards or context treatment.
+Trajectory capture records structural evidence; enabling it does not grant
+model Policy any experimental execution or publication authority.
 
 The feature is source- and task-neutral. It stores event structure, bounded
 categorical routing facts, exact counters, and keyed/content digests. It does
@@ -1927,7 +1877,7 @@ owner-bound opaque identities; external request IDs on the wire, upstream, and
 in metering retain their existing semantics. `replay` validates a stable
 episode snapshot and compares the newest persisted route checkpoint digest with
 a fresh replay. Corrupt histories expose only the first intrinsically invalid
-event id/sequence and a stable reason code; a pending route awaiting its guard
+event id/sequence and a stable reason code; a pending route awaiting completion
 is not itself corruption. Concurrent appends are retried and are never reported
 as corruption. Use global `--json` or `--human` for either view.
 
@@ -1948,15 +1898,16 @@ contention error means the episode kept changing during the bounded read; retry
 after traffic quiets. Stable corruption reason codes mean the durable history
 needs operator investigation or restoration from backup.
 
-Progress metrics are descriptive: request/settlement counts, elapsed time,
-projection/tier/unprotected streaks, recovery/hold counters, and optional
-authoritative token/cost totals. Missing metering stays absent rather than
-becoming zero. `history_complete=false` means the visible prefix is not proven
-complete and guards follow their configured incomplete-history behavior.
+Trajectory metrics are descriptive: request/settlement counts, elapsed time,
+categorical route facts and available authoritative token/cost totals. Missing
+metering stays absent rather than becoming zero. `history_complete=false` means
+the visible prefix is not proven complete; it does not authorize reconstructing
+missing evidence or changing model-policy execution.
 
 ### `bro eval`
 
 ```text
+bro eval subject seal DRAFT --output SEALED
 bro eval subject put FILE [--config PATH]
 bro eval subject get EVAL_ID [--config PATH]
 bro eval subject list [--config PATH]
@@ -1966,10 +1917,24 @@ bro eval snapshot get SHA256 [--config PATH]
 bro eval status [--config PATH]
 ```
 
-Generic eval sits outside the inference hot path. Routed requests create
-redacted subjects automatically. A task-native runner, human, enterprise
-system, or agentic evaluator submits the same immutable `EvaluationResult` via
-CLI or authenticated REST. BitRouter validates evaluator authority and metric
+Eval subjects use schema 2 with a closed identity profile. Local gateway
+exchange uses `gateway_generic`; tenant exchange distinguishes `tenant_generic`
+from `tenant_model_policy`. Model-policy evidence binds installation, tenant,
+configuration revision, full immutable Policy `ResourceRef`, and literal selected
+name. Source/classifier digests are additional evidence, not substitutes for
+resource identity. Results inherit their validated subject identity and retain
+result schema 1. Use the tenant HTTP/SDK exchange and exact revision-bound
+inference for tenant evaluation; a local gateway ledger supplies no tenant
+authority. Generic evidence cannot qualify another Policy revision for activation.
+
+`subject seal` sorts redacted evidence, computes its canonical digest, validates
+the completed subject and writes deterministic JSON without opening a ledger.
+It does not evaluate the subject or create an active Policy revision.
+
+Generic eval sits outside the inference hot path. Clients submit redacted
+subjects and externally produced results. A task-native runner, human,
+enterprise system, or agentic evaluator submits the same immutable
+`EvaluationResult` via CLI or authenticated REST. BitRouter validates evaluator authority and metric
 scope, retains rejected/disputed outcomes, and admits trusted results into a
 content-addressed snapshot. It does not bundle or execute a universal judge.
 The local CLI operates in the `local` ownership scope. Authenticated REST
@@ -1986,7 +1951,7 @@ The daemon exposes the same library operations at
 `GET/POST /v1/evals/subjects`, `GET /v1/evals/subjects/{eval_id}`,
 `POST /v1/evals/results`, `POST /v1/evals/snapshots`,
 `GET /v1/evals/snapshots/{evidence_root}`, and `GET /v1/evals/status`.
-These endpoints mutate evidence only; no evaluator can edit or publish a lock.
+These endpoints mutate evidence only; evaluation does not edit or activate a Policy source.
 
 ### `bro key sign`
 
@@ -2061,8 +2026,6 @@ benchmarks:
 bro workflow-state classifier-bakeoff --fixtures <DIR> [--submission <JSON>] --output <JSON>
 bro workflow-state metering-usage --database-url <URL> --output <JSONL> [--since <RFC3339>] [--until <RFC3339>] [--impute-price <SPEC> ...]
 bro workflow-state reconcile-metering --database-url <URL> [--api-base <URL>] [--api-key-env <NAME>] [--credentials-file <PATH>] --request-id <ID> ... [--price <SPEC> ...] [--max-attempts <N>] [--poll-interval-ms <MS>]
-bro workflow-state reliability-report --database-url <URL> --config <PATH> --output <JSON>
-bro workflow-state policy-oracle --traces <JSONL> --cloud-usage <JSONL> --policy-lock <YAML> --policy <NAME> --effective-cost-factor <0..1> --target-savings <0..1> ... --output <JSON>
 bro workflow-state bundle --run-label <LABEL> --traces <JSONL> --cloud-usage <JSONL> [--outcomes <JSONL>] [--policy-decisions <JSONL>] --output-dir <DIR>
 bro workflow-state apply-reward-feedback --database-url <URL> --traces <JSONL> --cloud-usage <JSONL> --outcomes <JSONL> --policy-decisions <JSONL>
 ```
@@ -2075,7 +2038,7 @@ for every frozen fixture and bind the dataset, input projection, model artifact,
 features, training split, and (when applicable) calibration split. Task family,
 next-step role, progress, and shadow risk use separate heads. OOD and abstention
 are explicit, and the shadow risk head is evidence only: deterministic rules and
-signed policy remain authoritative.
+the validated model-policy source remain authoritative.
 
 The report contains per-head exact counts and macro-F1, per-slice coverage and
 accepted error risk, fixed-point Brier/ECE for calibrated candidates, OOD
@@ -2104,15 +2067,6 @@ several frozen schedules. A computed receipt is accepted only when exactly one
 distinct candidate reconstructs its final micro-USD charge; no match or an
 ambiguous rounding collision remains `unknown`.
 
-`policy-oracle` performs an immutable cost-only replay of a candidate lock over
-baseline traces and exact request settlement. `--effective-cost-factor` is the
-candidate-to-baseline cost ratio after expected token, retry, and turn
-inflation. The report includes cost-weighted route coverage, projected savings,
-ranked eligible requests, the highest-cost routes still left on the default
-tier, and the minimum covered requests needed for each repeated
-`--target-savings`. It is an upper-bound prioritization report, not a quality
-claim or a claim that the live trajectory will remain unchanged.
-
 `bundle` is fail-closed: every non-empty trace set needs an exact request-ID
 usage join and computed auditable charge; supplied policy decisions and outcomes
 must each cover that same request-ID set exactly once. Omit `--outcomes` when
@@ -2139,15 +2093,16 @@ not estimate the unexecuted models' quality or authorize a policy change.
 
 ---
 
-## Policy
+## Access policies
 
-### `bro policy create <id>`
+### `bro access-policy create <id>`
 
 ```
-bro policy create strict [--dir ./policies]
+bro access-policy create strict [--dir ./policies]
 ```
 
-Writes a starter policy file to the policy directory. Bind it to a key with:
+Writes a starter access-control file under `./policies` by default, independently
+of routing `policy.yaml`. Existing ACL files are not overwritten. Bind it to a key with:
 
 ```
 bro key sign --user <id> --policy strict
@@ -2668,7 +2623,6 @@ is fixed at daemon startup: restart to replace native MCP transport/credentials.
 Skills discovery supplies metadata and versions without prompt injection.
 See [BRO harness resources](development/harness-resources.md).
 
-`bro workflow-state reliability-report --database-url <URL> --config <PATH> --policy <NAME> --output <PATH>` reads reliability thresholds from the named policy in the version 4 lock (`--policy` defaults to `auto`).
 
 
 ## Offline DB evidence (Unix SQLite only)
@@ -2686,12 +2640,43 @@ bro tenancy offline inventory --bundle /absolute/new-db-evidence
 bro tenancy offline verify --bundle /absolute/new-db-evidence --evidence-digest <digest-from-snapshot>
 ```
 
+Snapshot defaults to the bounded `v1` evidence artifact. Use `--format v2`
+with an existing private scratch directory for complete processing with finite
+working memory:
+
+```sh
+bro tenancy offline snapshot --database /absolute/state/bitrouter.db \
+  --bundle /absolute/new-db-evidence --format v2 \
+  --scratch-directory /absolute/private-scratch
+bro tenancy offline restore --bundle /absolute/new-db-evidence \
+  --evidence-digest <digest-from-snapshot> --database /absolute/new-state/bitrouter.db \
+  --expected-installation-id <original-installation> --wrapping-key-env WRAPPING_KEY \
+  --scratch-directory /absolute/private-scratch
+```
+
+Inventory, verify, audit and recover also accept explicit scratch and working
+budgets. `--working-bytes` defaults to 67108864, `--scratch-free-bytes` to
+268435456, and `--validation-page-rows` to 32. `--validation-bytes` is the alias
+for the working allowance. These bound temporary work, not retained history.
+Restore requires scratch, the original installation and wrapping key, and a new
+literal database path in a private directory. It preserves current dataset
+identity, ciphertext and history; it does not migrate, merge, reset counters,
+start the service or release ingress. Do not run original and restored
+installations concurrently. Artifact v1/v2 selection does not make historical
+authority or Policy formats readable. Historical capacity upgrades and old Eval
+backfills have no command entry point.
+
 The bundle path must not exist. Preserve the returned `evidence_digest` outside
 the bundle and pass its exact64 lowercase hexadecimal characters to `verify`.
 Inventory recomputes the actual contents but does not authenticate the origin of
 a self-contained bundle. Verification compares the supplied evidence anchor,
 private profile, file digest and actual typed SQL inventory. Neither operation
 grants execution, migration, owner assignment or recovery authority.
+
+SQL-value inventory verification does not authenticate every encrypted service
+payload or establish runtime recovery eligibility. Authenticated service
+validation and current-store/authority checks remain separate gates for audit,
+recovery and restore.
 
 The snapshot, inventory and verify results have `scope: sqlite_database_only`, `complete: false` and
 `cutover_ready: false`. This is **not a full backup** or an M0 MigrationManifest.
@@ -2756,17 +2741,7 @@ The bundle remains `sqlite_database_only`, `complete=false`, `cutover_ready=fals
 
 The new secured report directory records the original manifest and nonsecret validation summary. Duplicate mapping keys, missing or extraneous merge approvals, unresolved owners with grants, foreign observed installations and wrong snapshot digests fail. Same text in different owner namespaces remains distinct. The RECORDED marker only seals this review packet; it is never bundle READY or an execution capability.
 
-Counts and evidence inside the manifest remain operator claims. The command does **not** authenticate external ownership/producer evidence, count per-owner source records, backfill rows, provision a target or retire writers. Missing installation identity remains explicitly unobserved. All completion/cutover flags stay false. Historical family codecs, explicit quarantine/backfill and operational cutover/rollback verification are still required.
-
-### Bounded Legacy Eval import (Core, Unix SQLite)
-
-`bro tenancy offline eval-inventory --bundle DIRECTORY --evidence-digest SHA256 --source-kind local_user --report NEW_DIRECTORY` validates the four-table Legacy Eval graph and records exact keyed owner partitions. `shared_user` and `native_owner` are explicit alternative source namespaces, never inferred from owner names. Wildcard snapshots are unresolved quarantine.
-
-`bro tenancy offline eval-backfill --plan FILE --plan-digest SHA256 --report NEW_DIRECTORY` consumes an independently anchored private `bitrouter.offline.eval-backfill.v1` plan. It requires a stopped, freshly Service-provisioned destination with migration038 already applied, actual current tenant-wide admin bindings, and exact fresh provisioning history. It performs no provisioning, schema migration or counter reset. Inputs use explicit absolute paths; there is no context lookup or network call. See [the private-format profile](RESOURCE_TENANCY_EVAL_IMPORT.md) for plan fields and the required operator trust boundary.
-
-The complete source/target inventory is limited to 4096 rows, 32 MiB typed values and 1 MiB per cell; the transformed target must also fit those bounds. An 8 MiB M0 mapping manifest must match every Eval partition. Only selected Eval rows are inserted into an empty destination graph. All other source tables and unresolved/quarantined Eval partitions remain in external immutable evidence. Snapshot IDs, original root and manifest bytes are preserved through exact private versioned provenance; ordinary owned readers require that record to validate an imported Legacy root. No tenant authority is derived from source metadata.
-
-Success publishes a secured `RECORDED` packet only after explicit COMMIT, exact full-content verification and actual SQLite worker close. It remains `complete=false` and `cutover_ready=false`. A failed/abandoned reply may follow a committed import; retain any `INCOMPLETE` packet and keep the destination stopped for explicit reconciliation. Do not retry under another plan or merge history. Unknown SQL outcome/cleanup retains the canonical file fence until process exit. External writer retirement, target restart/readback, ingress release and compatible rollback are separate M4 gates. Production dispatch and strict-receipt flags are unchanged.
+Counts and evidence inside the manifest remain operator claims. The command does **not** authenticate external ownership/producer evidence, count per-owner source records, backfill rows, provision a target or retire writers. Missing installation identity remains explicitly unobserved. All completion/cutover flags stay false. This read-only packet does not enable historical data import or conversion. A new installation is provisioned through current APIs; backup restore requires a supported current dataset.
 
 ### Fresh installation recovery verification (Unix SQLite)
 

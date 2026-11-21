@@ -8,7 +8,7 @@ use bitrouter_ai::types::{Message, Role};
 use serde::{Deserialize, Serialize};
 
 use super::sha256;
-use bitrouter_ai::harness::resources::MaterialRef;
+use crate::managed_contract::harness::resources::MaterialRef;
 
 const MAX_BYTES: usize = 64 * 1024;
 

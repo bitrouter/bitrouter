@@ -91,7 +91,7 @@ agent-client-protocol-schema = { workspace = true, optional = true }
 agent-client-protocol-conductor = { workspace = true, optional = true }
 tokio-stream = { workspace = true, optional = true, features = ["sync"] }
 bitrouter-guardrails = { workspace = true, optional = true }
-bitrouter-ai = { workspace = true, features = ["schema", "axum"] }
+bitrouter-ai = { workspace = true, features = ["schema"] }
 # Product-only OS keyring discovery for explicitly adopted external CLI sessions.
 keyring.workspace = true
 chrono.workspace = true
@@ -161,8 +161,8 @@ toml.workspace = true
 # Differential stored-history tests use the pinned schema without activating
 # an ACP runtime in the application's normal/build dependency closure.
 agent-client-protocol-schema.workspace = true
-bitrouter-sdk = { workspace = true, features = ["core"] }
-bitrouter-ai = { workspace = true, features = ["testing"] }
+bitrouter-sdk.workspace = true
+http-body-util = "0.1"
 criterion = { version = "0.8", features = ["async_tokio"] }
 tonic = { workspace = true, features = ["server", "router"] }
 tokio-stream = { workspace = true, features = ["net"] }
@@ -239,7 +239,6 @@ required-features = ["core"]
 
 [[test]]
 name = "policy_eval_control_plane"
-required-features = ["core"]
 
 [[example]]
 name = "checkpoint_ts_publication"
@@ -282,10 +281,6 @@ name = "native_harness_resources"
 required-features = ["core", "harness"]
 
 [[test]]
-name = "harness_sdk"
-required-features = ["core", "harness"]
-
-[[test]]
 name = "mcp_skill_host"
 required-features = ["core", "harness"]
 
@@ -319,6 +314,5 @@ crate-type = ["lib"]
 required-features = ["core", "harness"]
 
 [[example]]
-name = "owned_native_experiment"
-crate-type = ["lib"]
-required-features = ["core", "harness"]
+name = "native_regex_checker"
+required-features = ["guardrails"]

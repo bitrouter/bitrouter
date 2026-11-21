@@ -6,7 +6,8 @@ use super::*;
 use crate::client::agent_local::ThreadReply;
 use crate::harness::service::core_disabled_tests::offline_fixture;
 use crate::harness::storage::ExecutionStore;
-use bitrouter_ai::harness::thread::{ThreadObservation, ThreadStatus};
+use crate::managed_contract::harness::thread::ThreadObservation;
+use crate::managed_contract::harness::thread::ThreadStatus;
 use tokio::io::AsyncWriteExt;
 
 async fn exchange_fixture(service: &ThreadService, operation: Operation) -> Result<ThreadReply> {

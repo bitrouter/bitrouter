@@ -26,18 +26,20 @@ use async_trait::async_trait;
 use axum_test::TestServer;
 use bitrouter::core::session::CoreSession;
 use bitrouter::gateway::caller::CallerContext;
+use bitrouter::gateway::extensions::request_check::{Decision, Input};
 use bitrouter::gateway::http::{AppState, build_router};
 use bitrouter::gateway::pipeline::native::{
     NativeExecutionControl, NativePlan, NativePlanAdmission,
 };
+use bitrouter::managed_contract::checkpoint::DurableHead;
+use bitrouter::managed_contract::evidence::NativeTokenCost;
+use bitrouter::managed_contract::evidence::{NativeAttemptReport, NativeProtocolValidation};
+use bitrouter::managed_contract::protocol::{
+    Bind, Capabilities, HarnessManifest, Limits, OwnershipGrant,
+};
 use bitrouter::metering::entities::requests;
 use bitrouter::metering::pricing::ChargeEvidence;
 use bitrouter::storage::checkpoint::snapshot::RunStatus;
-use bitrouter_ai::core::checkpoint::DurableHead;
-use bitrouter_ai::core::evidence::NativeTokenCost;
-use bitrouter_ai::core::evidence::{NativeAttemptReport, NativeProtocolValidation};
-use bitrouter_ai::core::protocol::{Bind, Capabilities, HarnessManifest, Limits, OwnershipGrant};
-use bitrouter_ai::extension::request_check::{Decision, Input};
 use bitrouter_ai::types::{
     GenerationParams, Message, Prompt, ReasoningEffort, ReasoningEffortSource, ResponseFormat,
     Role, Tool, ToolChoice,

@@ -4,9 +4,9 @@
 mod conversion;
 use conversion::{adapters, prompt, refusal};
 
+use bitrouter::gateway::conversion_report::{ConversionEffect, ConversionLocation};
 use bitrouter::gateway::model::protocol::responses::ResponsesAdapter;
 use bitrouter::gateway::model::protocol::{InboundAdapter, OutboundAdapter};
-use bitrouter_ai::conversion::{ConversionEffect, ConversionLocation};
 use bitrouter_ai::types::{
     ApiProtocol, Content, DataContent, Message, Prompt, ProviderMetadata, ResponseFormat, Role,
     Tool, ToolResultOutput,

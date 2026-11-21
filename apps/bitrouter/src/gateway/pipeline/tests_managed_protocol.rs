@@ -1,7 +1,7 @@
 use super::*;
 use crate::gateway::model::capabilities::required_capabilities;
 use crate::gateway::model::protocol::OutboundDispatch;
-use bitrouter_ai::core::evidence::NativeProtocolValidation;
+use crate::managed_contract::evidence::NativeProtocolValidation;
 use bitrouter_ai::types::{DataContent, ToolResultContentPart, ToolResultOutput};
 use serde_json::json;
 
@@ -165,12 +165,13 @@ fn managed_protocol_checks_preflight_controls_without_input_counting() -> Result
         ),
     ] {
         let mut req = request();
-        req.input
+        let params = &mut req
+            .input
             .generation_prompt_mut()
             .ok_or_else(|| BitrouterError::internal("generation fixture"))?
-            .params
-            .extra
-            .insert(field.into(), value);
+            .params;
+        params.extra_protocol = Some(ApiProtocol::Responses);
+        params.extra.insert(field.into(), value);
         let ctx = PipelineContext::new(req);
         assert_eq!(
             executor.native_protocol_validation(&target, ctx.require_generation_prompt()?, &ctx),
@@ -190,12 +191,13 @@ fn managed_protocol_checks_preflight_controls_without_input_counting() -> Result
 #[tokio::test]
 async fn managed_control_cannot_admit_an_incompatible_http_route() -> Result<()> {
     let mut req = request();
-    req.input
+    let params = &mut req
+        .input
         .generation_prompt_mut()
         .ok_or_else(|| BitrouterError::internal("generation fixture"))?
-        .params
-        .extra
-        .insert("truncation".into(), json!("auto"));
+        .params;
+    params.extra_protocol = Some(ApiProtocol::Responses);
+    params.extra.insert("truncation".into(), json!("auto"));
     let mut route = target("fixture");
     route.api_protocol = ApiProtocol::Responses;
     let table = Arc::new(StaticRoutingTable::new());

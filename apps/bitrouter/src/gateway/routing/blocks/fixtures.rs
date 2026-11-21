@@ -1,15 +1,20 @@
-//! Shared recorded-session and live-upstream fixtures; no learning runtime setup.
+//! Recorded-session fixtures with separate Gateway and explicit BRO assembly.
+
+#![cfg(feature = "core")]
 
 use crate::acp_trajectory::fixtures::{FixtureScope, PersistedHistory};
 use crate::config::Config;
 use crate::gateway::caller::CallerContext;
 use crate::gateway::pipeline::types::PipelineRequest;
+#[cfg(feature = "harness")]
 use crate::gateway::routing::blocks::allocation::BanditConfig;
+#[cfg(feature = "harness")]
 use crate::gateway::routing::blocks::control::{BlockDefinition, BlockRule};
-use crate::policy_lock::{PolicyDefinition, PolicyLock, deterministic_yaml};
+use crate::policy_lock::deterministic_yaml;
 use crate::storage::capture::{CaptureDirection, CaptureEvent, CaptureKind};
 use crate::storage::session_identity::SessionIdentity;
 use anyhow::{Context, Result};
+use bitrouter_ai::policy::{Document, Policy, SpecVersion, Target};
 use bitrouter_ai::types::{ApiProtocol, GenerationParams, Message, Prompt, Role};
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -25,12 +30,30 @@ pub(crate) struct Fixture {
     pub(crate) _home: tempfile::TempDir,
 }
 
-#[cfg(feature = "core")]
 pub(crate) async fn fixture(named: bool) -> Result<Fixture> {
-    fixture_with_persistence(named, false).await
+    fixture_with_scope(named, false, crate::assemble::AssemblyScope::Gateway).await
 }
 
-pub(crate) async fn fixture_with_persistence(named: bool, persistent: bool) -> Result<Fixture> {
+#[cfg(feature = "harness")]
+pub(crate) async fn bro_fixture(named: bool) -> Result<Fixture> {
+    bro_fixture_with_persistence(named, false).await
+}
+
+#[cfg(feature = "harness")]
+pub(crate) async fn bro_fixture_with_persistence(named: bool, persistent: bool) -> Result<Fixture> {
+    fixture_with_scope(
+        named,
+        persistent,
+        crate::assemble::AssemblyScope::BroHarness,
+    )
+    .await
+}
+
+async fn fixture_with_scope(
+    named: bool,
+    persistent: bool,
+    scope: crate::assemble::AssemblyScope,
+) -> Result<Fixture> {
     let upstream = MockServer::start().await;
     for model in ["strong", "cheap"] {
         Mock::given(method("POST")).and(path("/chat/completions"))
@@ -55,14 +78,14 @@ pub(crate) async fn fixture_with_persistence(named: bool, persistent: bool) -> R
     let mut config: Config = crate::config::parse_with(
         &format!(
             r#"
+inherit_defaults: false
 server:
+  listen: "127.0.0.1:0"
   skip_auth: true
 database:
   url: "sqlite::memory:"
 registry:
   enabled: false
-policy:
-  mode: frozen
 providers:
   fixture:
     api_base: "{}"
@@ -96,15 +119,17 @@ models:
         service_id: unavailable
       - provider: fixture
         service_id: cheap
-presets:
+routers:
   coding:
-    model: "fixture:strong"
-    system_prompt: "Use recorded requirements."
+    selection: {{kind: model, model: "fixture:strong"}}
+    defaults:
+      system_prompt: "Use recorded requirements."
   candidate:
-    model: "fixture:cheap"
-    system_prompt: "Use recorded requirements."
-    params:
-      temperature: 0.2
+    selection: {{kind: model, model: "fixture:cheap"}}
+    defaults:
+      system_prompt: "Use recorded requirements."
+      params:
+        temperature: 0.2
 "#,
             upstream.uri()
         ),
@@ -117,34 +142,67 @@ presets:
         );
     }
     if named {
-        let mut lock = PolicyLock::default();
+        config.policy.path = Some("policy.yaml".into());
+        let mut document = Document {
+            spec_version: SpecVersion::Beta1,
+            policies: BTreeMap::new(),
+        };
         for (name, default_tier) in [("coding", "strong"), ("candidate", "cheap")] {
-            config
-                .presets
+            let router = config
+                .routers
                 .get_mut(name)
-                .context("fixture preset missing")?
-                .policy = Some(name.into());
-            lock.policies.insert(
+                .context("fixture router missing")?;
+            let model = if name == "coding" {
+                "fixture:strong"
+            } else {
+                "fixture:cheap"
+            };
+            router.selection = crate::config::router::RouterSelection::Policy {
+                policy: name.into(),
+                base_model: model.into(),
+                routing: Default::default(),
+            };
+            document.policies.insert(
                 name.into(),
-                PolicyDefinition {
-                    tiers: BTreeMap::from([
-                        ("strong".into(), "fixture:strong".into()),
-                        ("cheap".into(), "fixture:cheap".into()),
-                    ]),
-                    default_tier: Some(default_tier.into()),
+                Policy {
+                    tiers: [
+                        (
+                            "strong".into(),
+                            Target {
+                                model: "fixture:strong".into(),
+                                effort: None,
+                            },
+                        ),
+                        (
+                            "cheap".into(),
+                            Target {
+                                model: "fixture:cheap".into(),
+                                effort: None,
+                            },
+                        ),
+                    ]
+                    .into(),
+                    default_tier: default_tier.into(),
                     tool_use_tier: Some("strong".into()),
                     tool_safe_tiers: vec!["strong".into()],
-                    ..PolicyDefinition::default()
+                    classifier_digest: None,
+                    routes: BTreeMap::new(),
                 },
             );
         }
         tokio::fs::write(
-            home.path().join("policy-lock.yaml"),
-            deterministic_yaml(&lock)?,
+            home.path().join("policy.yaml"),
+            deterministic_yaml(&document)?,
         )
         .await?;
     }
-    let assembled = crate::assemble::build_app_with_path(&config, Some(&config_path)).await?;
+    let assembled = Box::pin(crate::assemble::build_scoped_app(
+        &config,
+        Some(&config_path),
+        |_| Ok(()),
+        scope,
+    ))
+    .await?;
     Ok(Fixture {
         assembled,
         upstream,
@@ -221,6 +279,7 @@ pub(crate) async fn recording(
     Ok((identity, recorder))
 }
 
+#[cfg(feature = "harness")]
 pub(crate) fn definition(selector: &str, challenger: &str) -> BlockDefinition {
     BlockDefinition {
         block_id: "coding-block".into(),

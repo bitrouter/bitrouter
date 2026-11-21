@@ -161,15 +161,10 @@ impl Error {
     }
 }
 
-enum Defaults {
-    Canonical(bitrouter_ai::tenancy::generation_defaults::CanonicalGenerationDefaultsV1),
-    Envelope(bitrouter_ai::tenancy::generation_defaults::GenerationDefaultsEnvelopeV1),
-    EnvelopeV2(bitrouter_ai::tenancy::generation_defaults::GenerationDefaultsEnvelopeV2),
-}
-
 /// One trusted submission, borrowing the gateway pool without mutating defaults.
 pub struct TenantGateway<'a> {
-    generation_defaults: Option<Defaults>,
+    generation_defaults:
+        Option<bitrouter_ai::tenancy::generation_defaults::GenerationDefaultsEnvelope>,
     client: &'a GatewayClient,
     headers: HeaderMap,
 }
@@ -405,31 +400,8 @@ impl TenantGateway<'_> {
             .headers(self.headers.clone())
             .header(header::ACCEPT, accept)
             .header(header::CONTENT_TYPE, request_media_type);
-        let builder = if let Some(Defaults::Canonical(defaults)) = &self.generation_defaults {
-            let mut value = serde_json::to_value(request)
-                .map_err(|_| Error::Request("invalid request encoding"))?;
-            let object = value
-                .as_object_mut()
-                .ok_or(Error::Request("generation request must be an object"))?;
-            let member = bitrouter_ai::tenancy::generation_defaults::BODY_MEMBER;
-            if object.contains_key(member) {
-                return Err(Error::Request("competing canonical defaults member"));
-            }
-            object.insert(
-                member.to_owned(),
-                serde_json::to_value(defaults)
-                    .map_err(|_| Error::Request("invalid canonical defaults encoding"))?,
-            );
-            let body = serde_json::to_vec(&value)
-                .map_err(|_| Error::Request("invalid request encoding"))?;
-            if body.len() > 16 * 1024 * 1024 {
-                return Err(Error::Request("generation request exceeds body limit"));
-            }
-            builder.body(body)
-        } else if let Some(Defaults::Envelope(defaults)) = &self.generation_defaults {
+        let builder = if let Some(defaults) = &self.generation_defaults {
             builder.body(ordered::envelope_body(request, defaults)?)
-        } else if let Some(Defaults::EnvelopeV2(defaults)) = &self.generation_defaults {
-            builder.body(ordered::envelope_v2_body(request, defaults)?)
         } else {
             builder.json(request)
         };
@@ -476,7 +448,9 @@ impl TenantGateway<'_> {
 fn reject_stream_shadow(
     extra: &std::collections::HashMap<String, serde_json::Value>,
 ) -> Result<(), Error> {
-    if extra.contains_key(bitrouter_ai::tenancy::generation_defaults::ENVELOPE_BODY_MEMBER) {
+    if extra.contains_key(bitrouter_ai::tenancy::generation_defaults::ENVELOPE_BODY_MEMBER)
+        || extra.contains_key("bitrouter_generation_defaults")
+    {
         return Err(Error::Request(
             "defaults envelopes require the ordered attachment API",
         ));

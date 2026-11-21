@@ -15,6 +15,7 @@ pub(in crate::tenancy::tests) const ROOT: &str = "BITROUTER_PAID_STARTUP_ROOT";
 pub(in crate::tenancy::tests) const MODE: &str = "BITROUTER_PAID_STARTUP_MODE";
 #[cfg(all(unix, feature = "core", feature = "harness"))]
 pub(in crate::tenancy::tests) const WITNESS: &str = "paid-startup-physical-file-ready";
+pub(in crate::tenancy::tests) const KEY: &str = "BITROUTER_PAID_STARTUP_KEY";
 const PROFILE: &str = "BITROUTER_PAID_STARTUP_PROFILE";
 
 #[derive(Serialize, Deserialize)]
@@ -59,7 +60,7 @@ async fn retained(db: &DatabaseConnection) -> Result<Vec<Vec<serde_json::Value>>
         .collect()
 }
 
-async fn consume(path: &Path, pending: bool, native: bool) -> Result<()> {
+async fn consume(path: &Path, pending: bool) -> Result<()> {
     let transfer: Transfer = serde_json::from_slice(&std::fs::read(path.with_extension("json"))?)?;
     let owner = ownership::acquire_path(path, false)?;
     let db =
@@ -67,9 +68,6 @@ async fn consume(path: &Path, pending: bool, native: bool) -> Result<()> {
     let checked = async {
         let before = retained(&db).await?;
         ensure!(before.len() == if pending { 3 } else { 0 });
-        if native {
-            check_native_pending(&db, &before, pending).await?;
-        }
         let state = store::load(&db, Utc::now()).await?;
         ensure!(state.installation == transfer.installation);
         ensure!(
@@ -78,7 +76,7 @@ async fn consume(path: &Path, pending: bool, native: bool) -> Result<()> {
                 .is_empty(),
             "an active profile could mask the pending fence"
         );
-        let resources = Resources::with_key(transfer.installation.clone(), [29; 32])?;
+        let resources = Resources::fixture_key(&transfer.installation, Some(KEY))?;
         let draft = crate::tenancy::configuration_store::configuration(
             &db,
             &transfer.tenant,
@@ -154,91 +152,13 @@ async fn reduced_consumer() -> Result<()> {
     );
     let root = std::path::PathBuf::from(std::env::var_os(ROOT).context("transfer directory")?);
     tokio::time::timeout(Duration::from_secs(30), async {
-        consume(&root.join("clean.db"), false, false).await?;
-        consume(&root.join("pending.db"), true, false).await
+        consume(&root.join("clean.db"), false).await?;
+        consume(&root.join("pending.db"), true).await
     })
     .await??;
     std::fs::write(
         root.join("consumer-ack"),
         format!("paid-pending-refused:{actual}"),
-    )?;
-    Ok(())
-}
-
-async fn check_native_pending(
-    db: &DatabaseConnection,
-    retained: &[Vec<serde_json::Value>],
-    pending: bool,
-) -> Result<()> {
-    // A different pending family must not mask the paid-v4 startup fence.
-    ensure!(
-        db.query_one(Statement::from_string(
-            db.get_database_backend(),
-            "SELECT 1 FROM checkpoint_evolution WHERE kind='native_experiment_unit_pending_v1' LIMIT 1",
-        ))
-        .await?
-        .is_none(),
-        "native Unit cleanup must precede the reduced paid consumer"
-    );
-    if !pending {
-        return Ok(());
-    }
-    let mut active = None;
-    let mut mirror = None;
-    let mut budget = None;
-    for fields in retained {
-        let body: serde_json::Value = serde_json::from_str(
-            fields
-                .get(4)
-                .and_then(serde_json::Value::as_str)
-                .context("retained body")?,
-        )?;
-        match fields.get(2).and_then(serde_json::Value::as_str) {
-            Some("owned_judge_active_v3") => active = Some(body),
-            Some("owned_judge_pending") => mirror = Some(body),
-            Some("owned_judge_budget") => budget = Some(body),
-            _ => anyhow::bail!("native pending fixture contains an unexpected paid record"),
-        }
-    }
-    let active = active.context("real native active record")?;
-    ensure!(
-        active["version"] == 4
-            && active["status"] == "accepted"
-            && active["recovery"]["native_cleanup"].is_object()
-            && active["recovery"]["stopped"].is_object()
-            && active["recovery"]["observed"].is_object()
-            && active["native_evidence"].is_object()
-            && mirror.as_ref() == Some(&active)
-            && budget.context("original paid counter")?["accepted"] == 1,
-        "reduced consumer did not receive the original observed stopped paid-v4 job"
-    );
-    Ok(())
-}
-
-#[tokio::test]
-#[ignore = "real native-v4 producer and separately built reduced libtest required"]
-async fn reduced_native_consumer() -> Result<()> {
-    let expected = std::env::var(PROFILE)?;
-    let actual = match (cfg!(feature = "core"), cfg!(feature = "harness")) {
-        (false, false) => "gateway",
-        (true, false) => "core-only",
-        (false, true) => "harness-only",
-        (true, true) => "full",
-    };
-    ensure!(
-        expected == actual && actual != "full",
-        "wrong reduced native profile"
-    );
-    let root =
-        std::path::PathBuf::from(std::env::var_os(ROOT).context("native transfer directory")?);
-    tokio::time::timeout(Duration::from_secs(30), async {
-        consume(&root.join("clean/native-paid.db"), false, true).await?;
-        consume(&root.join("pending/native-paid.db"), true, true).await
-    })
-    .await??;
-    std::fs::write(
-        root.join("native-consumer-ack"),
-        format!("native-v4-refused:{actual}"),
     )?;
     Ok(())
 }

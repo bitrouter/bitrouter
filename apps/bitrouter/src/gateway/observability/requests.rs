@@ -3,9 +3,9 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
+use crate::gateway::observability::event::PipelineEvent;
 use anyhow::Result;
 use async_trait::async_trait;
-use bitrouter_ai::event::PipelineEvent;
 use bitrouter_ai::types::StreamPart;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use serde::Serialize;

@@ -37,7 +37,7 @@ impl<'a> OperationBudget<'a> {
             bytes: bytes.min(MAX_BYTES),
         }
     }
-    #[cfg(all(feature = "core", feature = "harness"))]
+    #[cfg(all(test, feature = "core", feature = "harness"))]
     pub(crate) fn usage(&self) -> Result<(usize, usize), Error> {
         self.check()?;
         self.used
@@ -66,14 +66,14 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
     #[test]
-    fn learner_limits_charge_all_participants_without_raising_other_profiles() -> anyhow::Result<()>
-    {
+    fn participant_limits_charge_all_participants_without_raising_other_profiles()
+    -> anyhow::Result<()> {
         let check = || Ok(());
-        let learner = OperationBudget::with_limits(&check, 4096, 8 * 1024 * 1024);
-        learner.charge(1000, 3 * 1024 * 1024)?;
-        learner.charge(3096, 5 * 1024 * 1024)?;
-        assert!(matches!(learner.charge(0, 1), Err(Error::Capacity)));
-        assert!(matches!(learner.charge(1, 0), Err(Error::Capacity)));
+        let participant = OperationBudget::with_limits(&check, 4096, 8 * 1024 * 1024);
+        participant.charge(1000, 3 * 1024 * 1024)?;
+        participant.charge(3096, 5 * 1024 * 1024)?;
+        assert!(matches!(participant.charge(0, 1), Err(Error::Capacity)));
+        assert!(matches!(participant.charge(1, 0), Err(Error::Capacity)));
         let narrowed = OperationBudget::with_limits(&check, 1, 1);
         narrowed.charge(1, 1)?;
         assert!(matches!(narrowed.charge(0, 1), Err(Error::Capacity)));

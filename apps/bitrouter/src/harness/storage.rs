@@ -1,7 +1,10 @@
 //! Transactional facts used by execution and, later, checkpoint recovery.
 //! A successful commit must be durable for the backend's documented fault scope.
 
-use bitrouter_ai::harness::runtime::{EffectStatus, ExecutionOwner, OwnerClaim, SettlementOutcome};
+use crate::managed_contract::harness::runtime::EffectStatus;
+use crate::managed_contract::harness::runtime::ExecutionOwner;
+use crate::managed_contract::harness::runtime::OwnerClaim;
+use crate::managed_contract::harness::runtime::SettlementOutcome;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -9,12 +12,12 @@ use bitrouter_ai::types::{Message, Prompt, Usage};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
-use bitrouter_ai::harness::agent::AgentConfig;
-use bitrouter_ai::harness::item::CallRecord;
-use bitrouter_ai::harness::thread::ThreadEvent;
-use bitrouter_ai::harness::thread::ThreadSnapshot;
-use bitrouter_ai::harness::turn::SteeringReceipt;
-use bitrouter_ai::harness::turn::VerificationEvidence;
+use crate::managed_contract::harness::agent::AgentConfig;
+use crate::managed_contract::harness::item::CallRecord;
+use crate::managed_contract::harness::thread::ThreadEvent;
+use crate::managed_contract::harness::thread::ThreadSnapshot;
+use crate::managed_contract::harness::turn::SteeringReceipt;
+use crate::managed_contract::harness::turn::VerificationEvidence;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AcceptedKey {
@@ -40,8 +43,8 @@ pub enum ExecutionRecord {
     CoreDispatch,
     /// Exact Core bytes acknowledged by the same fenced Thread commit owner.
     CoreCheckpoint {
-        batch: bitrouter_ai::core::checkpoint::CheckpointBatch,
-        limits: bitrouter_ai::core::protocol::Limits,
+        batch: crate::managed_contract::checkpoint::CheckpointBatch,
+        limits: crate::managed_contract::protocol::Limits,
     },
     /// Contiguous pieces of one native checkpoint record, appended atomically.
     /// Readers verify the complete digest before interpreting any Core state.
@@ -53,7 +56,7 @@ pub enum ExecutionRecord {
     },
     /// Immutable artifact chunks precede every checkpoint that references them.
     CoreArtifact {
-        reference: bitrouter_ai::core::protocol::ArtifactRef,
+        reference: crate::managed_contract::protocol::ArtifactRef,
         offset: u64,
         content_base64: String,
     },
@@ -65,7 +68,7 @@ pub enum ExecutionRecord {
     },
     HarnessInventory {
         context_version: u64,
-        inventory: Box<bitrouter_ai::harness::resources::HarnessInventory>,
+        inventory: Box<crate::managed_contract::harness::resources::HarnessInventory>,
     },
     /// Joined work and known effects/context are prepared for workspace release;
     /// the final outcome is committed before the held OS lock is dropped.
@@ -135,7 +138,7 @@ pub enum ExecutionRecord {
     },
     TurnLifecycle {
         turn_id: String,
-        lifecycle: bitrouter_ai::harness::turn::TurnLifecycle,
+        lifecycle: crate::managed_contract::harness::turn::TurnLifecycle,
     },
     ModelRequest {
         step_id: String,
@@ -175,7 +178,7 @@ pub enum ExecutionRecord {
     },
     VerificationResult {
         #[serde(default)]
-        status: Option<bitrouter_ai::harness::turn::VerificationStatus>,
+        status: Option<crate::managed_contract::harness::turn::VerificationStatus>,
         call: CallRecord,
         evidence: VerificationEvidence,
         effect: EffectStatus,

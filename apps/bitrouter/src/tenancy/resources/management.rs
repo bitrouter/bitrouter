@@ -11,7 +11,6 @@ use bitrouter_ai::tenancy::{
     identity::{RevisionId, TenantId},
     operation::ErrorCode,
     resources::{ResourceCapabilities, ResourceStatus},
-    resources_v2::ResourceCapabilitiesV2,
 };
 use chrono::{DateTime, Utc};
 use sea_orm::ConnectionTrait;
@@ -97,10 +96,7 @@ impl Resources {
         command: &Command,
         digest: &str,
     ) -> Result<String> {
-        if !matches!(
-            command,
-            Command::Resource(..) | Command::ResourceV2(..) | Command::ResourceV3(..)
-        ) {
+        if !matches!(command, Command::Resource(..)) {
             return Ok(digest.to_owned());
         }
         self.key
@@ -174,6 +170,7 @@ impl Resources {
                 )?;
             }
         }
+        super::qualify_model_policies(&closure)?;
         let envelope = if import.definition.is_route() {
             let policy = import.definition.policy_reference().and_then(|reference| {
                 closure
@@ -427,46 +424,18 @@ pub(in crate::tenancy) fn apply(
 }
 
 impl Service {
-    pub(in crate::tenancy) async fn resource_capabilities_v3(
+    pub(in crate::tenancy) async fn policy_capabilities(
         &self,
         caller: &Caller,
-    ) -> std::result::Result<bitrouter_ai::tenancy::resources_v3::ResourceCapabilitiesV3, Failure>
-    {
-        use bitrouter_ai::tenancy::{
-            ordered::GenerationProtocol, resources_v3::ResourceCapabilitiesV3,
-        };
-        self.with_capability_authority(caller, |state| {
-            Ok(ResourceCapabilitiesV3 {
-                format: 3,
-                installation_id: state.installation.clone(),
-                provisioning_enabled: self.resources.key.is_some()
-                    && self.private_adapter.is_some()
-                    && self.ordered_dispatch_ready(state),
-                max_command_bytes: 1048576,
-                tenant_routes_require_approved_origins: true,
-                generation_protocols: [
-                    GenerationProtocol::ChatCompletions,
-                    GenerationProtocol::Messages,
-                    GenerationProtocol::Responses,
-                    GenerationProtocol::GenerateContent,
-                ],
-            })
-        })
-        .await
-    }
-
-    pub(in crate::tenancy) async fn resource_capabilities_v2(
-        &self,
-        caller: &Caller,
-    ) -> std::result::Result<ResourceCapabilitiesV2, Failure> {
-        let previous = self.resource_capabilities(caller).await?;
-        Ok(ResourceCapabilitiesV2 {
-            format: 2,
-            installation_id: previous.installation_id,
-            provisioning_enabled: previous.provisioning_enabled,
-            max_command_bytes: previous.max_command_bytes,
-            tenant_routes_require_approved_origins: previous.tenant_routes_require_approved_origins,
-            admission_profile_versions: [1, 2],
+    ) -> std::result::Result<bitrouter_ai::tenancy::resources::PolicyCapabilities, Failure> {
+        let capabilities = self.resource_capabilities(caller).await?;
+        Ok(bitrouter_ai::tenancy::resources::PolicyCapabilities {
+            installation_id: capabilities.installation_id,
+            spec_version: bitrouter_ai::policy::SpecVersion::Beta1,
+            classifier_digest:
+                crate::gateway::routing::workflow::predictive::compiled_predictor_contract()
+                    .config_digest,
+            provisioning_enabled: capabilities.provisioning_enabled,
         })
     }
 
@@ -481,6 +450,12 @@ impl Service {
             provisioning_enabled: self.resources.key.is_some(),
             max_command_bytes: 1024 * 1024,
             tenant_routes_require_approved_origins: true,
+            generation_protocols: [
+                bitrouter_ai::tenancy::ordered::GenerationProtocol::ChatCompletions,
+                bitrouter_ai::tenancy::ordered::GenerationProtocol::Messages,
+                bitrouter_ai::tenancy::ordered::GenerationProtocol::Responses,
+                bitrouter_ai::tenancy::ordered::GenerationProtocol::GenerateContent,
+            ],
         })
     }
 
@@ -490,6 +465,34 @@ impl Service {
         tenant: &TenantId,
         reference: &ResourceRef,
     ) -> std::result::Result<ResourceStatus, Failure> {
+        self.resource_view(caller, tenant, reference)
+            .await
+            .map(|(status, _)| status)
+    }
+
+    pub(in crate::tenancy) async fn policy_source(
+        &self,
+        caller: &Caller,
+        tenant: &TenantId,
+        reference: &ResourceRef,
+    ) -> std::result::Result<bitrouter_ai::tenancy::resources::PolicySource, Failure> {
+        let (status, artifact) = self.resource_view(caller, tenant, reference).await?;
+        let super::manifest::Definition::Policy { document, name, .. } = artifact.definition else {
+            return Err(ErrorCode::InvalidRequest.into());
+        };
+        Ok(bitrouter_ai::tenancy::resources::PolicySource {
+            status,
+            document,
+            name,
+        })
+    }
+
+    async fn resource_view(
+        &self,
+        caller: &Caller,
+        tenant: &TenantId,
+        reference: &ResourceRef,
+    ) -> std::result::Result<(ResourceStatus, Artifact), Failure> {
         let identity = self
             .authority_read(crate::tenancy::actor::AuthoritySubject::Tenant {
                 caller: caller.clone(),
@@ -514,7 +517,7 @@ impl Service {
             .map_err(Failure::from)?;
         let _permit = self.read_permit()?;
         // Authenticate encrypted content without disclosing it.
-        tokio::time::timeout(
+        let artifact = tokio::time::timeout(
             crate::tenancy::MANAGEMENT_TIMEOUT,
             self.resources.load(&self.db, reference),
         )
@@ -539,14 +542,17 @@ impl Service {
                 if state.revision != identity.observed_revision {
                     return Err(ErrorCode::AuthorityUnavailable);
                 }
-                Ok(ResourceStatus {
-                    format: 1,
-                    installation_id: state.installation.clone(),
-                    reference: reference.clone(),
-                    authority_revision: state.revision,
-                    head_revision: state.resource_lifecycle.head(&reference.key()).cloned(),
-                    revoked: state.resource_lifecycle.revoked(reference),
-                })
+                Ok((
+                    ResourceStatus {
+                        format: 1,
+                        installation_id: state.installation.clone(),
+                        reference: reference.clone(),
+                        authority_revision: state.revision,
+                        head_revision: state.resource_lifecycle.head(&reference.key()).cloned(),
+                        revoked: state.resource_lifecycle.revoked(reference),
+                    },
+                    artifact,
+                ))
             })
             .map_err(Failure::from)
     }

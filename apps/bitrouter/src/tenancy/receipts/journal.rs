@@ -471,6 +471,8 @@ impl Journal {
             };
             let evidence = entry.evidence.project();
             attempts.push(Attempt {
+                candidate_index: None,
+                observed_http_status: entry.status,
                 attempt_id: entry.id.clone(),
                 target: Some(entry.target.clone()),
                 outcome,

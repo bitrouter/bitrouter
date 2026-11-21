@@ -8,6 +8,19 @@ use bitrouter_ai::tenancy::{
 use serde_json::json;
 
 #[test]
+fn retired_learned_checkpoint_kind_is_not_a_resource_reference()
+-> Result<(), Box<dyn std::error::Error>> {
+    use bitrouter_ai::tenancy::{authority::ResourceKind, configuration::ResourceRef};
+    let mut value = json!({"owner_kind":"tenant","owner_id":"tenant",
+        "resource_kind":"credential","resource_id":"resource","revision_id":"r1"});
+    let reference: ResourceRef = serde_json::from_value(value.clone())?;
+    assert_eq!(reference.resource_kind, ResourceKind::Credential);
+    value["resource_kind"] = "checkpoint".into();
+    assert!(serde_json::from_value::<ResourceRef>(value).is_err());
+    Ok(())
+}
+
+#[test]
 fn omitted_cas_and_duplicate_fields_do_not_become_valid_commands()
 -> Result<(), Box<dyn std::error::Error>> {
     let valid = json!({"operation_id":"op", "expected_revision":null, "state":"active", "installation_id":"install"});

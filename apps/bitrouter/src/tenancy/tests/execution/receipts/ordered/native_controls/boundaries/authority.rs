@@ -199,6 +199,7 @@ async fn restart(mut h: OrderedHarness) -> Result<OrderedHarness> {
     let stopped = tokio::time::timeout(TIMEOUT, &mut h._gateway).await?;
     ensure!(stopped.is_err_and(|error| error.is_cancelled()));
     let Fixture {
+        wrapping_key,
         service,
         db,
         operator,
@@ -252,6 +253,7 @@ async fn restart(mut h: OrderedHarness) -> Result<OrderedHarness> {
     )
     .await?;
     h.fixture = Fixture {
+        wrapping_key,
         service,
         db,
         operator,
@@ -360,7 +362,7 @@ async fn native_current_caller_rotation_restart_and_new_defaults_preserve_only_c
         let envelope = defaults(tokens, json!({}))?;
         let bound = binding
             .clone()
-            .with_generation_defaults_envelope_v2(&envelope)?;
+            .with_generation_defaults_envelope(&envelope)?;
         let (id, reply) = invoke(
             &h,
             &bound,
@@ -428,7 +430,7 @@ async fn native_partial_stream_cancellation_never_replays_or_reaches_the_next_ca
     tokio::time::timeout(TIMEOUT, h.fixture.service.admission.wait_drained()).await?;
     let receipt = h.receipt(&id).await?;
     ensure!(receipt.state == ReceiptState::Unknown && receipt.outcome == Outcome::Unknown);
-    ensure!(receipt.attempts.len() == 1 && receipt.attempts[0].candidate_index == 0);
+    ensure!(receipt.attempts.len() == 1 && receipt.attempts[0].candidate_index == Some(0));
     ensure!(h.observed()? == ["model-0"] && gate.release.available_permits() == 0);
     gate.release.close();
     h.fixture.service.shutdown().await?;

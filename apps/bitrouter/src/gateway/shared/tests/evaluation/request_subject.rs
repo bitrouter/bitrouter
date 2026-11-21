@@ -7,9 +7,7 @@ use crate::storage::evaluation::{
     canonical_digest, evidence_digest, shared::SharedEvaluation, validate_subject,
 };
 use anyhow::{Context, Result, ensure};
-use bitrouter_ai::eval::{
-    EVAL_SCHEMA_VERSION, EvalDecisionRef, EvalScope, EvalSubject, EvidenceItem,
-};
+use bitrouter_ai::eval::{EvalDecisionRef, EvalScope, EvalSubject, EvidenceItem};
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseTransaction, IsolationLevel, Statement};
 
 const MAX_SUBJECT_BYTES: usize = 1024 * 1024;
@@ -59,25 +57,24 @@ fn fixture() -> Result<EvalSubject> {
         attributes,
     }];
     let subject = EvalSubject {
-        schema_version: EVAL_SCHEMA_VERSION,
+        spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
+        identity: bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {},
         eval_id: format!("request:{request}"),
         scope: EvalScope::Request,
         subject_id: request.clone(),
-        policy_digest: policy_digest.clone(),
-        preset: None,
         cohort: None,
         holdout: true,
         decisions: vec![EvalDecisionRef {
             decision_id: "frozen-decision".into(),
             policy: "original-policy".into(),
-            route_projection: "original-route".into(),
-            request_key: request,
+            route_projection: "unknown|unknown|normal".parse().expect("valid route class"),
+            request_key: "unknown|implement|normal".parse()?,
             selected_tier: "standard".into(),
             selected_effort: None,
             baseline_tier: None,
             baseline_effort: None,
             policy_digest,
-            experiment: None,
+
             route_measurement: None,
         }],
         requested_dimensions: ["cost.usd_micros".into(), "latency.ms".into()].into(),

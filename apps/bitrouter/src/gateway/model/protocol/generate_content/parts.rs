@@ -57,7 +57,7 @@ impl Parts {
                     "unsupported or ambiguous GenerateContent part",
                 ));
             }
-            let size = bitrouter_ai::wire::json(part, MAX_BYTES)
+            let size = crate::gateway::wire::json(part, MAX_BYTES)
                 .map_err(|_| invalid_response("GenerateContent part exceeds codec bound"))?
                 .len();
             self.bytes = self

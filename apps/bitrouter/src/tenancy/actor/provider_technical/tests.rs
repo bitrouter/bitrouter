@@ -47,7 +47,7 @@ pub(in crate::tenancy) struct State {
     changed: Notify,
     seen: Mutex<
         std::collections::VecDeque<
-            bitrouter_ai::tenancy::provider_technical_facts::ProviderTechnicalFactsV1,
+            bitrouter_ai::tenancy::provider_technical_facts::ProviderTechnicalFacts,
         >,
     >,
 }
@@ -234,7 +234,7 @@ impl State {
     }
     pub(super) fn captured(
         &self,
-        facts: &bitrouter_ai::tenancy::provider_technical_facts::ProviderTechnicalFactsV1,
+        facts: &bitrouter_ai::tenancy::provider_technical_facts::ProviderTechnicalFacts,
     ) {
         if let Ok(mut seen) = self.seen.lock() {
             if seen.len() == 2 {
@@ -247,7 +247,7 @@ impl State {
     pub(in crate::tenancy) async fn observed(
         &self,
         id: &ExecutionId,
-    ) -> anyhow::Result<bitrouter_ai::tenancy::provider_technical_facts::ProviderTechnicalFactsV1>
+    ) -> anyhow::Result<bitrouter_ai::tenancy::provider_technical_facts::ProviderTechnicalFacts>
     {
         loop {
             let changed = self.changed.notified();

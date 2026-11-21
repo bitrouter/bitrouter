@@ -225,7 +225,7 @@ pub(crate) fn storage_health_error(error: &anyhow::Error) -> bool {
 /// their source happens to contain a constraint code.
 #[cfg(feature = "core")]
 pub(crate) fn sqlite_statement_refusal(error: &anyhow::Error) -> bool {
-    use crate::core::eval::store::OwnedError;
+    use crate::eval::store::OwnedError;
     use sea_orm::sqlx::{Error, error::DatabaseError, sqlite::SqliteError};
 
     if storage_health_error(error)

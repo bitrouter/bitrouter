@@ -1,6 +1,6 @@
 use super::*;
+use bitrouter::managed_contract::protocol::{ToolObservation, ToolStatus};
 use bitrouter::storage::checkpoint::CheckpointBatchExt;
-use bitrouter_ai::core::protocol::{ToolObservation, ToolStatus};
 
 fn observed(command: &ToolExecute, status: ToolStatus) -> ToolObservation {
     ToolObservation {
@@ -477,7 +477,7 @@ async fn recovery_time_adopts_a_committed_restore_after_ack_loss_without_double_
 
 fn rewrite_last(
     store: &mut DurableHarness,
-    change: impl FnOnce(&mut bitrouter_ai::core::checkpoint::CheckpointPayload),
+    change: impl FnOnce(&mut bitrouter::managed_contract::checkpoint::CheckpointPayload),
 ) -> TestResult {
     let batch = store.batches.last_mut().ok_or("batch")?;
     let mut payload = batch.decode(&store.limits)?;

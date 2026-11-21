@@ -1,17 +1,15 @@
 //! Exercises the paired adapter at the actual profiled JSON and SSE send gates.
 
-use axum::body::Bytes;
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use bitrouter_ai::tenancy::private_adapter::{
+use crate::managed_contract::private_adapter::{
     ATTEMPT_DOMAIN, ATTEMPT_HEADER, Attempt, Disposition, OUTCOME_DOMAIN, OUTCOME_HEADER,
     Outcome as AdapterOutcome,
 };
+use axum::body::Bytes;
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
 
 use super::*;
-
-pub(super) const KEY: [u8; 32] = [19; 32];
 
 #[derive(Clone, Copy)]
 enum Reply {
@@ -25,6 +23,7 @@ enum Reply {
 }
 
 pub(super) struct FixtureAdapter {
+    pub(super) key: [u8; 32],
     pub(super) ordinal: usize,
     reply: Reply,
     proofs: Mutex<Vec<Attempt>>,
@@ -54,7 +53,7 @@ async fn reply(
     let (payload, tag) = wire.split_once('.').context("envelope")?;
     let tag = URL_SAFE_NO_PAD.decode(tag)?;
     let payload = URL_SAFE_NO_PAD.decode(payload)?;
-    let mut mac = Hmac::<Sha256>::new_from_slice(&KEY)?;
+    let mut mac = Hmac::<Sha256>::new_from_slice(&adapter.key)?;
     mac.update(ATTEMPT_DOMAIN);
     mac.update(&payload);
     mac.verify_slice(&tag)
@@ -105,7 +104,7 @@ async fn reply(
         status: status.as_u16(),
         retry_after,
     })?;
-    let mut mac = Hmac::<Sha256>::new_from_slice(&KEY)?;
+    let mut mac = Hmac::<Sha256>::new_from_slice(&adapter.key)?;
     mac.update(OUTCOME_DOMAIN);
     mac.update(&tag);
     mac.update(&payload);
@@ -145,6 +144,7 @@ async fn reply(
 
 async fn setup(ordinal: usize, reply: Reply) -> Result<(OrderedHarness, Arc<FixtureAdapter>)> {
     let adapter = Arc::new(FixtureAdapter {
+        key: rand::random(),
         ordinal,
         reply,
         proofs: Mutex::new(Vec::new()),

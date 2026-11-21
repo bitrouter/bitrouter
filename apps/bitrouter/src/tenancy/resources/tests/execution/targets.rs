@@ -1,6 +1,7 @@
 use super::*;
+use crate::gateway::model::capabilities::ReasoningEffortConfig;
 use crate::gateway::{model::target::AuthScheme, pipeline::types::OutboundHeaderRule};
-use bitrouter_ai::types::{ChatTokenLimitField, ReasoningEffortConfig};
+use bitrouter_ai::types::ChatTokenLimitField;
 
 async fn fixture_row() -> Result<(DatabaseConnection, Resources, StoredConfiguration)> {
     let (db, resources) = fixture().await?;

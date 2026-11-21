@@ -1,7 +1,9 @@
 //! Concrete consumers of H's transaction custody; no independent writer task.
-use super::super::eval::{self, Job, Request, Settlement};
+#[cfg(feature = "core")]
+use super::super::eval::Settlement;
+use super::super::eval::{self, Job, Request};
 use super::*;
-use crate::core::eval::store::{EvalStore, OwnedError};
+use crate::eval::store::{EvalStore, OwnedError};
 use bitrouter_ai::eval::SubjectInsertOutcome;
 
 impl Worker {
@@ -9,6 +11,7 @@ impl Worker {
         match error {
             OwnedError::Rejected(code) => code.into(),
             OwnedError::Integrity(_) | OwnedError::Storage(_) => {
+                self.eval.fail();
                 self.unavailable(ErrorCode::StorageUnavailable)
             }
         }
@@ -19,10 +22,11 @@ impl Worker {
         job: &Job,
         control: &Control,
     ) -> Result<Vec<u8>, Failure> {
-        if !*self
-            .accepting
-            .lock()
-            .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?
+        if !self.eval.healthy()
+            || !*self
+                .accepting
+                .lock()
+                .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?
         {
             return Err(ErrorCode::AuthorityUnavailable.into());
         }
@@ -61,6 +65,9 @@ impl Worker {
             check().map_err(Failure::from)?;
             let (body, write) = match &job.request {
                 Request::Put(subject) => {
+                    job.identity
+                        .validate_subject_in(&tx, &self.resources, subject, &check)
+                        .await?;
                     let reply = store
                         .put_owned_in(&tx, subject, &check)
                         .await
@@ -155,6 +162,7 @@ impl Worker {
         Ok(body)
     }
 
+    #[cfg(feature = "core")]
     pub(super) async fn execute_settlement(
         &self,
         job: &Settlement,
@@ -209,6 +217,7 @@ impl Worker {
     /// Keep the original cause until the SQL owner acknowledges rollback. A
     /// statement constraint still fails the observation and closes authority;
     /// it does not prove that independent receipt storage is unhealthy.
+    #[cfg(feature = "core")]
     pub(super) async fn rollback_observation(
         &self,
         control: &Control,

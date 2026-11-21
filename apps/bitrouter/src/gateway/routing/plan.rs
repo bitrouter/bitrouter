@@ -48,7 +48,7 @@ pub struct Selection {
     /// Commitment to the exact canonical prompt selected for generation.
     pub prompt_digest: String,
     /// Policy-owned context treatment, distinct from granted capabilities.
-    pub strategy: super::ContextStrategy,
+    pub strategy: super::ContextTreatment,
     /// Stable explanation of the selection rule.
     pub reason: String,
     /// Candidate estimates including rejected alternatives.
@@ -101,7 +101,7 @@ pub struct Plan {
 /// Frozen policy, previous execution and context authority for one choice.
 pub struct Options<'a> {
     /// Context treatment admitted by the policy action.
-    pub strategy: super::ContextStrategy,
+    pub strategy: super::ContextTreatment,
     /// Local planning constraints and declared model prices.
     pub policy: CostPolicy,
     /// Previous admitted generation plan used to measure switching.
@@ -202,7 +202,7 @@ pub fn select(
                 context: view.id.clone(),
                 prompt_bytes,
                 policy_admitted: admitted,
-                eligible: (options.strategy == super::ContextStrategy::Evidence
+                eligible: (options.strategy == super::ContextTreatment::Evidence
                     || view.requires.is_empty())
                     && view.requires.is_subset(options.capabilities)
                     && prompt_bytes <= model.max_prompt_bytes
@@ -320,7 +320,7 @@ pub struct Model {
     pub output_microusd_per_million: Option<u64>,
 }
 
-impl bitrouter_ai::event::PipelineEvent for Selection {
+impl crate::gateway::observability::event::PipelineEvent for Selection {
     fn event_name(&self) -> &'static str {
         "routing.selected"
     }

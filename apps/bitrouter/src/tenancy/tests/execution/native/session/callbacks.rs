@@ -1,15 +1,13 @@
 //! Actual Core callbacks keep their post-COMMIT ACK after pipeline cancellation.
 use super::*;
+use crate::managed_contract::checkpoint::DurableHead;
 use crate::tenancy::{
     hosts::{HostBoundary, HostGate},
     receipts::read,
 };
-use bitrouter_ai::{
-    core::checkpoint::DurableHead,
-    tenancy::{
-        execution::{ExecutionReceipt, Outcome, ReceiptState},
-        identity::ExecutionId,
-    },
+use bitrouter_ai::tenancy::{
+    execution::{ExecutionReceipt, Outcome, ReceiptState},
+    identity::ExecutionId,
 };
 
 struct Release(Arc<HostGate>);

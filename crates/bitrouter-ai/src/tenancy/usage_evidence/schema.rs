@@ -1,5 +1,5 @@
-//! Dedicated schemas do not alter the frozen tenancy v1 definitions.
-use super::{ExecutionUsageEvidenceV1, UsageEvidenceCapabilitiesV1};
+//! Packaged schemas for the current usage observation contract.
+use super::{ExecutionUsageEvidence, UsageEvidenceCapabilities};
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 use std::borrow::Cow;
 
@@ -12,17 +12,17 @@ fn schema(document: &str) -> Schema {
         None => Schema::from(false),
     }
 }
-impl JsonSchema for ExecutionUsageEvidenceV1 {
+impl JsonSchema for ExecutionUsageEvidence {
     fn schema_name() -> Cow<'static, str> {
-        "ExecutionUsageEvidenceV1".into()
+        "ExecutionUsageEvidence".into()
     }
     fn json_schema(_: &mut SchemaGenerator) -> Schema {
         schema(include_str!("execution.schema.json"))
     }
 }
-impl JsonSchema for UsageEvidenceCapabilitiesV1 {
+impl JsonSchema for UsageEvidenceCapabilities {
     fn schema_name() -> Cow<'static, str> {
-        "UsageEvidenceCapabilitiesV1".into()
+        "UsageEvidenceCapabilities".into()
     }
     fn json_schema(_: &mut SchemaGenerator) -> Schema {
         schema(include_str!("capabilities.schema.json"))

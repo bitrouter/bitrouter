@@ -46,7 +46,7 @@ impl OutboundAdapter for Adapter {
             .map_err(|_| ModelError::invalid_request("invalid paired native encoding"))
     }
 
-    fn admission(&self, prompt: &Prompt) -> bitrouter_ai::conversion::ConversionReport {
+    fn admission(&self, prompt: &Prompt) -> crate::gateway::conversion_report::ConversionReport {
         GenerateContentAdapter.admission(prompt)
     }
 

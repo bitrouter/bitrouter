@@ -15,7 +15,7 @@ use bitrouter_ai::tenancy::{
     configuration::ResourceRef,
     identity::AuthorityRevision,
     operation::ErrorCode,
-    ordered::{CandidateManifestV1, GenerationProtocol},
+    ordered::{CandidateManifest, GenerationProtocol},
 };
 
 use super::{Service, Submission, authorize_route};
@@ -104,6 +104,7 @@ enum ExecutionKey {
         authority_revision: u64,
         tenant: Box<str>,
         revision: Box<str>,
+        binding: Box<str>,
     },
     // Stored bytes, not just an ID or a digest: a same-revision ciphertext/AAD
     // replacement must go through the authenticated decoder again. Service
@@ -120,8 +121,11 @@ impl ExecutionKey {
         // capacity. Inline key storage is charged by the cache's entry vector.
         match self {
             Self::Dispatch {
-                tenant, revision, ..
-            } => tenant.len() + revision.len(),
+                tenant,
+                revision,
+                binding,
+                ..
+            } => tenant.len() + revision.len() + binding.len(),
             Self::Control { binding, .. } => binding.len(),
         }
     }
@@ -172,7 +176,7 @@ impl Service {
         authority_revision: AuthorityRevision,
         reference: &ResourceRef,
         inbound: GenerationProtocol,
-    ) -> Result<CandidateManifestV1, Failure> {
+    ) -> Result<CandidateManifest, Failure> {
         let key = ExecutionKey::Control {
             authority_revision: u64::from(authority_revision),
             binding: configuration_store::execution_cache_binding(stored)
@@ -188,7 +192,10 @@ impl Service {
         let view = self
             .resources
             .open_execution(stored)
-            .map_err(|_| self.unavailable())?;
+            .map_err(|code| match code {
+                ErrorCode::InvalidRequest | ErrorCode::CapabilityMismatch => code.into(),
+                _ => self.unavailable(),
+            })?;
         let heap = match view.retained_heap_bytes() {
             Ok(heap) => heap,
             // Weight traversal has its own bounded-work limit. Failure to cache
@@ -275,32 +282,11 @@ impl Service {
         let authority_revision = self
             .with_dispatch_authority(submission, |state| Ok(u64::from(state.revision)))
             .map_err(Failure::from)?;
-        let key = ExecutionKey::Dispatch {
-            authority_revision,
-            tenant: submission.tenant.as_str().into(),
-            revision: submission.binding.execution_revision.as_str().into(),
-        };
-        if let Some(revision) = self
-            .caches
-            .executions
-            .get(&key)
-            .map_err(|error| self.cache_failure(error))?
-        {
-            self.check_cached_revision(submission, &revision)?;
-            return Ok(revision);
-        }
-        // Eight fail-fast read slots bound duplicate misses and transient decode
-        // work. A cache miss never creates another semaphore or per-key queue.
+        // The stored envelope is immutable by contract, but a database replacement
+        // must never select a different view only when the cache happens to be cold.
+        // Read bounded facts before lookup; cache hits avoid authenticated decoding,
+        // compilation and heap traversal, not the current-content integrity fence.
         let _read = self.read_permit()?;
-        if let Some(revision) = self
-            .caches
-            .executions
-            .get(&key)
-            .map_err(|error| self.cache_failure(error))?
-        {
-            self.check_cached_revision(submission, &revision)?;
-            return Ok(revision);
-        }
         let retained = tokio::time::timeout_at(
             self.read_deadline(submission),
             configuration_store::configuration(
@@ -313,10 +299,31 @@ impl Service {
         .map_err(|_| self.read_timeout(submission))?
         .map_err(|_| self.unavailable())?
         .ok_or_else(|| Failure::from(ErrorCode::NotFound))?;
+        let key = ExecutionKey::Dispatch {
+            authority_revision,
+            tenant: submission.tenant.as_str().into(),
+            revision: submission.binding.execution_revision.as_str().into(),
+            binding: configuration_store::execution_cache_binding(&retained)
+                .map_err(|_| self.unavailable())?,
+        };
+        if let Some(revision) = self
+            .caches
+            .executions
+            .get(&key)
+            .map_err(|error| self.cache_failure(error))?
+        {
+            self.check_cached_revision(submission, &revision)?;
+            return Ok(revision);
+        }
         let revision = self
             .resources
             .open_execution(&retained)
-            .map_err(|_| self.unavailable())?;
+            .map_err(|code| match code {
+                // Authenticated history can be readable but unsupported for
+                // this execution. A rejected request must not fence storage.
+                ErrorCode::InvalidRequest | ErrorCode::CapabilityMismatch => code.into(),
+                _ => self.unavailable(),
+            })?;
         self.check_cached_revision(submission, &revision)?;
         let heap = revision.retained_heap_bytes().map_err(Failure::from)?;
         let key_heap = key.heap_bytes();

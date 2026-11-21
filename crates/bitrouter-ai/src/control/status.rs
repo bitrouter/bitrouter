@@ -153,34 +153,9 @@ pub struct StatusReport {
     /// Compiled identity reported by the daemon, never inferred from its version.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub daemon_artifact: Option<crate::artifact::ArtifactIdentity>,
-    /// Safe handoff protocol advertised by the local daemon.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub handoff_protocol: Option<u32>,
-    /// Build fingerprint used to distinguish same-version development builds.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub handoff_build_id: Option<String>,
-    /// Observed activity; unknown counts remain absent.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub handoff_activity: Option<crate::control::status::HandoffActivity>,
     /// Whether the detached CLI launcher owns this daemon.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub daemon_cli_owned: Option<bool>,
-    /// `compatible`, `handoff_required`, `legacy_unknown`,
-    /// `externally_managed`, `profile_mismatch`, or `daemon_newer`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub compatibility: Option<String>,
-}
-
-/// Point-in-time activity observed by the local daemon. Missing counts mean
-/// that subsystem could not prove idleness.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct HandoffActivity {
-    pub operations: usize,
-    pub supervised_runs: Option<usize>,
-    pub route_leases: usize,
-    pub acp_recordings: Option<u64>,
-    pub drain_in_progress: bool,
 }
 
 impl StatusReport {
@@ -207,11 +182,7 @@ impl StatusReport {
             installed_artifact: None,
             daemon_version: None,
             daemon_artifact: None,
-            handoff_protocol: None,
-            handoff_build_id: None,
-            handoff_activity: None,
             daemon_cli_owned: None,
-            compatibility: None,
         }
     }
 
@@ -240,11 +211,7 @@ impl StatusReport {
             installed_artifact: None,
             daemon_version: None,
             daemon_artifact: None,
-            handoff_protocol: None,
-            handoff_build_id: None,
-            handoff_activity: None,
             daemon_cli_owned: None,
-            compatibility: None,
         }
     }
 
@@ -268,11 +235,7 @@ impl StatusReport {
             installed_artifact: None,
             daemon_version: None,
             daemon_artifact: None,
-            handoff_protocol: None,
-            handoff_build_id: None,
-            handoff_activity: None,
             daemon_cli_owned: None,
-            compatibility: None,
         }
     }
 

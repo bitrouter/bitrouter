@@ -1,6 +1,8 @@
 //! Authenticated manual ledger operations and admitted execution observations.
 
 pub(super) mod http;
+pub(crate) mod identity;
+#[cfg(feature = "core")]
 pub(crate) mod observation;
 mod wire;
 
@@ -38,7 +40,7 @@ pub(super) struct State {
     pub producers_open: AtomicBool,
     failed: AtomicBool,
     live: Arc<AtomicBool>,
-    #[cfg(test)]
+    #[cfg(all(test, feature = "core"))]
     pub producer_waiting: tokio::sync::Notify,
     #[cfg(test)]
     pub handoff: std::sync::Mutex<Option<Arc<Handoff>>>,
@@ -50,7 +52,7 @@ impl State {
             producers_open: AtomicBool::new(true),
             failed: AtomicBool::new(false),
             live,
-            #[cfg(test)]
+            #[cfg(all(test, feature = "core"))]
             producer_waiting: tokio::sync::Notify::new(),
             #[cfg(test)]
             handoff: std::sync::Mutex::new(None),
@@ -155,7 +157,8 @@ impl Request {
                 wire::size(subject, BODY_BYTES)
                     .map_err(|_| Failure::from(ErrorCode::PayloadTooLarge))?;
                 crate::storage::evaluation::validate_subject(subject)
-                    .map_err(|_| ErrorCode::InvalidRequest.into())
+                    .map_err(|_| Failure::from(ErrorCode::InvalidRequest))?;
+                identity.validate_subject_namespace(subject)
             }
             Self::Submit(result) => {
                 wire::size(result, BODY_BYTES)
@@ -195,6 +198,7 @@ pub(super) struct Reply {
     pub body: Vec<u8>,
     pub lease: OwnedSemaphorePermit,
 }
+#[cfg(feature = "core")]
 pub(super) struct Settlement {
     pub execution: Arc<super::execution::TenantExecution>,
     pub subject: Arc<EvalSubject>,

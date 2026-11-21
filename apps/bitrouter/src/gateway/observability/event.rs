@@ -1,8 +1,8 @@
 //! Per-request storage and queries for typed lifecycle events.
 //!
-//! The event contract lives in `bitrouter-ai`; this bus owns host-side state.
+//! Event producers and the per-request bus are application-owned.
 
-use bitrouter_ai::event::PipelineEvent;
+use serde::Serialize;
 use std::any::{Any, TypeId};
 use std::sync::Arc;
 
@@ -95,6 +95,18 @@ impl EventBus {
                 .map(|e| serde_json::json!({ "event": e.name, "data": e.json }))
                 .collect(),
         )
+    }
+}
+
+/// A typed lifecycle event emitted by an implementation or extension.
+pub trait PipelineEvent: Serialize + Any + Send + Sync + 'static {
+    /// Stable event name used by diagnostics and serialized observations.
+    fn event_name(&self) -> &'static str;
+}
+
+impl PipelineEvent for bitrouter_ai::routing::RouterRequestIdentity {
+    fn event_name(&self) -> &'static str {
+        "router.resolved"
     }
 }
 

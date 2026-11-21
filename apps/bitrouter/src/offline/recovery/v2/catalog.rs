@@ -40,36 +40,13 @@ pub(crate) async fn recovery(
                     "bro_runtime_ownership",
                     "tenancy_continuation_epoch",
                     "tenancy_resource_revisions",
+                    "tenancy_resource_lifecycle",
                     "tenancy_configurations",
                     "tenancy_active_configurations"
                 ]
                 .contains(&table.name.as_str())
                 || table.rows == 0,
             "target contains operational or imported history"
-        );
-    }
-    Ok(())
-}
-
-#[cfg(feature = "core")]
-pub(crate) async fn eval(
-    db: &impl ConnectionTrait,
-    inventory: &Inventory,
-    installation: &InstallationId,
-) -> Result<()> {
-    common(db, inventory, installation).await?;
-    for table in &inventory.tables {
-        ensure!(
-            AUTHORITY.contains(&table.name.as_str())
-                || [
-                    "seaql_migrations",
-                    "sqlite_sequence",
-                    "bro_runtime_ownership",
-                    "provider_continuation_key_epoch"
-                ]
-                .contains(&table.name.as_str())
-                || table.rows == 0,
-            "Eval target contains configuration/resource/work history"
         );
     }
     Ok(())
@@ -132,6 +109,16 @@ async fn common(
         ),
         (
             "tenancy_resource_revisions",
+            &[
+                "owner_kind",
+                "owner_id",
+                "resource_kind",
+                "resource_id",
+                "revision_id",
+            ][..],
+        ),
+        (
+            "tenancy_resource_lifecycle",
             &[
                 "owner_kind",
                 "owner_id",

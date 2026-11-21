@@ -231,14 +231,14 @@ fn source_install_command(
 enum VersionSpec {
     /// Newest stable (non-prerelease) release.
     Latest,
-    /// Newest release including prereleases — the default while pre-1.0.
+    /// Newest release including prereleases.
     LatestPrerelease,
     /// A specific pinned tag (enables downgrade/rollback).
     Tag(String),
 }
 
 /// `--tag` always wins; otherwise `--stable` selects stable-only, and the
-/// default follows prereleases (the project currently ships only `alpha.*`).
+/// default follows prereleases.
 fn choose_spec(tag: Option<&str>, stable: bool) -> VersionSpec {
     match tag {
         Some(t) => VersionSpec::Tag(t.to_string()),
@@ -668,7 +668,6 @@ mod tests {
                 .map(|feature| (*feature).to_string())
                 .collect(),
             profile,
-            handoff_build_id: "test-build".into(),
         }
     }
 
@@ -710,7 +709,6 @@ mod tests {
         let mut target = current.clone();
         target.version = "1.0.0-alpha.20".into();
         target.source_revision = Some("new-revision".into());
-        target.handoff_build_id = "new-build".into();
         for daemon_running in [false, true] {
             let mut outcome = completed_update(&current, &target.version, daemon_running);
             outcome.record_target_verification(Ok(target.clone()));
@@ -1247,7 +1245,6 @@ mod tests {
         let mut next = full.clone();
         next.version = "1.0.0-alpha.20".into();
         next.source_revision = None;
-        next.handoff_build_id = "another-build".into();
         assert!(cache_matches(&cache, &next));
         next.target = "aarch64-apple-darwin".into();
         assert!(!cache_matches(&cache, &next));

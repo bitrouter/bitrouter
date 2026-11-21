@@ -94,5 +94,6 @@ contracts! {
     Target => "/$defs/Target", NumericUsage => "/$defs/NumericUsage",
     UsageDimension => "/$defs/NumericUsage/properties/name", Attempt => "/$defs/Attempt",
     Outcome => "/$defs/Attempt/properties/outcome", ReceiptState => "/$defs/ExecutionReceipt/properties/state",
+    Dispatch => "/$defs/Dispatch",
     ExecutionReceipt => "/$defs/ExecutionReceipt", ExecutionPage => "/$defs/ExecutionPage",
 }

@@ -1,5 +1,5 @@
 use super::*;
-use bitrouter_ai::tenancy::{admission::AdmissionProfileV1, operation::ErrorCode};
+use bitrouter_ai::tenancy::{admission::AdmissionProfile, operation::ErrorCode};
 
 fn request(protocol: GenerationProtocol) -> Result<(&'static str, Value)> {
     Ok(match protocol {
@@ -20,7 +20,7 @@ fn request(protocol: GenerationProtocol) -> Result<(&'static str, Value)> {
 
 async fn send(
     harness: &OrderedHarness,
-    binding: &OrderedDispatchBindingV2,
+    binding: &OrderedDispatchBinding,
     path: &str,
     raw: String,
 ) -> Result<reqwest::Response> {
@@ -66,8 +66,8 @@ async fn no_work(harness: &OrderedHarness) -> Result<()> {
 }
 
 async fn profiled() -> Result<OrderedHarness> {
-    let profile: AdmissionProfileV1 = serde_json::from_value(
-        json!({"schema_version":1,"rate":{"rate_group_id":"envelope-rpm","member_rpm":100},"health":{"rules":"availability_v1","failure_threshold":1,"transient_cooldown_seconds":60,"persistent_cooldown_seconds":120,"probe_lease_seconds":5},"fallback":"ordered_terminal_rejections_v1"}),
+    let profile: AdmissionProfile = serde_json::from_value(
+        json!({"schema_version":1,"rate":{"rate_group_id":"envelope-rpm","member_rpm":100},"health":{"rules":"availability_v1","failure_threshold":1,"transient_cooldown_seconds":60,"persistent_cooldown_seconds":120,"probe_lease_seconds":5},"health_group_id":"profile","fallback":"ordered_terminal_rejections_v1"}),
     )?;
     OrderedHarness::with_profiles(1, 8, None, Value::Null, Some(&[profile])).await
 }
@@ -89,13 +89,9 @@ async fn envelope_invalid_binding_and_raw_decoding_never_charge_arm_or_send() ->
         let raw = body.to_string();
         let payload = serde_json::to_string(&defaults)?;
         let valid = format!("{{\"{ENVELOPE_BODY_MEMBER}\":{payload},{}", &raw[1..]);
-        let canonical_hash = original
-            .clone()
-            .with_generation_defaults(defaults.canonical.as_ref().context("canonical")?)?;
         for (binding, body) in [
             (&bound, raw),
             (&original, valid.clone()),
-            (&canonical_hash, valid.clone()),
             (&bound, valid.replace("\"k\":1", "\"k\":2")),
             (&bound, valid.replace("\"k\":1", "\"k\":1,\"\\u006b\":1")),
             (
@@ -112,7 +108,7 @@ async fn envelope_invalid_binding_and_raw_decoding_never_charge_arm_or_send() ->
             (
                 &bound,
                 format!(
-                    "{{\"{BODY_MEMBER}\":{{\"schema_version\":1}},{}",
+                    "{{\"bitrouter_generation_defaults\":{{\"schema_version\":1}},{}",
                     &valid[1..]
                 ),
             ),
