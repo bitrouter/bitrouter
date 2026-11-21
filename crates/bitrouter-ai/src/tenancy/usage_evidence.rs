@@ -245,7 +245,7 @@ pub struct AttemptEvidence {
 
 /// Original observations bound to the immutable receipt and its dispatch.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(remote = "Self", deny_unknown_fields)]
 pub struct ExecutionUsageEvidence {
     /// Exact dispatch accepted by the corresponding receipt.
     pub dispatch: Dispatch,
@@ -280,6 +280,37 @@ pub struct ExecutionUsageEvidence {
     #[serde(deserialize_with = "super::number::integer")]
     pub dropped_frames: u64,
 }
+
+impl Serialize for ExecutionUsageEvidence {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        Self::serialize(self, serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ExecutionUsageEvidence {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Object;
+        impl<'de> serde::de::Visitor<'de> for Object {
+            type Value = ExecutionUsageEvidence;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("an execution usage evidence JSON object")
+            }
+
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                map: M,
+            ) -> Result<Self::Value, M::Error> {
+                // Preserve RawValue numbers and derived duplicate/required-field checks.
+                ExecutionUsageEvidence::deserialize(serde::de::value::MapAccessDeserializer::new(
+                    map,
+                ))
+            }
+        }
+        deserializer.deserialize_map(Object)
+    }
+}
+
 impl Validate for ExecutionUsageEvidence {
     fn validate(&self) -> Result<(), ValidationError> {
         self.validate_fields()?;
