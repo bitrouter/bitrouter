@@ -74,10 +74,13 @@ async fn gateway_sdk_exchange_preserves_current_versions_and_refuses_tenant_prof
             .await?;
         assert_eq!(frozen.entries.len(), 1);
         assert_eq!(client.eval_snapshot(&frozen.evidence_root).await?, frozen);
-        let exported =
-            crate::eval::export::EvalEvidenceSnapshot::load(&store, &frozen.evidence_root).await?;
+        let exported = crate::eval::store::snapshot_fixtures::SnapshotFixture::load(
+            &store,
+            &frozen.evidence_root,
+        )
+        .await?;
         assert_eq!(
-            exported.records[0].subject.identity,
+            exported.records[0].1.identity,
             EvalSubjectIdentity::GatewayGeneric {}
         );
         let http = reqwest::Client::builder().no_proxy().build()?;
@@ -151,8 +154,10 @@ async fn generic_results_only_freeze_their_own_immutable_subject() -> anyhow::Re
         .await?;
     let frozen = store.freeze_snapshot("2026-11-18T00:02:00Z").await?;
     assert_eq!(frozen.entries.len(), 1);
-    let export = crate::eval::export::EvalEvidenceSnapshot::from_manifest(&store, frozen).await?;
-    assert_eq!(export.records[0].subject, input);
+    let export =
+        crate::eval::store::snapshot_fixtures::SnapshotFixture::from_manifest(&store, frozen)
+            .await?;
+    assert_eq!(export.records[0].1, input);
     db.close().await?;
     Ok(())
 }

@@ -108,20 +108,29 @@ async fn three_namespaces_share_logical_content_but_never_sql_identity() -> Resu
     );
     assert_ne!(frozen.evidence_root, legacy_frozen.evidence_root);
     assert!(
-        crate::eval::export::EvalEvidenceSnapshot::from_manifest(&legacy, frozen.clone())
-            .await
-            .is_err()
+        crate::eval::store::snapshot_fixtures::SnapshotFixture::from_manifest(
+            &legacy,
+            frozen.clone()
+        )
+        .await
+        .is_err()
     );
     assert!(
-        crate::eval::export::EvalEvidenceSnapshot::from_manifest(&legacy, legacy_frozen)
-            .await
-            .is_ok()
+        crate::eval::store::snapshot_fixtures::SnapshotFixture::from_manifest(
+            &legacy,
+            legacy_frozen
+        )
+        .await
+        .is_ok()
     );
     let owned_legacy = legacy.freeze_snapshot_for_owner(FROZEN, "local").await?;
     assert!(
-        crate::eval::export::EvalEvidenceSnapshot::from_manifest(&legacy, owned_legacy)
-            .await
-            .is_ok()
+        crate::eval::store::snapshot_fixtures::SnapshotFixture::from_manifest(
+            &legacy,
+            owned_legacy
+        )
+        .await
+        .is_ok()
     );
     let sql = subject_entity::Entity::find_by_id("eval-1")
         .one(&db)
@@ -305,14 +314,14 @@ async fn frozen_roots_bind_namespace_and_survive_later_admission_changes() -> Re
     let snapshot = a.freeze_snapshot(FROZEN).await?;
     assert!(b.persist_snapshot(&snapshot).await.is_err());
     assert!(
-        crate::eval::export::EvalEvidenceSnapshot::from_manifest(&b, snapshot.clone())
+        crate::eval::store::snapshot_fixtures::SnapshotFixture::from_manifest(&b, snapshot.clone())
             .await
             .is_err()
     );
     let mut tampered = snapshot.clone();
     tampered.entries[0].eval_id = "foreign".into();
     assert!(
-        crate::eval::export::EvalEvidenceSnapshot::from_manifest(&a, tampered)
+        crate::eval::store::snapshot_fixtures::SnapshotFixture::from_manifest(&a, tampered)
             .await
             .is_err()
     );
@@ -324,7 +333,7 @@ async fn frozen_roots_bind_namespace_and_survive_later_admission_changes() -> Re
         Some(snapshot.clone())
     );
     assert_eq!(
-        crate::eval::export::EvalEvidenceSnapshot::from_manifest(&a, snapshot)
+        crate::eval::store::snapshot_fixtures::SnapshotFixture::from_manifest(&a, snapshot)
             .await?
             .records
             .len(),
@@ -627,8 +636,8 @@ async fn pad_subject_json(store: &EvalStore, bytes: i64) -> Result<()> {
 }
 
 #[tokio::test]
-async fn compiler_load_reads_closure_once_and_bounds_manifest_plus_records() -> Result<()> {
-    use crate::eval::export::EvalEvidenceSnapshot;
+async fn snapshot_load_reads_closure_once_and_bounds_manifest_plus_records() -> Result<()> {
+    use crate::eval::store::snapshot_fixtures::SnapshotFixture;
 
     let mut db = database().await?;
     let queries = query_log(&mut db);
@@ -640,10 +649,10 @@ async fn compiler_load_reads_closure_once_and_bounds_manifest_plus_records() -> 
 
     // One closure fits. Loading it twice would transfer over 36 MiB, even
     // though independent 32 MiB budgets would each permit the operation.
-    let loaded = EvalEvidenceSnapshot::load(&a, &snapshot.evidence_root).await?;
-    assert_eq!(loaded.evidence_root, snapshot.evidence_root);
+    let loaded = SnapshotFixture::load(&a, &snapshot.evidence_root).await?;
+    assert_eq!(loaded.snapshot.evidence_root, snapshot.evidence_root);
     assert_eq!(loaded.records.len(), 1);
-    assert_eq!(loaded.records[0].subject, subject()?);
+    assert_eq!(loaded.records[0].1, subject()?);
     let reads = queries
         .try_iter()
         .filter(|sql| sql.starts_with("select "))
@@ -677,13 +686,13 @@ async fn compiler_load_reads_closure_once_and_bounds_manifest_plus_records() -> 
     assert_eq!(a.decode_snapshot(&row)?, snapshot);
     tx.commit().await?;
     assert_eq!(
-        EvalEvidenceSnapshot::from_manifest(&a, snapshot.clone()).await?,
+        SnapshotFixture::from_manifest(&a, snapshot.clone()).await?,
         loaded
     );
-    let error = EvalEvidenceSnapshot::load(&a, &snapshot.evidence_root)
+    let error = SnapshotFixture::load(&a, &snapshot.evidence_root)
         .await
         .err()
-        .context("compiler load reset its budget")?;
+        .context("snapshot load reset its budget")?;
     assert!(error.to_string().contains("byte bound"));
     let error = a
         .persist_snapshot(&snapshot)
@@ -722,8 +731,8 @@ async fn freeze_shares_materialization_and_persistence_budget() -> Result<()> {
 }
 
 #[tokio::test]
-async fn compiler_load_preserves_legacy_wildcard_owned_and_empty_roots() -> Result<()> {
-    use crate::eval::export::EvalEvidenceSnapshot;
+async fn snapshot_load_preserves_legacy_wildcard_owned_and_empty_roots() -> Result<()> {
+    use crate::eval::store::snapshot_fixtures::SnapshotFixture;
 
     let mut db = database().await?;
     let queries = query_log(&mut db);
@@ -738,8 +747,8 @@ async fn compiler_load_preserves_legacy_wildcard_owned_and_empty_roots() -> Resu
     ];
     for snapshot in snapshots {
         queries.try_iter().for_each(drop);
-        let loaded = EvalEvidenceSnapshot::load(&legacy, &snapshot.evidence_root).await?;
-        assert_eq!(loaded.evidence_root, snapshot.evidence_root);
+        let loaded = SnapshotFixture::load(&legacy, &snapshot.evidence_root).await?;
+        assert_eq!(loaded.snapshot.evidence_root, snapshot.evidence_root);
         assert_eq!(loaded.records.len(), snapshot.entries.len());
         assert_eq!(
             queries
@@ -749,7 +758,7 @@ async fn compiler_load_preserves_legacy_wildcard_owned_and_empty_roots() -> Resu
             1
         );
         assert_eq!(
-            EvalEvidenceSnapshot::from_manifest(&legacy, snapshot).await?,
+            SnapshotFixture::from_manifest(&legacy, snapshot).await?,
             loaded
         );
     }
@@ -757,7 +766,7 @@ async fn compiler_load_preserves_legacy_wildcard_owned_and_empty_roots() -> Resu
 }
 
 #[tokio::test]
-async fn compiler_closure_has_one_cumulative_byte_budget() -> Result<()> {
+async fn snapshot_closure_has_one_cumulative_byte_budget() -> Result<()> {
     let db = database().await?;
     let a = tenant(&db, "installation", "a", "first")?;
     for id in ["one", "two"] {
@@ -778,17 +787,17 @@ async fn compiler_closure_has_one_cumulative_byte_budget() -> Result<()> {
     }
     let snapshot = a.freeze_snapshot(FROZEN).await?;
     // Each record remains parseable, under the point-read cap and semantically
-    // unchanged; only the combined compiler closure exceeds its byte budget.
+    // unchanged; only the combined snapshot closure exceeds its byte budget.
     for id in ["one", "two"] {
         db.execute(sea_orm::Statement::from_sql_and_values(sea_orm::DatabaseBackend::Sqlite,
             "UPDATE eval_subjects SET subject_json = subject_json || printf('%*s', ?, '') WHERE eval_id = ?",
             [(18_i64 * 1024 * 1024).into(), a.key(KeyDomain::EvalSubject, id)?.into()])).await?;
         assert!(a.subject(id).await?.is_some());
     }
-    let error = crate::eval::export::EvalEvidenceSnapshot::from_manifest(&a, snapshot)
+    let error = crate::eval::store::snapshot_fixtures::SnapshotFixture::from_manifest(&a, snapshot)
         .await
         .err()
-        .context("compiler accepted oversized closure")?;
+        .context("snapshot reader accepted oversized closure")?;
     assert!(error.to_string().contains("byte bound"));
     Ok(())
 }

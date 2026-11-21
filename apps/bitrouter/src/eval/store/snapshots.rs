@@ -25,27 +25,6 @@ impl EvalStore {
         codec::Decoder { scope: &self.scope }.verify_manifest(snapshot, owner)
     }
 
-    pub async fn freeze_snapshot(&self, frozen_at: &str) -> Result<EvalSnapshot> {
-        let mut budget = Budget::new(self);
-        let snapshot = self
-            .materialize_snapshot_scoped(frozen_at, None, None, &mut budget)
-            .await?;
-        self.persist_snapshot_scoped(&snapshot, None, &mut budget)
-            .await
-    }
-
-    /// Materialize the admitted result set in one stable database snapshot.
-    pub async fn materialize_snapshot(&self, frozen_at: &str) -> Result<EvalSnapshot> {
-        self.materialize_snapshot_scoped(frozen_at, None, None, &mut Budget::new(self))
-            .await
-    }
-
-    /// Persist immutable evidence without reevaluating later admission changes.
-    pub async fn persist_snapshot(&self, snapshot: &EvalSnapshot) -> Result<EvalSnapshot> {
-        self.persist_snapshot_scoped(snapshot, None, &mut Budget::new(self))
-            .await
-    }
-
     pub async fn freeze_snapshot_for_owner(
         &self,
         frozen_at: &str,
@@ -61,34 +40,7 @@ impl EvalStore {
             .await
     }
 
-    /// Freeze exactly the named admitted results for one legacy owner.
-    pub async fn freeze_snapshot_for_result_ids(
-        &self,
-        frozen_at: &str,
-        owner_user_id: &str,
-        result_ids: &[String],
-    ) -> Result<EvalSnapshot> {
-        self.legacy_only()?;
-        validate_owner(owner_user_id)?;
-        let selected = result_ids.iter().cloned().collect::<BTreeSet<_>>();
-        ensure!(
-            !selected.is_empty() && selected.len() == result_ids.len(),
-            "snapshot result ids must be a non-empty unique set"
-        );
-        let mut budget = Budget::new(self);
-        let snapshot = self
-            .materialize_snapshot_scoped(
-                frozen_at,
-                Some(owner_user_id),
-                Some(&selected),
-                &mut budget,
-            )
-            .await?;
-        self.persist_snapshot_scoped(&snapshot, Some(owner_user_id), &mut budget)
-            .await
-    }
-
-    async fn materialize_snapshot_scoped(
+    pub(super) async fn materialize_snapshot_scoped(
         &self,
         frozen_at: &str,
         owner: Option<&str>,
@@ -179,7 +131,7 @@ impl EvalStore {
         Ok(snapshot)
     }
 
-    async fn persist_snapshot_scoped(
+    pub(super) async fn persist_snapshot_scoped(
         &self,
         snapshot: &EvalSnapshot,
         owner: Option<&str>,
@@ -268,10 +220,6 @@ impl EvalStore {
         Ok(existing)
     }
 
-    pub async fn snapshot_by_root(&self, evidence_root: &str) -> Result<Option<EvalSnapshot>> {
-        self.read_snapshot(evidence_root, None).await
-    }
-
     pub async fn snapshot_by_root_for_owner(
         &self,
         evidence_root: &str,
@@ -281,7 +229,11 @@ impl EvalStore {
         self.read_snapshot(evidence_root, Some(owner_user_id)).await
     }
 
-    async fn read_snapshot(&self, root: &str, owner: Option<&str>) -> Result<Option<EvalSnapshot>> {
+    pub(super) async fn read_snapshot(
+        &self,
+        root: &str,
+        owner: Option<&str>,
+    ) -> Result<Option<EvalSnapshot>> {
         let tx = self.transaction(false).await?;
         let mut budget = Budget::new(self);
         let value = if let Some((snapshot, stored_owner)) =
@@ -322,37 +274,6 @@ impl EvalStore {
         } else {
             Ok(None)
         }
-    }
-
-    /// Load the stored manifest and its closure once, in one stable transaction.
-    pub(crate) async fn snapshot_records(&self, root: &str) -> Result<Option<SnapshotRecords>> {
-        let tx = self.transaction(false).await?;
-        let mut budget = Budget::new(self);
-        let value = if let Some((snapshot, stored_owner)) =
-            self.read_snapshot_in(&tx, root, None, &mut budget).await?
-        {
-            let records = self
-                .manifest_records_in(&tx, &snapshot, &mut budget, false, Some(&stored_owner))
-                .await?;
-            Some(SnapshotRecords { snapshot, records })
-        } else {
-            None
-        };
-        tx.commit().await?;
-        Ok(value)
-    }
-
-    /// Evidence export: one namespace, one stable read, one cumulative byte bound.
-    pub(crate) async fn manifest_records(
-        &self,
-        snapshot: &EvalSnapshot,
-    ) -> Result<Vec<(StoredEvaluationResult, EvalSubject)>> {
-        let tx = self.transaction(false).await?;
-        let values = self
-            .manifest_records_in(&tx, snapshot, &mut Budget::new(self), false, None)
-            .await?;
-        tx.commit().await?;
-        Ok(values)
     }
 
     pub(super) async fn manifest_records_in(
@@ -411,6 +332,10 @@ impl EvalStore {
             if self.scope.is_legacy() {
                 legacy_owners.insert(row.owner_user_id.clone());
             }
+            crate::storage::evaluation::validate_result_for_subject(
+                &value.result,
+                &decoded_subject,
+            )?;
             records.push((value, decoded_subject));
         }
         if self.scope.is_legacy() {
