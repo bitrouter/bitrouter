@@ -1,11 +1,9 @@
 //! Operator verification is a separate local shell invocation. Only a durable
 //! result can discharge its intent, including after the foreground worker exits.
-use anyhow::{Context, Result, ensure};
-use bitrouter_ai::harness::agent::ToolMode;
-use bitrouter_ai::harness::runtime::EffectStatus;
-use bitrouter_ai::harness::turn::{
-    InputRequest, TurnStatus, VerificationEvidence, VerificationStatus,
+use crate::harness::{
+    EffectStatus, InputRequest, ToolMode, TurnStatus, VerificationEvidence, VerificationStatus,
 };
+use anyhow::{Context, Result, ensure};
 use bitrouter_ai::types::ToolResultOutput;
 use serde::{Deserialize, Serialize};
 use serde_json::json;

@@ -2,8 +2,8 @@
 //! Only the explicit Chat terminal authorizes committing an assistant message.
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+use crate::harness::ToolMode;
 use anyhow::{Context, Result, bail, ensure};
-use bitrouter_ai::harness::agent::ToolMode;
 use bitrouter_ai::protocol::chat_completions::{
     ChatChunk, ChatFunctionCall, ChatMessage, ChatRequest, ChatToolCall, ChatToolCallDelta,
     ChatUsage,
@@ -17,7 +17,7 @@ use crate::tools::WorkspaceTools;
 
 pub(crate) const MAX_CONTEXT_BYTES: usize = 512 * 1024;
 
-// Port of BRO startup instruction discovery for a single explicit workspace grant.
+// Startup instructions are confined to the explicit workspace grant.
 pub(crate) fn workspace_instructions(root: &std::path::Path) -> Result<Option<String>> {
     use std::io::Read;
     for name in ["AGENTS.override.md", "AGENTS.md"] {
@@ -78,7 +78,7 @@ pub(crate) fn request(thread: &Thread, tools: &WorkspaceTools) -> Result<ChatReq
         for step in &turn.steps {
             let response = match &step.state {
                 ModelState::ModelResponse { response } => response,
-                ModelState::GatewayDenied | ModelState::ModelRequest => {
+                ModelState::ModelRequest => {
                     bail!("cannot replay an unresolved model request")
                 }
             };

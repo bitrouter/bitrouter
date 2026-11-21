@@ -3,10 +3,8 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 
+use crate::harness::{EffectStatus, ToolMode, TurnStatus};
 use anyhow::{Context, Result, ensure};
-use bitrouter_ai::harness::agent::ToolMode;
-use bitrouter_ai::harness::runtime::EffectStatus;
-use bitrouter_ai::harness::turn::TurnStatus;
 use bitrouter_ai::types::ToolResultOutput;
 use bitrouter_sdk::gateway::GatewayClient;
 use futures::{StreamExt, stream::FuturesUnordered};

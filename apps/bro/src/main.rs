@@ -4,6 +4,7 @@ mod catalog;
 mod checkpoint;
 mod durable;
 mod gateway;
+mod harness;
 mod home_owner;
 mod orchestration;
 mod runner;
@@ -21,8 +22,8 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use crate::harness::ToolMode;
 use anyhow::{Context, Result, bail, ensure};
-use bitrouter_ai::harness::agent::ToolMode;
 use bitrouter_ai::types::ReasoningEffort;
 use bitrouter_sdk::gateway::GatewayClient;
 use clap::{Args, Parser, Subcommand, ValueEnum};

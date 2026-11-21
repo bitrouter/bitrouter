@@ -158,7 +158,7 @@ pub(super) async fn run(home: &Home, action: AgentCommand, endpoint: Option<&str
                     || Instant::now() >= deadline
                 {
                     return emit(
-                        &json!({"parent":parent,"child":child,"turn_id":turn,"status":status,"outcome":observed.outcome,"pending_input":observed.pending(),"timed_out":observed.outcome.is_none() && status==bitrouter_ai::harness::turn::TurnStatus::Running}),
+                        &json!({"parent":parent,"child":child,"turn_id":turn,"status":status,"outcome":observed.outcome,"pending_input":observed.pending(),"timed_out":observed.outcome.is_none() && status==crate::harness::TurnStatus::Running}),
                     );
                 }
                 drop(lock);

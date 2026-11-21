@@ -5,10 +5,8 @@ use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
+use crate::harness::{EffectStatus, InputRequest, ToolMode, TurnStatus};
 use anyhow::{Context, Result, bail, ensure};
-use bitrouter_ai::harness::agent::ToolMode;
-use bitrouter_ai::harness::runtime::EffectStatus;
-use bitrouter_ai::harness::turn::{InputRequest, TurnStatus};
 use bitrouter_ai::protocol::chat_completions::{ChatMessage, ChatUsage};
 use bitrouter_ai::types::{ReasoningEffort, ToolResultOutput};
 use serde::{Deserialize, Serialize};
@@ -20,7 +18,7 @@ enum Format {
     Local,
     #[serde(rename = "bro-local/2")]
     Managed,
-    // Older workers must refuse checkpoints whose completion requires a check.
+    // Verification checkpoints bind completion to an approved check result.
     #[serde(rename = "bro-local/3")]
     Checked,
     #[serde(rename = "bro-local/3-managed")]
@@ -89,7 +87,6 @@ pub(crate) struct Step {
 #[serde(tag = "record", rename_all = "snake_case")]
 pub(crate) enum ModelState {
     ModelRequest,
-    GatewayDenied,
     ModelResponse { response: Box<Assistant> },
 }
 
@@ -143,7 +140,6 @@ impl Step {
     fn confirmed(&self) -> bool {
         match &self.state {
             ModelState::ModelRequest => false,
-            ModelState::GatewayDenied => true,
             ModelState::ModelResponse { response } => response.calls.iter().all(|call| {
                 matches!(
                     call.state,
@@ -301,7 +297,7 @@ impl Turn {
     pub fn response(&self) -> Option<&Assistant> {
         match &self.steps.last()?.state {
             ModelState::ModelResponse { response } => Some(response),
-            ModelState::ModelRequest | ModelState::GatewayDenied => None,
+            ModelState::ModelRequest => None,
         }
     }
 
@@ -386,12 +382,6 @@ impl Turn {
             Next::Waiting => TurnStatus::WaitingForInput,
             _ => TurnStatus::Running,
         }
-    }
-
-    fn legacy_denial(&self) -> bool {
-        self.steps
-            .last()
-            .is_some_and(|step| matches!(step.state, ModelState::GatewayDenied))
     }
 
     fn released(&self) -> bool {
@@ -526,18 +516,18 @@ impl Home {
 
     pub fn load(&self, id: Uuid) -> Result<Thread> {
         let file = File::open(self.path(id)).with_context(|| format!("opening thread {id}"))?;
-        let mut thread: Thread = serde_json::from_reader(std::io::BufReader::new(file))
+        let thread: Thread = serde_json::from_reader(std::io::BufReader::new(file))
             .context("invalid or unsupported local checkpoint")?;
         ensure!(
             thread.thread_id == id,
             "checkpoint thread identity mismatch"
         );
-        Self::validate(&mut thread)?;
+        Self::validate(&thread)?;
         crate::tree::validate(&thread)?;
         Ok(thread)
     }
 
-    fn validate(thread: &mut Thread) -> Result<()> {
+    fn validate(thread: &Thread) -> Result<()> {
         ensure!(
             matches!(thread.format, Format::Checked | Format::ManagedChecked)
                 == thread.verification_command.is_some(),
@@ -547,7 +537,7 @@ impl Home {
         for (index, turn) in thread.turns.iter().enumerate() {
             crate::verification::validate(thread, turn)?;
             ensure!(
-                index + 1 == thread.turns.len() || turn.released() || turn.legacy_denial(),
+                index + 1 == thread.turns.len() || turn.released(),
                 "later turn follows unresolved work"
             );
             for (step_index, step) in turn.steps.iter().enumerate() {
@@ -577,25 +567,8 @@ impl Home {
                 }
             }
         }
-        // Older workers treated HTTP 401/403 as proof of no dispatch. Retain
-        // their ledger (including later history), but never release that grant.
-        for turn in &mut thread.turns {
-            if turn.legacy_denial() {
-                let outcome = turn.outcome.get_or_insert_with(|| Outcome {
-                    status: TurnStatus::Failed,
-                    detail: "legacy gateway denial".into(),
-                    final_answer: None,
-                });
-                if outcome.status != TurnStatus::RecoveryRequired {
-                    outcome.status = TurnStatus::RecoveryRequired;
-                    outcome
-                        .detail
-                        .push_str("; gateway dispatch was not ruled out");
-                }
-            }
-        }
-        for turn in &mut thread.turns {
-            for child in turn.children.values_mut() {
+        for turn in &thread.turns {
+            for child in turn.children.values() {
                 Self::validate(child)?;
             }
         }

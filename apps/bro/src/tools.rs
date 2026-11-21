@@ -10,9 +10,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use self::shell::Interpreter;
-use bitrouter_ai::harness::agent::ToolMode;
-use bitrouter_ai::harness::runtime::EffectStatus;
-use bitrouter_ai::harness::turn::TurnEventPayload as RunEvent;
+use crate::harness::{EffectStatus, RunEvent, ToolMode};
 
 mod edit;
 #[cfg(test)]

@@ -1,8 +1,8 @@
 use super::Connection;
 use crate::checkpoint::{Invocation, ModelState, Thread, ToolState, Turn};
+use crate::harness::{InputRequest, TurnStatus};
 use agent_client_protocol_schema::{v1, v2};
 use anyhow::{Context, Result, ensure};
-use bitrouter_ai::harness::turn::{InputRequest, TurnStatus};
 use bitrouter_ai::protocol::chat_completions::ChatFunctionCall;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -62,9 +62,9 @@ pub(super) fn state(turn: &Turn) -> Value {
     let (state, reason) = match status {
         TurnStatus::Completed => ("idle", Some("end_turn")),
         TurnStatus::Cancelled => ("idle", Some("cancelled")),
-        TurnStatus::Failed | TurnStatus::Interrupted => ("idle", Some("_bitrouter_failed")),
-        TurnStatus::Running | TurnStatus::Queued | TurnStatus::Accepted => ("running", None),
-        _ => ("requires_action", None),
+        TurnStatus::Failed => ("idle", Some("_bitrouter_failed")),
+        TurnStatus::Running => ("running", None),
+        TurnStatus::WaitingForInput | TurnStatus::RecoveryRequired => ("requires_action", None),
     };
     let mut frame = json!({"sessionUpdate":"state_update","state":state,"_meta":{"bitrouter":{"turnId":turn.turn_id,"status":status}}});
     if let Some(reason) = reason {
@@ -114,7 +114,7 @@ pub(super) fn tool_status(call: &Invocation) -> &'static str {
         ToolState::Proposed => "pending",
         ToolState::ToolIntent | ToolState::Child => "in_progress",
         ToolState::ToolResult {
-            effect: bitrouter_ai::harness::runtime::EffectStatus::Completed,
+            effect: crate::harness::EffectStatus::Completed,
             ..
         } => "completed",
         ToolState::ToolResult { .. } => "failed",

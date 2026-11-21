@@ -3,7 +3,7 @@
 use bitrouter_ai::types::ToolResultOutput;
 
 use super::{MAX_FILE_BYTES, WorkspaceTools, WriteArgs};
-use bitrouter_ai::harness::runtime::EffectStatus;
+use crate::harness::EffectStatus;
 
 impl WorkspaceTools {
     pub(super) fn write(

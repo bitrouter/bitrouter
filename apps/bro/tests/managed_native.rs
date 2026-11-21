@@ -1,4 +1,4 @@
-//! M0's managed consumer scenarios, using the standalone foreground worker, its
+//! Managed consumer scenarios using the standalone foreground worker, its
 //! real workspace tools, durable checkpoints, and the public SDK HTTP stream.
 #[path = "support/binary.rs"]
 mod binary;

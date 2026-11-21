@@ -1,9 +1,8 @@
 //! Real HTTP/SSE requests exercise the public SDK and the stored restart boundary.
 use std::fs;
 
+use crate::harness::{EffectStatus, ToolMode, TurnStatus};
 use anyhow::{Context, Result, ensure};
-use bitrouter_ai::harness::agent::ToolMode;
-use bitrouter_ai::harness::turn::TurnStatus;
 use bitrouter_sdk::gateway::GatewayClient;
 use serde_json::json;
 
@@ -199,7 +198,7 @@ async fn cancelling_waiting_approval_settles_without_effects() -> Result<()> {
     assert!(!loaded.workspace.join("answer").exists());
     let last = loaded.current()?.steps.last().context("missing step")?;
     assert!(
-        matches!(&last.state,ModelState::ModelResponse {response} if matches!(response.calls[1].state,ToolState::ToolResult{effect:bitrouter_ai::harness::runtime::EffectStatus::NotExecuted,..}))
+        matches!(&last.state,ModelState::ModelResponse {response} if matches!(response.calls[1].state,ToolState::ToolResult{effect:EffectStatus::NotExecuted,..}))
     );
     assert_eq!(mock.join()?.len(), 1);
     Ok(())
@@ -231,6 +230,26 @@ async fn permission_denial_after_dispatch_preserves_receipts_and_ownership() -> 
     assert!(loaded.current()?.response().is_none());
     assert!(loaded.start("retry".into(), None).is_err());
     assert!(runner::run(&home, &mut loaded, &client).await.is_err());
+    let mut unsupported = serde_json::to_value(&loaded)?;
+    unsupported["turns"][0]["steps"][0]["state"] = json!({"record":"gateway_denied"});
+    unsupported["turns"][0]["outcome"]["status"] = json!("failed");
+    let path = _dir
+        .path()
+        .join("bro/threads")
+        .join(format!("{}.json", loaded.thread_id));
+    let bytes = serde_json::to_vec(&unsupported)?;
+    fs::write(&path, &bytes)?;
+    assert!(home.load(loaded.thread_id).is_err());
+    let contender = Thread::new(
+        loaded.workspace.clone(),
+        mock.endpoint.clone(),
+        "fixture".into(),
+        None,
+        None,
+        ToolMode::Coding,
+    )?;
+    assert!(home.admit(&contender).is_err());
+    assert_eq!(fs::read(path)?, bytes);
     assert_eq!(mock.join()?.len(), 1);
     Ok(())
 }

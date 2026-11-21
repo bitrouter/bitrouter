@@ -3,9 +3,8 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::harness::{EffectStatus, InputRequest, RunEvent, TurnStatus, VerificationStatus};
 use anyhow::{Context, Result, bail, ensure};
-use bitrouter_ai::harness::runtime::EffectStatus;
-use bitrouter_ai::harness::turn::{InputRequest, TurnEventPayload, TurnStatus};
 use bitrouter_ai::stream::{ProtocolEnd, StreamItem};
 use bitrouter_ai::types::ToolResultOutput;
 use bitrouter_sdk::gateway::{GatewayClient, reply::Body};
@@ -23,7 +22,7 @@ pub(crate) const MAX_TOOL_CALLS: usize = 128;
 pub(crate) trait Journal {
     fn save(&self, thread: &Thread) -> Result<()>;
 
-    fn live(&self, thread_id: Uuid, turn_id: Uuid, event: TurnEventPayload) -> Result<()> {
+    fn live(&self, thread_id: Uuid, turn_id: Uuid, event: RunEvent) -> Result<()> {
         crate::emit(&json!({"type":"live","thread_id":thread_id,"turn_id":turn_id,"event":event}))
     }
 }
@@ -244,8 +243,7 @@ pub(crate) async fn drive(
                 if response.finish_reason == "stop" {
                     let passed = matches!(
                         turn.verification(),
-                        bitrouter_ai::harness::turn::VerificationStatus::Passed
-                            | bitrouter_ai::harness::turn::VerificationStatus::NotRequested
+                        VerificationStatus::Passed | VerificationStatus::NotRequested
                     );
                     settle(
                         home,
@@ -402,7 +400,7 @@ async fn run_model(
                     home.live(
                         thread.thread_id,
                         thread.current()?.turn_id,
-                        TurnEventPayload::AssistantDelta {
+                        RunEvent::AssistantDelta {
                             item_id: step_id.to_string(),
                             text: text.into(),
                         },

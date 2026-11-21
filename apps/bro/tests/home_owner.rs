@@ -181,5 +181,5 @@ mod gateway;
 async fn gateway_refuses_bro_checkpoint_homes() -> Result<()> {
     let binary = std::env::var_os("BITROUTER_TEST_GATEWAY_BINARY").context("gateway executable")?;
     let fixture = tempfile::tempdir()?;
-    gateway::ordinary_and_legacy(&binary, fixture.path()).await
+    gateway::ordinary_and_unmarked(&binary, fixture.path()).await
 }

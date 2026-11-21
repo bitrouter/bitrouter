@@ -3,7 +3,7 @@
 use bitrouter_ai::types::ToolResultOutput;
 
 use super::{EditArgs, MAX_FILE_BYTES, WorkspaceTools};
-use bitrouter_ai::harness::runtime::EffectStatus;
+use crate::harness::EffectStatus;
 
 impl WorkspaceTools {
     pub(super) fn edit(
