@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::config;
 use crate::gateway::http::AppState;
-use crate::gateway::http::build_router;
+use crate::gateway::http::tests::build_router;
 use crate::metering::entities::requests;
 use anyhow::Context;
 use axum_test::TestServer;

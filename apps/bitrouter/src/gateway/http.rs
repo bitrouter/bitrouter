@@ -285,32 +285,11 @@ pub struct RouterOptions {
     /// convention). `None` omits the aggregate route — only per-server routes
     /// (`/mcp/{server}`) are mounted.
     pub mcp_aggregate_route: Option<String>,
-    /// Optional wrapper applied to the fully-built router. Set via
-    /// [`RouterOptions::with_router_wrapper`].
+    /// Optional wrapper applied to the fully-built router.
     pub router_wrapper: Option<RouterWrapper>,
 }
 
-impl RouterOptions {
-    /// Install a router-wrapper closure that runs after the gateway has mounted
-    /// every route. Application telemetry and custom hosts use this to add
-    /// inbound HTTP middleware without making routing depend on an exporter.
-    pub fn with_router_wrapper<F>(mut self, wrapper: F) -> Self
-    where
-        F: Fn(Router) -> Router + Send + Sync + 'static,
-    {
-        self.router_wrapper = Some(Arc::new(wrapper));
-        self
-    }
-}
-
-/// Build the axum router for the given state.
-pub fn build_router(state: AppState) -> Router {
-    build_router_with_options(state, RouterOptions::default())
-}
-
-/// Like [`build_router`], but lets the caller opt out of specific routes
-/// before they are mounted (so a host can supply its own variant without
-/// tripping `Router::merge`'s duplicate-route panic).
+/// Build the router with explicit host route and middleware options.
 pub fn build_router_with_options(state: AppState, options: RouterOptions) -> Router {
     let mut router = Router::new()
         .route("/v1/messages", post(messages))
@@ -2243,7 +2222,11 @@ fn apply_error_headers(response: &mut Response, error: &BitrouterError) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    pub(crate) fn build_router(state: super::AppState) -> axum::Router {
+        super::build_router_with_options(state, super::RouterOptions::default())
+    }
+
     use super::*;
     use crate::gateway::assembly::PromptTransform;
     use crate::gateway::pipeline::executor::{Executor, MockExecutor, MockResponse};
@@ -2484,10 +2467,10 @@ mod tests {
         }
     }
 
-    struct RejectNativeAndHttp;
+    struct RejectHttp;
 
     #[async_trait]
-    impl PreRequestHook for RejectNativeAndHttp {
+    impl PreRequestHook for RejectHttp {
         async fn check(&self, _ctx: &mut PipelineContext) -> Result<HookDecision> {
             Ok(HookDecision::Deny(
                 crate::gateway::pipeline::hooks::DenyReason::Unauthorized(
@@ -2704,11 +2687,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn native_and_http_turns_share_transform_policy_and_settlement()
+    async fn http_turns_preserve_transform_policy_and_settlement()
     -> std::result::Result<(), Box<dyn std::error::Error>> {
-        use bitrouter_ai::types::{
-            Content, FinishReason, GenerateResult, Message, ReasoningEffort, Role, Usage,
-        };
+        use bitrouter_ai::types::{Content, FinishReason, GenerateResult, Usage};
 
         let table = StaticRoutingTable::new();
         table.insert(
@@ -2748,7 +2729,6 @@ mod tests {
             stop_details: None,
             provider_metadata: Default::default(),
         };
-        let expected_content = result.content.clone();
         let provider_calls = Arc::new(AtomicUsize::new(0));
         let settlements = Arc::new(AtomicUsize::new(0));
         let settled_routes = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -2760,10 +2740,7 @@ mod tests {
                 lm.routing_table(Arc::new(table))
                     .executor(Arc::new(CountingExecutor {
                         calls: Arc::clone(&provider_calls),
-                        inner: MockExecutor::new(vec![
-                            MockResponse::Generate(result.clone()),
-                            MockResponse::Generate(result),
-                        ]),
+                        inner: MockExecutor::new(vec![MockResponse::Generate(result)]),
                     }))
                     .pre_request_hook(RecordModelIntent(Arc::clone(&observed)))
                     .settlement_recorder(CountSettlements(Arc::clone(&settlements)))
@@ -2796,55 +2773,24 @@ mod tests {
             .await?;
         assert_eq!(response.status(), StatusCode::OK);
 
-        let native_prompt = Prompt {
-            model: "caller-model".into(),
-            system: None,
-            system_provider_metadata: Default::default(),
-            messages: vec![Message::text(Role::User, "hello")],
-            tools: Vec::new(),
-            params: bitrouter_ai::types::GenerationParams {
-                reasoning_effort: Some(ReasoningEffort::Low),
-                ..Default::default()
-            },
-            response_format: None,
-            tool_choice: None,
-            stream: false,
-        };
-        let native = app
-            .execute_native(native_prompt, CallerContext::local())
-            .await?;
-        assert_eq!(
-            native
-                .result
-                .generation()
-                .ok_or("native result must be generation")?
-                .content,
-            expected_content
-        );
-        assert_eq!(provider_calls.load(Ordering::SeqCst), 2);
-        assert_eq!(settlements.load(Ordering::SeqCst), 2);
+        let body = to_bytes(response.into_body(), 1024 * 1024).await?;
+        let body: serde_json::Value = serde_json::from_slice(&body)?;
+        assert_eq!(body["choices"][0]["message"]["content"], "ok");
+        assert_eq!(provider_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(settlements.load(Ordering::SeqCst), 1);
         let routes = match settled_routes.lock() {
             Ok(entries) => entries.clone(),
             Err(poisoned) => poisoned.into_inner().clone(),
         };
         assert_eq!(
             routes,
-            vec![
-                (
-                    "test-provider".into(),
-                    "gpt-5.5".into(),
-                    Some("low".into()),
-                    10,
-                    5
-                ),
-                (
-                    "test-provider".into(),
-                    "gpt-5.5".into(),
-                    Some("low".into()),
-                    10,
-                    5
-                ),
-            ]
+            vec![(
+                "test-provider".into(),
+                "gpt-5.5".into(),
+                Some("low".into()),
+                10,
+                5
+            ),]
         );
         let captured = match observed.lock() {
             Ok(slot) => slot.clone(),
@@ -2858,10 +2804,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejected_native_and_http_turns_do_not_call_provider()
+    async fn rejected_http_turns_do_not_call_provider()
     -> std::result::Result<(), Box<dyn std::error::Error>> {
-        use bitrouter_ai::types::{Message, Role};
-
         let calls = Arc::new(AtomicUsize::new(0));
         let table = StaticRoutingTable::new();
         let app = App::builder()
@@ -2872,7 +2816,7 @@ mod tests {
                         calls: Arc::clone(&calls),
                         inner: MockExecutor::always_text("should not run"),
                     }))
-                    .pre_request_hook(RejectNativeAndHttp);
+                    .pre_request_hook(RejectHttp);
             })
             .build()?;
         let state = AppState {
@@ -2901,22 +2845,6 @@ mod tests {
             )
             .await?;
         assert!(!response.status().is_success());
-        let native_prompt = Prompt {
-            model: "blocked".into(),
-            system: None,
-            system_provider_metadata: Default::default(),
-            messages: vec![Message::text(Role::User, "hello")],
-            tools: Vec::new(),
-            params: Default::default(),
-            response_format: None,
-            tool_choice: None,
-            stream: false,
-        };
-        assert!(
-            app.execute_native(native_prompt, CallerContext::local())
-                .await
-                .is_err()
-        );
         assert_eq!(calls.load(Ordering::SeqCst), 0);
         Ok(())
     }

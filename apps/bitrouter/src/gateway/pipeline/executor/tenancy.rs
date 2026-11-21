@@ -369,22 +369,8 @@ pub(super) fn admit_send(
             let permit = permit
                 .as_mut()
                 .ok_or_else(|| execution.reject(ErrorCode::Forbidden))?;
-            let counted = if execution
-                .count_required()
-                .map_err(|code| execution.reject(code))?
-            {
-                Some(super::input_count::request_digest(request, target)?)
-            } else {
-                None
-            };
             let attempt_id = execution
-                .arm_attempt_with_oauth(
-                    target,
-                    permit,
-                    &binding.stamp,
-                    binding.oauth.as_ref(),
-                    counted.as_deref(),
-                )
+                .arm_attempt_with_oauth(target, permit, &binding.stamp, binding.oauth.as_ref())
                 .map_err(|code| execution.reject(code))?;
             super::super::provider_technical::armed(ctx, &attempt_id);
             let adapter = adapter

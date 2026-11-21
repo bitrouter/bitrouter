@@ -2944,7 +2944,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use crate::gateway::caller::CallerContext;
-    use crate::gateway::http::{AppState, build_router};
+    use crate::gateway::http::{AppState, tests::build_router};
     use crate::gateway::pipeline::builder::PipelineBuilder;
     use crate::gateway::pipeline::context::{PipelineContext, ProviderContinuation, StreamContext};
     use crate::gateway::pipeline::execution::Pipeline;

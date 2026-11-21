@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::config;
 use crate::gateway::extensions::request_check::{Callback, Decision};
-use crate::gateway::http::{AppState, build_router};
+use crate::gateway::http::{AppState, tests::build_router};
 use anyhow::{Context, Result, ensure};
 use axum_test::TestServer;
 use serde_json::{Value, json};

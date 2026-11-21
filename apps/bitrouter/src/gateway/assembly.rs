@@ -4,17 +4,11 @@
 //! the resulting application with its HTTP lifecycle methods. Typed request
 //! checks register through [`crate::gateway::extensions::registry::ExtensionApi`].
 
-use std::pin::Pin;
 use std::sync::Arc;
 
-use futures_core::Stream;
-
-use crate::gateway::caller::CallerContext;
 use crate::gateway::error::Result;
 use crate::gateway::model::protocol::sanitize_model_name;
-use bitrouter_ai::types::{Prompt, StreamPart};
-
-use crate::gateway::pipeline::types::{PipelineRequest, PipelineResponse};
+use bitrouter_ai::types::Prompt;
 
 use crate::gateway::observability::metrics::MetricsRenderer;
 use crate::gateway::pipeline::builder::PipelineBuilder;
@@ -47,16 +41,6 @@ pub(crate) trait PromptTransform: Send + Sync {
     ) {
         self.apply(prompt);
     }
-
-    /// Validate authorized history removal after model selection. Both prompts
-    /// are already prepared; this must not rerun the transform or its selection.
-    /// Implementations must reject removal of dependencies introduced by the
-    /// transform. Absence of this contract keeps reconstruction disabled.
-    fn validate_context_rebuild(&self, _original: &Prompt, _rebuilt: &Prompt) -> Result<()> {
-        Err(crate::gateway::error::BitrouterError::bad_request(
-            "prompt transform has no context revalidation contract",
-        ))
-    }
 }
 
 /// A fully assembled application: one pipeline per enabled protocol, plus the
@@ -65,7 +49,6 @@ pub struct App {
     /// Installed only by successful product assembly; never an embedding setter.
     tenancy: Option<crate::tenancy::Service>,
     language_model: Option<Arc<language_model::execution::Pipeline>>,
-    decision_model: Option<crate::gateway::model::decision::DecisionRuntime>,
     mcp: Option<Arc<mcp::Pipeline>>,
     /// Optional Prometheus-style metrics renderer; if set, the HTTP server
     /// exposes `GET /metrics` against it.
@@ -106,229 +89,9 @@ impl App {
         self
     }
 
-    /// Typed decision backend injected by the host, independent of generation.
-    pub(crate) fn decision_model(
-        &self,
-    ) -> Option<&crate::gateway::model::decision::DecisionRuntime> {
-        if self.tenancy.is_some() {
-            // A host-global decision backend has no owned child-execution proof.
-            return None;
-        }
-        self.decision_model.as_ref()
-    }
-
     /// Start configuring an application.
     pub(crate) fn builder() -> AppBuilder {
         AppBuilder::new()
-    }
-
-    /// Execute one non-streaming native model turn through this app's routed,
-    /// checked, and settled language-model pipeline. The caller is established
-    /// by the embedding server, not inferred from `skip_auth`.
-    ///
-    /// Prompt transforms that require HTTP headers see an empty header map and
-    /// therefore cannot infer an HTTP client identity. The SDK's optional
-    /// request-scoped server-tool loop is skipped: the embedding agent owns its
-    /// own tool calls and must execute each one exactly once.
-    pub(crate) async fn execute_native(
-        &self,
-        prompt: Prompt,
-        caller: CallerContext,
-    ) -> Result<PipelineResponse> {
-        if self.tenancy.is_some() {
-            return Err(crate::gateway::error::BitrouterError::Unauthorized(
-                "tenant native execution requires authenticated dispatch headers".into(),
-            ));
-        }
-        if prompt.stream {
-            return Err(crate::gateway::error::BitrouterError::bad_request(
-                "native model turns must be non-streaming",
-            ));
-        }
-        let pipeline = self.language_model.as_ref().ok_or_else(|| {
-            crate::gateway::error::BitrouterError::internal("no language_model pipeline configured")
-        })?;
-        let headers = http::HeaderMap::new();
-        let (prompt, original_model) =
-            prepare_model_prompt(prompt, &headers, &self.prompt_transforms);
-        let mut request = PipelineRequest::new(prompt.model.clone(), caller, prompt);
-        request.original_model = original_model;
-        Arc::clone(pipeline)
-            .execute_without_server_tools(request)
-            .await
-    }
-
-    /// Execute a managed native turn with durable admission before each
-    /// provider attempt. Ordinary HTTP and native requests share preparation,
-    /// selection, execution and settlement; core-owned tools stay client-owned.
-    pub(crate) async fn execute_native_controlled(
-        &self,
-        prompt: Prompt,
-        caller: CallerContext,
-        control: Arc<dyn crate::gateway::pipeline::native::NativeExecutionControl>,
-    ) -> Result<PipelineResponse> {
-        self.execute_native_controlled_with_headers(prompt, caller, http::HeaderMap::new(), control)
-            .await
-    }
-
-    /// Controlled native execution with host-authenticated ingress headers.
-    /// The host retains these credentials in memory, outside durable agent state.
-    /// Normal pipeline authentication and policy checks still run on every turn.
-    pub(crate) async fn execute_native_controlled_with_headers(
-        &self,
-        prompt: Prompt,
-        caller: CallerContext,
-        headers: http::HeaderMap,
-        control: Arc<dyn crate::gateway::pipeline::native::NativeExecutionControl>,
-    ) -> Result<PipelineResponse> {
-        if prompt.stream {
-            return Err(crate::gateway::error::BitrouterError::bad_request(
-                "controlled model turns must be non-streaming",
-            ));
-        }
-        if let Some(service) = &self.tenancy {
-            return service
-                .execute_native_controlled(prompt, headers, control)
-                .await;
-        }
-        let pipeline = self.language_model.as_ref().ok_or_else(|| {
-            crate::gateway::error::BitrouterError::internal("no language_model pipeline configured")
-        })?;
-        let requested_model = sanitize_model_name(&prompt.model);
-        let requested_effort = (prompt.params.reasoning_effort_source
-            == bitrouter_ai::types::ReasoningEffortSource::Caller)
-            .then_some(prompt.params.reasoning_effort)
-            .flatten();
-        let mut prompt = prompt;
-        prompt.model = requested_model.clone();
-        let mut request = PipelineRequest::new(requested_model.clone(), caller, prompt);
-        request.headers = headers.clone();
-        for (index, transform) in self.prompt_transforms.iter().enumerate() {
-            use crate::gateway::pipeline::native_preparation::{
-                NativePreparationWork, NativePreparationWorkKind, observe,
-            };
-            let work_index = u32::try_from(index).map_err(|_| {
-                crate::gateway::error::BitrouterError::internal("prompt transform index exhausted")
-            })?;
-            observe(
-                control.as_ref(),
-                NativePreparationWork {
-                    request_id: request.request_id.clone(),
-                    kind: NativePreparationWorkKind::PromptTransform,
-                    work_index,
-                },
-                async {
-                    transform.apply_with_headers(
-                        request.input.generation_prompt_mut().ok_or_else(|| {
-                            crate::gateway::error::BitrouterError::bad_request(
-                                "managed request requires generation",
-                            )
-                        })?,
-                        &headers,
-                    );
-                    Ok(())
-                },
-            )
-            .await?;
-        }
-        let prompt = request.input.generation_prompt_mut().ok_or_else(|| {
-            crate::gateway::error::BitrouterError::bad_request(
-                "managed request requires generation",
-            )
-        })?;
-        if (control.model_selection()
-            == crate::gateway::pipeline::native::NativeModelSelection::Fixed
-            && prompt.model != requested_model)
-            || requested_effort.is_some_and(|effort| prompt.params.reasoning_effort != Some(effort))
-        {
-            return Err(crate::gateway::error::BitrouterError::bad_request(
-                "managed request preparation changed a manual model or effort override",
-            ));
-        }
-        if requested_effort.is_some() {
-            prompt.params.reasoning_effort_source =
-                bitrouter_ai::types::ReasoningEffortSource::Caller;
-        }
-        request.model = prompt.model.clone();
-        let control = Arc::new(TransformCheckedControl {
-            inner: control,
-            transforms: self.prompt_transforms.clone(),
-        });
-        Arc::clone(pipeline)
-            .execute_native_controlled(request, control)
-            .await
-    }
-
-    /// Read already persisted, caller-scoped request costs without executing or
-    /// charging another request. An unconfigured source is explicitly unknown.
-    pub(crate) async fn native_cost_observations(
-        &self,
-        caller: &CallerContext,
-        request_ids: &[String],
-    ) -> Result<Vec<crate::gateway::pipeline::native_accounting::NativeCostObservation>> {
-        if self.tenancy.is_some() {
-            // Public caller metadata cannot authorize a host-global cost lookup.
-            return Ok(request_ids
-                .iter()
-                .map(|request_id| {
-                    crate::gateway::pipeline::native_accounting::NativeCostObservation {
-                        request_id: request_id.clone(),
-                        claims: Vec::new(),
-                        unknown_reason: Some("owned_cost_source_unavailable".into()),
-                    }
-                })
-                .collect());
-        }
-        if let Some(source) = self
-            .language_model
-            .as_ref()
-            .and_then(|pipeline| pipeline.native_cost_source.as_ref())
-        {
-            source.read(caller, request_ids).await
-        } else {
-            Ok(request_ids
-                .iter()
-                .map(|request_id| {
-                    crate::gateway::pipeline::native_accounting::NativeCostObservation {
-                        request_id: request_id.clone(),
-                        claims: Vec::new(),
-                        unknown_reason: Some("cost_source_unavailable".into()),
-                    }
-                })
-                .collect())
-        }
-    }
-
-    /// Stream one native agent turn through the same routed and settled path.
-    /// The embedding agent owns client tool calls, so SDK server tools are
-    /// excluded just as they are for `execute_native`.
-    pub(crate) async fn execute_native_stream(
-        &self,
-        mut prompt: Prompt,
-        caller: CallerContext,
-    ) -> Result<(
-        String,
-        Pin<Box<dyn Stream<Item = Result<StreamPart>> + Send>>,
-    )> {
-        if self.tenancy.is_some() {
-            return Err(crate::gateway::error::BitrouterError::Unauthorized(
-                "tenant native execution requires authenticated dispatch headers".into(),
-            ));
-        }
-        let pipeline = self.language_model.as_ref().ok_or_else(|| {
-            crate::gateway::error::BitrouterError::internal("no language_model pipeline configured")
-        })?;
-        prompt.stream = true;
-        let headers = http::HeaderMap::new();
-        let (prompt, original_model) =
-            prepare_model_prompt(prompt, &headers, &self.prompt_transforms);
-        let mut request = PipelineRequest::new(prompt.model.clone(), caller, prompt);
-        request.original_model = original_model;
-        let request_id = request.request_id.clone();
-        let parts = Arc::clone(pipeline)
-            .execute_stream_without_server_tools(request)
-            .await?;
-        Ok((request_id, parts))
     }
 
     /// The `language_model` pipeline, if that protocol was configured.
@@ -369,148 +132,7 @@ impl App {
     }
 }
 
-/// Enforce the App's transform contract for every native embedding control.
-struct TransformCheckedControl {
-    inner: Arc<dyn crate::gateway::pipeline::native::NativeExecutionControl>,
-    transforms: Vec<Arc<dyn PromptTransform>>,
-}
-
-#[async_trait::async_trait]
-impl crate::gateway::pipeline::native::NativeExecutionControl for TransformCheckedControl {
-    async fn prepare_routing(
-        &self,
-        prompt: &Prompt,
-    ) -> Result<Option<crate::gateway::routing::preparation::Prepared>> {
-        self.inner.prepare_routing(prompt).await
-    }
-
-    async fn commit_routing(&self, prompt: &Prompt) -> Result<()> {
-        self.inner.commit_routing(prompt).await
-    }
-
-    fn observe_stream(&self) -> bool {
-        self.inner.observe_stream()
-    }
-
-    async fn on_stream_part(&self, request_id: &str, part: &bitrouter_ai::types::StreamPart) {
-        self.inner.on_stream_part(request_id, part).await;
-    }
-
-    fn provider_response_byte_limit(&self) -> Option<u64> {
-        self.inner.provider_response_byte_limit()
-    }
-
-    fn canonical_output_byte_limit(&self) -> Option<u64> {
-        self.inner.canonical_output_byte_limit()
-    }
-
-    fn auxiliary_report_byte_limit(&self, request_id: &str) -> Result<Option<u64>> {
-        self.inner.auxiliary_report_byte_limit(request_id)
-    }
-
-    fn attempt_report_byte_limit(
-        &self,
-        request_id: &str,
-        route: &crate::managed_contract::evidence::NativeRoute,
-    ) -> Result<Option<u64>> {
-        self.inner.attempt_report_byte_limit(request_id, route)
-    }
-
-    async fn provider_cancelled(&self) {
-        self.inner.provider_cancelled().await;
-    }
-
-    async fn before_preparation_work(
-        &self,
-        work: &crate::gateway::pipeline::native_preparation::NativePreparationWork,
-    ) -> Result<()> {
-        self.inner.before_preparation_work(work).await
-    }
-    async fn after_preparation_work(
-        &self,
-        report: crate::gateway::pipeline::native_preparation::NativePreparationWorkReport,
-    ) -> Result<()> {
-        self.inner.after_preparation_work(report).await
-    }
-    fn model_selection(&self) -> crate::gateway::pipeline::native::NativeModelSelection {
-        self.inner.model_selection()
-    }
-    async fn plan(
-        &self,
-        plan: crate::gateway::pipeline::native::NativePlan,
-    ) -> Result<crate::gateway::pipeline::native::NativePlanAdmission> {
-        self.inner.plan(plan).await
-    }
-    async fn before_input_count(
-        &self,
-        plan: &crate::gateway::pipeline::native::NativePlan,
-        index: u32,
-    ) -> Result<()> {
-        self.inner.before_input_count(plan, index).await
-    }
-    async fn after_input_count(
-        &self,
-        report: crate::gateway::pipeline::native::NativeInputCountReport,
-    ) -> Result<()> {
-        self.inner.after_input_count(report).await
-    }
-    async fn rebuild_context(
-        &self,
-        rejected: &crate::gateway::pipeline::native::NativePlan,
-    ) -> Result<Option<Vec<bitrouter_ai::types::Message>>> {
-        self.inner.rebuild_context(rejected).await
-    }
-    async fn validate_context_rebuild(
-        &self,
-        original: &Prompt,
-        rebuilt: &Prompt,
-        request_id: &str,
-    ) -> Result<()> {
-        self.inner
-            .validate_context_rebuild(original, rebuilt, request_id)
-            .await?;
-        for transform in &self.transforms {
-            self.inner.check_context_validation(request_id).await?;
-            transform.validate_context_rebuild(original, rebuilt)?;
-        }
-        Ok(())
-    }
-    async fn before_context_validation(&self, request_id: &str) -> Result<()> {
-        self.inner.before_context_validation(request_id).await
-    }
-    async fn check_context_validation(&self, request_id: &str) -> Result<()> {
-        self.inner.check_context_validation(request_id).await
-    }
-    fn context_validation_gate_duration(&self) -> Option<std::time::Duration> {
-        self.inner.context_validation_gate_duration()
-    }
-    async fn after_context_validation(
-        &self,
-        report: crate::gateway::pipeline::native::NativeContextValidationReport,
-    ) -> Result<()> {
-        self.inner.after_context_validation(report).await
-    }
-    async fn before_attempt(&self, request_id: &str, index: u32) -> Result<()> {
-        self.inner.before_attempt(request_id, index).await
-    }
-    async fn after_attempt(&self, report: crate::managed_contract::evidence::NativeAttemptReport) {
-        self.inner.after_attempt(report).await
-    }
-    async fn before_provider_work(
-        &self,
-        work: &crate::gateway::pipeline::native_work::NativeProviderWork,
-    ) -> Result<()> {
-        self.inner.before_provider_work(work).await
-    }
-    async fn after_provider_work(
-        &self,
-        report: crate::gateway::pipeline::native_work::NativeProviderWorkReport,
-    ) {
-        self.inner.after_provider_work(report).await
-    }
-}
-
-/// Common post-parse preparation for HTTP and in-process native requests.
+/// Post-parse preparation for HTTP requests.
 /// Preserve the caller's selector before transforms for policy attribution.
 pub(crate) fn prepare_model_prompt(
     mut prompt: Prompt,
@@ -659,7 +281,6 @@ impl AppBuilder {
         Ok(App {
             tenancy: None,
             language_model,
-            decision_model: self.decision_model,
             mcp,
             metrics_renderer: self.metrics_renderer,
             skip_auth: self.skip_auth,

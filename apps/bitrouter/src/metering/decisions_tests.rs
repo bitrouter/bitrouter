@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use crate::gateway::caller::CallerContext;
-use crate::gateway::http::{AppState, build_router};
+use crate::gateway::http::{AppState, tests::build_router};
 use crate::gateway::pipeline::builder::PipelineBuilder;
 use crate::gateway::pipeline::context::PipelineContext;
 use crate::gateway::pipeline::executor::HttpExecutor;

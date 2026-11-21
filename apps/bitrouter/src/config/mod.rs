@@ -47,7 +47,6 @@ pub mod server_tools;
 pub(crate) mod shared_process;
 pub mod skills;
 pub mod tenancy;
-pub(crate) mod yaml;
 
 #[cfg(test)]
 mod tests;

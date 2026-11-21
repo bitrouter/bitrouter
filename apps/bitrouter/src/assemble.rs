@@ -881,7 +881,6 @@ async fn assemble_app(
     let metering_store_for_policy = metering_store.clone();
     let metering_store_for_recorder = metering_store.clone();
     let pricing_for_recorder = pricing.clone();
-    let pricing_for_native = pricing.clone();
     #[cfg(feature = "multi-instance")]
     let shared_policies = shared.map(|inputs| PolicyStore::from_policies(inputs.policies.clone()));
     #[cfg(not(feature = "multi-instance"))]
@@ -1293,12 +1292,6 @@ async fn assemble_app(
                 lm.owned_drain();
             }
             lm.routing_table(routing_table).executor(executor);
-            if !is_shared {
-                lm.native_cost_estimator(pricing_for_native);
-            }
-            if let Some(policy) = &private_context {
-                lm.native_private_context(Arc::new(policy.clone()));
-            }
             lm.served_operations(OperationScope::Both);
             lm.require_hook::<AuthHook>(HookStage::PreResolution, OperationScope::Both);
             lm.require_hook::<SessionContextHook>(HookStage::PreResolution, OperationScope::Both);
