@@ -421,22 +421,19 @@ async fn preparation_failure_retains_unsettled_inventory_without_inventing_usage
 }
 
 #[tokio::test]
-async fn context_revalidation_retains_the_original_request_and_attempt() -> Result<()> {
+async fn http_context_revalidation_retains_the_original_request_and_attempt() -> Result<()> {
     let fixture = fixture(Failure::None).await?;
-    let mut ctx = PipelineContext::new(request("rebuild", true)?);
-    let retained = ctx.require_generation_prompt()?.messages.clone();
-    let mut initial = ctx.require_generation_prompt()?.clone();
-    initial
-        .messages
-        .insert(0, Message::text(Role::User, "old history"));
-    ctx.apply_routing_prompt(initial)?;
+    let mut request = request("revalidate", true)?;
+    request.inbound_protocol = Some(bitrouter_ai::types::ApiProtocol::ChatCompletions);
+    let mut ctx = PipelineContext::new(request);
+    let prompt = serde_json::to_value(ctx.require_generation_prompt()?)?;
+    let delivery_attempt = ctx.delivery_attempt_id();
     NormalizedScope.check(&mut ctx).await?;
     fixture.tracker.check(&mut ctx).await?;
     fixture.binding.check(&mut ctx).await?;
-    let before = saved(&fixture, "rebuild").await?;
+    let before = saved(&fixture, "revalidate").await?;
     let observation = serde_json::to_value(ctx.get_event::<GatewayRequestObserved>())?;
 
-    ctx.replace_managed_messages(retained)?;
     for _ in 0..2 {
         assert!(matches!(
             fixture.tracker.revalidate_context(&ctx).await?,
@@ -448,8 +445,18 @@ async fn context_revalidation_retains_the_original_request_and_attempt() -> Resu
         ));
         RouteHook::revalidate_context(&fixture.binding, &[], &ctx).await?;
     }
+    assert_eq!(ctx.request_id(), "revalidate");
+    assert_eq!(ctx.delivery_attempt_id(), delivery_attempt);
     assert_eq!(
-        serde_json::to_value(saved(&fixture, "rebuild").await?)?,
+        serde_json::to_value(ctx.require_generation_prompt()?)?,
+        prompt
+    );
+    assert_eq!(
+        ctx.inbound_protocol(),
+        Some(bitrouter_ai::types::ApiProtocol::ChatCompletions)
+    );
+    assert_eq!(
+        serde_json::to_value(saved(&fixture, "revalidate").await?)?,
         serde_json::to_value(before)?
     );
     assert_eq!(
