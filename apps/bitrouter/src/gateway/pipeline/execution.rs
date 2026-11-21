@@ -2521,16 +2521,7 @@ impl Pipeline {
                 execution.admit_native_controls(prompt, &target.api_protocol)
             });
         let assessment = controls
-            .and_then(|()| {
-                if ctx
-                    .extension::<super::native::NativeManagedRequest>()
-                    .is_some()
-                {
-                    self.executor.preflight_managed(target, prompt, stream, ctx)
-                } else {
-                    self.executor.preflight(target, prompt, stream)
-                }
-            })
+            .and_then(|()| self.executor.preflight(target, prompt, stream))
             .and_then(|report| {
                 report.require_admitted()?;
                 Ok(report)

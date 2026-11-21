@@ -89,7 +89,6 @@ impl HttpExecutor {
                 client: &client,
                 url: &url,
                 body: &body,
-                managed_expected: None,
                 target,
                 transport,
                 ctx,

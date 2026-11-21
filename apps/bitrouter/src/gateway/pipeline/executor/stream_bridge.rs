@@ -169,10 +169,7 @@ impl HttpExecutor {
 
         let (client, _) = self.client_for(
             target,
-            ctx.extension::<super::super::native::NativeManagedRequest>()
-                .is_some()
-                || super::shared::has_admission(ctx)
-                || super::tenancy::has_execution(ctx),
+            super::shared::has_admission(ctx) || super::tenancy::has_execution(ctx),
         );
 
         let mut http_source = if target.api_protocol == ApiProtocol::Responses {
@@ -184,7 +181,7 @@ impl HttpExecutor {
         let (response, mut shared_attempt, mut tenant_attempt) = loop {
             let mut body =
                 self.render_execution_request(adapter.as_ref(), target, prompt, ctx, true)?;
-            let managed_expected = self.managed_expected_body(&body, target, ctx)?;
+
             if self.needs_body_shaping(target, ctx)? {
                 self.shape_request_body(&mut body, target, ctx)
                     .await
@@ -201,7 +198,6 @@ impl HttpExecutor {
 
                 url: &url,
                 body: &body,
-                managed_expected: managed_expected.as_ref(),
                 target,
                 transport,
                 ctx,

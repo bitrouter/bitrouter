@@ -166,13 +166,6 @@ impl ProviderContinuation {
         self
     }
 
-    pub(crate) fn admits_effort(
-        &self,
-        effort: Option<bitrouter_ai::types::ReasoningEffort>,
-    ) -> bool {
-        self.effort_constraint == Some(effort)
-    }
-
     pub(crate) fn response_id(&self) -> &str {
         &self.response_id
     }
@@ -719,15 +712,6 @@ impl PipelineContext {
         prompt.params.reasoning_effort = effort;
         prompt.params.reasoning_effort_source = bitrouter_ai::types::ReasoningEffortSource::Policy;
         Ok(())
-    }
-
-    /// Restore the embedding caller's hard effort constraint after policy.
-    pub(crate) fn preserve_caller_effort(&mut self, effort: bitrouter_ai::types::ReasoningEffort) {
-        let Some(prompt) = self.input.generation_prompt_mut() else {
-            return;
-        };
-        prompt.params.reasoning_effort = Some(effort);
-        prompt.params.reasoning_effort_source = bitrouter_ai::types::ReasoningEffortSource::Caller;
     }
 
     /// Apply preset prompt-body overrides. `system_prompt`, when
