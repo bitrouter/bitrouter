@@ -814,7 +814,7 @@ jobs:
           # Leave time for the test suite after the all-features MSVC build.
           timeout-minutes: 60
           targets: --lib --test invocation
-          filter: test(=tenancy::ownership::unsupported_claim_tests::native_recovery_connector_refuses_before_creating_non_unix_authority) | test(=tenancy::tests::execution::native::local_tenancy_remains_unavailable_without_creating_files)
+          filter: test(=tenancy::ownership::unsupported_claim_tests::native_recovery_connector_refuses_before_creating_non_unix_authority)
             | test(=providers::cli_install::tests::install_command_is_the_official_native_installer) | test(=paths::tests::replacing_private_file_overwrites_existing_destination_on_windows)
             | test(=tests::daemon::status_route_and_stop_roundtrip_over_the_control_socket)
             | test(=tests::daemon::concurrent_clients_are_all_served) | test(=tests::daemon::probe_status_reports_none_when_nothing_listens) | test(=tests::daemon::client_fails_clearly_when_no_daemon_is_listening)
