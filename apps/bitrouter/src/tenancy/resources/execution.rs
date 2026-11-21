@@ -1,7 +1,7 @@
 //! Immutable, selected-route execution views. Membership never caches grants.
 
+mod budget;
 mod compact;
-mod native_v1;
 mod ordered;
 mod retained;
 mod target;
@@ -36,7 +36,6 @@ use crate::{
 };
 
 use super::{Envelope, compiler};
-use native_v1::NativeChains;
 
 pub(super) fn generation_protocol(
     inbound: &ApiProtocol,
@@ -228,38 +227,6 @@ impl RetainedExecutionRevision {
         })
     }
 
-    fn selected_native_data(
-        &self,
-        raw_model: &str,
-        operation: ModelOperation,
-    ) -> std::result::Result<RetainedRoute, ErrorCode> {
-        let data = self.routes.get(raw_model).ok_or(ErrorCode::NotFound)?;
-        let chains = data.native.chains()?;
-        if !chains
-            .iter()
-            .any(|chain| chain.selector == data.selector && chain.operation == operation)
-        {
-            return Err(ErrorCode::CapabilityMismatch);
-        }
-        Ok(RetainedRoute {
-            data: data.clone(),
-            selection: RouteSelection::Native(operation),
-            ordered: None,
-            generation_defaults: self.document.generation_defaults.clone(),
-            _revision: None,
-        })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn select_native(
-        &self,
-        raw_model: &str,
-        operation: ModelOperation,
-    ) -> std::result::Result<Arc<RetainedRoute>, ErrorCode> {
-        self.selected_native_data(raw_model, operation)
-            .map(Arc::new)
-    }
-
     /// Uncached decoder fixtures do not participate in a live service budget.
     #[cfg(test)]
     pub(crate) fn select(
@@ -272,17 +239,6 @@ impl RetainedExecutionRevision {
 }
 
 impl CachePin<RetainedExecutionRevision> {
-    /// Canonical requests have an operation but no inbound wire preference.
-    pub(crate) fn select_native(
-        &self,
-        raw_model: &str,
-        operation: ModelOperation,
-    ) -> std::result::Result<Arc<RetainedRoute>, ErrorCode> {
-        let mut route = self.selected_native_data(raw_model, operation)?;
-        route._revision = Some(self.clone());
-        Ok(Arc::new(route))
-    }
-
     /// Every escaping route retains the entire charged revision, including its
     /// unselected routes. A selected route cannot outlive cache accounting.
     pub(crate) fn select(
@@ -298,14 +254,12 @@ impl CachePin<RetainedExecutionRevision> {
 
 enum RouteSelection {
     Wire(ApiProtocol),
-    Native(ModelOperation),
 }
 
 impl RouteSelection {
     fn operation(&self) -> ModelOperation {
         match self {
             Self::Wire(inbound) => inbound.operation(),
-            Self::Native(operation) => *operation,
         }
     }
 
@@ -313,7 +267,6 @@ impl RouteSelection {
         prefs.operation == self.operation()
             && match self {
                 Self::Wire(inbound) => prefs.inbound_protocol.as_ref().is_none_or(|p| p == inbound),
-                Self::Native(_) => prefs.inbound_protocol.is_none(),
             }
     }
 }
@@ -335,7 +288,6 @@ struct RouteData {
     overrides: PromptOverrides,
     policy: Option<RetainedPolicy>,
     chains: Vec<Chain>,
-    native: NativeChains,
     candidates: Vec<Candidate>,
 }
 
@@ -443,7 +395,6 @@ impl RetainedRoute {
     pub(crate) fn inbound_protocol(&self) -> Option<&ApiProtocol> {
         match &self.selection {
             RouteSelection::Wire(protocol) => Some(protocol),
-            RouteSelection::Native(_) => None,
         }
     }
 
@@ -457,8 +408,7 @@ impl RetainedRoute {
 
     /// Sort preference belongs to the authenticated selected source, including
     /// policy tiers. The selector is already resolved by the pipeline; public
-    /// resource IDs must not be reinterpreted here. Native selection uses the
-    /// same per-selector preferences.
+    /// resource IDs must not be reinterpreted here.
     pub(crate) fn routing_sort(&self, selector: &str) -> std::result::Result<SortOrder, ErrorCode> {
         self.data
             .chains
@@ -523,59 +473,6 @@ impl RetainedRoute {
         Ok(self.candidate(candidate)?.credential.clone())
     }
 
-    /// A fixed native count profile is selected before embedding callbacks.
-    pub(in crate::tenancy) fn count_candidate(
-        &self,
-    ) -> std::result::Result<Option<&RoutingTarget>, ErrorCode> {
-        if !matches!(self.selection, RouteSelection::Native(_)) {
-            return Ok(None);
-        }
-        let mut candidate = None;
-        let mut required = false;
-        let mut fixed = true;
-        for (_, indices) in self.selected_chains() {
-            if indices.len() != 1 {
-                fixed = false;
-            }
-            for index in indices {
-                let target = &self
-                    .data
-                    .candidates
-                    .get(*index)
-                    .ok_or(ErrorCode::Forbidden)?
-                    .target;
-                required |= target.model_constraints.input_token_counting.is_some();
-                if candidate.is_some_and(|prior| prior != *index) {
-                    fixed = false;
-                }
-                candidate = Some(*index);
-            }
-        }
-        if !required {
-            return Ok(None);
-        }
-        let target = &self
-            .data
-            .candidates
-            .get(candidate.ok_or(ErrorCode::Forbidden)?)
-            .ok_or(ErrorCode::Forbidden)?
-            .target;
-        if !fixed
-            || self.data.policy.is_some()
-            || !matches!(
-                self.selection,
-                RouteSelection::Native(ModelOperation::Generation)
-            )
-            || target.api_protocol != ApiProtocol::Responses
-            || target.model_constraints.input_token_counting
-                != Some(crate::config::model::InputTokenCounting::Responses)
-            || target.headers.iter().any(|rule| rule.passthrough())
-        {
-            return Err(ErrorCode::CapabilityMismatch);
-        }
-        Ok(Some(target))
-    }
-
     pub(in crate::tenancy) fn require_oauth_messages(
         &self,
         target: &RoutingTarget,
@@ -631,20 +528,7 @@ impl RetainedRoute {
                 }
                 _ => None,
             });
-        let native = self
-            .data
-            .native
-            .chains()
-            .into_iter()
-            .flatten()
-            .filter(|_| self.ordered.is_none())
-            .filter_map(|chain| match &self.selection {
-                RouteSelection::Native(operation) if chain.operation == *operation => {
-                    Some((chain.selector.as_str(), chain.candidates.as_slice()))
-                }
-                _ => None,
-            });
-        ordered.into_iter().chain(wire).chain(native)
+        ordered.into_iter().chain(wire)
     }
 
     fn selector<'a>(&'a self, model: &'a str, raw: bool) -> GatewayResult<&'a str> {
@@ -744,9 +628,6 @@ impl RoutingTable for RetainedRoute {
     async fn resolve_model(&self, model: &str) -> GatewayResult<ModelResolution> {
         let selector = self.selector(model, true)?;
         let mut resolved = ModelResolution::passthrough(selector);
-        if let RouteSelection::Native(operation) = &self.selection {
-            resolved.prefs.operation = *operation;
-        }
         if selector == self.data.selector {
             resolved.overrides = self.overrides();
             resolved.policy = self.data.policy.as_ref().map(|policy| policy.name.clone());

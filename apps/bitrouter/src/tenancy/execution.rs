@@ -39,12 +39,10 @@ use crate::gateway::{
 
 pub(super) mod cached;
 mod continuation;
-mod count;
 pub(crate) mod deadline;
 mod generation_defaults;
 pub(crate) mod http_continuation;
 pub(crate) mod lifecycle;
-mod native;
 mod native_controls;
 mod oauth;
 mod operational;
@@ -387,20 +385,6 @@ impl Service {
             } else {
                 revision.select(raw_model, inbound)
             }
-        })
-        .await
-    }
-
-    async fn admit_native_execution(
-        &self,
-        submission: Submission,
-        raw_model: &str,
-    ) -> Result<Arc<TenantExecution>, Failure> {
-        if submission.binding.selection.is_some() {
-            return Err(ErrorCode::CapabilityMismatch.into());
-        }
-        self.admit_selected_execution(submission, false, |revision| {
-            revision.select_native(raw_model, bitrouter_ai::types::ModelOperation::Generation)
         })
         .await
     }
@@ -854,7 +838,7 @@ impl TenantExecution {
         permit: &mut super::receipts::journal::AttemptPermit,
         authenticated: &super::receipts::journal::TargetStamp,
     ) -> Result<AttemptId, ErrorCode> {
-        self.arm_attempt_with_oauth(target, permit, authenticated, None, None)
+        self.arm_attempt_with_oauth(target, permit, authenticated, None)
     }
 
     pub(crate) fn arm_attempt_with_oauth(
@@ -863,7 +847,6 @@ impl TenantExecution {
         permit: &mut super::receipts::journal::AttemptPermit,
         authenticated: &super::receipts::journal::TargetStamp,
         oauth: Option<&super::oauth::ModelStamp>,
-        counted: Option<&str>,
     ) -> Result<AttemptId, ErrorCode> {
         if self.route.is_ordered()
             && !self
@@ -880,7 +863,6 @@ impl TenantExecution {
         }
         self.with_send_authority(|view| {
             self.validate_oauth_model(view, target, oauth)?;
-            self.verify_count_send(target, counted)?;
             let hop = self.bound_hop(target)?;
             if self.profiled()
                 && let Some(hop) = &hop
