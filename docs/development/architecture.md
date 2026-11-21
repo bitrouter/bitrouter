@@ -236,18 +236,18 @@ Eval snapshot records evidence without changing the selected revision.
 
 ### Extension authors and host assembly
 
-Capability implementation libraries use AI's `Input`, `Decision` and `Callback`
-contracts. Custom hosts install those callbacks through a function accepting
-`bitrouter::gateway::extensions::registry::ExtensionApi` and call
-`request_check(id, revision, callback)`. Business inputs and decisions live in
-`bitrouter::gateway::extensions::request_check`, without a wire envelope. The custom host passes the
-registration function to `host::serve_with_extensions` for the shared foreground
-daemon lifecycle, or `assemble::build_app_with_extensions` for low-level embedding.
+Capability implementation libraries use `Input`, `Decision` and `Callback` from
+`bitrouter::gateway::extensions::request_check`. Custom hosts register callbacks
+through `bitrouter::gateway::extensions::registry::ExtensionApi::request_check(id, revision, callback)`.
+The foreground entry point `bitrouter::host::serve_with_extensions` accepts a
+configuration file path as `&Path` and a registration function, and owns the
+product's service and management lifecycle. Hosts that own their listeners call
+`bitrouter::assemble::build_app_with_extensions` with `bitrouter::config::Config`
+and the registration function, then serve the returned `Assembled.app`.
 Fragment and coverage types also live in `bitrouter::gateway::extensions::request_check`.
-Concrete callback registrations live in application
-`gateway::extensions::registry::registration`, alongside the host collection.
-Router bindings
-control execution scope and order; registration is not global activation.
+Concrete registrations and pipeline builders remain private to the application.
+Router bindings control execution scope and order; registration is not global
+activation.
 Beta supports compiled extensions only: no HTTP checker service, wire crate,
 probe command, runtime installation or extra extension API crate.
 
@@ -481,23 +481,29 @@ Protocol adapters live in `apps/bitrouter/src/gateway/model/protocol/`. A new pr
 
 ### Add a provider whose wire isn't HTTP+JSON+SSE
 
-Rare — no current registry provider needs this. The big clouds (Bedrock, Azure) speak one of BitRouter's built-in protocols over SSE and are ordinary Bearer registry providers. Only if an upstream uses a wire an existing outbound adapter can't decode (e.g. a vendor SDK's binary event-stream) do you add an `ApiProtocol::Custom` outbound adapter + `Transport` in a standalone crate, registered on the dispatch executor at startup. See the `Custom` escape-hatch docs in `apps/bitrouter/src/gateway/model/protocol/mod.rs`.
+Protocol adapters, transports and outbound dispatch are private gateway
+implementation details in `apps/bitrouter/src/gateway/model/protocol` and
+`gateway::pipeline::executor`. Supporting an additional upstream wire requires a
+gateway implementation change; the public embedding API registers request
+checks, not protocol adapters or replacement executors.
 
 ### Add a hook or compiled capability
 
-Trusted custom hosts use application `gateway::pipeline::hooks` and
-`gateway::pipeline::settlement` when they need global pipeline integration.
-New request-check implementations consume the AI capability contract and register
-through `gateway::extensions::registry::ExtensionApi`. The optional global regex
-adapter is in application `gateway::extensions::guardrails`; it preserves global
-input/output behavior and requires explicit installation.
+Global pipeline hooks and settlement recorders are private gateway
+implementation details. Custom hosts register typed request checks through
+`bitrouter::gateway::extensions::registry::ExtensionApi`. The optional
+`bitrouter::gateway::extensions::guardrails::checker` adapts regex rules to an
+input-block callback. It runs only where a router binds the registered checker;
+it does not install global hooks, redact content or check output.
 
 ### Run the official gateway or assemble an advanced host
 
-Ordinary service consumers run `bitrouter serve` with configuration and use its HTTP
-interfaces. The SDK provides typed gateway, control and evaluation clients. Advanced trusted Rust
-hosts can use `gateway::assembly::App` and the shared `host::serve_with_extensions`
-lifecycle; adding compiled extension code requires rebuilding that custom host.
+Ordinary service consumers run `bitrouter serve` with configuration and use its
+HTTP interfaces. The SDK provides typed gateway, control and evaluation clients.
+Custom Rust hosts use `bitrouter::host::serve_with_extensions` for the foreground
+service lifecycle, or `bitrouter::assemble::build_app_with_extensions` to obtain
+an `Assembled.app` and own its HTTP listener. Both accept typed extension
+registrations; adding compiled extension code requires rebuilding that host.
 
 ## Validation
 

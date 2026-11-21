@@ -30,42 +30,6 @@
 //!   emit JSON `null` (v0 #454-5);
 //! - role mapping is **total** — an unknown role is an error, not a silent
 //!   downgrade to `user` (v0 #454-4).
-//!
-//! ## Adding a provider with a non-standard wire (the `Custom` escape hatch)
-//!
-//! The big platform clouds — AWS Bedrock, Azure OpenAI — speak one of the three
-//! built-in protocols over HTTP+JSON+SSE and differ only in auth + base URL, so
-//! they are plain registry providers (Bearer/Header auth), **not** custom
-//! protocols. Bedrock reaches its OpenAI/Responses/Messages `bedrock-mantle`
-//! endpoints; Azure its `/openai/v1` surface.
-//!
-//! [`ApiProtocol::Custom`] exists for the rare provider whose wire an existing
-//! [`OutboundAdapter`] cannot decode (e.g. a binary event-stream framing owned
-//! by a vendor SDK, like Bedrock's native Converse API). No built-in provider
-//! needs it today. To add such a provider — typically in its own crate:
-//!
-//! 1. Pick a unique protocol name and use
-//!    [`ApiProtocol::Custom`]`("my-wire".into())` to identify it.
-//! 2. Implement [`OutboundAdapter`] for the wire-format conversion. Its
-//!    `protocol()` method returns the same `ApiProtocol::Custom` value.
-//! 3. Implement [`Transport`] for the URL shape and authentication scheme.
-//! 4. Register both with [`OutboundDispatch`] before building the executor:
-//!
-//! ```ignore
-//! use std::sync::Arc;
-//! use bitrouter::gateway::model::protocol::OutboundDispatch;
-//!
-//! let mut dispatch = OutboundDispatch::builtin();
-//! dispatch.register(
-//!     Arc::new(MyWireAdapter::new()),
-//!     Arc::new(MyWireTransport::new(/* … */)),
-//! );
-//! ```
-//!
-//! Clients still call BitRouter using one of the three built-in inbound
-//! protocols; the routing table directs the request to a target whose
-//! `api_protocol` is `ApiProtocol::Custom("my-wire")`, and the executor
-//! dispatches through the registered adapter + transport.
 
 pub(crate) mod values;
 

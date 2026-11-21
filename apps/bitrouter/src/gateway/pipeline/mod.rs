@@ -35,29 +35,6 @@
 //! 6. **Observe** — every [`ObserveHook`](hooks::ObserveHook) sees phase boundaries and the final
 //!    [`RequestOutcome`](hooks::RequestOutcome); observers are read-only and error-swallowing.
 //!
-//! ## Building a pipeline
-//!
-//! The usual entry point is [`crate::gateway::assembly::App::builder`] → `.language_model(...)`
-//! sub-builder, which exposes [`PipelineBuilder`](builder::PipelineBuilder):
-//!
-//! ```no_run
-//! use std::sync::Arc;
-//! use bitrouter::gateway::assembly::App;
-//! use bitrouter::gateway::pipeline::executor::HttpExecutor;
-//! use bitrouter::gateway::pipeline::routing::StaticRoutingTable;
-//!
-//! # fn run() -> bitrouter::gateway::error::Result<()> {
-//! let executor = HttpExecutor::with_defaults()?;
-//! let app = App::builder()
-//!     .language_model(|lm| {
-//!         lm.routing_table(Arc::new(StaticRoutingTable::new()))
-//!           .executor(Arc::new(executor));
-//!     })
-//!     .build()?;
-//! # let _ = app;
-//! # Ok(()) }
-//! ```
-//!
 //! ## Protocol isolation
 //!
 //! The hook traits here are **not** shared with [`crate::gateway::mcp`]:
