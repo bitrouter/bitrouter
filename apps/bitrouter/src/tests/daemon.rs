@@ -18,20 +18,6 @@ use crate::metering::{MeteringRecorder, MeteringStore, ModelPricing, PricingTabl
 use crate::session_identity::{RequestOrigin, SessionIdentityObserved};
 use bitrouter_ai::types::UsageOrigin;
 
-/// A reloader that re-reads only the routing table. Used by the reload test —
-/// production callers use the AppReloader in main.rs which also reloads the
-/// policy store.
-struct RoutingTableReloader(Arc<App>);
-
-#[async_trait::async_trait]
-impl daemon::DaemonReloader for RoutingTableReloader {
-    async fn reload(&self) -> anyhow::Result<()> {
-        if let Some(pipeline) = self.0.language_model() {
-            pipeline.routing_table().reload().await?;
-        }
-        Ok(())
-    }
-}
 use crate::config;
 
 async fn run_control(
@@ -375,6 +361,15 @@ async fn reload_re_reads_the_config_file() {
     let cfg_path = write_config(&dir, "sqlite::memory:").await;
     let cfg = config::load(&cfg_path).await.unwrap();
     let assembled = build_app_with_path(&cfg, Some(&cfg_path)).await.unwrap();
+    let reloader = Arc::new(
+        crate::reload::AppReloader::new(
+            assembled.policy_store.clone(),
+            assembled.routing_table.clone(),
+            assembled.upstream_executor.clone(),
+            crate::reload::ReloadSource::File(cfg_path.clone()),
+        )
+        .with_policy_runtime(assembled.policy_runtime.clone()),
+    );
     let app = Arc::new(assembled.app);
 
     let socket = dir.join("bitrouter.sock");
@@ -382,7 +377,7 @@ async fn reload_re_reads_the_config_file() {
         socket.clone(),
         app.clone(),
         "127.0.0.1:0".to_string(),
-        Arc::new(RoutingTableReloader(app.clone())),
+        reloader,
         Arc::new(NoopObserveStatus { compiled_in: false }),
         MeteringStore::new(assembled.db.clone()),
     ));
@@ -437,9 +432,8 @@ providers:
 /// from the catalog at assembly time. (The other known providers come from the
 /// fetched registry, not a compiled-in snapshot.) If the reload path swapped in
 /// a bare file re-read (skipping `apply_builtin_defaults`), the provider would
-/// come back with an empty `api_base`. The SDK's own `RoutingTable::reload`
-/// cannot fix this — it has no application provider bridge — so the reloader
-/// rebuilds the config in the app layer.
+/// come back with an empty `api_base`. The reloader prepares provider
+/// discovery before publishing the replacement configuration.
 #[tokio::test]
 async fn reload_re_applies_builtin_provider_catalog() -> anyhow::Result<()> {
     use crate::daemon::DaemonReloader;
@@ -641,6 +635,15 @@ async fn reload_returns_error_when_the_config_is_broken() {
     let cfg_path = write_config(&dir, "sqlite::memory:").await;
     let cfg = config::load(&cfg_path).await.unwrap();
     let assembled = build_app_with_path(&cfg, Some(&cfg_path)).await.unwrap();
+    let reloader = Arc::new(
+        crate::reload::AppReloader::new(
+            assembled.policy_store.clone(),
+            assembled.routing_table.clone(),
+            assembled.upstream_executor.clone(),
+            crate::reload::ReloadSource::File(cfg_path.clone()),
+        )
+        .with_policy_runtime(assembled.policy_runtime.clone()),
+    );
     let app = Arc::new(assembled.app);
 
     let socket = dir.join("bitrouter.sock");
@@ -648,7 +651,7 @@ async fn reload_returns_error_when_the_config_is_broken() {
         socket.clone(),
         app.clone(),
         "127.0.0.1:0".to_string(),
-        Arc::new(RoutingTableReloader(app.clone())),
+        reloader,
         Arc::new(NoopObserveStatus { compiled_in: false }),
         MeteringStore::new(assembled.db.clone()),
     ));

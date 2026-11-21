@@ -683,19 +683,4 @@ impl RoutingTable for RetainedRoute {
             providers,
         })
     }
-
-    async fn reload(&self) -> GatewayResult<()> {
-        Err(BitrouterError::bad_request(
-            "retained routing cannot be reloaded",
-        ))
-    }
-
-    async fn preset_overrides(&self, model: &str) -> GatewayResult<PromptOverrides> {
-        let selector = self.selector(model, true)?;
-        Ok(if selector == self.data.selector {
-            self.overrides()
-        } else {
-            PromptOverrides::default()
-        })
-    }
 }

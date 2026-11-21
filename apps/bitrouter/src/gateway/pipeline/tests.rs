@@ -25,7 +25,7 @@ use crate::gateway::pipeline::builder::PipelineBuilder;
 use crate::gateway::pipeline::context::{PipelineContext, StreamContext};
 use crate::gateway::pipeline::execution::Pipeline;
 use crate::gateway::pipeline::executor::{
-    DispatchExecutor, Executor, HttpExecutor, MockExecutor, MockResponse, StreamPartStream,
+    Executor, HttpExecutor, MockExecutor, MockResponse, StreamPartStream,
 };
 use crate::gateway::pipeline::hooks::{
     DenyReason, ExecutionHook, FallbackDecision, HookDecision, HopOutcome, ObserveHook, Phase,
@@ -495,10 +495,6 @@ impl RoutingTable for NamedRoutingTable {
     fn model_info(&self, _model: &str) -> Option<ModelInfo> {
         None
     }
-
-    async fn reload(&self) -> Result<()> {
-        Ok(())
-    }
 }
 
 struct ConvergenceRoutingTable;
@@ -577,10 +573,6 @@ impl RoutingTable for ConvergenceRoutingTable {
 
     fn model_info(&self, _model: &str) -> Option<ModelInfo> {
         None
-    }
-
-    async fn reload(&self) -> Result<()> {
-        Ok(())
     }
 }
 
@@ -5421,7 +5413,7 @@ async fn conversion_admission_skips_http_candidate_for_json_and_stream_without_f
         let mut builder = PipelineBuilder::new();
         builder
             .routing_table(table)
-            .executor(Arc::new(DispatchExecutor::new(Arc::new(executor))))
+            .executor(Arc::new(executor))
             .observe_hook(observer.clone());
         let pipeline = Arc::new(builder.build()?);
         if streamed {
@@ -5925,11 +5917,10 @@ async fn equivalent_conversion_observation_preserves_retry_content_and_attempt_a
         table.insert("test-model", vec![excluded, retry, final_target]);
         let events = Arc::new(ConversionEvents::default());
         let http = Arc::new(HttpExecutor::with_defaults()?);
-        let dispatch = DispatchExecutor::new(http);
         let mut builder = PipelineBuilder::new();
         builder
             .routing_table(table)
-            .executor(Arc::new(dispatch))
+            .executor(http)
             .observe_hook(events.clone());
         let pipeline = Arc::new(builder.build()?);
         let req = json_observation_request(streamed)?;

@@ -3,15 +3,10 @@
 //! Kept in the lib (not `main.rs`) so the reload behaviour is testable
 //! without spawning the binary — the same reason `commands.rs` lives here.
 //!
-//! Both reload paths build a fresh `Config` **in the app layer** and swap
-//! it into the routing table via `ConfigRoutingTable::replace_config`.
-//! Building the config in the application is what lets
-//! [`crate::providers::apply::apply_builtin_defaults`] fill the empty fields
-//! of the built-in Cloud gateway. The SDK's own
-//! `RoutingTable::reload` has no application provider bridge and cannot
-//! apply the catalog; routing through it on reload would leave a built-in
-//! provider with an empty `api_base`, and an `auto_discover` provider
-//! would then silently drop every model.
+//! Reload prepares a fresh `Config` in the application layer and publishes it
+//! through `ConfigRoutingTable::replace_prepared_config`. Preparation applies
+//! [`crate::providers::apply::apply_builtin_defaults`] and provider discovery
+//! before routing, policy, and upstream clients adopt the replacement.
 
 use crate::actions::administration::PolicyReportRuntime;
 use bitrouter_ai::control::reload::{

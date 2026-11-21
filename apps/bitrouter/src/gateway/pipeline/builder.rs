@@ -364,29 +364,15 @@ impl PipelineBuilder {
                     HookStage::PreResolution => {
                         covers(&self.pre_resolution_hooks, requirement.type_id, operation)
                     }
-                    HookStage::RouterPreparation => covers(
-                        &self.router_preparation_hooks,
-                        requirement.type_id,
-                        operation,
-                    ),
                     HookStage::PreRequest => {
                         covers(&self.pre_request_hooks, requirement.type_id, operation)
                     }
                     HookStage::Route => covers(&self.route_hooks, requirement.type_id, operation),
-                    HookStage::ModelSelection => {
-                        covers(&self.model_selectors, requirement.type_id, operation)
-                    }
-                    HookStage::Execution => {
-                        covers(&self.execution_hooks, requirement.type_id, operation)
-                    }
                     HookStage::Settlement => {
                         covers(&self.settlement_recorders, requirement.type_id, operation)
                     }
                     HookStage::Finalization => {
                         covers(&self.required_finalizers, requirement.type_id, operation)
-                    }
-                    HookStage::Observation => {
-                        covers(&self.observe_hooks, requirement.type_id, operation)
                     }
                 };
                 if !installed {
