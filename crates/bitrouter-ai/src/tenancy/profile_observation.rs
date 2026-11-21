@@ -46,7 +46,7 @@ pub struct AdmissionProfileObservationCapabilitiesV1 {
     #[serde(deserialize_with = "super::number::integer")]
     #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 1048576)))]
     pub max_response_bytes: u32,
-    /// Supported retained profile versions, exactly [1].
+    /// Supported retained profile versions, exactly `[1]`.
     #[serde(deserialize_with = "profile_versions")]
     #[cfg_attr(feature = "schema", schemars(extend("const" = serde_json::json!([1]))))]
     pub profile_versions: [u8; 1],
