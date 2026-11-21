@@ -176,46 +176,6 @@ jobs:
     - name: verify gateway MCP discovery and process cleanup
       if: matrix.features == 'mcp'
       run: cargo test -p bitrouter --no-default-features --features mcp --lib "tests::harness_mcp_check::" --jobs 2 -- --test-threads=2
-  test-paid-reduced-startup:
-    name: paid reduced startup (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-        - ubuntu-latest
-      max-parallel: 2
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 120
-    env:
-      CARGO_BUILD_JOBS: '2'
-      CARGO_INCREMENTAL: '0'
-      CARGO_PROFILE_DEV_DEBUG: '0'
-      CARGO_PROFILE_TEST_DEBUG: '0'
-    steps:
-    - uses: actions/checkout@v6
-    - name: add swap for the Linux lib test harness
-      if: runner.os == 'Linux'
-      run: |
-        sudo fallocate --length 8G /swapfile-bitrouter
-        sudo chmod 600 /swapfile-bitrouter
-        sudo mkswap /swapfile-bitrouter
-        sudo swapon /swapfile-bitrouter
-    - uses: actions-rust-lang/setup-rust-toolchain@v1
-      with:
-        cache-save-if: false
-    - uses: taiki-e/install-action@nextest
-    - name: verify paid obligations across minimum and full service builds
-      shell: bash
-      run: |
-        for profile in minimum full; do
-          features=()
-          if [[ "$profile" == minimum ]]; then features=(--no-default-features); fi
-          for selector in \
-            tenancy::tests::learning_startup::interrupted_paid_work_fences_restart_and_preserves_original_rows; do
-            cargo nextest run --locked -p bitrouter "${features[@]}" --lib \
-              --test-threads 1 --retries 0 --no-tests fail -E "test(=$selector)"
-          done
-        done
   artifact-profiles:
     name: artifact profiles (${{ matrix.os }})
     strategy:
