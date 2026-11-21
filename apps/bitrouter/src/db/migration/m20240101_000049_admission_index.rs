@@ -8,6 +8,18 @@ use super::m20240101_000028_resource_tenancy::identity;
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
+pub(super) fn head_index() -> IndexCreateStatement {
+    Index::create()
+        .name("tenancy_resource_head_lookup")
+        .table(Alias::new("tenancy_resource_lifecycle"))
+        .col(Alias::new("owner_kind"))
+        .col(Alias::new("owner_id"))
+        .col(Alias::new("resource_kind"))
+        .col(Alias::new("resource_id"))
+        .col(Alias::new("is_head"))
+        .to_owned()
+}
+
 // MySQL commits DDL independently of the migration ledger. A restart may reuse
 // only our exact EMPTY objects; no application writer runs before the fence.
 async fn resume_mysql_table(manager: &SchemaManager<'_>, table: &str) -> Result<(), DbErr> {
@@ -188,19 +200,7 @@ impl MigrationTrait for Migration {
             }
             return Ok(());
         }
-        manager
-            .create_index(
-                Index::create()
-                    .name("tenancy_resource_head_lookup")
-                    .table(Alias::new("tenancy_resource_lifecycle"))
-                    .col(Alias::new("owner_kind"))
-                    .col(Alias::new("owner_id"))
-                    .col(Alias::new("resource_kind"))
-                    .col(Alias::new("resource_id"))
-                    .col(Alias::new("is_head"))
-                    .to_owned(),
-            )
-            .await?;
+        manager.create_index(head_index()).await?;
         Ok(())
     }
 

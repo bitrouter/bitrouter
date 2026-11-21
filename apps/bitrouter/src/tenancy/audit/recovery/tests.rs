@@ -7,6 +7,8 @@ use sea_orm::{
 };
 use std::sync::Mutex;
 
+mod admission;
+
 #[derive(Default)]
 struct Observation {
     body_queries: usize,

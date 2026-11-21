@@ -102,6 +102,16 @@ identity, immutable rules, and managed profile heads. These checks detect missin
 witnesses even after a completed or interrupted migration. The index shares the
 persisted heads/grants trust model; live SQL tampering is outside that model.
 
+Fresh offline recovery recognizes this derived bootstrap metadata only after a
+read-only proof: one completed installation-bound checkpoint, a retained cursor
+when non-null, and matching witnesses for every approved ordinary Policy key.
+Every witness must point back to an existing ordinary Policy revision whose
+definition is authenticated by the approved static closure check. Missing or
+extra witnesses, health/protected-route history, and incomplete progress are
+rejected. Eval freshness accepts only the completed empty-resource checkpoint.
+This includes previously provisioned schema-five targets reopened for upgrade;
+their completed cursor need not be null and their provisioning revision is kept.
+
 Commands and authority dependency reads batch relevant index keys and load only
 requested immutable pins and current heads in the existing read transaction.
 No normal publication or import scans unrelated history. Resource/index writes,
@@ -292,6 +302,11 @@ The command checks the expected installation/revision, the actual legacy count
 latch, all retained authority/evidence and an explicit acknowledgment before
 atomically recording the transition and its replay result. It preserves
 identities and evidence and does not clear other storage or cleanup fences.
+That saved result continues to describe format 2. After complete validation,
+normal startup promotes it to the installed format-6 writer fence with an exact
+header CAS; counters, authority revision, later stop latches and saved replay
+bytes remain unchanged. Startup refuses this promotion without the registered
+indexed-admission migration.
 See the [operator procedure](../../skills/bitrouter/references/cli.md#local-db-only-offline-evidence).
 Public strict-v1 request, attempt and evidence limits remain independent of host
 capacity, as do the bounded offline bundle and declared provisioning profiles.
