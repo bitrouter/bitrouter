@@ -457,9 +457,18 @@ async fn another_principal(
 #[tokio::test]
 async fn principal_installation_and_message_transplants_reject_before_send() -> Result<()> {
     let mut server = Server::start().await?;
-    let (fixture, route, _) = provision_protocol(&server.url, "responses").await?;
-    let (other, other_route, _) = provision_protocol(&server.url, "responses").await?;
+    let first_fixture = Fixture::new().await?;
+    let mut other_fixture = Fixture::new().await?;
+    other_fixture.wrapping_key = first_fixture.wrapping_key;
+    let (fixture, route, _) =
+        provision_protocol_with_fixture(first_fixture, &server.url, "responses", &mut |_| {})
+            .await?;
+    let (other, other_route, _) =
+        provision_protocol_with_fixture(other_fixture, &server.url, "responses", &mut |_| {})
+            .await?;
     let checked = async {
+        ensure!(fixture.wrapping_key == other.wrapping_key);
+        ensure!(fixture.installation != other.installation);
         let (ingress, _) = ready(&fixture, &route).await?;
         let revision = ingress
             .get("Bitrouter-Execution-Revision")
