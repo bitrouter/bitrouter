@@ -146,6 +146,7 @@ cargo-nextest nextest run \
   --profile "$profile" --retries 0 --no-fail-fast --no-tests fail "$@" || status=$?
 if [[ -f "$report" ]]; then
   mkdir -p ci-test-results
-  cp "$report" "ci-test-results/$suite.xml"
+  report_directory="$(mktemp -d "ci-test-results/$suite.XXXXXX")"
+  cp "$report" "$report_directory/junit.xml"
 fi
 exit "$status"

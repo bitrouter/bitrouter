@@ -546,7 +546,7 @@ jobs:
       if: always() && runner.os == 'Linux'
       with:
         name: gateway-profile-test-results-${{ matrix.profile }}-${{ github.run_attempt }}
-        path: ci-test-results/*.xml
+        path: ci-test-results/
 
   test-libraries:
     name: test (contracts, SDK, registry and helpers)
