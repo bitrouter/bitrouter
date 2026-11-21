@@ -45,29 +45,6 @@ pub enum BudgetWindow {
     Total,
 }
 
-/// BYOK posture for a guardrail policy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ByokRequirement {
-    /// Inference call MUST be served via a BYOK provider key.
-    Required,
-    /// Inference call MUST NOT be served via a BYOK provider key.
-    Forbidden,
-    /// Either path is acceptable. Equivalent to no constraint.
-    Optional,
-}
-
-/// OAuth client kind.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ClientType {
-    /// Backend-credentialed client; presents `client_secret` at the
-    /// token endpoint.
-    Confidential,
-    /// No client secret; PKCE is mandatory.
-    Public,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,33 +69,6 @@ mod tests {
         assert_eq!(serde_json::to_string(&BudgetWindow::Day)?, "\"day\"");
         assert_eq!(serde_json::to_string(&BudgetWindow::Month)?, "\"month\"");
         assert_eq!(serde_json::to_string(&BudgetWindow::Total)?, "\"total\"");
-        Ok(())
-    }
-
-    #[test]
-    fn client_type_wire_form_is_snake_case() -> anyhow::Result<()> {
-        assert_eq!(
-            serde_json::to_string(&ClientType::Confidential)?,
-            "\"confidential\""
-        );
-        assert_eq!(serde_json::to_string(&ClientType::Public)?, "\"public\"");
-        Ok(())
-    }
-
-    #[test]
-    fn byok_requirement_wire_form_is_snake_case() -> anyhow::Result<()> {
-        assert_eq!(
-            serde_json::to_string(&ByokRequirement::Required)?,
-            "\"required\""
-        );
-        assert_eq!(
-            serde_json::to_string(&ByokRequirement::Forbidden)?,
-            "\"forbidden\""
-        );
-        assert_eq!(
-            serde_json::to_string(&ByokRequirement::Optional)?,
-            "\"optional\""
-        );
         Ok(())
     }
 }

@@ -1,14 +1,5 @@
-//! The `route` action: *how would BitRouter route this, and what would it
-//! cost?*
-//!
-//! One report type is shared by `bitrouter route`, Code sessions, and typed remote
-//! control so all retained surfaces preserve the same JSON shape. Read-only by
-//! construction: it replays routing without sending
-//! anything upstream, and the resolved targets' secrets (api keys) never enter
-//! the report.
-//!
-//! The app owns the types, port, and implementation beside the policy table,
-//! routing table, and pricing registry.
+//! Read-only routing and cost previews for the operator CLI and HTTP control.
+//! Provider credentials never enter the report.
 
 use {
     bitrouter_ai::control::route::ContextTierRates, bitrouter_ai::control::route::EstimatedCost,
@@ -16,19 +7,6 @@ use {
     bitrouter_ai::control::route::ResolvedVia, bitrouter_ai::control::route::RouteInput,
     bitrouter_ai::control::route::RouteReport,
 };
-
-use super::ToolError;
-
-/// The `route` port.
-///
-/// This reaches no upstream and reads no per-caller state: it resolves this
-/// machine's routing table.
-#[async_trait::async_trait]
-pub trait RouteQuery: Send + Sync {
-    /// Resolve `input` against the live daemon, else this machine's config, or
-    /// a `ToolError` when the model does not resolve at all.
-    async fn route(&self, input: RouteInput) -> Result<RouteReport, ToolError>;
-}
 
 use std::path::{Path, PathBuf};
 
@@ -385,15 +363,6 @@ fn policy_selection(d: &PolicyDecision) -> PolicySelection {
     }
 }
 
-#[async_trait::async_trait]
-impl RouteQuery for RouteAction {
-    async fn route(&self, input: RouteInput) -> Result<RouteReport, ToolError> {
-        self.report(input)
-            .await
-            .map_err(|e| ToolError::new(format!("{e:#}")))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -439,31 +408,22 @@ routers:
     selection: { kind: model, model: demo-model-big }
 "#;
 
-    /// The direct path and injected port answer with the same bytes.
     #[tokio::test]
-    async fn both_surfaces_produce_the_same_report() {
-        let dir = tempfile::tempdir().expect("tempdir");
+    async fn report_resolves_the_configured_model() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
         let action = RouteAction::new(config_source(dir.path(), ONE_MODEL), None);
-        let input = RouteInput {
-            model: "demo-model".to_string(),
-            prompt: Some("hello".to_string()),
-        };
-
-        let cli = action.report(input.clone()).await.expect("cli surface");
-        let port = RouteQuery::route(&action, input)
-            .await
-            .expect("port surface");
-
-        assert_eq!(
-            serde_json::to_value(&cli).expect("cli json"),
-            serde_json::to_value(&port).expect("port json"),
-            "the two surfaces of one action must be the same bytes"
-        );
-        assert_eq!(cli.requested_model, "demo-model");
-        assert_eq!(cli.resolved_via, ResolvedVia::Config);
-        assert_eq!(cli.provider_chain.len(), 1);
-        assert_eq!(cli.provider_chain[0].provider, "demo");
-        assert_eq!(cli.provider_chain[0].service_id, "demo-model");
+        let report = action
+            .report(RouteInput {
+                model: "demo-model".to_string(),
+                prompt: Some("hello".to_string()),
+            })
+            .await?;
+        assert_eq!(report.requested_model, "demo-model");
+        assert_eq!(report.resolved_via, ResolvedVia::Config);
+        assert_eq!(report.provider_chain.len(), 1);
+        assert_eq!(report.provider_chain[0].provider, "demo");
+        assert_eq!(report.provider_chain[0].service_id, "demo-model");
+        Ok(())
     }
 
     #[tokio::test]
@@ -508,22 +468,19 @@ routers:
     }
 
     #[tokio::test]
-    async fn both_surfaces_resolve_the_named_router() -> anyhow::Result<()> {
+    async fn report_resolves_the_named_router() -> anyhow::Result<()> {
         let dir = tempfile::tempdir()?;
         let action = RouteAction::new(config_source(dir.path(), ROUTER_REDIRECTS), None);
-        let input = RouteInput {
-            model: "bitrouter/demo".into(),
-            prompt: Some("write a function".into()),
-        };
-        let cli = action.report(input.clone()).await?;
-        let port = RouteQuery::route(&action, input).await?;
-        for report in [&cli, &port] {
-            assert_eq!(report.requested_model, "bitrouter/demo");
-            assert_eq!(report.effective_model, "demo-model-big");
-            assert_eq!(report.provider_chain[0].service_id, "demo-model-big");
-            assert!(report.policy_decision.is_none());
-        }
-        assert_eq!(serde_json::to_value(&cli)?, serde_json::to_value(&port)?);
+        let report = action
+            .report(RouteInput {
+                model: "bitrouter/demo".into(),
+                prompt: Some("write a function".into()),
+            })
+            .await?;
+        assert_eq!(report.requested_model, "bitrouter/demo");
+        assert_eq!(report.effective_model, "demo-model-big");
+        assert_eq!(report.provider_chain[0].service_id, "demo-model-big");
+        assert!(report.policy_decision.is_none());
         Ok(())
     }
 
@@ -605,16 +562,13 @@ policies:
     async fn an_edited_config_is_visible_to_the_next_call() {
         let dir = tempfile::tempdir().expect("tempdir");
         let source = config_source(dir.path(), ONE_MODEL);
-        // Built once and kept behind the port for the life of the process —
-        // not rebuilt per call.
-        let served: std::sync::Arc<dyn RouteQuery> =
-            std::sync::Arc::new(RouteAction::new(source, None));
+        let served = RouteAction::new(source, None);
         let ask = || RouteInput {
             model: "bitrouter/demo".to_string(),
             prompt: None,
         };
 
-        let before = served.route(ask()).await.expect("resolves");
+        let before = served.report(ask()).await.expect("resolves");
         assert_eq!(before.effective_model, "demo-model");
         assert!(before.policy_decision.is_none(), "no policy table yet");
 
@@ -622,7 +576,7 @@ policies:
         config_source(dir.path(), ROUTER_REDIRECTS);
 
         let after = served
-            .route(ask())
+            .report(ask())
             .await
             .expect("resolves against the edited config");
         assert_eq!(
@@ -655,19 +609,17 @@ policies:
     async fn an_unroutable_model_is_an_error() {
         let dir = tempfile::tempdir().expect("tempdir");
         let action = RouteAction::new(config_source(dir.path(), ONE_MODEL), None);
-        let err = RouteQuery::route(
-            &action,
-            RouteInput {
+        let err = action
+            .report(RouteInput {
                 model: "nonexistent-model".to_string(),
                 prompt: None,
-            },
-        )
-        .await
-        .expect_err("an unroutable model surfaces a ToolError");
+            })
+            .await
+            .expect_err("an unroutable model returns an error");
+        let message = format!("{err:#}");
         assert!(
-            err.0.contains("nonexistent-model"),
-            "the error names the unresolved model: {}",
-            err.0
+            message.contains("nonexistent-model"),
+            "the error names the unresolved model: {message}"
         );
     }
 

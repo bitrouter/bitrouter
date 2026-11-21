@@ -55,15 +55,6 @@ impl Theme {
             Self::ansi()
         }
     }
-
-    /// Palette for stderr (diagnostics / error echoes).
-    pub fn for_stderr() -> Self {
-        if no_color() || !std::io::stderr().is_terminal() {
-            Self::none()
-        } else {
-            Self::ansi()
-        }
-    }
 }
 
 /// True when `NO_COLOR` is set to a non-empty value (<https://no-color.org/>).
@@ -102,16 +93,6 @@ impl Table {
             headers: headers.into_iter().map(Into::into).collect(),
             rows: Vec::new(),
         }
-    }
-
-    /// Append a data row (builder form).
-    pub fn row<I, S>(mut self, cells: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.push(cells);
-        self
     }
 
     /// Append a data row (mutating form).
@@ -275,9 +256,9 @@ mod tests {
 
     #[test]
     fn table_pads_columns_and_trims_last() {
-        let t = Table::new(["ID", "MODELS"])
-            .row(["openai", "42"])
-            .row(["x", "1"]);
+        let mut t = Table::new(["ID", "MODELS"]);
+        t.push(["openai", "42"]);
+        t.push(["x", "1"]);
         let s = render(|h| h.table(&t).unwrap());
         assert!(s.starts_with("ID      MODELS"), "{s:?}");
         assert!(s.contains("openai  42"), "{s:?}");

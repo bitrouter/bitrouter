@@ -53,18 +53,6 @@ impl CredentialsStore {
         Ok(Self { path, current })
     }
 
-    /// Resolve the default credentials path under the bitrouter data
-    /// directory and load.
-    pub fn default_path() -> Result<Self> {
-        let path = default_credentials_path()?;
-        Self::load(path)
-    }
-
-    /// Path the store reads + writes.
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
     /// The current stored credentials, if any. Does NOT trigger a
     /// refresh — request-time resolution belongs to [`super::manager::CredentialManager`].
     pub fn current(&self) -> Option<&StoredCredential> {

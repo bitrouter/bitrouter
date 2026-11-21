@@ -376,9 +376,7 @@ impl CliReport for RequestsReport {
 fn window_label(window: TimeWindow) -> &'static str {
     match window {
         TimeWindow::LastMinute => "last minute",
-        TimeWindow::LastHour => "last hour",
         TimeWindow::Today => "today",
-        TimeWindow::ThisWeek => "this week",
         TimeWindow::ThisMonth => "this month",
         TimeWindow::Custom { .. } => "window",
     }
@@ -395,11 +393,7 @@ fn window_start(
     let midnight = now.date_naive().and_time(chrono::NaiveTime::MIN).and_utc();
     match window {
         TimeWindow::LastMinute => now - chrono::Duration::minutes(1),
-        TimeWindow::LastHour => now - chrono::Duration::hours(1),
         TimeWindow::Today => midnight,
-        TimeWindow::ThisWeek => {
-            midnight - chrono::Duration::days(now.weekday().num_days_from_monday().into())
-        }
         TimeWindow::ThisMonth => {
             let first = chrono::NaiveDate::from_ymd_opt(now.year(), now.month(), 1);
             match first {

@@ -22,7 +22,6 @@ pub mod api_client;
 pub mod auth;
 pub mod cli;
 pub mod management;
-pub mod settlement;
 
 use std::sync::Arc;
 
@@ -177,41 +176,6 @@ fn credential_origin_for_exporter(exporter: &str) -> String {
         Some(FIRST_PARTY_TELEMETRY_ORIGIN) => DEFAULT_ACCOUNT_ORIGIN.to_owned(),
         _ => exporter.to_owned(),
     }
-}
-
-/// Resolve the signed-in Cloud bearer only when `target_base_url` has the
-/// exact origin recorded at login. This permits headless gateway clients to
-/// reuse `bitrouter cloud login` without ever forwarding that credential to
-/// an arbitrary remote host.
-pub async fn cloud_bearer_for_base_url(target_base_url: &str) -> Option<String> {
-    let manager = default_manager().ok()?;
-    cloud_bearer_for_base_url_with_manager(manager, target_base_url).await
-}
-
-/// Resolve a hosted bearer for `target_base_url` using the supplied manager.
-pub async fn cloud_bearer_for_base_url_with_manager(
-    manager: Arc<CredentialManager>,
-    target_base_url: &str,
-) -> Option<String> {
-    manager
-        .session()
-        .resolve_bearer(None, Some(target_base_url))
-        .await
-        .map(|credential| credential.secret().to_owned())
-        .ok()
-}
-
-/// Resolve only a static inference API key for an exact Cloud origin. OAuth
-/// access tokens use `Authorization: Bearer`; settlement receipts are scoped
-/// by `x-api-key`, so silently coercing OAuth into that header is invalid.
-pub async fn cloud_api_key_for_base_url(target_base_url: &str) -> Option<String> {
-    let manager = default_manager().ok()?;
-    manager
-        .session()
-        .resolve_api_key(None, Some(target_base_url))
-        .await
-        .map(|credential| credential.secret().to_owned())
-        .ok()
 }
 
 fn onboarding_hint() -> String {
@@ -554,34 +518,6 @@ mod tests {
             None => anyhow::bail!("stored credential did not produce telemetry source"),
         };
         assert!(source.bearer().await.is_none());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn cloud_gateway_bearer_is_scoped_to_the_login_origin() -> anyhow::Result<()> {
-        let (_directory, path) = fresh_tmp_creds_path("gateway-origin")?;
-        let manager = Arc::new(CredentialManager::with_client(path, reqwest::Client::new()));
-        manager
-            .save(StoredCredential::api_key(
-                "brk_gateway.secret".to_owned(),
-                "https://api.bitrouter.ai".to_owned(),
-            ))
-            .await?;
-
-        assert_eq!(
-            cloud_bearer_for_base_url_with_manager(
-                Arc::clone(&manager),
-                "https://api.bitrouter.ai/v1/responses",
-            )
-            .await
-            .as_deref(),
-            Some("brk_gateway.secret")
-        );
-        assert!(
-            cloud_bearer_for_base_url_with_manager(manager, "https://api.bitrouter.ai.evil/v1")
-                .await
-                .is_none()
-        );
         Ok(())
     }
 
