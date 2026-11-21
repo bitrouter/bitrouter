@@ -19,9 +19,9 @@
 //!
 //! ## Where the concrete executor lives
 //!
-//! The `Pipeline`, `PipelineBuilder`, authentication hook, and wire types are
-//! always available — they have no external dependencies, so a consumer can
-//! plug in a custom `Executor` for a non-standard transport.
+//! The `Pipeline`, `PipelineBuilder`, authentication hook, and HTTP-facing
+//! wire types remain available to the HTTP adapter. Concrete routing targets
+//! require the `mcp` feature or the routing tests.
 //!
 //! The bundled implementation that dials real upstream MCP servers via
 //! [rmcp](https://github.com/modelcontextprotocol/rust-sdk) lives behind the
@@ -29,7 +29,7 @@
 //! `config_routing::ConfigMcpRoutingTable`.
 
 use std::sync::Arc;
-#[cfg(feature = "mcp")]
+#[cfg(any(feature = "mcp", test))]
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -45,11 +45,11 @@ pub mod client;
 #[cfg(feature = "mcp")]
 mod process;
 
-#[cfg(feature = "mcp")]
+#[cfg(any(feature = "mcp", test))]
 pub mod aggregating_executor;
 #[cfg(feature = "mcp")]
 pub mod caching_executor;
-#[cfg(feature = "mcp")]
+#[cfg(any(feature = "mcp", test))]
 pub mod config_routing;
 #[cfg(feature = "mcp")]
 pub mod rmcp_executor;
@@ -84,6 +84,7 @@ pub fn upstream_protocol_version(
 // `McpTransport` is named in this file's own type definitions
 // (`AggregateMember`, `McpTarget`), so a private `use` brings it into local
 // scope without re-exporting it.
+#[cfg(any(feature = "mcp", test))]
 use crate::config::mcp::McpTransport;
 
 /// Reduce a cacheable result's advertised freshness by time already spent in
@@ -93,7 +94,7 @@ use crate::config::mcp::McpTransport;
 /// is rounded down from the remaining allowance rather than accidentally
 /// extending it. Malformed or absent hints are left for the normal fail-closed
 /// envelope validation path.
-#[cfg(feature = "mcp")]
+#[cfg(any(feature = "mcp", test))]
 pub(crate) fn age_cacheable_result(result: &mut serde_json::Value, elapsed: Duration) {
     let Some(ttl_ms) = result.get("ttlMs").and_then(serde_json::Value::as_u64) else {
         return;
@@ -218,6 +219,7 @@ pub struct McpResponse {
 /// `aggregating_executor::AggregatingExecutor` when dispatching
 /// `tools/list` / `tools/call` / etc. across multiple upstreams.
 #[derive(Debug, Clone)]
+#[cfg(any(feature = "mcp", test))]
 pub struct AggregateMember {
     /// The upstream MCP server name.
     pub server_name: String,
@@ -235,6 +237,7 @@ pub struct AggregateMember {
 #[derive(Debug, Clone)]
 pub enum McpTarget {
     /// One named upstream.
+    #[cfg(any(feature = "mcp", test))]
     Direct {
         /// The upstream server name.
         server_name: String,
@@ -242,6 +245,7 @@ pub enum McpTarget {
         transport: McpTransport,
     },
     /// Fan-out across many upstreams.
+    #[cfg(any(feature = "mcp", test))]
     Aggregate {
         /// The per-server members of the aggregate.
         members: Vec<AggregateMember>,
@@ -262,6 +266,7 @@ pub trait RoutingTable: Send + Sync {
 /// `caching_executor::CachingExecutor` subscribes to this stream and evicts
 /// the affected cache entries.
 #[derive(Debug, Clone)]
+#[cfg(feature = "mcp")]
 pub struct InvalidationEvent {
     /// The MCP server whose state changed.
     pub server_name: String,
@@ -271,6 +276,7 @@ pub struct InvalidationEvent {
 
 /// Which slice of cached state an [`InvalidationEvent`] is about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(feature = "mcp")]
 pub enum InvalidationKind {
     /// `notifications/tools/list_changed` — drop the server's `tools/list`
     /// cache.
@@ -291,6 +297,7 @@ pub enum InvalidationKind {
 #[derive(Debug, Clone)]
 pub enum McpStreamPart {
     /// JSON-RPC notification with no `id` (progress / log / etc.).
+    #[cfg(feature = "mcp")]
     Notification {
         /// The JSON-RPC method (e.g. `notifications/progress`).
         method: String,
@@ -685,6 +692,7 @@ mod tests {
             McpStreamPart::Final(resp) => {
                 assert_eq!(resp.result["echoed"], "tools/list");
             }
+            #[cfg(feature = "mcp")]
             McpStreamPart::Notification { .. } => panic!("expected Final, got Notification"),
         }
     }

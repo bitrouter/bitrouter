@@ -1,5 +1,5 @@
 //! Application validation and namespace policy for MCP skills.
-//! Public wire records live in [`crate::skills::wire`].
+//! MCP wire records live in `crate::skills::wire`.
 //! Skill-name validation uses the shared `bitrouter-skills` format.
 //!
 //! The gateway prefixes skill URIs with the member label without changing
@@ -7,22 +7,23 @@
 //! See [SEP-2640](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2640)
 //! and the [Agent Skills specification](https://agentskills.io/specification).
 
-use crate::skills::wire::DYNAMIC_RESOURCES;
-use crate::skills::wire::MAX_SKILL_RESOURCES;
-use crate::skills::wire::MAX_SKILL_TOTAL_BYTES;
-use crate::skills::wire::SKILL_SCHEME;
-use crate::skills::wire::SkillEntry;
-use crate::skills::wire::SkillResources;
+#[cfg(any(feature = "mcp", test))]
+use crate::skills::wire::{
+    DYNAMIC_RESOURCES, MAX_SKILL_RESOURCES, MAX_SKILL_TOTAL_BYTES, SKILL_SCHEME, SkillEntry,
+    SkillResources,
+};
 #[cfg(test)]
 use crate::skills::wire::{
     RESOURCES_DIRECTORY_READ_METHOD, SKILLS_EXTENSION_ID, SKILLS_GET_METHOD, SKILLS_LIST_METHOD,
     SkillResource,
 };
 
+#[cfg(any(feature = "mcp", test))]
 pub trait SkillEntryExt: Sized {
     fn validate_metadata(&self) -> Result<(), String>;
 }
 
+#[cfg(any(feature = "mcp", test))]
 impl SkillEntryExt for SkillEntry {
     /// Validate metadata without fetching files or asserting trust in content.
     /// Direct routes retain legal URI schemes that aggregation cannot rewrite.
@@ -82,6 +83,7 @@ pub(crate) fn is_valid_gateway_label(label: &str) -> bool {
 /// Prefix an upstream skill URI with `label`, moving it into the gateway's
 /// namespace. Returns `None` for an unsafe label or a URI that is not
 /// `skill://`-schemed; those entries are not aggregated (see the module docs).
+#[cfg(any(feature = "mcp", test))]
 pub fn namespace_uri(label: &str, uri: &str) -> Option<String> {
     if !is_valid_gateway_label(label) {
         return None;
@@ -102,6 +104,7 @@ pub fn namespace_uri(label: &str, uri: &str) -> Option<String> {
 /// two call sites forgot, and the gateway forwarded a scheme-less path to an
 /// upstream. Returning something callers can use directly removes the trap
 /// rather than documenting it.
+#[cfg(any(feature = "mcp", test))]
 pub fn strip_label(label: &str, uri: &str) -> Option<String> {
     if !is_valid_gateway_label(label) {
         return None;
@@ -114,15 +117,18 @@ pub fn strip_label(label: &str, uri: &str) -> Option<String> {
 }
 
 /// Shared Agent Skills name grammar: Unicode characters, not UTF-8 bytes.
-pub use bitrouter_skills::valid_agent_skill_name;
+#[cfg(any(feature = "mcp", test))]
+use bitrouter_skills::valid_agent_skill_name;
 
 /// Validate absolute URI/IRI syntax without interpreting its scheme or
 /// resolving an authority. Syntax alone does not identify or activate a skill.
+#[cfg(any(feature = "mcp", test))]
 pub fn validate_skill_resource_uri(uri: &str) -> Result<(), String> {
     skill_resource_path(uri).map(|_| ())
 }
 
 /// Read the original URI/IRI path independently of query and fragment identity.
+#[cfg(any(feature = "mcp", test))]
 pub fn skill_resource_path(uri: &str) -> Result<&str, String> {
     fluent_uri::Iri::parse(uri)
         .map(|parsed| parsed.path().as_str())
@@ -132,6 +138,7 @@ pub fn skill_resource_path(uri: &str) -> Result<&str, String> {
 /// Return the original directory URI, preserving its spelling and scheme.
 /// The explicit file and parent-name constraints apply equally to rootless,
 /// authority-based and absolute paths. No URL normalization is performed.
+#[cfg(any(feature = "mcp", test))]
 pub fn skill_uri_root<'a>(uri: &'a str, name: &str) -> Result<&'a str, String> {
     let parsed = fluent_uri::Iri::parse(uri).map_err(|_| "invalid MCP skill URI")?;
     let file_uri = uri.split(['?', '#']).next().ok_or("skill URI is missing")?;
@@ -161,6 +168,7 @@ pub fn skill_uri_root<'a>(uri: &'a str, name: &str) -> Result<&'a str, String> {
 }
 
 /// Decode one URI segment without resolving an authority or changing origin.
+#[cfg(any(feature = "mcp", test))]
 pub fn decode_skill_uri_segment(segment: &str) -> Result<String, String> {
     let input = segment.as_bytes();
     let mut decoded = Vec::with_capacity(input.len());
@@ -182,6 +190,7 @@ pub fn decode_skill_uri_segment(segment: &str) -> Result<String, String> {
     String::from_utf8(decoded).map_err(|_| "skill URI segment requires UTF-8".into())
 }
 
+#[cfg(any(feature = "mcp", test))]
 fn has_dot_segment(uri: &str) -> bool {
     skill_resource_path(uri).map_or(true, |path| {
         path.split('/').any(|segment| {
@@ -196,6 +205,7 @@ fn has_dot_segment(uri: &str) -> bool {
 /// Return the entry's skill-directory URI when the entry satisfies the
 /// transport-level Agent Skills invariants a gateway can verify without
 /// fetching content.
+#[cfg(any(feature = "mcp", test))]
 fn validated_skill_root(entry: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
     let uri = entry.get("uri")?.as_str()?;
     if !uri.starts_with(SKILL_SCHEME) || has_dot_segment(uri) {
@@ -210,6 +220,7 @@ fn validated_skill_root(entry: &serde_json::Map<String, serde_json::Value>) -> O
     skill_uri_root(uri, name).ok().map(str::to_owned)
 }
 
+#[cfg(any(feature = "mcp", test))]
 fn resource_belongs_to(root: &str, uri: &str) -> bool {
     if !uri.starts_with(SKILL_SCHEME) || has_dot_segment(uri) {
         return false;
@@ -218,6 +229,7 @@ fn resource_belongs_to(root: &str, uri: &str) -> bool {
         .is_some_and(|suffix| suffix.starts_with('/') && suffix.len() > 1)
 }
 
+#[cfg(any(feature = "mcp", test))]
 fn valid_sha256_digest(digest: &str) -> bool {
     digest.strip_prefix("sha256:").is_some_and(|hex| {
         hex.len() == 64
@@ -239,6 +251,7 @@ fn valid_sha256_digest(digest: &str) -> bool {
 /// through byte-identical, and unknown fields — including ones added by
 /// future revisions of the Agent Skills spec — are preserved, which is why
 /// this operates on `serde_json::Value` rather than a typed entry.
+#[cfg(any(feature = "mcp", test))]
 pub fn namespace_entry(label: &str, entry: &serde_json::Value) -> Option<serde_json::Value> {
     let mut entry = entry.clone();
     let object = entry.as_object_mut()?;

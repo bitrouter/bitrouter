@@ -317,6 +317,7 @@ const INSTALL_LOCK_FILENAME: &str = ".installation.lock";
 /// on every subsequent call for a given home.
 ///
 /// A malformed/empty existing file is treated as missing and rewritten.
+#[cfg(any(feature = "otel-http", feature = "otel-grpc", test))]
 pub fn get_or_create_install_id(home: &Path) -> Result<String> {
     ensure_home_directory(home)?;
     with_install_lock(home, || get_or_create_install_id_locked(home))
@@ -525,6 +526,7 @@ pub fn runtime_home() -> Result<PathBuf> {
 }
 
 /// The stable install id under [`runtime_home`]. Used by the telemetry opt-in.
+#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
 pub fn install_id() -> Result<String> {
     get_or_create_install_id(&runtime_home()?)
 }

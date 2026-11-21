@@ -671,13 +671,14 @@ fn sse_response(
     let event_stream = terminated_stream.map(move |item| {
         let inbound_id = inbound_id.clone();
         match item {
+            #[cfg(feature = "mcp")]
             Ok(mcp::McpStreamPart::Notification { method, params }) => {
                 let payload = serde_json::json!({
                     "jsonrpc": "2.0",
                     "method": method,
                     "params": params,
                 });
-                Ok::<_, Infallible>(Event::default().data(payload.to_string()))
+                Ok(Event::default().data(payload.to_string()))
             }
             Ok(mcp::McpStreamPart::Final(mut response)) => {
                 shape_mcp_result_for_peer(&method, modern, &mut response.result);
@@ -686,7 +687,7 @@ fn sse_response(
                     "id": &*inbound_id,
                     "result": response.result,
                 });
-                Ok(Event::default().data(payload.to_string()))
+                Ok::<_, Infallible>(Event::default().data(payload.to_string()))
             }
             Err(e) => {
                 let payload = serde_json::json!({
