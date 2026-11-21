@@ -244,8 +244,7 @@ pub struct AttemptEvidence {
 }
 
 /// Original observations bound to the immutable receipt and its dispatch.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(remote = "Self", deny_unknown_fields)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ExecutionUsageEvidence {
     /// Exact dispatch accepted by the corresponding receipt.
     pub dispatch: Dispatch,
@@ -258,15 +257,12 @@ pub struct ExecutionUsageEvidence {
     /// Distinguishes historical absence, retained capture and observations lost at recovery.
     pub capture: Capture,
     /// Qualified mapping discriminator: two for native ingress or observations, one otherwise.
-    #[serde(deserialize_with = "super::number::integer")]
     pub extractor_version: u8,
     /// Whether an estimator was actually observed; never reconstructed from totals.
     pub estimation: Estimation,
     /// Required null unless the existing stream estimator was actually used.
-    #[serde(deserialize_with = "nullable")]
     pub estimate: Option<Estimate>,
     /// Exact owned parent execution, never inferred from correlation IDs.
-    #[serde(deserialize_with = "nullable")]
     pub parent_execution_id: Option<ExecutionId>,
     /// Independently admitted owned children. Their usage must not be added to these frames.
     pub child_execution_ids: Vec<ExecutionId>,
@@ -277,14 +273,30 @@ pub struct ExecutionUsageEvidence {
     /// Sticky once any frame cannot be retained.
     pub truncated: bool,
     /// Saturating exact count of discarded observations.
-    #[serde(deserialize_with = "super::number::integer")]
     pub dropped_frames: u64,
 }
 
-impl Serialize for ExecutionUsageEvidence {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        Self::serialize(self, serializer)
-    }
+#[derive(Deserialize)]
+#[serde(remote = "ExecutionUsageEvidence", deny_unknown_fields)]
+struct EvidenceFields {
+    dispatch: Dispatch,
+    installation_id: InstallationId,
+    tenant_id: TenantId,
+    execution_id: ExecutionId,
+    capture: Capture,
+    #[serde(deserialize_with = "super::number::integer")]
+    extractor_version: u8,
+    estimation: Estimation,
+    #[serde(deserialize_with = "nullable")]
+    estimate: Option<Estimate>,
+    #[serde(deserialize_with = "nullable")]
+    parent_execution_id: Option<ExecutionId>,
+    child_execution_ids: Vec<ExecutionId>,
+    attempts: Vec<AttemptEvidence>,
+    frames: Vec<Frame>,
+    truncated: bool,
+    #[serde(deserialize_with = "super::number::integer")]
+    dropped_frames: u64,
 }
 
 impl<'de> Deserialize<'de> for ExecutionUsageEvidence {
@@ -302,9 +314,7 @@ impl<'de> Deserialize<'de> for ExecutionUsageEvidence {
                 map: M,
             ) -> Result<Self::Value, M::Error> {
                 // Preserve RawValue numbers and derived duplicate/required-field checks.
-                ExecutionUsageEvidence::deserialize(serde::de::value::MapAccessDeserializer::new(
-                    map,
-                ))
+                EvidenceFields::deserialize(serde::de::value::MapAccessDeserializer::new(map))
             }
         }
         deserializer.deserialize_map(Object)
