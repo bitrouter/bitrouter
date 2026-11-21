@@ -122,12 +122,18 @@ jobs:
     - changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       BITROUTER_BUILD_REVISION: ${{ github.sha }}
       CARGO_BUILD_JOBS: '1'
+      CARGO_PROFILE_DEV_CODEGEN_UNITS: '512'
+      CARGO_PROFILE_TEST_CODEGEN_UNITS: '512'
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: clang
+      RUSTFLAGS: -D warnings -C link-arg=-fuse-ld=lld
     steps:
     - uses: actions/checkout@v6
+    - name: Install the LLVM linker
+      run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang lld
     - name: Prepare memory for the Linux test build
       env:
         RUNNER_KIND: ${{ runner.environment }}
@@ -149,7 +155,7 @@ jobs:
         cache-on-failure: false
         # Keep cache restore without optional PR cache writes after archive upload.
         cache-save-if: ${{ github.event_name != 'pull_request' }}
-        cache-key: complete-v1
+        cache-key: complete-linux-lld-v2
     - uses: taiki-e/install-action@v2
       with:
         tool: nextest@0.9.114
@@ -161,7 +167,7 @@ jobs:
         set -euo pipefail
         mkdir -p ci-evidence
         command -v vmstat
-        vmstat -w -t 30 120 &
+        vmstat -w -t 30 &
         sampler_pid=$!
         finish_build() {
           result=$?
