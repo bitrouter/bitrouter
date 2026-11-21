@@ -35,28 +35,22 @@ impl daemon::DaemonReloader for RoutingTableReloader {
 use bitrouter::config;
 
 #[tokio::test]
-async fn recording_coverage_is_acknowledged_by_the_serving_runtime_over_ipc() -> anyhow::Result<()>
-{
+async fn serving_gateway_rejects_legacy_recording_and_evolution_over_ipc() -> anyhow::Result<()> {
     let dir = tempdir("coverage");
     let cfg_path = write_config(&dir, "sqlite::memory:").await;
     let cfg = config::load(&cfg_path).await?;
     let assembled = build_app_with_path(&cfg, Some(&cfg_path)).await?;
-    use bitrouter::storage::capture::connections;
-    use sea_orm::{ActiveModelTrait, Set};
-    let connection_id = uuid::Uuid::new_v4().to_string();
-    connections::ActiveModel {
-        connection_id: Set(connection_id.clone()),
-        owner: Set("local".into()),
-        source: Set("fixture".into()),
-        controller_instance_id: Set(Some("controller".into())),
-        route_scope_id: Set(Some("principal".into())),
-        state: Set("recording".into()),
-        head: Set(0),
-        started_at: Set(chrono::Utc::now().to_rfc3339()),
-        metadata_json: Set("{}".into()),
-    }
-    .insert(&assembled.db)
-    .await?;
+    use sea_orm::{ConnectionTrait, EntityTrait, PaginatorTrait, Statement};
+    let capture_table = || {
+        Statement::from_string(
+            assembled.db.get_database_backend(),
+            "SELECT name FROM sqlite_schema WHERE name = 'acp_capture_connections'",
+        )
+    };
+    assert!(assembled.db.query_one(capture_table()).await?.is_none());
+    let before = bitrouter::storage::evolution::records::Entity::find()
+        .count(&assembled.db)
+        .await?;
     let socket = dir.join("bitrouter.sock");
     let server = tokio::spawn(daemon::run_control_socket_with_acp_runtime(
         socket.clone(),
@@ -65,111 +59,30 @@ async fn recording_coverage_is_acknowledged_by_the_serving_runtime_over_ipc() ->
         Arc::new(NoopReloader),
         Arc::new(NoopObserveStatus { compiled_in: false }),
         daemon::AcpControlPlane {
-            #[cfg(feature = "harness")]
-            runtime: assembled.acp_runtime,
             metering: MeteringStore::new(assembled.db.clone()),
             inventory: Some(assembled.gateway_requests.inventory()),
-            #[cfg(feature = "core")]
-            evolution: Some(assembled.evolution.clone()),
         },
     ));
     wait_until_ready(&socket).await;
-    let command = |principal: &str| DaemonCommand::AcpRecordingRegister {
-        connection_id: connection_id.as_str().into(),
-        api_principal: principal.into(),
-        controller_instance_id: "controller".into(),
-    };
-    assert!(matches!(
-        daemon::send_command(&socket, &command("other")).await?,
-        DaemonResponse::Error { .. }
-    ));
-    let response = daemon::send_command(&socket, &command("principal")).await?;
-    let DaemonResponse::AcpRecordingRegistered { registration } = response else {
-        anyhow::bail!("coverage acknowledgement missing");
-    };
-    assert_eq!(registration.connection_id, connection_id.as_str());
-    assert_eq!(
-        registration.version,
-        bitrouter::gateway::observability::inventory::INVENTORY_VERSION
-    );
-    assert!(registration.invalid_reason.is_none());
-    #[cfg(feature = "core")]
-    {
-        use bitrouter::core::evolution::operator::{EvolutionOperation, EvolutionReport};
-        use bitrouter::gateway::routing::blocks::control::EvolutionMode;
-        let response = daemon::send_command(
-            &socket,
-            &DaemonCommand::Evolution {
-                operation: EvolutionOperation::Status,
-            },
-        )
-        .await?;
-        let DaemonResponse::Evolution { report } = response else {
-            anyhow::bail!("evolution status missing");
-        };
-        let EvolutionReport::Status(status) = *report else {
-            anyhow::bail!("unexpected evolution report");
-        };
-        assert_eq!(status.control.mode, EvolutionMode::Off);
-        assert!(matches!(
-            daemon::send_command(
-                &socket,
-                &DaemonCommand::Evolution {
-                    operation: EvolutionOperation::Mode {
-                        mode: EvolutionMode::Automatic,
-                        judge_model: None
-                    },
-                }
-            )
-            .await?,
-            DaemonResponse::Error { .. }
-        ));
-        for mode in [EvolutionMode::Manual, EvolutionMode::Off] {
-            let response = daemon::send_command(
-                &socket,
-                &DaemonCommand::Evolution {
-                    operation: EvolutionOperation::Mode {
-                        mode,
-                        judge_model: None,
-                    },
-                },
-            )
-            .await?;
-            let DaemonResponse::Evolution { report } = response else {
-                anyhow::bail!("evolution mutation receipt missing");
-            };
-            let EvolutionReport::Status(status) = *report else {
-                anyhow::bail!("unexpected evolution report");
-            };
-            assert_eq!(status.control.mode, mode);
-            assert!(status.jobs.is_empty());
-        }
-    }
-    #[cfg(not(feature = "core"))]
-    {
-        use sea_orm::{EntityTrait, PaginatorTrait};
-        let before = bitrouter::storage::evolution::records::Entity::find()
-            .count(&assembled.db)
-            .await?;
-        for operation in [
-            serde_json::json!({"operation": "status"}),
-            serde_json::json!({"operation": "mode", "mode": "automatic", "judge_model": "fixture"}),
-        ] {
-            let command = serde_json::from_value(serde_json::json!({
-                "cmd": "evolution", "operation": operation
-            }))?;
-            let response = daemon::send_command(&socket, &command).await?;
-            assert!(
-                matches!(response, DaemonResponse::Error { message } if message.contains("core feature"))
-            );
-        }
-        assert_eq!(
-            before,
-            bitrouter::storage::evolution::records::Entity::find()
-                .count(&assembled.db)
-                .await?
+    for operation in [
+        serde_json::json!({"operation": "status"}),
+        serde_json::json!({"operation": "mode", "mode": "automatic", "judge_model": "fixture"}),
+    ] {
+        let command = serde_json::from_value(serde_json::json!({
+            "cmd": "evolution", "operation": operation
+        }))?;
+        let response = daemon::send_command(&socket, &command).await?;
+        assert!(
+            matches!(response, DaemonResponse::Error { message } if message == "the gateway does not run checkpoint evolution")
         );
     }
+    assert_eq!(
+        before,
+        bitrouter::storage::evolution::records::Entity::find()
+            .count(&assembled.db)
+            .await?
+    );
+    assert!(assembled.db.query_one(capture_table()).await?.is_none());
     daemon::send_command(&socket, &DaemonCommand::Stop).await?;
     server.await??;
     tokio::fs::remove_dir_all(dir).await?;
@@ -387,167 +300,6 @@ async fn status_route_and_stop_roundtrip_over_the_control_socket() {
         "control endpoint should be released on shutdown"
     );
 
-    let _ = tokio::fs::remove_dir_all(&dir).await;
-}
-
-#[cfg(feature = "harness")]
-#[tokio::test]
-async fn api_principal_scoped_acp_routes_roundtrip_over_the_control_socket() {
-    let dir = tempdir("acp-route");
-    let cfg_path = write_config(&dir, "sqlite::memory:").await;
-    let cfg = config::load(&cfg_path).await.unwrap();
-    let assembled = build_app_with_path(&cfg, Some(&cfg_path)).await.unwrap();
-    let runtime = assembled.acp_runtime.clone();
-    let app = Arc::new(assembled.app);
-    let socket = dir.join("bitrouter.sock");
-    let server = tokio::spawn(daemon::run_control_socket_with_acp_runtime(
-        socket.clone(),
-        app,
-        "127.0.0.1:1234".to_string(),
-        Arc::new(NoopReloader),
-        Arc::new(NoopObserveStatus { compiled_in: false }),
-        daemon::AcpControlPlane {
-            runtime: runtime.clone(),
-            metering: MeteringStore::new(assembled.db.clone()),
-            inventory: Some(assembled.gateway_requests.inventory()),
-            #[cfg(feature = "core")]
-            evolution: Some(assembled.evolution.clone()),
-        },
-    ));
-    wait_until_ready(&socket).await;
-
-    let set = daemon::send_command(
-        &socket,
-        &DaemonCommand::AcpRouteSet {
-            api_principal: "principal-a".to_string(),
-            controller_instance_id: "brc_test".to_string(),
-            session_id: "native-session".to_string(),
-            route: "gpt-5".to_string(),
-        },
-    )
-    .await
-    .unwrap();
-    match set {
-        DaemonResponse::AcpRouteState {
-            available,
-            current,
-            scope,
-        } => {
-            assert!(available.contains(&"gpt-5".to_string()));
-            assert_eq!(current.as_deref(), Some("gpt-5"));
-            assert_eq!(scope, "session");
-        }
-        other => panic!("expected ACP route state, got {other:?}"),
-    }
-
-    let invalid = daemon::send_command(
-        &socket,
-        &DaemonCommand::AcpRouteSet {
-            api_principal: "principal-a".to_string(),
-            controller_instance_id: "brc_test".to_string(),
-            session_id: "native-session".to_string(),
-            route: "missing-model".to_string(),
-        },
-    )
-    .await
-    .unwrap();
-    assert!(matches!(invalid, DaemonResponse::Error { .. }));
-    assert_eq!(
-        runtime
-            .current_route("principal-a", "brc_test", "native-session")
-            .unwrap()
-            .route(),
-        "gpt-5"
-    );
-
-    let other = daemon::send_command(
-        &socket,
-        &DaemonCommand::AcpRouteList {
-            api_principal: "principal-b".to_string(),
-            controller_instance_id: "brc_test".to_string(),
-            session_id: "native-session".to_string(),
-        },
-    )
-    .await
-    .unwrap();
-    assert!(matches!(
-        other,
-        DaemonResponse::AcpRouteState {
-            current: None,
-            scope,
-            ..
-        } if scope == "default"
-    ));
-
-    let reset = daemon::send_command(
-        &socket,
-        &DaemonCommand::AcpRouteReset {
-            api_principal: "principal-a".to_string(),
-            controller_instance_id: "brc_test".to_string(),
-            session_id: "native-session".to_string(),
-        },
-    )
-    .await
-    .unwrap();
-    assert!(matches!(
-        reset,
-        DaemonResponse::AcpRouteState {
-            current: None,
-            scope,
-            ..
-        } if scope == "default"
-    ));
-
-    let cleanup_target = daemon::send_command(
-        &socket,
-        &DaemonCommand::AcpRouteSet {
-            api_principal: "principal-a".to_string(),
-            controller_instance_id: "brc_test".to_string(),
-            session_id: "cleanup-target".to_string(),
-            route: "gpt-5".to_string(),
-        },
-    )
-    .await
-    .unwrap();
-    assert!(matches!(
-        cleanup_target,
-        DaemonResponse::AcpRouteState {
-            current: Some(_),
-            scope,
-            ..
-        } if scope == "session"
-    ));
-    runtime
-        .set_route("principal-a", "brc_other", "cleanup-target", "shared")
-        .unwrap();
-
-    assert!(matches!(
-        daemon::send_command(
-            &socket,
-            &DaemonCommand::AcpControllerCleanup {
-                api_principal: "principal-a".to_string(),
-                controller_instance_id: "brc_test".to_string(),
-            },
-        )
-        .await
-        .unwrap(),
-        DaemonResponse::Ok
-    ));
-    assert!(
-        runtime
-            .current_route("principal-a", "brc_test", "cleanup-target")
-            .is_none()
-    );
-    assert_eq!(
-        runtime
-            .current_route("principal-a", "brc_other", "cleanup-target")
-            .unwrap()
-            .route(),
-        "shared"
-    );
-
-    let _ = daemon::send_command(&socket, &DaemonCommand::Stop).await;
-    server.await.unwrap().unwrap();
     let _ = tokio::fs::remove_dir_all(&dir).await;
 }
 
@@ -1054,8 +806,6 @@ async fn acp_session_spend_roundtrips_over_the_control_socket() {
     let cfg_path = write_config(&dir, "sqlite::memory:").await;
     let cfg = config::load(&cfg_path).await.unwrap();
     let assembled = build_app_with_path(&cfg, Some(&cfg_path)).await.unwrap();
-    #[cfg(feature = "harness")]
-    let runtime = assembled.acp_runtime.clone();
     let metering = MeteringStore::new(assembled.db.clone());
     let app = Arc::new(assembled.app);
     let socket = dir.join("bitrouter.sock");
@@ -1066,12 +816,8 @@ async fn acp_session_spend_roundtrips_over_the_control_socket() {
         Arc::new(NoopReloader),
         Arc::new(NoopObserveStatus { compiled_in: false }),
         daemon::AcpControlPlane {
-            #[cfg(feature = "harness")]
-            runtime: runtime.clone(),
             metering: metering.clone(),
             inventory: Some(assembled.gateway_requests.inventory()),
-            #[cfg(feature = "core")]
-            evolution: Some(assembled.evolution.clone()),
         },
     ));
     wait_until_ready(&socket).await;

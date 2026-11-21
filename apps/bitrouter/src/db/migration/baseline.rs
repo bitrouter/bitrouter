@@ -7,7 +7,7 @@ use crate::db::store_format::{self, State};
 pub(super) struct Migration;
 impl MigrationName for Migration {
     fn name(&self) -> &str {
-        store_format::BASELINE
+        store_format::GATEWAY_SERVER
     }
 }
 
@@ -25,6 +25,14 @@ pub(super) async fn open(connection: SchemaManagerConnection<'_>) -> Result<(), 
         let state = store_format::inspect(&tx)
             .await
             .map_err(|error| DbErr::Custom(error.to_string()))?;
+        if tx.get_database_backend() == DatabaseBackend::Sqlite {
+            if state == State::Empty {
+                crate::db::sqlite_schema::initialize_gateway_schema(&tx)
+                    .await
+                    .map_err(|error| DbErr::Custom(error.to_string()))?;
+            }
+            return validate(&tx).await;
+        }
         if state == State::Current {
             return validate(&tx).await;
         }
@@ -43,7 +51,7 @@ pub(super) async fn open(connection: SchemaManagerConnection<'_>) -> Result<(), 
                 _ => "INSERT INTO seaql_migrations(version,applied_at) VALUES (?,?)",
             },
             [
-                store_format::BASELINE.into(),
+                store_format::GATEWAY_SERVER.into(),
                 chrono::Utc::now().timestamp().into(),
             ],
         ))
@@ -73,46 +81,24 @@ impl MigrationTrait for Migration {
                 "baseline initialization requires a genuinely empty database".into(),
             ));
         }
-        super::m20240101_000001_create_auth_tables::initialize_current(manager).await?;
-        super::m20240101_000002_create_metering_tables::initialize_current(manager).await?;
-        super::m20240101_000004_create_adequacy_table::initialize_current(manager).await?;
-        super::m20240101_000005_create_adequacy_exploration_table::initialize_current(manager)
-            .await?;
-        super::m20240101_000006_create_adequacy_semantic_success_table::initialize_current(manager)
-            .await?;
-        super::m20240101_000007_add_metering_evidence::initialize_current(manager).await?;
-        super::m20240101_000008_add_metering_reconciliation::initialize_current(manager).await?;
-        super::m20240101_000009_create_adequacy_reliability_events::initialize_current(manager)
-            .await?;
-        super::m20240101_000010_create_eval_exchange::initialize_current(manager).await?;
-        super::m20240101_000011_scope_eval_exchange::initialize_current(manager).await?;
-        super::m20240101_000012_create_trajectory_ledger::initialize_current(manager).await?;
-        super::m20240101_000013_create_continuation_registry::initialize_current(manager).await?;
-        super::m20240101_000015_add_metering_launch_id::initialize_current(manager).await?;
-        super::m20240101_000016_add_acp_metering_identity::initialize_current(manager).await?;
-        super::m20240101_000017_add_metering_route_scope::initialize_current(manager).await?;
-        super::m20240101_000018_create_acp_capture::initialize_current(manager).await?;
-        super::m20240101_000019_create_acp_checkpoints::initialize_current(manager).await?;
-        super::m20240101_000020_create_checkpoint_evolution::initialize_current(manager).await?;
-        super::m20240101_000021_add_router_request_identity::initialize_current(manager).await?;
-        super::m20240101_000022_create_bro_execution_records::initialize_current(manager).await?;
-        super::m20240101_000023_create_bro_acceptance_keys::initialize_current(manager).await?;
-        super::m20240101_000024_create_bro_runtime_ownership::initialize_current(manager).await?;
-        super::m20240101_000025_create_bro_execution_index::initialize_current(manager).await?;
-        super::m20240101_000026_bro_runtime_format::initialize_current(manager).await?;
-        super::m20240101_000027_bro_managed_sessions::initialize_current(manager).await?;
-        super::m20240101_000028_resource_tenancy::initialize_current(manager).await?;
-        super::m20240101_000029_tenancy_configurations::initialize_current(manager).await?;
-        super::m20240101_000030_eval_storage_scope::initialize_current(manager).await?;
-        super::m20240101_000031_native_continuation_epoch::initialize_current(manager).await?;
-        super::m20240101_000032_trajectory_storage_scope::initialize_current(manager).await?;
-        super::m20240101_000033_capture_legacy_scope::initialize_current(manager).await?;
-        super::m20240101_000034_continuation_storage_scope::initialize_current(manager).await?;
-        super::m20240101_000036_native_harness_scope::initialize_current(manager).await?;
-        super::m20240101_000037_owned_oauth::initialize_current(manager).await?;
-        super::m20240101_000038_eval_import_provenance::initialize_current(manager).await?;
-        super::m20240101_000039_resource_lifecycle::initialize_current(manager).await?;
-        receipts(manager).await?;
+        service_tables(manager).await?;
+        if manager.get_database_backend() == DatabaseBackend::MySql {
+            // This path only constructs a fresh gateway. Historical fixtures
+            // retain the column comparisons inherited from their database.
+            let mut alter = Table::alter();
+            alter.table(Alias::new("requests"));
+            for &name in super::MYSQL_METERING_IDENTITIES {
+                let nullable = !matches!(name, "request_id" | "user_id" | "api_key_id");
+                alter.modify_column(super::m20240101_000028_resource_tenancy::identity(
+                    DatabaseBackend::MySql,
+                    name,
+                    255,
+                    nullable,
+                ));
+            }
+            manager.alter_table(alter).await?;
+        }
+        super::m20240101_000020_create_checkpoint_evolution::scope(manager).await?;
         validate_tables(manager.get_connection()).await
     }
 
@@ -121,6 +107,33 @@ impl MigrationTrait for Migration {
             "current store rollback requires its original binary and backup".into(),
         ))
     }
+}
+
+pub(super) async fn service_tables(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
+    super::m20240101_000001_create_auth_tables::initialize_current(manager).await?;
+    super::m20240101_000002_create_metering_tables::initialize_current(manager).await?;
+    super::m20240101_000007_add_metering_evidence::initialize_current(manager).await?;
+    super::m20240101_000008_add_metering_reconciliation::initialize_current(manager).await?;
+    super::m20240101_000010_create_eval_exchange::initialize_current(manager).await?;
+    super::m20240101_000011_scope_eval_exchange::initialize_current(manager).await?;
+    super::m20240101_000012_create_trajectory_ledger::initialize_current(manager).await?;
+    super::m20240101_000013_create_continuation_registry::initialize_current(manager).await?;
+    super::m20240101_000015_add_metering_launch_id::initialize_current(manager).await?;
+    super::m20240101_000016_add_acp_metering_identity::initialize_current(manager).await?;
+    super::m20240101_000017_add_metering_route_scope::initialize_current(manager).await?;
+    super::m20240101_000020_create_checkpoint_evolution::initialize_current(manager).await?;
+    super::m20240101_000021_add_router_request_identity::initialize_current(manager).await?;
+    super::m20240101_000028_resource_tenancy::initialize_current(manager).await?;
+    super::m20240101_000029_tenancy_configurations::initialize_current(manager).await?;
+    super::m20240101_000030_eval_storage_scope::initialize_current(manager).await?;
+    super::m20240101_000031_native_continuation_epoch::initialize_current(manager).await?;
+    super::m20240101_000032_trajectory_storage_scope::initialize_current(manager).await?;
+    super::m20240101_000034_continuation_storage_scope::initialize_current(manager).await?;
+    super::m20240101_000037_owned_oauth::initialize_current(manager).await?;
+    super::m20240101_000038_eval_import_provenance::initialize_current(manager).await?;
+    super::m20240101_000039_resource_lifecycle::initialize_current(manager).await?;
+    receipts(manager).await?;
+    Ok(())
 }
 
 async fn receipts(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
@@ -178,76 +191,6 @@ mod tests {
     use super::*;
     use anyhow::{Result, ensure};
 
-    #[derive(serde::Deserialize)]
-    struct SchemaObject {
-        r#type: String,
-        name: String,
-        tbl_name: String,
-        sql: String,
-    }
-
-    fn compact_sql(sql: &str) -> String {
-        let mut quoted = None;
-        let mut out = String::new();
-        for character in sql.chars() {
-            if let Some(quote) = quoted {
-                out.push(character);
-                if character == quote {
-                    quoted = None;
-                }
-            } else if character == '\'' || character == '"' {
-                quoted = Some(character);
-                out.push(character);
-            } else if !character.is_ascii_whitespace() {
-                out.push(character.to_ascii_lowercase());
-            }
-        }
-        out
-    }
-
-    #[tokio::test]
-    async fn sqlite_current_baseline_matches_frozen_catalog() -> Result<()> {
-        // Independently captured sqlite_schema: 55 tables and 59 explicit indexes
-        // from the prior retained fixture. The sole schema retirement is the
-        // capacity-upgrade table. No rows, keys or old executable are included.
-        let frozen: Vec<SchemaObject> =
-            serde_json::from_str(include_str!("baseline/fixtures/sqlite-current-schema.json"))?;
-        ensure!(frozen.len() == 113);
-        let db = crate::db::connect("sqlite::memory:").await?;
-        super::super::Migrator::up(&db, None).await?;
-        let rows = db.query_all(Statement::from_string(DatabaseBackend::Sqlite,
-            "SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name")).await?;
-        ensure!(
-            rows.len() == frozen.len(),
-            "current schema object count differs from reviewed catalog"
-        );
-        let expected: std::collections::BTreeMap<_, _> = frozen
-            .iter()
-            .map(|object| {
-                (
-                    (object.r#type.as_str(), object.name.as_str()),
-                    (object.tbl_name.as_str(), compact_sql(&object.sql)),
-                )
-            })
-            .collect();
-        for row in rows {
-            let kind: String = row.try_get("", "type")?;
-            let name: String = row.try_get("", "name")?;
-            let table: String = row.try_get("", "tbl_name")?;
-            let sql: String = row.try_get("", "sql")?;
-            let frozen = expected
-                .get(&(kind.as_str(), name.as_str()))
-                .ok_or_else(|| anyhow::anyhow!("unreviewed schema object {kind}/{name}"))?;
-            ensure!(
-                table == frozen.0 && compact_sql(&sql) == frozen.1,
-                "current schema differs from frozen catalog: {kind}/{name}"
-            );
-        }
-        validate(&db).await?;
-        db.close().await?;
-        Ok(())
-    }
-
     #[tokio::test]
     async fn fresh_baseline_has_current_receipts_and_one_atomic_marker() -> Result<()> {
         let db = crate::db::connect("sqlite::memory:").await?;
@@ -261,7 +204,7 @@ mod tests {
             ))
             .await?;
         let ledger = super::super::Migrator::get_migration_models(&db).await?;
-        ensure!(ledger.len() == 1 && ledger[0].version == store_format::BASELINE);
+        ensure!(ledger.len() == 1 && ledger[0].version == store_format::GATEWAY_SQLITE);
         super::super::Migrator::up(&db, None).await?;
         let after = db
             .query_all(Statement::from_string(

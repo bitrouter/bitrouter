@@ -1,42 +1,11 @@
 # BRO six base tools
 
-> Historical first-party UI interfaces described here have been removed.
-> Current commands and execution entry points are documented in the
-> [CLI reference](../CLI.md).
 
-This guide follows the current native tool implementation.
-
-The native runtime owns authority, commit ordering and recovery; see the
-[agent runtime guide](agent-runtime.md).
-
-## Scope and authority
-
-Expose `read`, `glob`, `grep`, `write`, `edit`, and `shell` as BRO's native base
-tools. Merge directory listing into `read`, rename `find` to `glob`, and expose
-one `shell` backed by a server-selected interpreter. Preserve the native
-read-only profile without a general command executor.
-
-This document defines tool arguments, outputs, path bounds and interpreter rules.
-[agent runtime guide](agent-runtime.md) owns identities,
-permissions, commit barriers, concurrency and recovery; tool validation does not
-establish full runtime or product acceptance.
-
-External ACP harnesses retain their own tool names and behavior. The change
-does not rename external tools or cross-harness observation markers. New CLI
-flags, interpreter overrides, PTY support, image reading, recursive directory
-listing, and new glob syntax are outside this slice.
-
-## Source findings and design rationale
-
-The earlier seven-tool interface split file/directory reads and exposed platform
-shell names. The current registry uses the same six names on supported Unix and
-Windows servers.  A clearer interface is the motivation; better accuracy, latency
-or token cost is not established by the controlled acceptance tasks.
-
-Source: [tools](../../apps/bitrouter/src/harness/tools.rs),
-[agent](../../apps/bitrouter/src/harness/agent.rs),
-[service](../../apps/bitrouter/src/harness/service.rs) and
-[storage](../../apps/bitrouter/src/harness/storage.rs).
+BRO exposes six workspace tools. It validates calls before approval, records
+effects in local checkpoints and keeps execution within the selected workspace
+grant. The [agent runtime guide](agent-runtime.md) describes authority and
+recovery. External ACP adapters define their own tools and permissions.
+The implementation lives under [BRO tools](../../apps/bro/src/tools.rs).
 
 ## Tool interfaces and permissions
 
@@ -79,15 +48,40 @@ Use one schema without a model-selected file/directory mode:
 `path` stays required. `"."` explicitly selects the workspace root. Other paths
 use the existing workspace-relative validation and canonical containment check.
 Handle `"."` as a read-specific root case; do not relax write/edit validation.
-Resolve the path and accept only a regular file or a directory. Reject missing
-paths, special files, invalid UTF-8 file content, and paths escaping the root.
+Resolve the path and accept only a singly linked regular file or a directory.
+Reject missing paths, special files, invalid UTF-8 file content, and paths
+escaping the root.
 An explicitly selected symlink may resolve to an in-workspace file/directory;
 an escaping target is rejected. Directory enumeration never follows child links.
+After path resolution, open each child relative to its held parent directory.
 These checks retain the workspace boundary and are not OS sandboxing.
+
+`write` and `edit` sync the complete replacement before installing it in
+the held directory. New files never replace an existing entry. An edit
+verifies the existing file and its original bytes; on a publication conflict,
+the displaced file is retained for recovery. BRO reports an unknown effect
+when publication or syncing may have changed the workspace but completion is
+uncertain.
+
+On Windows, BRO installs and syncs a bounded `.bro-recovery-<id>.json`
+record beside the target before moving the held original to its matching
+`.bro-recovery-<id>.original` name. The record gives the exact original
+basename (including its UTF-16 form), the escrow and staging basenames, and
+the original SHA-256. The target can be absent if interrupted after the move
+and before the staged file is installed. BRO does not retry that publication
+or restore the original on restart.
+
+To recover, stop workspace writers and inspect the record and files in that
+directory. Verify the escrow bytes against the recorded digest. If the
+destination is absent, restore the escrow to the recorded name with a move
+that refuses to overwrite. If the destination exists, leave both files in
+place and reconcile them manually. A record without an escrow can also mean
+the move never happened or cleanup was interrupted; inspect the destination
+before removing the record or any leftover staging file.
 
 ### File behavior
 
-Read UTF-8 text with the existing 2 MiB input limit. `offset` is a one-based line
+Read UTF-8 text with the 2 MiB input limit. `offset` is a one-based line
 number, defaulting to 1; `limit` defaults to 2000 lines and has a maximum of
 2000. Reject zero or out-of-range values rather than silently accepting them.
 Preserve `L<number>:` content lines. Add a short header identifying the result
@@ -100,7 +94,7 @@ This is direct inspection, so it does not apply project ignore filters. `glob`
 and `grep` retain their search filters.
 
 `offset` is a one-based entry index, defaulting to 1. `limit` defaults to 500
-entries and may be raised to 2000, matching the existing listing limit range.
+entries and may be raised to 2000, subject to the same limit on every page.
 Sort the complete listing by lowercased name, then original name as a tie-breaker,
 before applying pagination. A repeated request over an unchanged directory
 must produce the same order; different calls do not share a filesystem snapshot.
@@ -190,128 +184,34 @@ Keep the command interface small:
 }
 ```
 
-Whitespace-only commands are invalid. Timeout defaults to 30 seconds. Do not
-add model-selected interpreters or inherit the client's login shell preference.
+Whitespace-only commands are invalid. Timeout defaults to 30 seconds. BRO
+selects the interpreter from the available workspace sandbox.
 
 ### Interpreter selection
 
-The server resolves the interpreter before advertising tools for a native
-execution. Selection is fixed for that execution and shared by model-issued
-commands and its verification action:
-
-| Server platform | Ordered availability selection | Command invocation |
-| --- | --- | --- |
-| Unix | `bash`, then `sh` | resolved executable with `-c` |
-| Windows | `pwsh`, then `powershell.exe` | existing noninteractive PowerShell flags and UTF-8 setup |
-
-Resolve from the server environment and retain the executable path and dialect.
-The declaration must identify both, for example "Uses Bash at /bin/bash on the
-server", plus the existing host-authority/output wording. The client platform
-never determines server command syntax. Results include an `interpreter` object
-with `executable` (the resolved path) and `dialect` (`bash`, `sh`, or `powershell`)
-alongside existing command outcome fields. PowerShell declarations also name
-the selected executable, distinguishing `pwsh` from `powershell.exe`.
-
-Fallback occurs only during availability selection, before model sampling.
-After declaring Bash, failure to spawn it returns a tool error; it never retries
-the generated command under `sh`. Apply the same rule to the two PowerShell
-executables. Nonzero exit, cancellation, timeout, or launch failure never triggers
-another interpreter. Availability does not prove a subsequent launch will work.
-
-If no interpreter is available, a coding execution fails clearly before model
-sampling; it does not silently expose five tools. Read-only execution still
-works without shell discovery. There is no user override in this version.
+On macOS, BRO runs `/bin/bash` under Seatbelt in a private working copy and
+publishes changes after checking the original files. On Linux, it runs
+`/bin/sh` with bubblewrap when the workspace sandbox is available. The
+executor checks availability before starting and refuses shell execution
+if it cannot establish the sandbox. See [workspace execution](../CLI.md#local-bro-threads-and-agents).
 
 ### Execution and outcomes
 
-Preserve workspace cwd, null stdin, piped stdout/stderr, bounded live output,
-existing 32 KiB per-stream capture, timeout/cancellation behavior, and descendant
-cleanup on normal exit, timeout, cancellation, or dropped execution futures.
-Reuse the existing Unix process-group and Windows process-wrapper mechanisms.
-This tool supports noninteractive commands, not an interactive terminal.
+The sandbox runs noninteractive commands in the workspace with null stdin,
+piped output and bounded capture. BRO supervises descendant cleanup on exit,
+timeout or cancellation.
 
-Retain `exit_status`, `stdout`, `stderr`, both truncation flags, and `timed_out`.
-Nonzero exit remains an explicit outcome, not a success claim. Launch/cleanup
-errors and cancellation retain their current error classification; possible
-effects are handled by the runtime's effect-status and recovery contract.
-Shell commands can affect paths outside the workspace under host authority.
+The result records `exit_status`, `stdout`, `stderr`, both truncation flags,
+and `timed_out`.
+A nonzero exit is an explicit outcome. If launch, cancellation or cleanup
+leaves the effect uncertain, BRO records the uncertainty for recovery.
 
-Verification uses the same resolved interpreter and executor without model
-dispatch, retains its own evidence/outcome policy, and stays forbidden in
-`read_only`. Changing tool names must not widen verification permissions.
+Verification uses the same sandbox and records its own result. It requires a
+coding workspace with shell execution available.
 
-## History and compatibility
+## Checkpoints and recovery
 
-New model requests declare only the six canonical names. Do not register
-`bash`, `powershell`, `ls`, or `find` as hidden dispatch aliases. Calls to those
-names in a new request are unavailable and receive normal not-executed results.
-Native instructions must name `read`, `glob`, and `grep` for inspection, and
-`write`, `edit`, and `shell` for coding.
-
-Preserve historical names, arguments, provider call IDs, Item IDs, results, and
-approval records exactly. Completed history stays readable; do not rewrite
-stored assistant calls or manufacture new results under renamed tools.
-
-If continuation/recovery encounters pending work created against the
-old declarations, treat it as incompatible work requiring explicit resolution.
-Settle safely unstarted calls through the runtime's not-executed path; unknown
-or potentially started effects retain recovery blocking. Do not execute old
-calls through aliases, reuse old approvals, or automatically replay effects.
-A confirmed safe continuation may issue a fresh request with the new tools.
-The Thread/Turn runtime admits only proved-safe settled checkpoints; unresolved
-calls block recovery. Prior Task root formats remain unsupported; this tool
-change does not introduce a legacy-root migration.
-
-## Implementation scope and documentation
-
-Implement within `bitrouter-orchestrator`; keep SDK provider adapters unchanged.
-Use its static tool registry as the common source for declaration, validation,
-effect/resource metadata, and dispatch. Do not introduce an extensible interpreter
-framework, filesystem abstraction, plugin loader, or new scheduler for this slice.
-
-Change `tools.rs`, native instructions in `agent.rs`, verification wiring in
-`service.rs`, and applicable native process/integration tests. Update runtime
-tool/resource tables when this contract is approved. Preserve unrelated worktree
-changes and external harness behavior.
-
-The implementation change must update `skills/bitrouter/SKILL.md`, relevant
-references, `docs/CLI.md`, and current development/implementation documentation.
-Review `.claude-plugin/`, `.codex-plugin/`, and `.agents/plugins/marketplace.json`
-and update affected CLI/harness references in lockstep. Do not rewrite historical
-spec bodies or treat local implementation as release publication.
-
-## Acceptance and review
-
-The gates below remain the contract. macOS evidence is recorded separately;
-combined Unix/Windows gates stay unchecked until Windows runtime checks pass:
-
-- [ ] Unix and Windows coding declarations expose exactly the six canonical
-  names; read-only declarations expose only `read`, `glob`, and `grep`.
-- [x] Forged effectful/legacy calls are rejected before launch; new shell naming
-  preserves approval, workspace exclusion, and verification restrictions.
-- [x] SDK requests preserve omitted optional arguments and the actual server
-  interpreter description; validation rejects malformed/unknown arguments.
-- [x] File reading preserves line numbers/UTF-8 limits. Root and child-directory
-  reads include hidden/ignored entries and paginate in deterministic order,
-  including case ties, empty/end pages, escaped names, and symlink entries.
-- [x] Traversal/absolute-path/symlink escapes and special-file reads fail;
-  boundary-size results stay bounded and continuation always makes progress.
-- [x] Rename regression tests preserve `glob` basename/path behavior, ignore
-  filtering, file/directory results, cancellation, and symlink exclusions.
-- [x] Interpreter selection happens before sampling. Missing preferred
-  interpreters select the documented fallback; loss after selection never
-  re-executes a command under another interpreter. Read-only works without one.
-- [ ] Commands stream bounded output and preserve exit/timeout/cancellation
-  outcomes. Descendant cleanup passes on Unix and Windows, including dropped
-  futures and background children after the parent exits.
-- [ ] Verification shares interpreter selection; historic records keep their
-  names/IDs and pending old calls cannot reuse approvals or replay effects.
-- [x] Required source checks pass: `cargo nextest run --all-features` (or
-  `cargo test --all-features`), `cargo clippy --all-features`, and
-  `cargo fmt -- --check`. Report platform evidence separately from local checks.
-- [x] Skills and affected harness manifests match delivered behavior.
-
-Directory pagination, availability-only fallback, and rejection of legacy
-dispatch aliases are implemented. Historical facts are not rewritten; pending and unknown effects remain subject
-to the current Thread/Turn recovery gates. The controlled
-real-model comparison establishes functionality, not a quality or cost improvement.
+BRO keeps the original call names, arguments, provider call IDs, results and
+approval records. A resumed turn reuses committed results. If an effect may
+have started before its result was committed, the checkpoint records that
+uncertainty. Inspect it before attempting new work in the affected thread.

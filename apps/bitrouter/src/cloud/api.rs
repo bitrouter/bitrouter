@@ -1,4 +1,4 @@
-//! `bro cloud api` request assembly and streaming output.
+//! `bitrouter cloud api` request assembly and streaming output.
 
 use std::io::{IsTerminal, Read, Write};
 use std::path::PathBuf;
@@ -13,7 +13,7 @@ use serde_json::{Map, Number, Value};
 
 use super::api_client::{ApiRequest, CloudApiClient};
 
-/// Arguments accepted by `bro cloud api`.
+/// Arguments accepted by `bitrouter cloud api`.
 #[derive(clap::Args)]
 struct ParsedApiArgs {
     /// Relative API endpoint, for example `/v1/models`.
@@ -44,7 +44,7 @@ struct ParsedApiArgs {
     pub verbose: bool,
 }
 
-/// Arguments accepted by `bro cloud api`.
+/// Arguments accepted by `bitrouter cloud api`.
 pub struct ApiArgs {
     /// Relative API endpoint, for example `/v1/models`.
     pub endpoint: String,
@@ -378,7 +378,7 @@ struct PreparedRequest {
     body: Option<Vec<u8>>,
 }
 
-/// Execute `bro cloud api` using the process standard streams.
+/// Execute `bitrouter cloud api` using the process standard streams.
 pub async fn run(args: ApiArgs, manager: Arc<CredentialManager>) -> Result<()> {
     let client = CloudApiClient::from_manager(manager).await?;
     let stdout_is_terminal = std::io::stdout().is_terminal();

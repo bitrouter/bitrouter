@@ -151,7 +151,7 @@ fn cli_validation_and_serve_block_legacy_without_rewriting_or_creating_database(
     let raw = serde_json::to_string(&configuration(json!({})))?;
     std::fs::write(&path, &raw)?;
     for args in [["config", "validate"].as_slice(), ["serve"].as_slice()] {
-        let output = Command::new(env!("CARGO_BIN_EXE_bro"))
+        let output = Command::new(env!("CARGO_BIN_EXE_bitrouter"))
             .current_dir(directory.path())
             .env("BITROUTER_HOME", directory.path())
             .args(args)

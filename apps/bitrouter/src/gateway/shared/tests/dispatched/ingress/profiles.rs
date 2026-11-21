@@ -1,7 +1,6 @@
 //! Unsupported managed intent must never bind or reuse an ordinary execution.
 
 use super::*;
-use crate::managed_contract::protocol::{ErrorCode, ErrorEnvelope};
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
 pub(super) async fn exercise(
@@ -113,9 +112,8 @@ async fn unsupported(response: axum::response::Response) -> Result<()> {
         response.status()
     );
     ensure!(!response.headers().contains_key("x-bitrouter-execution-id"));
-    let error: ErrorEnvelope =
-        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await?)?;
-    ensure!(error.error.code == ErrorCode::UnsupportedCapability);
+    let error: Value = serde_json::from_slice(&to_bytes(response.into_body(), 4096).await?)?;
+    ensure!(error["error"]["code"] == "invalid_request");
     Ok(())
 }
 

@@ -114,25 +114,6 @@ impl State {
         Ok(())
     }
 
-    #[cfg(all(unix, feature = "core", feature = "harness"))]
-    pub(in crate::tenancy) fn hold_after_receipt_ack(
-        &self,
-        execution: &ExecutionId,
-    ) -> anyhow::Result<Arc<ReceiptAckGate>> {
-        let mut slot = self
-            .receipt_ack
-            .lock()
-            .map_err(|_| anyhow::anyhow!("receipt ACK fixture gate unavailable"))?;
-        anyhow::ensure!(slot.is_none(), "receipt ACK fixture gate already installed");
-        let gate = Arc::new(ReceiptAckGate {
-            expected: Some(execution.clone()),
-            actual: Mutex::new(None),
-            entered: CancellationToken::new(),
-            release: CancellationToken::new(),
-        });
-        *slot = Some(gate.clone());
-        Ok(gate)
-    }
     #[cfg(unix)]
     pub(in crate::tenancy) fn hold_next_receipt_ack(&self) -> anyhow::Result<Arc<ReceiptAckGate>> {
         let mut slot = self
@@ -473,43 +454,6 @@ async fn rotation_probe_scopes_identity_and_never_extracts_codes_from_error_text
                 sqlite_code: None
             }
     );
-    Ok(())
-}
-
-#[cfg(all(unix, feature = "core", feature = "harness"))]
-#[tokio::test]
-async fn receipt_ack_fixture_gate_ignores_other_identity_and_is_consumed_once() -> anyhow::Result<()>
-{
-    let state = Arc::new(State::default());
-    let actual = "observed-execution".try_into()?;
-    let gate = state.hold_after_receipt_ack(&actual)?;
-    let release = gate.release.clone().drop_guard();
-    tokio::time::timeout(
-        crate::tenancy::MANAGEMENT_TIMEOUT,
-        state.after_receipt_ack(&"other-execution".try_into()?),
-    )
-    .await?;
-    anyhow::ensure!(!gate.entered.is_cancelled());
-    let actor = state.clone();
-    let id = actual.clone();
-    let mut waiting = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
-        actor.after_receipt_ack(&id).await
-    }));
-    tokio::select! {biased;
-        result=&mut waiting=>anyhow::bail!("actual gate did not hold caller: {result:?}"),
-        ()=gate.entered.cancelled()=>{},
-        ()=tokio::time::sleep(crate::tenancy::MANAGEMENT_TIMEOUT)=>anyhow::bail!("fixture ACK barrier did not observe actual caller"),
-    }
-    anyhow::ensure!(!waiting.is_finished());
-    // The consumed gate does not hold a second response for the same ID.
-    tokio::time::timeout(
-        crate::tenancy::MANAGEMENT_TIMEOUT,
-        state.after_receipt_ack(&actual),
-    )
-    .await?;
-    gate.release.cancel();
-    tokio::time::timeout(crate::tenancy::MANAGEMENT_TIMEOUT, waiting).await??;
-    drop(release);
     Ok(())
 }
 

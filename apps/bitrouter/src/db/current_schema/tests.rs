@@ -168,35 +168,16 @@ fn default_values_cannot_be_replaced_with_expressions() -> Result<()> {
 #[test]
 fn mysql_content_types_follow_explicit_backend_ddl() -> Result<()> {
     let tables = expected()?;
-    // m019, m020 and m027 widen only these non-tenancy content fields.
-    for (table, column) in [
-        ("acp_capture_events", "event_json"),
-        ("acp_checkpoints", "manifest_json"),
-        ("acp_resource_observations", "observation_json"),
-        ("acp_assessment_revisions", "revision_json"),
-        ("checkpoint_evolution", "body"),
-        ("bro_managed_sessions", "payload"),
-    ] {
-        let field = tables
+    let find = |name: &str, column: &str| {
+        tables
             .iter()
-            .find(|candidate| candidate.name == table)
+            .find(|table| table.name == name)
             .and_then(|table| table.columns.iter().find(|field| field.name == column))
-            .context("backend content field")?;
-        ensure!(kind(DatabaseBackend::MySql, field) == "longtext");
-        ensure!(kind(DatabaseBackend::Postgres, field) == "text");
-    }
-    // Adjacent JSON and timestamp fields retain their original TEXT declaration.
-    for (table, column) in [
-        ("acp_capture_connections", "metadata_json"),
-        ("acp_resource_observations", "observed_at"),
-    ] {
-        let field = tables
-            .iter()
-            .find(|candidate| candidate.name == table)
-            .and_then(|table| table.columns.iter().find(|field| field.name == column))
-            .context("unchanged text field")?;
-        ensure!(kind(DatabaseBackend::MySql, field) == "text");
-    }
+            .context("backend content field")
+    };
+    let content = find("checkpoint_evolution", "body")?;
+    ensure!(kind(DatabaseBackend::MySql, content) == "longtext");
+    ensure!(kind(DatabaseBackend::Postgres, content) == "text");
     Ok(())
 }
 

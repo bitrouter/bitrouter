@@ -18,7 +18,7 @@ use bitrouter_ai::types::ModelOperation;
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
-use crate::policy_lock::semantic_digest;
+use crate::policy_source::semantic_digest;
 use bitrouter_ai::policy::Document;
 
 const MAX_BYTES: usize = 64 * 1024;
@@ -47,7 +47,7 @@ enum PolicyEvaluation {
 impl Requirements {
     pub fn from_config(config: &Config, document: Option<&Document>) -> Result<Self> {
         if let Some(document) = document {
-            crate::policy_lock::validate_for_config(config, document)?;
+            crate::policy_source::validate_for_config(config, document)?;
         }
         let value = Self {
             format: 1,

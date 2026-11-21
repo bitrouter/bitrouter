@@ -1,0 +1,23 @@
+[package]
+name = "bitrouter-update"
+description = "Product-owned release updates for the BitRouter executables"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+hex.workspace = true
+axotag = "0.3"
+reqwest.workspace = true
+same-file = "1"
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["process", "time"] }
+
+[target.'cfg(windows)'.dependencies]
+self-replace = "1"

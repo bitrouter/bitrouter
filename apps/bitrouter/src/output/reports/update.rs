@@ -1,4 +1,4 @@
-//! Report for the `bro update` self-updater.
+//! Report for the `bitrouter update` self-updater.
 //!
 //! Every terminal outcome of `update` — a package-manager delegation, a
 //! `--check` probe, a declined confirmation, a no-op, or a completed swap —
@@ -11,7 +11,7 @@ use serde::Serialize;
 use crate::output::CliReport;
 use crate::output::human::Human;
 
-/// Result of `bro update`. `status` is the discriminant; the remaining
+/// Result of `bitrouter update`. `status` is the discriminant; the remaining
 /// fields are populated only for the outcomes they belong to.
 #[derive(Debug, Serialize)]
 pub struct UpdateReport {
@@ -35,7 +35,6 @@ pub struct UpdateReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_artifact: Option<ArtifactIdentity>,
     /// `updated`: why the installed executable's identity could not be verified.
-    /// The installer completed, but automatic daemon handoff is unavailable.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_verification_error: Option<String>,
     /// `delegated`: how the binary was installed (`homebrew` | `cargo` |
@@ -48,22 +47,9 @@ pub struct UpdateReport {
     /// Why self-update was refused or a matching release channel is unavailable.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub manual_reason: Option<String>,
-    /// `updated`: `restarted`, `compatible`, or `deferred`. Absent when no
-    /// daemon runs.
+    /// `updated`: `restart_needed` when a daemon is running.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub daemon: Option<&'static str>,
-    /// Why an installed binary could not take over the running daemon.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub daemon_reason: Option<String>,
-    /// Verified state of the daemon after an update attempt.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub daemon_pid: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub daemon_version: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub daemon_instance_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub daemon_listen: Option<String>,
 }
 
 impl UpdateReport {
@@ -92,11 +78,6 @@ impl UpdateReport {
             upgrade_command: Some(upgrade_command),
             manual_reason: None,
             daemon: None,
-            daemon_reason: None,
-            daemon_pid: None,
-            daemon_version: None,
-            daemon_instance_id: None,
-            daemon_listen: None,
         }
     }
 
@@ -118,11 +99,6 @@ impl UpdateReport {
             upgrade_command: None,
             manual_reason: None,
             daemon: None,
-            daemon_reason: None,
-            daemon_pid: None,
-            daemon_version: None,
-            daemon_instance_id: None,
-            daemon_listen: None,
         }
     }
 
@@ -140,11 +116,6 @@ impl UpdateReport {
             upgrade_command: None,
             manual_reason: None,
             daemon: None,
-            daemon_reason: None,
-            daemon_pid: None,
-            daemon_version: None,
-            daemon_instance_id: None,
-            daemon_listen: None,
         }
     }
 
@@ -162,16 +133,10 @@ impl UpdateReport {
             upgrade_command: None,
             manual_reason: None,
             daemon: None,
-            daemon_reason: None,
-            daemon_pid: None,
-            daemon_version: None,
-            daemon_instance_id: None,
-            daemon_listen: None,
         }
     }
 
-    /// The binary was swapped to `new_version`. `daemon` records whether a
-    /// running daemon was restarted onto it or still needs a manual restart.
+    /// The binary was swapped to `new_version`. A running daemon needs a restart.
     pub fn updated(
         current_version: String,
         new_version: String,
@@ -189,18 +154,13 @@ impl UpdateReport {
             upgrade_command: None,
             manual_reason: None,
             daemon,
-            daemon_reason: None,
-            daemon_pid: None,
-            daemon_version: None,
-            daemon_instance_id: None,
-            daemon_listen: None,
         }
     }
 }
 
 impl CliReport for UpdateReport {
     fn exit_code(&self) -> i32 {
-        i32::from(self.daemon == Some("deferred"))
+        i32::from(self.target_verification_error.is_some())
     }
 
     fn render(&self, h: &mut Human<'_>) -> std::io::Result<()> {
@@ -246,32 +206,12 @@ impl CliReport for UpdateReport {
                 if let Some(error) = &self.target_verification_error {
                     h.note(&format!("Installed artifact verification failed: {error}"))?;
                 }
-                match self.daemon {
-                    Some("restarted") => h.note(&format!("Restarted the running daemon on {new}.")),
-                    Some("compatible") => h.note(&format!("The running daemon is serving {new}.")),
-                    Some("restart_needed") => h.note(&format!(
-                        "A daemon is running the old binary. Run `{} restart` to serve {new}.",
+                if self.daemon == Some("restart_needed") && self.target_verification_error.is_none()
+                {
+                    h.note(&format!(
+                        "Run `{} restart` to serve {new}.",
                         crate::commands::invocation::name()
-                    )),
-                    Some("deferred") => h.note(&format!(
-                        "Daemon handoff deferred: {}",
-                        self.daemon_reason
-                            .as_deref()
-                            .unwrap_or("reason unavailable")
-                    )),
-                    _ => Ok(()),
-                }?;
-                if let Some(pid) = self.daemon_pid {
-                    h.field("daemon pid", pid)?;
-                }
-                if let Some(version) = &self.daemon_version {
-                    h.field("daemon version", version)?;
-                }
-                if let Some(instance) = &self.daemon_instance_id {
-                    h.field("daemon instance", instance)?;
-                }
-                if let Some(listen) = &self.daemon_listen {
-                    h.field("daemon listen", listen)?;
+                    ))?;
                 }
                 Ok(())
             }
@@ -457,8 +397,7 @@ mod tests {
         assert!(rendered.contains(
             "Installed artifact verification failed: legacy release does not support build-info"
         ));
-        assert!(!rendered.contains("Daemon handoff"));
-        assert_eq!(report.exit_code(), 0);
+        assert_eq!(report.exit_code(), 1);
     }
 
     #[test]
@@ -482,45 +421,7 @@ mod tests {
             h.contains("✓ updated 1.0.0-alpha.19 -> 1.0.0-alpha.20"),
             "{h:?}"
         );
-        assert!(h.contains("Run `bro restart`"), "{h:?}");
-    }
-
-    #[test]
-    fn updated_restarted_omits_hint() {
-        let r = UpdateReport::updated(
-            "1.0.0-alpha.19".into(),
-            "1.0.0-alpha.20".into(),
-            Some("restarted"),
-        );
-        let h = human(&r);
-        assert!(
-            h.contains("Restarted the running daemon on 1.0.0-alpha.20"),
-            "{h:?}"
-        );
-    }
-
-    #[test]
-    fn already_compatible_daemon_does_not_claim_restart() {
-        let report = UpdateReport::updated(
-            "1.0.0-alpha.31".into(),
-            "1.0.0-alpha.32".into(),
-            Some("compatible"),
-        );
-        assert_eq!(report.exit_code(), 0);
-        assert!(human(&report).contains("The running daemon is serving 1.0.0-alpha.32"));
-    }
-
-    #[test]
-    fn updated_binary_with_deferred_daemon_is_not_a_success() {
-        let mut report = UpdateReport::updated(
-            "1.0.0-alpha.31".into(),
-            "1.0.0-alpha.32".into(),
-            Some("deferred"),
-        );
-        report.daemon_reason = Some("one supervised run is still active".into());
-        assert_eq!(report.exit_code(), 1);
-        assert_eq!(json(&report)["daemon"], "deferred");
-        assert!(human(&report).contains("one supervised run is still active"));
+        assert!(h.contains("Run `bitrouter restart`"), "{h:?}");
     }
 
     #[test]

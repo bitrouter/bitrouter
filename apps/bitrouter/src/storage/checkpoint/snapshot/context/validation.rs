@@ -4,8 +4,6 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 
-#[cfg(feature = "core")]
-use crate::managed_contract::checkpoint::CheckpointPayload;
 use crate::managed_contract::protocol::CoreError;
 use crate::storage::checkpoint::snapshot::SessionSnapshot;
 use crate::storage::checkpoint::snapshot::context::view::ContextRepresentation;
@@ -317,20 +315,6 @@ pub(crate) fn validate(state: &SessionSnapshot) -> Result<(), CoreError> {
 #[derive(Clone, Default)]
 pub(crate) struct History {
     immutable: BTreeMap<String, String>,
-}
-
-#[cfg(feature = "core")]
-pub(crate) fn validate_history(
-    payload: &CheckpointPayload,
-    history: &mut History,
-) -> Result<(), CoreError> {
-    let store: ContextStore = match payload.checkpoint.state.get("context_store") {
-        Some(value) => {
-            serde_json::from_value(value.clone()).map_err(|error| invalid(error.to_string()))?
-        }
-        None => ContextStore::default(),
-    };
-    validate_store_history(&store, history)
 }
 
 /// Replay already holds the typed state derived from the verified checkpoint.

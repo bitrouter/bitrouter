@@ -296,13 +296,13 @@ async fn check_inventory_case(
             .begin()
             .await?;
         ensure!(sea_orm::sqlx::query(valid).execute(&mut *tx).await.is_err());
-        let legacy = inventory::inspect_in(&mut tx, &[9; 32]).await;
+        let reference = inventory::inspect_in(&mut tx, &[9; 32]).await;
         let actual = inspect_in(&mut tx, &[9; 32], &workspace).await;
         if corrupt {
             let error = actual.err().context("corrupt database accepted")?;
             ensure!(error.to_string() == "SQLite integrity failed");
             ensure!(
-                legacy
+                reference
                     .err()
                     .context("v1 accepted corrupt CHECK")?
                     .to_string()
@@ -310,7 +310,7 @@ async fn check_inventory_case(
             );
         } else {
             let actual = actual?;
-            ensure!(actual.value().rows == valid_rows && actual.value() == &legacy?);
+            ensure!(actual.value().rows == valid_rows && actual.value() == &reference?);
         }
         // Both outcomes cross ClearCache ACK; only the connection remains held.
         ensure!(workspace.available() == held);
@@ -452,7 +452,7 @@ async fn unsafe_check_schema_refuses_before_an_earlier_violating_predicate() -> 
         .context("copy missing")?
         .begin()
         .await?;
-    let legacy = inventory::inspect_in(&mut tx, &[1; 32])
+    let reference = inventory::inspect_in(&mut tx, &[1; 32])
         .await
         .err()
         .context("v1 accepted executable CHECK")?;
@@ -460,8 +460,8 @@ async fn unsafe_check_schema_refuses_before_an_earlier_violating_predicate() -> 
         .await
         .err()
         .context("v2 accepted executable CHECK")?;
-    ensure!(legacy.to_string() == "unsupported schema literal");
-    ensure!(large.to_string() == legacy.to_string());
+    ensure!(reference.to_string() == "unsupported schema literal");
+    ensure!(large.to_string() == reference.to_string());
     ensure!(workspace.available() == held);
     tx.rollback().await?;
     connections.close().await?;
@@ -487,8 +487,6 @@ fn external_sort_preserves_duplicates_across_odd_runs_and_empty_input() -> Resul
     ensure!(sorted.len() == input.len() as u64);
     let mut expected = input;
     expected.sort_unstable();
-    ensure!(sorted.read_at(5)? == Some(expected[5].to_be_bytes()));
-    ensure!(sorted.read_at(sorted.len())?.is_none());
     for value in expected {
         ensure!(sorted.next()? == Some(value.to_be_bytes()));
     }
@@ -663,9 +661,9 @@ async fn complete_inventory_matches_v1_typed_values_and_empty_tables() -> Result
         .context("copy missing")?
         .begin()
         .await?;
-    let legacy = inventory::inspect_in(&mut tx, &[3; 32]).await?;
+    let reference = inventory::inspect_in(&mut tx, &[3; 32]).await?;
     let large = inspect_in(&mut tx, &[3; 32], &workspace).await?;
-    ensure!(*large.value() == legacy);
+    ensure!(*large.value() == reference);
     ensure!(large.value().rows == 9);
     tx.rollback().await?;
     drop(large);

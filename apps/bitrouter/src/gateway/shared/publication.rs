@@ -228,11 +228,11 @@ impl Configuration {
             policies.push(policy);
         }
         if let Some(document) = &self.model_policy {
-            crate::policy_lock::validate_document(document)?;
-            crate::policy_lock::validate_for_config(&config, document)?;
+            crate::policy_source::validate_document(document)?;
+            crate::policy_source::validate_for_config(&config, document)?;
         } else {
             ensure!(
-                crate::policy_lock::bound_policy_names(&config).is_empty(),
+                crate::policy_source::bound_policy_names(&config).is_empty(),
                 "shared policy bindings require an embedded policy lock"
             );
         }
@@ -294,10 +294,7 @@ impl Authority {
         self.store()
             .bounded(async {
                 let tx = self.store().begin().await?;
-                ensure!(
-                    super::schema::current(&tx).await?,
-                    "shared schema is not initialized"
-                );
+                super::schema::validate_replica(&tx).await?;
                 let head: Stored<Head> = self
                     .store()
                     .read(&tx, Kind::Authority, "head")

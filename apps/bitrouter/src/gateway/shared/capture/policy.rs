@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::gateway::observability::decision::PendingEvalDecision;
-use crate::policy_lock::PolicyRoutingSnapshot;
+use crate::policy_source::PolicyRoutingSnapshot;
 
 impl Capture {
     pub(crate) fn policy(

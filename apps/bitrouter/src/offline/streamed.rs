@@ -518,18 +518,6 @@ async fn read(
     })
 }
 
-pub(super) async fn read_borrowed(
-    bundle: &Path,
-    expected: Option<&str>,
-    action: &'static str,
-    connections: &mut Connections,
-    workspace: &Arc<Workspace>,
-) -> Result<(Report, large::Charge, Arc<File>)> {
-    let pending = read(bundle, expected, action, connections, workspace).await?;
-    let ready = pending._ready.context("bundle READY guard missing")?;
-    Ok((pending.report, pending._charge, ready))
-}
-
 async fn restore(
     bundle: &Path,
     expected: &str,
@@ -595,7 +583,7 @@ async fn restore(
         "restored inventory mismatch"
     );
     drop(inspected);
-    // The separate historical proof authenticates the original key/resources;
+    // The restore proof authenticates the original key/resources;
     // it never applies fresh-target restrictions or starts an owning Service.
     connections.validation_budget().await?;
     let db = connections
@@ -604,8 +592,9 @@ async fn restore(
         .context("restore database unavailable")?;
     connections.uncertain = true;
     sea_orm::sqlx::query("BEGIN").execute(&mut *db).await?;
-    let proof = crate::tenancy::audit::recovery::v2::inspect_restore_in(
+    let proof = crate::tenancy::restore::inspect_restore_in(
         db,
+        pending.report.evidence.inventory.archive_marker()?,
         installation,
         wrapping_key_env,
         super::ValidationBudget {

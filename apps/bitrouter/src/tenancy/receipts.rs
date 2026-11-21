@@ -13,8 +13,6 @@ pub(crate) mod output;
 pub(crate) mod owner;
 pub(crate) mod provider_technical;
 pub(in crate::tenancy) mod read;
-#[cfg(all(feature = "core", feature = "harness"))]
-pub(crate) mod recovery;
 pub(crate) mod store;
 pub(in crate::tenancy) mod usage_evidence;
 

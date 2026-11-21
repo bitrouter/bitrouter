@@ -101,7 +101,7 @@ impl Host {
     fn official(home: &Path) -> Result<Self> {
         let log = home.join("official.log");
         let output = std::fs::File::create(&log)?;
-        let child = Command::new(env!("CARGO_BIN_EXE_bro"))
+        let child = Command::new(env!("CARGO_BIN_EXE_bitrouter"))
             .args(["serve", "--config"])
             .arg(home.join("bitrouter.yaml"))
             .env("BITROUTER_HOME", home)
@@ -485,7 +485,7 @@ async fn compiled_host_rejects_registration_before_database_and_cleans_bind_fail
 async fn cli(home: &Path, command: &str) -> Result<std::process::Output> {
     Ok(tokio::time::timeout(
         Duration::from_secs(10),
-        tokio::process::Command::new(env!("CARGO_BIN_EXE_bro"))
+        tokio::process::Command::new(env!("CARGO_BIN_EXE_bitrouter"))
             .kill_on_drop(true)
             .args([command, "--config"])
             .arg(home.join("bitrouter.yaml"))
@@ -519,14 +519,9 @@ async fn official_cli_uses_shared_host_without_extension_registrations() -> Resu
         .send()
         .await?
         .status();
-    let expected_eval_status = if cfg!(feature = "core") {
-        reqwest::StatusCode::OK
-    } else {
-        reqwest::StatusCode::NOT_FOUND
-    };
     ensure!(
-        eval_status == expected_eval_status,
-        "eval route does not match compiled core capability: {eval_status}"
+        eval_status == reqwest::StatusCode::OK,
+        "gateway host did not expose the Eval ledger: {eval_status}"
     );
     let response = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))

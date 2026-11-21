@@ -340,6 +340,8 @@ fn valid_output_path(path: &Path) -> Result<()> {
     }
     if !(path.starts_with("dist/registry")
         || path.starts_with("apps/bitrouter/registry-dist")
+        || path == Path::new("apps/bro/registry-dist/agents.json")
+        || path == Path::new("apps/bro/registry-dist/runtimes.json")
         || path == Path::new("docs/specs/registry-v1/registry.schema.json"))
     {
         bail!("publication output outside registry artifacts");
@@ -454,6 +456,7 @@ fn build_outputs(root: &Path, sources: &Sources) -> Result<Vec<(PathBuf, Vec<u8>
     for directory in [
         root.join("dist/registry"),
         root.join("apps/bitrouter/registry-dist"),
+        root.join("apps/bro/registry-dist"),
     ] {
         outputs.push((directory.join("agents.json"), agents.as_bytes().to_vec()));
         outputs.push((

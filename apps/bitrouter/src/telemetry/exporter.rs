@@ -298,9 +298,7 @@ impl OtelExporter {
 
     /// Clone the underlying OTel SDK tracer. Used by
     /// [`crate::telemetry::subscriber::tracing_subscriber_layer`] to build the
-    /// `tracing` ↔ OTel bridge, and by [`crate::telemetry::acp::AcpSpanRecorder`],
-    /// which stores it. Crate-scoped so the OTel tracer type never reaches
-    /// this crate's public API.
+    /// `tracing` ↔ OTel bridge. The SDK tracer stays internal to telemetry.
     pub(crate) fn tracer_clone(&self) -> SdkTracer {
         self.tracer.clone()
     }

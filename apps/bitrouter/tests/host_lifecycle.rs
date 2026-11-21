@@ -130,8 +130,6 @@ control:
   listen: {}
 {control_credentials}database:
   url: 'sqlite://host.db?mode=rwc'
-agent_api:
-  enabled: false
 providers:
   fixture:
     api_base: {upstream}
@@ -167,7 +165,7 @@ models:
         }
         let source = fs::read_to_string(config)?;
         let output = File::options().create(true).append(true).open(&self.log)?;
-        let mut command = Command::new(env!("CARGO_BIN_EXE_bro"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_bitrouter"));
         command
             .args(["serve", "--managed-child", "--config"])
             .arg(config)
@@ -363,16 +361,16 @@ models:
         })
         .await
         .context("official host readiness timed out")??;
-        let hello = self.command(&DaemonCommand::HandoffHello).await?;
+        let status = self.command(&DaemonCommand::Status).await?;
         ensure!(
             matches!(
-                hello,
-                DaemonResponse::HandoffHello {
-                    cli_owned: true,
+                status,
+                DaemonResponse::Status {
+                    cli_owned: Some(true),
                     ..
                 }
             ),
-            "must exercise managed-child admission, not external-host rejection: {hello:?}"
+            "must exercise managed-child admission, not external-host rejection: {status:?}"
         );
         self.ready_once = true;
         Ok(())

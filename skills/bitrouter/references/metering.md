@@ -1,4 +1,4 @@
-# Cache-aware metering and benchmark evidence
+# Cache-aware metering
 
 BitRouter records provider usage in four non-overlapping billing buckets:
 
@@ -56,96 +56,11 @@ Each new metering row retains:
 - a deterministic SHA-256 pricing version
 - charge status, final charge, and any unknown reason
 
-Historical rows created before this evidence schema are marked
-`legacy_unknown`. They do not become zero-cost requests during export.
 
-## Reconcile request-scoped receipts
+## Inspect request usage
 
-Hosted BitRouter Cloud rows can be reconciled without exporting a static API
-key into the environment. Point the command at the owner-only credential file
-used by `bro cloud login`, provided that file contains a static API key:
-
-```bash
-bro workflow-state reconcile-metering \
-  --database-url sqlite://$HOME/.bitrouter/bitrouter.db \
-  --credentials-file "$XDG_DATA_HOME/bitrouter/account-credentials.json" \
-  --request-id req-123 \
-  --price 'bitrouter:model=1.0,0.1,1.25,6.0'
-```
-
-For API-key environments, omit `--credentials-file` and provide the variable
-named by `--api-key-env` (default `BITROUTER_API_KEY`). A non-empty environment
-value takes precedence over the file. OAuth credentials are rejected and never
-refreshed for settlement. Never place either credential in command arguments,
-logs, or benchmark artifacts.
-
-## Export an auditable usage snapshot
-
-```bash
-bro workflow-state metering-usage \
-  --database-url sqlite://$HOME/.bitrouter/bitrouter.db \
-  --since 2026-07-14T00:00:00Z \
-  --until 2026-07-15T00:00:00Z \
-  --output artifacts/cloud-usage.jsonl
-```
-
-If a provider price was unavailable during the run, impute all four rates
-explicitly:
-
-```bash
-bro workflow-state metering-usage \
-  --database-url sqlite://$HOME/.bitrouter/bitrouter.db \
-  --output artifacts/cloud-usage.jsonl \
-  --impute-price 'provider:model=1.0,0.1,1.25,6.0'
-```
-
-The legacy `input,output` form is accepted only when the matching records have
-no cache usage. Overrides are preserved as `pricing_source: override` evidence.
-
-## Build the strict run bundle
-
-```bash
-bro workflow-state bundle \
-  --run-label short13-fixed-strong \
-  --traces artifacts/traces.jsonl \
-  --cloud-usage artifacts/cloud-usage.jsonl \
-  --policy-decisions artifacts/policy-decisions.jsonl \
-  --output-dir artifacts/bundle
-```
-
-This example leaves terminal outcomes to the Eval Exchange. Add
-`--outcomes artifacts/benchmark-outcomes.jsonl` only for genuinely
-request-scoped outcomes whose request-ID set exactly matches the traces. Task-
-or episode-scoped outcomes need a separate scope join and explicit evaluator
-decision credit; do not broadcast them into request-scoped rows.
-
-For any non-empty trace set, bundle creation requires an exact one-to-one
-trace/usage request-id join, provider-reported raw usage, consistent normalized
-buckets, a computed charge, complete effective rates, and a full pricing hash.
-When policy decisions or outcomes are supplied, their persisted `request_id`
-sets must each match the trace set exactly and one-to-one. Timestamp overlap,
-session IDs, and trial IDs are useful benchmark diagnostics only; none can
-replace the strict request-ID join. Terminus-2 identity is likewise diagnostic
-adapter evidence, not a source-specific bundle requirement.
-
-The benchmark bundle gate validates archival completeness. Reward-feedback
-admission additionally requires the exact request-ID joins, a completed
-request, and authoritative computed settlement; diagnostic identity fields do
-not participate in learning.
-
-The bundle writes `routing-baselines.json` in addition to the run artifact,
-trace, usage, outcome, decision, and shadow-policy files. Eligible policy
-decisions carry a versioned `route_measurement`: the complete semantic
-tier/model/effort candidate set, pre-guard logging action, and integer-ppm
-logging probabilities from one immutable policy snapshot. Effective
-`selected_*` fields can differ after safety or progress guards.
-
-Routing baselines are deterministic measurement controls. They are isolated by
-candidate-set digest, expose no raw request IDs, and include both every
-always-tier allocation and an exact share-matched content-blind allocation.
-They make no counterfactual quality claim; decisions without measurement are
-reported as excluded rather than silently synthesized.
-
-The in-memory analytical `build*` APIs may omit usage and decisions for
-extractor development. The `workflow-state bundle` command is benchmark-grade
-and fails closed when traces exist without usage evidence.
+Use `bitrouter requests` to inspect settled gateway rows and available
+charge evidence. Filter by time, model or provider. On an authorized
+tenant service, retrieve execution receipts with the SDK. Keep missing usage
+and uncertain charges explicit when joining results. See [Eval workflow](workflow-optimization.md)
+for submitting evidence against a pinned configuration.

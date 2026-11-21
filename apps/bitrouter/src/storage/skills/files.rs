@@ -5,8 +5,6 @@ use bitrouter_ai::types::Tool;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-#[cfg(feature = "core")]
-use super::SkillSelection;
 use super::{SkillCandidate, SkillSource, invalid};
 use crate::managed_contract::protocol::{CoreError, ErrorCode};
 use crate::storage::checkpoint::sha256;
@@ -157,17 +155,6 @@ pub(crate) fn prefix(candidate: &SkillCandidate, file: &File) -> Result<String, 
         "Skill supporting file data. This read does not execute scripts or activate nested skills. The parent binding and existing permissions remain authoritative.\n{}\nBEGIN VERIFIED FILE DATA\n",
         json!({"parent_source_id":candidate.source.identity()?,"source":source,"file":file})
     ))
-}
-
-#[cfg(feature = "core")]
-pub(crate) fn cached_bytes(selection: &SkillSelection) -> Result<u64, CoreError> {
-    let mut total = 0_u64;
-    for candidate in &selection.candidates {
-        for (reference, content) in &candidate.files {
-            total = total.saturating_add(text(candidate, reference, content)?.len() as u64);
-        }
-    }
-    Ok(total)
 }
 
 pub fn declarations(state: &SessionSnapshot, turn: &AgentTurn) -> Result<Vec<Tool>, CoreError> {

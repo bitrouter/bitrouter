@@ -17,7 +17,7 @@ const TOKEN: &str = "fixture-tenancy-cli-process-0123456789abcdef";
 const TOKEN_ENV: &str = "FIXTURE_TENANCY_CLI_TOKEN";
 
 async fn invoke(home: &Path, args: &[&str]) -> Result<std::process::Output> {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_bro"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bitrouter"));
     command
         .current_dir(home)
         .env("BITROUTER_HOME", home)

@@ -104,7 +104,7 @@ jobs:
           suffix=""
           if [[ "$PACKAGE_TARGET" == *windows* ]]; then suffix=".exe"; fi
           root="$PACKAGE_OUTPUT/unpacked/bitrouter-$PACKAGE_DISTRIBUTION-$PACKAGE_TARGET"
-          candidate="$root/bro$suffix"
+          candidate="$root/bitrouter$suffix"
           "$candidate" --json build-info > "$PACKAGE_OUTPUT/build-info.json"
           features='[]'
           if [[ "$PACKAGE_DISTRIBUTION" == 'gateway-shared' ]]; then features='["db-postgres","multi-instance"]'; fi
@@ -113,7 +113,10 @@ jobs:
             '.profile == $profile and .target == $target and .source_revision == $revision and .features == $features' \
             "$PACKAGE_OUTPUT/build-info.json"
           jq -e --slurpfile actual "$PACKAGE_OUTPUT/build-info.json" \
-            --arg binary "bro$suffix" '.identity == $actual[0] and .binary.path == $binary' "$root/manifest.json"
+            --arg binary "bitrouter$suffix" '
+              .package == "bitrouter" and .package == $actual[0].product and
+              .identity == ($actual[0] | del(.product)) and .binary.path == $binary
+            ' "$root/manifest.json"
           # Hash binary stdin to avoid escaped Windows filenames. Compare in jq
           # so native Windows CRLF output cannot decorate the expected digest.
           # https://www.gnu.org/software/coreutils/manual/html_node/cksum-output-modes.html
@@ -133,7 +136,7 @@ jobs:
           cargo build --locked --manifest-path "$consumer_manifest" --target-dir target/sdk-consumer
           suffix=""
           if [[ "$PACKAGE_TARGET" == *windows* ]]; then suffix=".exe"; fi
-          gateway_binary="$PACKAGE_OUTPUT/unpacked/bitrouter-gateway-$PACKAGE_TARGET/bro$suffix"
+          gateway_binary="$PACKAGE_OUTPUT/unpacked/bitrouter-gateway-$PACKAGE_TARGET/bitrouter$suffix"
           consumer_binary="$PWD/target/sdk-consumer/debug/bitrouter-packaged-sdk-consumer$suffix"
           if [[ "$PACKAGE_TARGET" == *windows* ]]; then
             gateway_binary="$(cygpath -m "$gateway_binary")"
@@ -208,11 +211,14 @@ jobs:
           sha256sum -c *.sha256
           mkdir unpacked
           tar -xzf bitrouter-gateway-shared-x86_64-unknown-linux-gnu.tar.gz -C unpacked
-          candidate="$PWD/unpacked/bitrouter-gateway-shared-x86_64-unknown-linux-gnu/bro"
+          candidate="$PWD/unpacked/bitrouter-gateway-shared-x86_64-unknown-linux-gnu/bitrouter"
           "$candidate" --json build-info > build-info.json
           jq -e --slurpfile actual build-info.json \
             --arg revision "$BITROUTER_BUILD_REVISION" \
-            '.identity == $actual[0] and .identity.profile == "gateway-shared" and .identity.features == ["db-postgres", "multi-instance"] and .identity.source_revision == $revision' \
+            '.package == "bitrouter" and .package == $actual[0].product and
+             .identity == ($actual[0] | del(.product)) and
+             .identity.profile == "gateway-shared" and .identity.features == ["db-postgres", "multi-instance"] and
+             .identity.source_revision == $revision' \
             unpacked/bitrouter-gateway-shared-x86_64-unknown-linux-gnu/manifest.json
           printf 'BITROUTER_TEST_GATEWAY_BINARY=%s\n' "$candidate" >> "$GITHUB_ENV"
       - name: Validate shared distribution contracts and updater boundaries
@@ -226,7 +232,7 @@ jobs:
       - name: Run actual shared PostgreSQL process campaigns against the archive
         shell: bash
         run: |
-          # The test executable may compile, but the child bro always comes from
+          # The test executable may compile, but the service child always comes from
           # the archive above; no workspace debug binary is substituted.
           cargo nextest run --locked -p bitrouter --no-default-features --features multi-instance \
             --lib --run-ignored only --test-threads 2 --no-fail-fast --no-tests fail \

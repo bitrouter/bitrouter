@@ -511,53 +511,8 @@ pub(crate) fn validate(root: &Path) -> Result<()> {
     );
     let operations = read(root, "operations.json")?;
     let operation_names = validate_operations(&operations, &covered)?;
-    let scenarios = read(root, "scenarios.json")?;
-    let mut scenario_names = HashSet::new();
-    ensure!(
-        !array(&scenarios)?.is_empty(),
-        "missing deferred runtime scenarios"
-    );
-    for scenario in array(&scenarios)? {
-        ensure!(
-            scenario_names.insert(string(scenario, "name")?),
-            "duplicate scenario name"
-        );
-        ensure!(
-            operation_names.contains(string(scenario, "operation")?),
-            "scenario has unknown operation"
-        );
-        string(scenario, "given")?;
-        string(scenario, "expected")?;
-        ensure!(
-            scenario["verification"] == "required-in-M1-M3-runtime-tests",
-            "M0 cannot claim runtime scenario verification"
-        );
-    }
-    let inventory = read(root, "inventory.json")?;
-    let mut families = HashSet::new();
-    ensure!(!array(&inventory)?.is_empty(), "missing inventory");
-    for family in array(&inventory)? {
-        ensure!(
-            families.insert(string(family, "name")?),
-            "duplicate inventory family"
-        );
-        for field in ["existing", "target", "obligations", "exclusions"] {
-            string(family, field)?;
-        }
-        let paths = strings(&family["paths"])?;
-        ensure!(!paths.is_empty(), "inventory family has no source paths");
-        for path in paths {
-            ensure!(
-                Path::new(path)
-                    .components()
-                    .all(|part| matches!(part, std::path::Component::Normal(_))),
-                "inventory path must be repository relative"
-            );
-            ensure!(root.join(path).exists(), "inventory source missing: {path}");
-        }
-    }
     println!(
-        "validated {} frozen v1 shape fixtures ({} semantic rejections), {} operations, actual migration example and capacity inputs; runtime scenarios were not executed by this checker",
+        "validated {} tenancy fixtures ({} semantic rejections), {} operations and capacity inputs",
         fixtures.len(),
         semantic_negatives,
         operation_names.len()

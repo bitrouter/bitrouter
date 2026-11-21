@@ -24,7 +24,7 @@ use crate::gateway::shared::authority::Authority;
 use crate::gateway::shared::capture::{Inputs, Requirements};
 use crate::gateway::shared::ownership::Custody;
 use crate::gateway::shared::store::Store;
-use crate::policy_lock::PolicyRuntime;
+use crate::policy_source::PolicyRuntime;
 use crate::runtime_crypto::DeploymentKey;
 
 struct Fixture {

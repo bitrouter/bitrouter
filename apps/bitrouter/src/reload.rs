@@ -474,9 +474,6 @@ fn restart_required_fields(
     if current.tenancy != candidate.tenancy {
         fields.insert("tenancy".to_string());
     }
-    if current.chat != candidate.chat {
-        fields.insert("chat".to_string());
-    }
     if current.database.url != candidate.database.url {
         fields.insert("database.url".to_string());
     }
@@ -485,9 +482,6 @@ fn restart_required_fields(
     }
     if current.trajectory != candidate.trajectory {
         fields.insert("trajectory".to_string());
-    }
-    if current.acp_recording != candidate.acp_recording {
-        fields.insert("acp_recording".to_string());
     }
     if current.continuation != candidate.continuation {
         fields.insert("continuation".to_string());
@@ -1075,7 +1069,6 @@ fn fixed_top_level_field(name: &str) -> &'static str {
         "database" => "database",
         "eval" => "eval",
         "trajectory" => "trajectory",
-        "acp_recording" => "acp_recording",
         "continuation" => "continuation",
         "providers" => "providers",
         "models" => "models",
@@ -1136,7 +1129,6 @@ fn fixed_restart_field(path: &str) -> String {
         | "database.url"
         | "eval"
         | "trajectory"
-        | "acp_recording"
         | "continuation"
         | "routers"
         | "checkers"
@@ -1222,7 +1214,7 @@ pub(crate) async fn load_selected_configuration_baseline(
         ),
         "local startup cannot consume shared authority"
     );
-    crate::policy_lock::apply_defaults(&mut config, Some(path));
+    crate::policy_source::apply_defaults(&mut config, Some(path));
     crate::assemble::validate_host_configuration(&config)?;
     let (unclassified_fields, unclassified_values) = unclassified_config(&document);
     Ok(ConfigurationBaseline {
@@ -1297,7 +1289,7 @@ async fn load_configuration_baseline_at(
                         guardrails_migration_required: false,
                     }
                 })?;
-            crate::policy_lock::apply_defaults(&mut config, Some(path));
+            crate::policy_source::apply_defaults(&mut config, Some(path));
             let guardrails_migration_required = config.plugins.contains_key("bitrouter-guardrails");
             crate::assemble::validate_host_configuration(&config).map_err(|error| {
                 ConfigurationLoadError {
@@ -1347,7 +1339,7 @@ async fn load_configuration_baseline_at(
                 }
             })?;
             crate::cloud::enable_in_zero_config(&mut config);
-            crate::policy_lock::apply_defaults(&mut config, None);
+            crate::policy_source::apply_defaults(&mut config, None);
             Ok(ConfigurationBaseline {
                 source: source.clone(),
                 loaded_source: effective_source.clone(),
@@ -1395,7 +1387,7 @@ pub struct AppReloader {
     /// Concrete upstream HTTP executor. Timeout knobs are client-level, so a
     /// config reload must rebuild the live executor's client set too.
     upstream_executor: Arc<crate::gateway::pipeline::executor::HttpExecutor>,
-    policy_runtime: Option<Arc<crate::policy_lock::PolicyRuntime>>,
+    policy_runtime: Option<Arc<crate::policy_source::PolicyRuntime>>,
     /// Owns admission for local IPC, SIGHUP, and guarded remote reloads. The
     /// routing table's own lock is narrower and cannot protect preparation or
     /// the other live participants.
@@ -1802,7 +1794,7 @@ struct PreparedReload {
     baseline: ConfigurationBaseline,
     config: crate::config::Config,
     timeout_clients: crate::gateway::pipeline::executor::PreparedProviderTimeouts,
-    named_policy_runtime: Option<crate::policy_lock::PreparedPolicySnapshot>,
+    named_policy_runtime: Option<crate::policy_source::PreparedPolicySnapshot>,
     access_policy_store: Option<crate::policy::store::PreparedPolicyStore>,
 }
 
@@ -2403,10 +2395,10 @@ impl AppReloader {
             crate::paths::ConfigSource::File(path) => Some(path.as_path()),
             crate::paths::ConfigSource::Default { .. } => None,
         };
-        let loaded = match crate::policy_lock::load_for_config(&baseline.config, path).await {
+        let loaded = match crate::policy_source::load_for_config(&baseline.config, path).await {
             Ok(loaded) => loaded,
             Err(_) => {
-                let Some(policy_path) = crate::policy_lock::resolve_path(&baseline.config, path)
+                let Some(policy_path) = crate::policy_source::resolve_path(&baseline.config, path)
                 else {
                     return AuxiliaryConfigState::Invalid;
                 };
@@ -2607,7 +2599,10 @@ impl AppReloader {
     }
 
     /// Attach the app's named routing-policy registry to the same reload fanout.
-    pub fn with_policy_runtime(mut self, runtime: Arc<crate::policy_lock::PolicyRuntime>) -> Self {
+    pub fn with_policy_runtime(
+        mut self,
+        runtime: Arc<crate::policy_source::PolicyRuntime>,
+    ) -> Self {
         self.policy_runtime = Some(runtime);
         self
     }
@@ -2757,7 +2752,7 @@ providers:
         _home: tempfile::TempDir,
         reloader: Arc<AppReloader>,
         routing_table: Arc<ConfigRoutingTable>,
-        policy_runtime: Arc<crate::policy_lock::PolicyRuntime>,
+        policy_runtime: Arc<crate::policy_source::PolicyRuntime>,
         policy_store: Arc<PolicyStore>,
         initial_policy_digest: String,
         candidate_policy_digest: String,
@@ -2843,7 +2838,7 @@ policies:
         let executor = Arc::new(HttpExecutor::new(HttpTimeouts::default())?);
         let db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&db).await?;
-        let policy_runtime = crate::policy_lock::PolicyRuntime::new(
+        let policy_runtime = crate::policy_source::PolicyRuntime::new(
             &initial,
             Some(&config_path),
             None,
@@ -2870,7 +2865,7 @@ policies:
         resolve_reloadable_config(&mut candidate, None).await;
         assert_eq!(initial.routers, candidate.routers);
         let candidate_policy_digest =
-            crate::policy_lock::load_for_config(&candidate, Some(&config_path))
+            crate::policy_source::load_for_config(&candidate, Some(&config_path))
                 .await?
                 .map(|loaded| loaded.digest)
                 .ok_or_else(|| anyhow::anyhow!("candidate policy has no digest"))?;
@@ -2966,7 +2961,7 @@ policies:
         }
     }
 
-    /// `bro reload` used to return `{"status":"reloaded"}` while the
+    /// `bitrouter reload` used to return `{"status":"reloaded"}` while the
     /// daemon kept serving the tiers it started with — only `restart` applied
     /// a `policy_table:` edit. The transform is baked into the built `App` and
     /// cannot be re-registered, so nothing swapped its spec.

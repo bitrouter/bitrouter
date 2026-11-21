@@ -1,23 +1,9 @@
-//! CLI inspection and scaffolding for installed Agent Skills.
-//!
-//! This module owns the shared format parser and offline discovery rules,
-//! selects CLI roots and renders reports. Installing skills remains the
-//! ecosystem's responsibility.
-//! The managed harness publishes metadata and returns versioned materials to
-//! Core. Ordinary `bro skills list` does not activate a skill or execute scripts.
+//! Skill format and evidence shared with the gateway MCP client.
 
-pub mod cli;
-#[cfg(feature = "harness")]
-pub mod delivery;
-pub mod directory;
-pub mod explain;
-mod files;
 pub mod format;
 pub mod library;
 pub mod mcp;
-pub(crate) mod native;
 pub mod protocol;
-pub mod root;
 
 /// Errors from `SKILL.md` parsing and skills-directory reads.
 #[derive(Debug, thiserror::Error)]
@@ -35,7 +21,7 @@ pub enum Error {
 /// Result alias for this module.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Validate with the same rules used by the production harness.
+/// Validate a skill name using the shared format.
 pub fn validate_skill_name(name: &str) -> Result<()> {
     format::validate_skill_name(name).map_err(|_| Error::InvalidSkillName(name.to_string()))
 }

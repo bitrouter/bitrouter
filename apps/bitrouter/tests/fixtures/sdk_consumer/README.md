@@ -1,9 +1,8 @@
 # Packaged gateway / independent SDK acceptance
 
-This is bounded P0 A03/A04/A14 evidence. The integration host launches a supplied
-`bro` unpacked from the official **gateway** archive and this separately built
-consumer. It never substitutes `CARGO_BIN_EXE_bro`, builds either executable, or
-imports the application's server/configuration/database code. The consumer is
+The integration host launches the supplied `bitrouter` executable from the
+**gateway** archive and the separately built SDK consumer. The two executables
+are built before the test. The consumer uses the gateway's HTTP interfaces. The consumer is
 its own Cargo workspace with only SDK/AI path dependencies and client necessities;
 it performs every service call through the actual SDK.
 
@@ -18,7 +17,7 @@ cargo run --locked -p dist-helper -- package --profile gateway \
 mkdir -p target/gateway-acceptance/unpacked
 tar -xzf "target/gateway-acceptance/bitrouter-gateway-$gateway_target.tar.gz" \
   -C target/gateway-acceptance/unpacked
-export BITROUTER_TEST_GATEWAY_BINARY=/absolute/path/to/unpacked-gateway/bro
+export BITROUTER_TEST_GATEWAY_BINARY=/absolute/path/to/unpacked-gateway/bitrouter
 export BITROUTER_SDK_CONSUMER_TARGET_DIR=/absolute/path/to/separate-sdk-consumer-target
 cargo build --locked --manifest-path apps/bitrouter/tests/fixtures/sdk_consumer/Cargo.toml \
   --target-dir "$BITROUTER_SDK_CONSUMER_TARGET_DIR"
@@ -89,52 +88,3 @@ connection-refused error; a timeout or another transport error fails the check.
 The ephemeral port reservations must be released immediately before gateway bind;
 another local process winning that race causes a failure, not a retry against a
 different daemon. This test is portable Rust and has no Unix-only test gate.
-
-This fixture does not complete all A03/A04/A14 gates: full-product packaging,
-installation/upgrades, registry/schema bootstrap, OS matrix execution, opaque
-history/extension preservation, malformed/oversized peer coverage, explicit
-consumer cancellation, and core/harness channel/ACK acceptance remain separate
-suites. The interrupted case covers an upstream socket failure, not proof of
-remote execution cancellation. No build, test, or commit is performed by the
-integration host itself.
-
-## Isolated prehashed manifest fidelity
-
-This separate regression consumes a manifest emitted by the application's real
-`HarnessManifestExt::digest` and `HarnessManifestExt::validate` implementation in
-`apps/bitrouter/src/storage/checkpoint/validation.rs`. The
-`sdk_manifest_fixture` example constructs a typed, read-only custom tool with
-deliberately nonalphabetical JSON schema members. It calls production digest
-and validation code; it does not duplicate hashing or hardcode a matching hash.
-
-The output records the writer's fully qualified name, `writer_revision` and
-application build identity. `tools_json` preserves the exact bytes supplied to
-the digest, and `manifest_json` preserves the original validated manifest as a
-string. Keeping those fields as strings prevents the consumer from accidentally
-normalizing its own expected result. The consumer compares those original tool
-bytes and the retained digest after typed bind and restore round trips. It also
-requires nonalphabetical schema keys, so a sorted fixture cannot make the check
-vacuous. This checks serialization fidelity, not live core admission or execution.
-
-Run these commands from the repository root after the independent workspace's
-lockfile has been refreshed for dependency changes:
-
-```sh
-mkdir -p target/sdk-manifest-fidelity
-cargo run --locked -p bitrouter --no-default-features --features core \
-  --example sdk_manifest_fixture \
-  > target/sdk-manifest-fidelity/manifest.json
-export BITROUTER_TEST_MANIFEST_FIXTURE="$PWD/target/sdk-manifest-fidelity/manifest.json"
-cargo test --locked \
-  --manifest-path apps/bitrouter/tests/fixtures/sdk_consumer/Cargo.toml \
-  --target-dir target/sdk-consumer --test manifest_fidelity -- \
-  --ignored --exact server_prehashed_manifest_survives_isolated_bind_and_restore
-```
-
-Only the separately built writer enables application `core`. The consumer test
-uses its own workspace and SDK/AI dependencies with defaults disabled; it needs
-neither the application, SDK `core`, nor application dev-dependency features.
-The test is ignored by ordinary `cargo test` because its input must come from
-the separately built writer. Select it explicitly as above; a missing fixture
-or missing provenance fails the selected test. Running ordinary consumer tests
-for packaged gateway acceptance does not establish this regression's result.

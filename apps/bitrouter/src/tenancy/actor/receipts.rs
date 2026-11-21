@@ -54,8 +54,6 @@ impl Worker {
             .checked_add(candidate.auxiliary_bytes())
             .ok_or(ErrorCode::CapacityExceeded)?;
         let encoded = usize::try_from(durable_bytes).map_err(|_| ErrorCode::CapacityExceeded)?;
-        #[cfg(all(feature = "core", feature = "harness"))]
-        let encoded = encoded.max(crate::storage::operation_budget::MAX_BYTES);
         control.reserve_write(encoded, true)?;
         let transaction_span = owner.observation.span(Phase::Transaction);
         let beginning = control.begin_write_receipt(&self.db).await;

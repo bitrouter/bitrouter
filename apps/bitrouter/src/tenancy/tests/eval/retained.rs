@@ -181,8 +181,28 @@ async fn seeded(path: &Path, key_env: Option<&str>) -> Result<Seeded> {
     // Both the Service claim and the final pool clone retain the acquisition.
     // Return only facts so stopped-file readers can acquire a fresh owner.
     drop(fixture);
-    db.close().await?;
+    finish_fixture_image(db).await?;
     Ok(seeded)
+}
+
+async fn finish_fixture_image(db: sea_orm::DatabaseConnection) -> Result<()> {
+    // These tests copy and compare the main file directly. Make the stopped
+    // image self-contained before handing it to the next reader.
+    let backend = db.get_database_backend();
+    let checkpoint = db
+        .query_one(Statement::from_string(
+            backend,
+            "PRAGMA wal_checkpoint(TRUNCATE)",
+        ))
+        .await?
+        .context("checkpointing retained Eval fixture")?;
+    ensure!(
+        checkpoint.try_get_by_index::<i64>(0)? == 0,
+        "fixture checkpoint was busy"
+    );
+    ensure!(checkpoint.try_get_by_index::<i64>(1)? == checkpoint.try_get_by_index::<i64>(2)?);
+    db.close().await?;
+    Ok(())
 }
 
 fn gateway_router(db: sea_orm::DatabaseConnection) -> Router {
@@ -347,8 +367,7 @@ async fn corrupt(path: &Path, gateway: bool, expression: &str) -> Result<()> {
         }
     }
     drop(database);
-    db.close().await?;
-    Ok(())
+    finish_fixture_image(db).await
 }
 
 #[tokio::test]

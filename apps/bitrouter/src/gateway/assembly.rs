@@ -12,7 +12,7 @@
 //! # Legacy custom-host assembly
 //!
 //! [`Plugin`] and [`AppBuilder::plugin`] retain the legacy convenience for
-//! trusted custom hosts to install hooks and SQL [`crate::gateway::extensions::legacy::MigrationItem`]s.
+//! trusted custom hosts to install hooks and SQL [`crate::gateway::extensions::plugin::MigrationItem`]s.
 //! These APIs assemble a host; they are not the restricted extension author API.
 //! New request-check extensions register a callback through
 //! [`crate::gateway::extensions::registry::ExtensionApi::request_check`], using
@@ -54,7 +54,7 @@ use bitrouter_ai::types::{Prompt, StreamPart};
 
 use crate::gateway::pipeline::types::{PipelineRequest, PipelineResponse};
 
-use crate::gateway::extensions::legacy::{MigrationItem, PluginId};
+use crate::gateway::extensions::plugin::{MigrationItem, PluginId};
 use crate::gateway::observability::metrics::MetricsRenderer;
 use crate::gateway::pipeline::builder::PipelineBuilder;
 use crate::gateway::{mcp, pipeline as language_model};
@@ -139,58 +139,6 @@ pub struct App {
 }
 
 impl App {
-    #[cfg(feature = "core")]
-    pub(crate) fn require_legacy_core(
-        &self,
-    ) -> std::result::Result<(), crate::managed_contract::protocol::CoreError> {
-        if self.tenancy.is_some() {
-            return Err(crate::managed_contract::protocol::CoreError::rejected(
-                crate::managed_contract::protocol::ErrorCode::UnauthorizedScope,
-                "tenant Core requires the authenticated native harness",
-            ));
-        }
-        Ok(())
-    }
-
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(crate) fn native_session_service(
-        &self,
-    ) -> std::result::Result<crate::tenancy::Service, crate::managed_contract::protocol::CoreError>
-    {
-        self.tenancy.clone().ok_or_else(|| {
-            crate::managed_contract::protocol::CoreError::rejected(
-                crate::managed_contract::protocol::ErrorCode::UnauthorizedScope,
-                "authenticated native harness requires tenancy",
-            )
-        })
-    }
-
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(crate) async fn execute_native_owned(
-        &self,
-        step: &crate::tenancy::execution::session::StepBinding,
-        prompt: bitrouter_ai::types::Prompt,
-        headers: http::HeaderMap,
-        control: std::sync::Arc<dyn crate::gateway::pipeline::native::NativeExecutionControl>,
-    ) -> crate::gateway::error::Result<crate::gateway::pipeline::types::PipelineResponse> {
-        let service = self
-            .tenancy
-            .as_ref()
-            .ok_or_else(|| crate::gateway::error::BitrouterError::UpstreamUnavailable)?;
-        service
-            .execute_session_native(step, prompt, headers, control)
-            .await
-    }
-
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(crate) fn capture_service(
-        &self,
-    ) -> std::result::Result<crate::tenancy::Service, anyhow::Error> {
-        self.tenancy
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("authenticated capture requires tenancy"))
-    }
-
     pub(crate) fn owned_inference_router(&self, router: axum::Router) -> axum::Router {
         match &self.tenancy {
             Some(service) => router.layer(axum::middleware::from_fn_with_state(

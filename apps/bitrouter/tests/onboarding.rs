@@ -10,10 +10,6 @@ use std::process::{Command, Output, Stdio};
 use serde_json::Value;
 use tempfile::TempDir;
 
-#[cfg(all(unix, feature = "harness"))]
-#[path = "support/example_binary.rs"]
-mod example_binary;
-
 /// The BYOK env vars the probe reads — removed so the test's own environment
 /// can't make an "unconfigured" case look configured.
 const PROBE_VARS: &[&str] = &[
@@ -37,7 +33,7 @@ fn startup_home() -> std::io::Result<TempDir> {
 }
 
 fn isolated_command(home: &Path) -> tokio::process::Command {
-    let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_bro"));
+    let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_bitrouter"));
     command
         .current_dir(home)
         .env("HOME", home)
@@ -136,51 +132,6 @@ async fn init_rejects_unpaired_keys_and_handles_a_closed_stdout_pipe() -> anyhow
     let status = tokio::time::timeout(std::time::Duration::from_secs(30), child.wait()).await??;
     assert!(!status.success());
     assert!(home.path().join(".bitrouter/bitrouter.yaml").is_file());
-    Ok(())
-}
-
-#[cfg(all(unix, feature = "harness"))]
-#[tokio::test]
-async fn init_after_launch_explicitly_runs_the_native_harness() -> anyhow::Result<()> {
-    let home = startup_home()?;
-    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-    let listen = listener.local_addr()?.to_string();
-    drop(listener);
-    isolated_config(home.path(), &listen)?;
-    let startup = invoke(home.path(), &[]).await?;
-    let ready: Value = serde_json::from_slice(&startup.stdout)?;
-    let pid = ready["pid"]
-        .as_u64()
-        .and_then(|pid| u32::try_from(pid).ok())
-        .ok_or_else(|| anyhow::anyhow!("daemon not ready: {ready}"))?;
-    let _daemon = TestDaemon { pid };
-    let fixture =
-        example_binary::build("bitrouter", "onboarding_fixture").map_err(anyhow::Error::msg)?;
-    std::os::unix::fs::symlink(&fixture, home.path().join("codex"))?;
-    let marker = home.path().join("native.marker");
-    let path = std::env::join_paths(std::iter::once(home.path().to_path_buf()).chain(
-        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
-    ))?;
-    let output = tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        isolated_command(home.path())
-            .args(["init", "--yes", "--harness", "codex", "--after", "launch"])
-            .env("PATH", path)
-            .env("ONBOARDING_NATIVE_MARKER", &marker)
-            .output(),
-    )
-    .await??;
-    assert!(
-        output.status.success(),
-        "{}; {}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(std::fs::read_to_string(marker)?, "native codex launched");
-    assert_eq!(
-        serde_json::from_slice::<Value>(&output.stdout)?["after"],
-        "launch"
-    );
     Ok(())
 }
 
@@ -350,7 +301,7 @@ async fn configured_runtime_is_reused_without_a_file_chat_agent_or_client_creden
 /// Run the compiled binary with an isolated home/data dir and a null (non-TTY)
 /// stdin. `extra_env` layers provider-key or `BITROUTER_HOME` overrides on top.
 fn run_cli(home: &Path, data_home: &Path, args: &[&str], extra_env: &[(&str, &str)]) -> Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_bro"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bitrouter"));
     command
         .args(args)
         .current_dir(home)
@@ -577,7 +528,7 @@ fn init_preserves_existing_settings_unless_force_is_requested() -> anyhow::Resul
         "server: { listen: '127.0.0.1:9012', skip_auth: false }\n",
     )?;
 
-    // Without --force, existing values survive the saved chat default.
+    // Normal onboarding preserves existing server settings.
     let out = run_cli(
         home.path(),
         data.path(),
@@ -612,96 +563,19 @@ fn init_preserves_existing_settings_unless_force_is_requested() -> anyhow::Resul
     Ok(())
 }
 
-#[cfg(feature = "harness")]
 #[test]
-fn init_saves_default_harness_model_and_user_home() -> anyhow::Result<()> {
-    let home = TempDir::new()?;
-    let data = TempDir::new()?;
-    let out = run_cli(
-        home.path(),
-        data.path(),
-        &[
-            "init",
-            "--yes",
-            "--harness",
-            "codex",
-            "--model",
-            "openai-codex:gpt-6-astra",
-        ],
-        &[],
-    );
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let path = home.path().join(".bitrouter/bitrouter.yaml");
-    let config: Value = serde_saphyr::from_str(&std::fs::read_to_string(&path)?)?;
-    assert_eq!(config["chat"]["agent"], "codex-acp");
-    assert_eq!(config["chat"]["model"], "openai-codex:gpt-6-astra");
-    assert_eq!(config["server"]["listen"], "127.0.0.1:4356");
-    assert_eq!(config["server"]["skip_auth"], true);
-    assert!(!home.path().join("bitrouter.yaml").exists());
-    Ok(())
-}
-
-#[cfg(feature = "harness")]
-#[test]
-fn changing_harness_preserves_routes_and_chat_commands() -> anyhow::Result<()> {
-    let home = TempDir::new()?;
-    let data = TempDir::new()?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(home.path(), std::fs::Permissions::from_mode(0o755))?;
-    }
-    let path = home.path().join("bitrouter.yaml");
-    std::fs::write(
-        &path,
-        "server: { listen: '127.0.0.1:9012', skip_auth: false }\nchat:\n  agent: codex-acp\n  model: custom/model\n  commands: [{ name: review, prompt: 'Review $ARGUMENTS' }]\nproviders: { private: { api_base: 'https://example.invalid/v1' } }\n",
-    )?;
-    let out = run_cli(
-        home.path(),
-        data.path(),
-        &["init", "--yes", "--harness", "claude"],
-        &[],
-    );
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let config: Value = serde_saphyr::from_str(&std::fs::read_to_string(path)?)?;
-    assert_eq!(config["chat"]["agent"], "claude-acp");
-    assert_eq!(config["chat"]["model"], "custom/model");
-    assert_eq!(config["chat"]["commands"][0]["name"], "review");
-    assert_eq!(config["server"]["skip_auth"], false);
-    assert_eq!(
-        config["providers"]["private"]["api_base"],
-        "https://example.invalid/v1"
-    );
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        assert_eq!(
-            std::fs::metadata(home.path())?.permissions().mode() & 0o777,
-            0o755
-        );
-    }
-    Ok(())
-}
-
-#[test]
-fn public_help_exposes_canonical_agent_entry_points() -> anyhow::Result<()> {
+fn public_help_exposes_gateway_operator_commands() -> anyhow::Result<()> {
     let home = TempDir::new()?;
     let data = TempDir::new()?;
     let out = run_cli(home.path(), data.path(), &["--help"], &[]);
     assert!(out.status.success());
     let help = String::from_utf8_lossy(&out.stdout);
-    for command in ["launch", "claude", "codex", "run", "code", "acp"] {
+    for command in ["serve", "key", "route", "policy", "eval", "tenancy"] {
         assert!(help.contains(&format!("  {command}")), "{command}: {help}");
     }
-    for hidden in ["spawn", "chat", "tui"] {
+    for hidden in [
+        "spawn", "chat", "tui", "launch", "claude", "codex", "run", "code", "acp", "task", "thread",
+    ] {
         assert!(
             !help.contains(&format!("  {hidden}")),
             "hidden command {hidden}: {help}"
@@ -710,7 +584,7 @@ fn public_help_exposes_canonical_agent_entry_points() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(any(feature = "harness", feature = "mcp"))]
+#[cfg(feature = "mcp")]
 #[tokio::test]
 async fn onboarding_saves_mcp_without_installing_skills_or_starting_the_resource()
 -> anyhow::Result<()> {

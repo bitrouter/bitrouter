@@ -45,14 +45,6 @@ impl Connections {
         );
         Ok(())
     }
-    pub(crate) async fn open(&mut self, path: &Path, immutable: bool) -> Result<()> {
-        self.check()?;
-        ensure!(path.to_str().is_some(), "SQLite path must be UTF-8");
-        let options = options(path, immutable);
-        #[cfg(all(test, unix))]
-        let options = tests::initialization_options(path, options);
-        self.open_options(options, immutable, None).await
-    }
     pub(crate) async fn open_budgeted(
         &mut self,
         path: &Path,
@@ -62,8 +54,6 @@ impl Connections {
         self.check()?;
         ensure!(path.to_str().is_some(), "SQLite path must be UTF-8");
         let options = options(path, immutable);
-        #[cfg(all(test, unix))]
-        let options = tests::initialization_options(path, options);
         self.open_options(options, immutable, Some(workspace)).await
     }
     /// Open a clean, externally fenced source without creating SQLite sidecars.
@@ -94,15 +84,6 @@ impl Connections {
         super::large::Source::inspect(path)?;
         // Immutable skips locking and change detection; external writers must
         // remain fenced until publication. https://sqlite.org/uri.html#uriimmutable
-        Ok(())
-    }
-    pub(super) async fn destination_cleanup_budget(&mut self) -> Result<()> {
-        self.source
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("destination missing"))?
-            .lock_handle()
-            .await?
-            .remove_progress_handler();
         Ok(())
     }
     /// Complete validation is cancellable, but has no cumulative time/work cap.
@@ -157,28 +138,6 @@ impl Connections {
             .ok_or_else(|| anyhow::anyhow!("connection unavailable"))?;
         policy(db, self.cancel.clone(), self.deadline).await?;
         self.check()
-    }
-    /// Reset only query work; cleanup never shares a cancellable await.
-    pub(crate) async fn read_budget(
-        &mut self,
-        cancel: CancellationToken,
-        remaining: Duration,
-    ) -> Result<()> {
-        self.cancel = cancel;
-        self.deadline = Some(Instant::now() + remaining.min(Duration::from_secs(5)));
-        let db = self
-            .copy
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("audit connection missing"))?;
-        policy(db, self.cancel.clone(), self.deadline).await
-    }
-    pub(crate) async fn cleanup_budget(&mut self) -> Result<()> {
-        let db = self
-            .copy
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("audit connection missing"))?;
-        db.lock_handle().await?.remove_progress_handler();
-        Ok(())
     }
     pub(crate) async fn close(&mut self) -> Result<()> {
         let unresolved = self.uncertain;

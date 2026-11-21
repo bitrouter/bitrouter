@@ -14,7 +14,7 @@ fn configuration(telemetry: &str) -> String {
 }
 
 #[tokio::test]
-async fn startup_reload_loading_and_handoff_preflight_reject_before_storage() -> Result<()> {
+async fn startup_and_reload_refuse_unavailable_telemetry_before_storage() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("bitrouter.yaml");
     let raw = configuration("    telemetry: { enabled: true, attribution: account }");
@@ -34,11 +34,7 @@ async fn startup_reload_loading_and_handoff_preflight_reject_before_storage() ->
         .await
         .err()
         .context("reload preparation accepted unavailable export")?;
-    let preflight_error = bitrouter::upgrade_preflight::Preflight::check_explicit(&source)
-        .await
-        .err()
-        .context("handoff preflight accepted unavailable export")?;
-    for error in [assembly_error, load_error, reload_error, preflight_error] {
+    for error in [assembly_error, load_error, reload_error] {
         let diagnostic = format!("{error:#}");
         ensure!(
             diagnostic.contains("plugins.bitrouter-telemetry.telemetry.enabled"),
@@ -77,7 +73,7 @@ async fn explicit_yaml_and_environment_opt_in_fail_before_serve_side_effects() -
         let path = directory.path().join("bitrouter.yaml");
         std::fs::write(&path, configuration(telemetry))?;
         let runtime = directory.path().join("runtime");
-        let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_bro"));
+        let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_bitrouter"));
         command
             .args(["serve", "--config"])
             .arg(&path)
@@ -121,7 +117,7 @@ async fn zero_config_environment_opt_in_rejects_before_enrichment() -> Result<()
     let runtime = directory.path().join(".bitrouter");
     let output = tokio::time::timeout(
         Duration::from_secs(20),
-        tokio::process::Command::new(env!("CARGO_BIN_EXE_bro"))
+        tokio::process::Command::new(env!("CARGO_BIN_EXE_bitrouter"))
             .arg("serve")
             .current_dir(directory.path())
             .env_clear()

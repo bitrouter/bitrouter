@@ -27,6 +27,8 @@
 //! should always pass `-c <path>` explicitly so they never depend on the
 //! live env.
 
+mod product_home;
+
 use std::path::{Path, PathBuf};
 
 use crate::commands::invocation;
@@ -78,6 +80,54 @@ impl ConfigSource {
     }
 }
 
+/// Check the selected home before gateway commands touch the filesystem.
+pub(crate) fn check_gateway_home(home: &Path) -> Result<()> {
+    product_home::check(home)
+}
+
+pub(crate) fn claim_gateway_home(home: &Path) -> Result<()> {
+    product_home::claim_if_runtime(home)
+}
+
+/// Resolve and check the parent of a file-backed SQLite target without opening it.
+pub(crate) fn gateway_database_home(url: &str, base: &Path) -> Result<Option<PathBuf>> {
+    use sea_orm::sqlx::sqlite::SqliteConnectOptions;
+    let Some(sqlite) = url
+        .strip_prefix("sqlite://")
+        .or_else(|| url.strip_prefix("sqlite:"))
+    else {
+        return Ok(None);
+    };
+    let (filename, query) = sqlite.split_once('?').unwrap_or((sqlite, ""));
+    let options: SqliteConnectOptions = url.parse()?;
+    if filename == ":memory:"
+        || url::form_urlencoded::parse(query.as_bytes())
+            .any(|(key, value)| key == "mode" && value == "memory")
+    {
+        return Ok(None);
+    }
+    let path = base.join(options.get_filename());
+    match path.canonicalize() {
+        Ok(target) => {
+            if let Some(parent) = target.parent() {
+                check_gateway_home(parent)?;
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            anyhow::ensure!(
+                !path.is_symlink(),
+                "SQLite target is a dangling symlink: {}",
+                path.display()
+            );
+        }
+        Err(error) => return Err(error.into()),
+    }
+    if let Some(parent) = path.parent() {
+        check_gateway_home(parent)?;
+    }
+    Ok(path.parent().map(Path::to_path_buf))
+}
+
 /// Resolve the config source according to the documented order. Reads
 /// the live environment (`current_dir`, `$BITROUTER_HOME`, `$HOME`, and
 /// `%USERPROFILE%` on Windows as the `$HOME` fallback).
@@ -97,6 +147,12 @@ pub fn resolve_config(explicit: Option<&Path>) -> Result<ConfigSource> {
     // the operator having to set `$BITROUTER_HOME` by hand.
     #[cfg(windows)]
     let home = home.or_else(|| std::env::var_os("USERPROFILE").filter(|v| !v.is_empty()));
+    if let Some(parent) = explicit.and_then(Path::parent) {
+        check_gateway_home(parent)?;
+    }
+    if let Some(home) = bitrouter_home.as_deref() {
+        check_gateway_home(Path::new(home))?;
+    }
     let outcome = resolve_config_with(
         explicit,
         cwd.as_deref(),
@@ -108,6 +164,7 @@ pub fn resolve_config(explicit: Option<&Path>) -> Result<ConfigSource> {
     // CWD; a relative `-c ./foo.yaml` would get lost once the chdir
     // happens. Absolutising without following symlinks keeps the
     // displayed path readable.
+    check_gateway_home(outcome.home())?;
     Ok(match outcome {
         ConfigSource::File(path) => ConfigSource::File(absolutize(path)),
         ConfigSource::Default { home } => ConfigSource::Default {
@@ -217,7 +274,7 @@ pub async fn load_config(source: &ConfigSource) -> Result<crate::config::Config>
             Ok(cfg)
         }
     }?;
-    crate::policy_lock::apply_defaults(
+    crate::policy_source::apply_defaults(
         &mut config,
         match source {
             ConfigSource::File(path) => Some(path.as_path()),

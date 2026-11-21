@@ -208,7 +208,7 @@ impl Import {
                 name,
                 dependencies,
             } => {
-                crate::policy_lock::validate_document(document)
+                crate::policy_source::validate_document(document)
                     .map_err(|_| anyhow::anyhow!("invalid policy artifact"))?;
                 ensure!(
                     document.policies.contains_key(name) && name.len() <= 256,
@@ -306,20 +306,6 @@ impl Definition {
                     && assessment.is_none()
                     && block.is_none(),
                 "experimental routes require the explicit BRO harness"
-            );
-        }
-        Ok(())
-    }
-
-    pub(super) fn require_bro_capture(&self) -> Result<()> {
-        ensure!(
-            cfg!(all(feature = "core", feature = "harness")),
-            "BRO capture requires core and harness"
-        );
-        if let Self::Route { exploration, .. } = self {
-            ensure!(
-                exploration.is_empty(),
-                "retired route exploration is not a current BRO obligation"
             );
         }
         Ok(())

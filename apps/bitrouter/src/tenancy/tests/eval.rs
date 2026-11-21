@@ -13,7 +13,7 @@ use std::time::Duration;
 use tower::ServiceExt;
 
 pub(in crate::tenancy::tests) mod authority;
-#[cfg(feature = "core")]
+#[cfg(feature = "eval-publication")]
 mod custody;
 #[cfg(unix)]
 mod retained;

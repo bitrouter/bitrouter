@@ -93,10 +93,6 @@ impl Budget {
         Ok(Charge {
             budget: self.clone(),
             bytes,
-            #[cfg(feature = "harness")]
-            encoded_bytes,
-            #[cfg(feature = "harness")]
-            maintenance,
             started: false,
             settled: false,
         })
@@ -114,35 +110,11 @@ impl Budget {
 pub(crate) struct Charge {
     budget: Budget,
     bytes: u64,
-    #[cfg(feature = "harness")]
-    encoded_bytes: usize,
-    #[cfg(feature = "harness")]
-    maintenance: bool,
     started: bool,
     settled: bool,
 }
 
 impl Charge {
-    /// Extend one transaction's reservation before its next mutation. Earlier
-    /// writes remain charged until the entire transaction is acknowledged.
-    #[cfg(feature = "harness")]
-    pub(crate) fn grow(&mut self, additional_encoded: usize) -> Result<(), ErrorCode> {
-        let encoded = self
-            .encoded_bytes
-            .checked_add(additional_encoded)
-            .ok_or(ErrorCode::CapacityExceeded)?;
-        let bytes = estimate(u64::try_from(encoded).map_err(|_| ErrorCode::CapacityExceeded)?)?;
-        let additional = bytes
-            .checked_sub(self.bytes)
-            .ok_or(ErrorCode::CapacityExceeded)?;
-        self.budget
-            .admission
-            .reserve_physical_write(additional, self.maintenance)?;
-        self.encoded_bytes = encoded;
-        self.bytes = bytes;
-        Ok(())
-    }
-
     pub(crate) fn start(&mut self) {
         self.started = true;
     }
@@ -223,7 +195,7 @@ pub(crate) fn storage_health_error(error: &anyhow::Error) -> bool {
 /// Positive evidence of a SQLite statement refusal, not an exemption for every
 /// non-health error. Logical integrity failures remain conservative even when
 /// their source happens to contain a constraint code.
-#[cfg(feature = "core")]
+#[cfg(feature = "eval-publication")]
 pub(crate) fn sqlite_statement_refusal(error: &anyhow::Error) -> bool {
     use crate::eval::store::OwnedError;
     use sea_orm::sqlx::{Error, error::DatabaseError, sqlite::SqliteError};

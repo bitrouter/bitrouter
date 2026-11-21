@@ -479,7 +479,7 @@ impl Publication {
     pub(in crate::tenancy) fn publish(mut self) -> Result<(), ErrorCode> {
         self.finish(false)
     }
-    #[cfg(any(test, all(feature = "core", feature = "harness")))]
+    #[cfg(test)]
     pub(in crate::tenancy) fn rollback(mut self) -> Result<(), ErrorCode> {
         self.finish(true)
     }

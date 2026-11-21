@@ -1,139 +1,32 @@
 # Harness: Codex
 
-Native `bro task run` supplies stable Core run and agent identities to routing
-and task evaluation. All model steps and child agents in a run share an
-experiment assignment; recovery retains that identity. Embedding hosts may
-retain their explicit outer workflow identity. These identities do not choose
-semantic labels or model tiers.
+Run the bundled Codex ACP adapter through BRO. Start BitRouter separately
+and set `BITROUTER_ENDPOINT` and `BITROUTER_API_KEY` for the selected gateway.
+Use `bro acp list` to inspect available adapters. The bundled adapter launches
+through `npx`.
 
-Decision JSONL records include a digest of the canonical ingress request ID,
-including direct Core calls without HTTP headers. An evaluator can join these
-to native attempt records while guarded trajectory IDs remain owner-opaque.
+To use a subscription route, configure the corresponding provider on the
+gateway host:
 
-Codex has two deliberate BitRouter facets:
-
-- `bro run codex` drives the maintained ACP adapter for one headless turn;
-  `--background` gives controller ownership to the daemon.
-- `bro codex` launches Codex's own native interface with reversible
-  one-shot configuration overrides.
-
-For local ACP sessions, install Node.js 22+ and `npx`. No `agents:` YAML is
-required. A ChatGPT Codex subscription can be imported with:
-
-```bash
-bro providers login openai-codex --import-existing
-bro init --yes --harness codex --after exit
+```sh
+bitrouter providers login openai-codex --import-existing
 ```
 
 ## ACP session
 
-For daemon skill allocation, use `bro run codex "review changes" --background
---skill project:DIRECTORY_ID` (one command). Obtain directory IDs with
-`bro skills list`; repeat `--skill` or `--exclude-skill` with project/global IDs.
-The daemon sends verified local root instructions as ACP text, bound to the
-directory manifest, content fingerprint, path and input identity. Only explicit
-includes are delivered; no decision backend is called. Acquisition belongs to
-`npx skills`.
-Inspect `agents show RUN` for negotiated delivery capability and original facts.
-This is prompt delivery; native activation, protected supporting-file access and
-vendor token/history admission are not verified. Old skill text may remain in
-agent history after a later input excludes it. MCP-origin required entries,
-required skills on native slash commands, and non-background allocation are
-unsupported. Existing ACP permissions and controls remain independent. Local
-fixtures are verified separately from real Codex sessions, which remain unverified.
-
-```bash
-bro run codex "summarize this repo"
-bro acp serve codex
+```sh
+bro acp --workspace . prompt --agent codex 'Summarize this project'
+bro acp --workspace . serve codex
 ```
 
-The pinned `@agentclientprotocol/codex-acp@1.10.0` adapter uses a local Codex
-CLI when its version is at least 0.153.3. Older, missing, failing, or
-unresponsive CLIs use the adapter's bundled worker. `CODEX_PATH` can select a
-worker explicitly; it does not bypass ACP. `--direct` keeps the adapter's own
-provider authentication; ordinary sessions route through BitRouter and can
-auto-start the local daemon.
+`prompt` emits NDJSON and declines external permission requests. `serve`
+forwards ACP over stdio so an ACP manager can handle permissions. Use
+`prompt --model MODEL` to set an explicit model for a single prompt.
+See [sessions and authority](sessions.md).
 
-With an active `openai-codex` provider, no model pin is needed: the ACP adapter
-keeps the Codex CLI's native default and model picker. BitRouter maps its
-declared native model names to the Codex subscription at gateway ingress.
-Generic API calls still require an explicit subscription route; canonical ids,
-provider-qualified routes, named routers, and user-defined virtual models retain
-their normal routing behavior. A daemon reload updates this mapping too.
+## Native BRO task
 
-`init --model ID` saves the default model. `run codex PROMPT --model ID` overrides it
-for one session. No vendor CLI config file is rewritten.
-
-## Native interface
-
-```bash
-bro codex
-bro codex --model gpt-6.1-sol
-```
-
-The native launcher supplies a `bitrouter` model provider for
-`http://localhost:4356/v1` with `wire_api="responses"` through one-shot `-c`
-arguments; it does not edit `~/.codex/config.toml`. `BITROUTER_API_KEY` is used
-when set, otherwise the launcher supplies the placeholder accepted by the
-`skip_auth: true` local default. Everything after `--` is forwarded verbatim,
-and a missing local daemon is auto-started unless `--no-start` is set.
-
-Like the ACP facet, the native launcher identifies Codex requests at gateway
-ingress. Declared native model names such as `gpt-6.1-sol` remain available for
-Codex model metadata and resolve through the active
-`openai-codex` subscription provider.
-Explicit routes and user-defined virtual models keep their normal semantics.
-For its own local daemon, the launcher adds the aggregate MCP gateway only
-when it is enabled and has configured MCP upstreams. External daemon targets
-keep the configured gateway route because their upstreams are managed remotely.
-Codex can still warn and use fallback model metadata
-if its own catalog does not recognize the selected model; that warning does not
-indicate a failed BitRouter route.
-
-Existing Codex processes must be restarted before changed provider routing
-takes effect. Inspect routed traffic with `bro requests`; ACP session
-diagnostics live under the BitRouter home in `logs/session-*.log`.
-
-## BRO native tools with a Codex subscription
-
-`bro threads` and `bro task run` use BRO's native harness.
-With automatic context routing, the native harness permits a portable execution
-view when a model switch rejects authenticated Responses reasoning. Core retains
-the original source and public messages/tool pairs, omits Responses reasoning
-from the new view, and reruns admission and checks with the chosen model fixed.
-Fixed context and policy `preserve` do not permit this projection. Remote-state
-dependencies and other private signatures remain nonportable. Custom harnesses
-must explicitly negotiate `portable_responses_reasoning_v1` to permit it.
-After importing an existing subscription login, the shortest startup is:
-
-```bash
-bro providers login openai-codex --import-existing
-bro task run "Inspect this workspace" --read-only
-```
-
-The native default is `bitrouter/auto`, using the policy shipped with the binary.
-No `chat.model`, policy file or output-token flag is needed. The current policy
-uses its strong default and contains no pretrained routes. Model capacities
-come from the registry, with an offline bundled fallback, and the reservation
-follows the selected model. A decision backend is optional; see
-[decision-native.md](decision-native.md) for typed decision configuration.
-
-To pin a model or run a headless task:
-
-```bash
-bro threads create --model openai-codex:openai/gpt-6.1-sol --workspace PATH
-bro task run "Inspect this workspace" --read-only --workspace PATH
-```
-
-Headless NDJSON emits changed routing observations and omits events without
-public changes. Durable cursors remain monotonic, with gaps; consumers must
-not interpret those gaps as lost tool results or missing model responses.
-
-Native journal rows compress checkpoint content without changing durable
-facts, hashes, or cursors. Startup upgrades older compressed rows atomically;
-older binaries cannot read the new storage encoding.
-
-An explicit `--max-output-tokens` is retained with the Thread. It bounds
-admission; it does not promise a provider-enforced cap or establish a monetary
-subscription cost. Uncappable routes require their declared output ceiling;
-do not lower that ceiling to make a smaller reservation pass.
+For BRO's native workspace tools, select a model from `bitrouter models`.
+A subscription route uses the provider-qualified selector printed by
+the gateway, for example `openai-codex:openai/gpt-6.1-sol` when available. Pass that selector with
+`bro task run --model MODEL`. BRO owns the local approvals and thread history.

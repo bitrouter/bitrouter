@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use super::fusion::config::FusionConfig;
 use super::toolset::ToolContext;
 use crate::gateway::error::Result;
-use crate::gateway::extensions::legacy::PluginId;
+use crate::gateway::extensions::plugin::PluginId;
 use crate::gateway::pipeline::context::PipelineContext;
 use crate::gateway::pipeline::hooks::{HookDecision, PreRequestHook};
 use bitrouter_ai::types::{Prompt, ProviderMetadata, Tool};

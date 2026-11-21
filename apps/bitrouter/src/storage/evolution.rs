@@ -102,25 +102,6 @@ impl EvolutionStore {
         self.decode_record(kind, row)
     }
 
-    /// Read a mutation-time fence after its owning connection/session locks.
-    /// Missing records remain meaningful; never create a row to validate it.
-    pub(crate) async fn get_current_in<T: DeserializeOwned>(
-        &self,
-        tx: &DatabaseTransaction,
-        kind: &str,
-        key: &str,
-    ) -> Result<Option<(i64, T)>> {
-        // Ordinary reads can retain an earlier MySQL RR snapshot even after
-        // the caller has acquired its authority row locks.
-        // https://dev.mysql.com/doc/refman/8.4/en/innodb-locking-reads.html
-        let row = records::Entity::find_by_id(self.id(kind, key)?)
-            .filter(crate::storage::legacy::scope("checkpoint_evolution"))
-            .lock_exclusive()
-            .one(tx)
-            .await?;
-        self.decode_record(kind, row)
-    }
-
     fn decode_record<T: DeserializeOwned>(
         &self,
         kind: &str,

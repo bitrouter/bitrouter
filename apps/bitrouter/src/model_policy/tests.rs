@@ -35,7 +35,7 @@ fn source_digest_matches_recursively_sorted_utf8_json_vector() -> Result<()> {
 
     assert_eq!(source_digest(&document)?, EXPECTED);
     assert_eq!(compile(&document)?.digest(), EXPECTED);
-    assert_eq!(crate::policy_lock::semantic_digest(&document)?, EXPECTED);
+    assert_eq!(crate::policy_source::semantic_digest(&document)?, EXPECTED);
     Ok(())
 }
 
@@ -356,7 +356,7 @@ async fn selection_uses_literal_names_and_missing_suffix_never_falls_back() -> R
         inherit_defaults: false,
         ..Default::default()
     };
-    let runtime = crate::policy_lock::PolicyRuntime::from_document(
+    let runtime = crate::policy_source::PolicyRuntime::from_document(
         &config,
         Some(parse(&value)?),
         Default::default(),
@@ -396,7 +396,7 @@ async fn default_tool_and_server_tool_bypass_preserve_admitted_content() -> Resu
         inherit_defaults: false,
         ..Default::default()
     };
-    let runtime = crate::policy_lock::PolicyRuntime::from_document(
+    let runtime = crate::policy_source::PolicyRuntime::from_document(
         &config,
         Some(parse(&source())?),
         Default::default(),
@@ -538,7 +538,7 @@ async fn fixed_native_case(reject: bool) -> Result<()> {
         "providers":{"fixture":{"api_base":"https://example.invalid/v1","models":[{"id":"base"},{"id":"small"},{"id":"large"}]}},
         "routers":{"auto":{"selection":{"kind":"policy","policy":"auto","base_model":"fixture:base"}}}
     }))?;
-    let runtime = crate::policy_lock::PolicyRuntime::from_document(
+    let runtime = crate::policy_source::PolicyRuntime::from_document(
         &config,
         Some(parse(&source())?),
         Default::default(),

@@ -250,31 +250,6 @@ pub(in crate::tenancy) async fn head(
         .transpose()
 }
 
-/// A fresh verifier requires lifecycle metadata for each independently approved
-/// revision and a usable current head. Its inventory separately proves coverage.
-pub(in crate::tenancy) async fn inspect_fresh_in(
-    db: &impl ConnectionTrait,
-    installation: &InstallationId,
-    authority: AuthorityRevision,
-    reference: &ResourceRef,
-) -> Result<()> {
-    let record = exact(db, installation, reference)
-        .await?
-        .context("fresh resource lifecycle missing")?;
-    ensure!(
-        !record.revoked && record.authority_revision <= authority,
-        "fresh resource lifecycle is revoked or outside approved authority"
-    );
-    let head = head(db, installation, &reference.key())
-        .await?
-        .context("fresh resource lifecycle has no head")?;
-    ensure!(
-        !head.revoked && head.authority_revision <= authority,
-        "fresh resource head is revoked or outside approved authority"
-    );
-    Ok(())
-}
-
 /// Upsert exactly one revision inside the single writer's caller-owned transaction.
 /// Rotation demotes the old head before inserting the new one; revocation supplies
 /// the exact revision's existing head flag. Immutable contents are never mutated.
@@ -405,48 +380,6 @@ mod tests {
     async fn sql(db: &impl ConnectionTrait, sql: &str) -> Result<()> {
         db.execute(Statement::from_string(DatabaseBackend::Sqlite, sql))
             .await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn fresh_verifier_requires_current_unrevoked_lifecycle_and_unique_head() -> Result<()> {
-        let db = database().await?;
-        let installation = "installation".try_into()?;
-        let allowed = 3.try_into()?;
-        let head = record("v1")?;
-        let mut second = record("v2")?;
-        second.is_head = false;
-        retain(&db, &head).await?;
-        retain(&db, &second).await?;
-        ensure!(
-            inspect_fresh_in(&db, &installation, allowed, &head.reference)
-                .await
-                .is_err()
-        );
-        write(&db, &installation, &head).await?;
-        write(&db, &installation, &second).await?;
-        inspect_fresh_in(&db, &installation, allowed, &head.reference).await?;
-        inspect_fresh_in(&db, &installation, allowed, &second.reference).await?;
-        ensure!(
-            inspect_fresh_in(&db, &installation, 0.try_into()?, &head.reference)
-                .await
-                .is_err()
-        );
-        for statement in [
-            "UPDATE tenancy_resource_lifecycle SET revoked=1 WHERE revision_id='v1'",
-            "UPDATE tenancy_resource_lifecycle SET is_head=0 WHERE revision_id='v1'",
-            "UPDATE tenancy_resource_lifecycle SET is_head=1 WHERE revision_id='v2'",
-        ] {
-            let tx = db.begin().await?;
-            sql(&tx, statement).await?;
-            ensure!(
-                inspect_fresh_in(&tx, &installation, allowed, &second.reference)
-                    .await
-                    .is_err()
-            );
-            tx.rollback().await?;
-        }
-        db.close().await?;
         Ok(())
     }
 

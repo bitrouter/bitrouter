@@ -12,11 +12,8 @@ pub mod commands;
 pub mod models;
 pub mod requests;
 pub mod route;
-pub mod session;
 pub mod skills;
 pub mod status;
-#[cfg(feature = "harness")]
-pub(crate) mod supervised;
 
 /// A typed action failed.
 ///
@@ -114,7 +111,7 @@ pub const ACTIONS: &[ActionSpec] = &[
     },
     ActionSpec {
         id: "route_set",
-        cli_leaf: if cfg!(feature = "harness") {
+        cli_leaf: if false {
             Some("agents route set")
         } else {
             None
@@ -128,7 +125,7 @@ pub const ACTIONS: &[ActionSpec] = &[
     },
     ActionSpec {
         id: "route_reset",
-        cli_leaf: if cfg!(feature = "harness") {
+        cli_leaf: if false {
             Some("agents route reset")
         } else {
             None

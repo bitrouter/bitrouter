@@ -1,6 +1,6 @@
 //! The `status` action: *is BitRouter up, and am I OK to spend?*
 //!
-//! One report type is shared by `bro status`, Code sessions, and typed remote
+//! One report type is shared by `bitrouter status`, Code sessions, and typed remote
 //! control so all retained surfaces preserve the same JSON shape. AI owns the
 //! report contract; the app owns the port and implementation over the daemon
 //! control socket and local metering database.
@@ -53,7 +53,7 @@ use crate::metering::store::TimeWindow;
 use crate::paths::ConfigSource;
 
 /// The window `status` reports spend over, and the label it carries in the
-/// report. `bro status --requests` rolls up the same day, so the
+/// report. `bitrouter status --requests` rolls up the same day, so the
 /// agent-facing spend surfaces agree.
 const SPEND_WINDOW: TimeWindow = TimeWindow::Today;
 

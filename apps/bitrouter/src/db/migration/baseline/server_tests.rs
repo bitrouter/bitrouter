@@ -1,81 +1,8 @@
 //! Real isolated PostgreSQL/MySQL baseline and refusal campaigns; no old binary.
+use super::super::server_fixture::OwnedServer;
 use super::*;
 use anyhow::{Context, Result, ensure};
-use sea_orm::{ConnectOptions, Database, DatabaseConnection};
-
-struct OwnedServer {
-    admin: DatabaseConnection,
-    database: DatabaseConnection,
-    name: String,
-}
-
-impl OwnedServer {
-    async fn new(backend: DatabaseBackend) -> Result<Self> {
-        let address = std::env::var("BITROUTER_TEST_MIGRATION_DATABASE_URL")
-            .context("dedicated migration database URL required; no fallback")?;
-        let mut selected = url::Url::parse(&address).context("invalid dedicated database URL")?;
-        ensure!(
-            match backend {
-                DatabaseBackend::Postgres => matches!(selected.scheme(), "postgres" | "postgresql"),
-                DatabaseBackend::MySql => selected.scheme() == "mysql",
-                _ => false,
-            },
-            "wrong backend selected for baseline campaign"
-        );
-        let mut options = ConnectOptions::new(address);
-        options
-            .max_connections(1)
-            .min_connections(1)
-            .sqlx_logging(false);
-        let admin = Database::connect(options)
-            .await
-            .context("baseline admin connection unavailable")?;
-        let name = format!("m0_baseline_{}", uuid::Uuid::new_v4().simple());
-        let create = match backend {
-            DatabaseBackend::Postgres => format!("CREATE DATABASE {name}"),
-            DatabaseBackend::MySql => {
-                format!("CREATE DATABASE {name} CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin")
-            }
-            _ => anyhow::bail!("server campaign backend"),
-        };
-        admin.execute_unprepared(&create).await?;
-        selected.set_path(&format!("/{name}"));
-        let mut options = ConnectOptions::new(selected.as_str());
-        options
-            .max_connections(1)
-            .min_connections(1)
-            .sqlx_logging(false);
-        let database = match Database::connect(options).await {
-            Ok(database) => database,
-            Err(error) => {
-                admin
-                    .execute_unprepared(&format!("DROP DATABASE {name}"))
-                    .await?;
-                admin.close().await?;
-                return Err(error.into());
-            }
-        };
-        Ok(Self {
-            admin,
-            database,
-            name,
-        })
-    }
-
-    async fn finish(self, result: Result<()>) -> Result<()> {
-        let closed = self.database.close().await;
-        let dropped = self
-            .admin
-            .execute_unprepared(&format!("DROP DATABASE {}", self.name))
-            .await;
-        let admin_closed = self.admin.close().await;
-        result?;
-        closed?;
-        dropped?;
-        admin_closed?;
-        Ok(())
-    }
-}
+use sea_orm::DatabaseConnection;
 
 #[cfg(feature = "db-postgres")]
 #[tokio::test]
@@ -92,7 +19,7 @@ async fn mysql_current_baseline_catalog_and_refusal() -> Result<()> {
 }
 
 async fn campaign(backend: DatabaseBackend) -> Result<()> {
-    let fixture = OwnedServer::new(backend).await?;
+    let fixture = OwnedServer::new(backend, "BITROUTER_TEST_MIGRATION_DATABASE_URL").await?;
     let checked = async {
         let db = &fixture.database;
         ensure!(store_format::inspect(db).await? == State::Empty);
@@ -100,8 +27,19 @@ async fn campaign(backend: DatabaseBackend) -> Result<()> {
         // This compares the real backend catalog with the frozen, independently
         // reviewed schema profile, including keys, collation and constraints.
         crate::db::current_schema::validate(db).await?;
+        for table in [
+            "acp_capture_connections",
+            "acp_canonical_sessions",
+            "bro_runtime_ownership",
+            "bro_execution_records",
+        ] {
+            ensure!(
+                !SchemaManager::new(db).has_table(table).await?,
+                "unexpected table {table}"
+            );
+        }
         let ledger = super::super::Migrator::get_migration_models(db).await?;
-        ensure!(ledger.len() == 1 && ledger[0].version == store_format::BASELINE);
+        ensure!(ledger.len() == 1 && ledger[0].version == store_format::GATEWAY_SERVER);
         db.execute_unprepared(
             "INSERT INTO users(id,created_at) VALUES ('retained-user','2026-11-18T00:00:00Z')",
         )
@@ -117,6 +55,9 @@ async fn campaign(backend: DatabaseBackend) -> Result<()> {
                 .await?
                 .is_some()
             );
+        }
+        if backend == DatabaseBackend::MySql {
+            mysql_metering_restart(&fixture).await?;
         }
         let drop_index = match backend {
             DatabaseBackend::Postgres => "DROP INDEX idx_requests_user_created",
@@ -139,6 +80,39 @@ async fn campaign(backend: DatabaseBackend) -> Result<()> {
         Ok(())
     }
     .await;
+    fixture.finish(checked).await?;
+
+    let fixture = OwnedServer::new(backend, "BITROUTER_TEST_MIGRATION_DATABASE_URL").await?;
+    let checked = async {
+        let db = &fixture.database;
+        super::super::Migrator::install(db).await?;
+        db.execute_unprepared(
+            "INSERT INTO seaql_migrations VALUES ('m20240101_000001_unrecognized_store',1)",
+        ).await?;
+        db.execute_unprepared("CREATE TABLE unrelated_records (id VARCHAR(64) PRIMARY KEY)")
+            .await?;
+        db.execute_unprepared("INSERT INTO unrelated_records(id) VALUES ('existing-record')")
+            .await?;
+        let before = super::super::Migrator::get_migration_models(db).await?;
+        let catalog = match backend {
+            DatabaseBackend::Postgres => "SELECT table_name FROM information_schema.tables WHERE table_schema=current_schema() ORDER BY table_name",
+            _ => "SELECT TABLE_NAME AS table_name FROM information_schema.tables WHERE TABLE_SCHEMA=DATABASE() ORDER BY TABLE_NAME",
+        };
+        let tables = || async {
+            db.query_all(Statement::from_string(backend, catalog)).await?.into_iter().map(|row| row.try_get::<String>("","table_name")).collect::<Result<Vec<_>, DbErr>>()
+        };
+        let original_tables = tables().await?;
+        for _ in 0..2 {
+            let error = crate::db::connect(&fixture.url).await.err().context("foreign store connected")?;
+            ensure!(error.to_string().contains("new empty database"), "{error}");
+            let error = crate::db::run_migrations(db).await.err().context("foreign store accepted")?;
+            ensure!(tables().await? == original_tables);
+            ensure!(error.to_string().contains("new empty database"), "{error}");
+            ensure!(super::super::Migrator::get_migration_models(db).await?==before);
+            ensure!(db.query_one(Statement::from_string(backend,"SELECT id FROM unrelated_records WHERE id='existing-record'")).await?.is_some());
+        }
+        Ok(())
+    }.await;
     fixture.finish(checked).await?;
 
     if backend == DatabaseBackend::Postgres {
@@ -170,7 +144,7 @@ async fn campaign(backend: DatabaseBackend) -> Result<()> {
         _ => anyhow::bail!("server campaign backend"),
     }
     for corruption in corruptions {
-        let fixture = OwnedServer::new(backend).await?;
+        let fixture = OwnedServer::new(backend, "BITROUTER_TEST_MIGRATION_DATABASE_URL").await?;
         let checked = async {
             let db = &fixture.database;
             super::super::Migrator::up(db, None).await?;
@@ -194,7 +168,7 @@ async fn campaign(backend: DatabaseBackend) -> Result<()> {
         Some("m20240101_000048_native_generate_content"),
         Some("m20990101_future"),
     ] {
-        let fixture = OwnedServer::new(backend).await?;
+        let fixture = OwnedServer::new(backend, "BITROUTER_TEST_MIGRATION_DATABASE_URL").await?;
         let checked = async {
             let db = &fixture.database;
             db.execute_unprepared("CREATE TABLE preserved(value VARCHAR(128) NOT NULL)").await?;
@@ -217,7 +191,11 @@ async fn campaign(backend: DatabaseBackend) -> Result<()> {
 }
 
 async fn postgres_unvalidated_not_null_refusal() -> Result<()> {
-    let fixture = OwnedServer::new(DatabaseBackend::Postgres).await?;
+    let fixture = OwnedServer::new(
+        DatabaseBackend::Postgres,
+        "BITROUTER_TEST_MIGRATION_DATABASE_URL",
+    )
+    .await?;
     let checked = async {
         let db = &fixture.database;
         let version = db
@@ -284,4 +262,46 @@ async fn postgres_authority_snapshot(db: &DatabaseConnection) -> Result<String> 
     .context("authority snapshot")?
     .try_get("", "authority")
     .map_err(Into::into)
+}
+
+/// Earlier gateways could inherit case/accent folding or PAD SPACE semantics.
+/// Refusal must preserve the real settlement and the already-issued marker.
+async fn mysql_metering_restart(fixture: &OwnedServer) -> Result<()> {
+    let db = &fixture.database;
+    db.execute_unprepared("INSERT INTO requests(request_id,user_id,api_key_id,model_id,provider_id,prompt_tokens,completion_tokens,reasoning_tokens,estimated_charge_micro_usd,created_at) VALUES('Paid-A','Owner','Key','model','provider',11,3,0,17,'2026-11-18T00:00:00Z')").await?;
+    let original = super::super::Migrator::get_migration_models(db).await?;
+    for (name, comparison) in [
+        ("request_id", "utf8mb4_0900_ai_ci"),
+        ("api_key_id", "utf8mb4_bin"),
+    ] {
+        db.execute_unprepared(&format!("ALTER TABLE requests MODIFY {name} VARCHAR(255) CHARACTER SET utf8mb4 COLLATE {comparison} NOT NULL")).await?;
+        let error = crate::db::connect(&fixture.url)
+            .await
+            .err()
+            .context("gateway opened incompatible metering catalog")?;
+        ensure!(
+            error
+                .to_string()
+                .contains(&format!("requests.{name} requires utf8mb4_0900_bin")),
+            "{error}"
+        );
+        ensure!(crate::db::run_migrations(db).await.is_err());
+        ensure!(super::super::Migrator::get_migration_models(db).await? == original);
+        let row = db
+            .query_one(Statement::from_string(
+                DatabaseBackend::MySql,
+                "SELECT request_id,user_id,api_key_id,estimated_charge_micro_usd FROM requests",
+            ))
+            .await?
+            .context("settlement missing after refusal")?;
+        ensure!(
+            row.try_get::<String>("", "request_id")? == "Paid-A"
+                && row.try_get::<String>("", "user_id")? == "Owner"
+                && row.try_get::<String>("", "api_key_id")? == "Key"
+                && row.try_get::<i64>("", "estimated_charge_micro_usd")? == 17
+        );
+        db.execute_unprepared(&format!("ALTER TABLE requests MODIFY {name} VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL")).await?;
+    }
+    crate::db::connect(&fixture.url).await?.close().await?;
+    Ok(())
 }

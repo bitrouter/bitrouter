@@ -365,53 +365,6 @@ async fn missing_table_extra_index_and_oversized_cells_are_refused() -> Result<(
     Ok(())
 }
 
-#[cfg(all(feature = "core", feature = "harness"))]
-#[tokio::test]
-async fn recovery_verifies_evidence_and_charges_the_shared_budget() -> Result<()> {
-    let db = open().await?;
-    let candidate = candidate()?;
-    write(&db, &candidate).await?;
-    let r = receipt()?;
-    let budget = crate::tenancy::session::recovery::Budget::default();
-    let recovered = store::recovery_lookup(
-        &db,
-        &r.installation_id,
-        &r.tenant_id,
-        &r.execution_id,
-        &budget,
-    )
-    .await?
-    .context("recovery receipt")?;
-    ensure!(recovered.usage_evidence.is_some());
-    let exhausted = crate::tenancy::session::recovery::Budget::default();
-    exhausted.charge(0, crate::tenancy::session::recovery::MAX_BYTES)?;
-    ensure!(
-        store::recovery_lookup(
-            &db,
-            &r.installation_id,
-            &r.tenant_id,
-            &r.execution_id,
-            &exhausted
-        )
-        .await
-        .is_err()
-    );
-    sql(&db,"UPDATE tenancy_usage_evidence SET receipt_digest='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'").await?;
-    ensure!(
-        store::recovery_lookup(
-            &db,
-            &r.installation_id,
-            &r.tenant_id,
-            &r.execution_id,
-            &crate::tenancy::session::recovery::Budget::default()
-        )
-        .await
-        .is_err()
-    );
-    db.close().await?;
-    Ok(())
-}
-
 #[test]
 fn native_generate_content_frames_preserve_exact_scalars_without_implicit_dimensions() -> Result<()>
 {

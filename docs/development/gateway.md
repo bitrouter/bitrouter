@@ -70,34 +70,25 @@ from shared gateway mode; the two profiles cannot be enabled together.
 [Tenant routing](tenant-routing.md) describes the actual-send limits and health
 state inside the authorized retained candidate set.
 
-## Accepted M0 Policy and Eval boundary
+## Model Policy and Eval
 
-These boundaries apply independently of the compiled feature set.
-Gateway model Policy uses the same public typed source as files, defaults, CLI,
-SDK and tenant resources. Shared publication carries model_policy under format2;
-ACL policies stay independent. Runtime selection changes model/effort and keeps
-complete admitted context. A private compiled view never becomes an editable
-format or a source-reconstruction bridge. Exact revision/literal-name bindings,
-full dependency qualification and live authority are checked before dispatch.
+Gateway model Policy selects a model and optional effort while preserving
+admitted context. Semantic classification yields a `policy::RouteClass`.
+Policy source files and tenant resources use the same typed document. The
+runtime binds the immutable resource revision and literal policy name, and
+validates dependencies and live authority before dispatch. Operator-configured
+server tools and provider continuation have separate permissions.
 
-Tenant/shared import, configuration and execution reject experimental context,
-core_choice, paid assessment and ACP block even on Policy-free routes with all
-features enabled. Retained experiments have an explicit BRO local harness owner.
-Ordinary provider continuation and explicitly enabled server tools retain their
-own permissions; selecting a Policy cannot start tool execution.
+The minimum gateway includes model Policy and tenant Eval exchange. External
+evaluators submit facts about the exact configuration and can freeze the
+evidence. An authorized operator publishes an immutable Policy revision and
+activates it with an explicit compare-and-swap operation.
 
-Model Policy and tenant Eval exchange belong to the minimum gateway profile.
-Evaluation executes externally; the service admits/queries/freezes facts against
-verified closed identities. It adds no Eval runner or implicit learner. Results,
-freeze and draft source do not change active routing. Source publication and
-configuration activation are distinct authorized/CAS operations.
-
-Shared bootstrap/join/restart validate the current baseline, authenticated head
-and all affected encrypted publications before instance registration, heartbeat
-or recovery writes. A Policy-free head does not permit old retained content.
-Refusal preserves old data; current shared reconciliation, idempotency, output,
-usage/Unknown and cancellation obligations remain required. Format selection is
-owned by the [service contract](../specs/service-api/README.md#resource-and-evidence-migration-and-rollback).
+Before startup, storage validates the current schema and retained authority.
+Shared instances also validate the authenticated head and its publications
+before registration and recovery. An uncertain upstream outcome remains
+unknown during reconciliation. See [tenant service](tenant-service.md) for
+receipt and configuration ownership.
 
 ## Adapter validation
 

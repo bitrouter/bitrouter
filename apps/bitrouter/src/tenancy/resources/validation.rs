@@ -243,7 +243,7 @@ pub(super) fn compiled_with_operation(
                         document.policies.contains_key(name),
                         "selected policy missing"
                     );
-                    crate::policy_lock::validate_for_config(&config, document)?;
+                    crate::policy_source::validate_for_config(&config, document)?;
                 }
             }
             let expected = if matches!(envelope.format, 4..=6) {

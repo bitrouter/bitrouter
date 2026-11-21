@@ -80,11 +80,6 @@ async fn retired_checkpoint_import_is_atomic_and_preserves_current_policy_closur
             "format":format, "installation_id":resources.installation, "resources":rejected
         }))?;
         assert!(resources.provision_bytes(&db, &bytes).await.is_err());
-        #[cfg(all(feature = "core", feature = "harness"))]
-        {
-            let bro = Resources::with_key(resources.installation.clone(), key)?.for_bro_capture();
-            assert!(bro.provision_bytes(&db, &bytes).await.is_err());
-        }
         assert_eq!(storage::references(&db).await?, references);
     }
     let recompiled = compile(&resources, &db, &original).await?;
@@ -140,22 +135,6 @@ fn authenticated_retired_checkpoint_is_rejected_even_with_current_bro_markers() 
             resources.open_execution(&stored),
             Err(ErrorCode::AuthorityUnavailable)
         ));
-        #[cfg(all(feature = "core", feature = "harness"))]
-        {
-            let bro = Resources::with_key(resources.installation.clone(), key)?.for_bro_capture();
-            assert_eq!(
-                bro.validate_compiled(&stored),
-                Err(ErrorCode::AuthorityUnavailable)
-            );
-            assert_eq!(
-                bro.validate_executable(&stored),
-                Err(ErrorCode::AuthorityUnavailable)
-            );
-            assert!(matches!(
-                bro.open_execution(&stored),
-                Err(ErrorCode::AuthorityUnavailable)
-            ));
-        }
     }
     Ok(())
 }

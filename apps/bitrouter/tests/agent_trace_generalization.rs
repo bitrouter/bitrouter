@@ -8,7 +8,7 @@ use axum_test::TestServer;
 use bitrouter::config;
 use bitrouter::gateway::http::AppState;
 use bitrouter::gateway::http::build_router;
-use bitrouter::policy_lock::deterministic_yaml;
+use bitrouter::policy_source::deterministic_yaml;
 use bitrouter_ai::policy::{Document, Policy, SpecVersion, Target};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;

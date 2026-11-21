@@ -99,56 +99,54 @@ fn private_history(continuation: bool) -> Prompt {
 #[tokio::test]
 async fn managed_history_rejection_after_real_entry_has_no_observation_obligation() -> Result<()> {
     tokio::time::timeout(BOUND, async {
-        for mode in [LearningMode::Observe, LearningMode::Explore] {
-            for continuation in [false, true] {
-                let upstream = wiremock::MockServer::start().await;
-                let (fixture, revision) =
-                    policy_fixture(&format!("{}/v1", upstream.uri()), mode).await?;
-                let key = fixture.issue("managed-history-rejection").await?;
-                fixture
-                    .service
-                    .dispatch_test_ready
-                    .store(true, Ordering::Release);
-                let headers = headers(
-                    &fixture,
-                    key.secret.as_deref().context("secret")?,
-                    &revision,
-                )?;
-                let store = scoped_eval_store(&fixture, &headers).await?;
-                let control = Arc::new(Control::default());
-                // No callback injects this failure: the public App path installs
-                // managed native history validation after successful tenant Entry.
-                let outcome = app(&fixture)?
-                    .execute_native_controlled_with_headers(
-                        private_history(continuation),
-                        CallerContext::local(),
-                        headers,
-                        control.clone(),
-                    )
-                    .await;
-                ensure!(matches!(outcome, Err(BitrouterError::BadRequest { .. })));
-                ensure!(control.entry_ok.load(Ordering::SeqCst) == 1);
-                ensure!(control.lookups.load(Ordering::SeqCst) == 0);
-                ensure!(control.selections.load(Ordering::SeqCst) == 0);
-                ensure!(control.plans.load(Ordering::SeqCst) == 0);
-                ensure!(control.attempts.load(Ordering::SeqCst) == 0);
-                ensure!(
-                    upstream
-                        .received_requests()
-                        .await
-                        .context("provider request log")?
-                        .is_empty()
-                );
-                fixture.service.pipelines.close_and_drain().await?;
-                tokio::time::timeout(
-                    Duration::from_secs(3),
-                    fixture.service.admission.wait_drained(),
+        for continuation in [false, true] {
+            let upstream = wiremock::MockServer::start().await;
+            let (fixture, revision) =
+                policy_fixture(&format!("{}/v1", upstream.uri()), LearningMode::Observe).await?;
+            let key = fixture.issue("managed-history-rejection").await?;
+            fixture
+                .service
+                .dispatch_test_ready
+                .store(true, Ordering::Release);
+            let headers = headers(
+                &fixture,
+                key.secret.as_deref().context("secret")?,
+                &revision,
+            )?;
+            let store = scoped_eval_store(&fixture, &headers).await?;
+            let control = Arc::new(Control::default());
+            // No callback injects this failure: the public App path installs
+            // managed native history validation after successful tenant Entry.
+            let outcome = app(&fixture)?
+                .execute_native_controlled_with_headers(
+                    private_history(continuation),
+                    CallerContext::local(),
+                    headers,
+                    control.clone(),
                 )
-                .await?;
-                ensure!(store.list_subjects().await?.is_empty());
-                ensure!(fixture.service.current().is_ok());
-                fixture.service.shutdown().await?;
-            }
+                .await;
+            ensure!(matches!(outcome, Err(BitrouterError::BadRequest { .. })));
+            ensure!(control.entry_ok.load(Ordering::SeqCst) == 1);
+            ensure!(control.lookups.load(Ordering::SeqCst) == 0);
+            ensure!(control.selections.load(Ordering::SeqCst) == 0);
+            ensure!(control.plans.load(Ordering::SeqCst) == 0);
+            ensure!(control.attempts.load(Ordering::SeqCst) == 0);
+            ensure!(
+                upstream
+                    .received_requests()
+                    .await
+                    .context("provider request log")?
+                    .is_empty()
+            );
+            fixture.service.pipelines.close_and_drain().await?;
+            tokio::time::timeout(
+                Duration::from_secs(3),
+                fixture.service.admission.wait_drained(),
+            )
+            .await?;
+            ensure!(store.list_subjects().await?.is_empty());
+            ensure!(fixture.service.current().is_ok());
+            fixture.service.shutdown().await?;
         }
         Ok::<_, anyhow::Error>(())
     })
@@ -158,7 +156,7 @@ async fn managed_history_rejection_after_real_entry_has_no_observation_obligatio
 /// Calls the real retained-policy selector, proves it recorded the invocation,
 /// clears its actual pending record, then fails before Route completes.
 struct LostDecision {
-    inner: Arc<crate::policy_lock::PolicyRuntime>,
+    inner: Arc<crate::policy_source::PolicyRuntime>,
     pending: PendingEvalDecisionStore,
     removed: Arc<AtomicUsize>,
 }
@@ -332,7 +330,7 @@ async fn missing_completion(selected: bool, terminal: Terminal) -> Result<()> {
         pipeline.settlement_recorders.clear();
         if selected {
             let policy = execution.route().policy().context("retained policy")?;
-            let runtime = crate::policy_lock::PolicyRuntime::from_document(
+            let runtime = crate::policy_source::PolicyRuntime::from_document(
                 &policy
                     .configuration()
                     .map_err(|code| anyhow::anyhow!("retained configuration: {code:?}"))?,

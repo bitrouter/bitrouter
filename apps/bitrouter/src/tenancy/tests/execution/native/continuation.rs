@@ -297,8 +297,17 @@ fn handle(output: &GenerateResult) -> Result<&str> {
 #[tokio::test]
 async fn two_turn_resume_survives_caller_rotation_and_restart_without_import_source() -> Result<()>
 {
+    rotation_after_restart(Fixture::new().await?, &mut |_| {}).await
+}
+
+pub(in crate::tenancy::tests::execution) async fn rotation_after_restart(
+    fixture: Fixture,
+    started: &mut impl FnMut(&Service),
+) -> Result<()> {
     let mut server = Server::start().await?;
-    let (mut fixture, route, _) = provision_protocol(&server.url, "responses").await?;
+    let (mut fixture, route, _) =
+        super::super::provision_protocol_with_fixture(fixture, &server.url, "responses", started)
+            .await?;
     let checked = async {
         let (ingress, old) = ready(&fixture, &route).await?;
         let revision = ingress
@@ -349,6 +358,7 @@ async fn two_turn_resume_survives_caller_rotation_and_restart_without_import_sou
         let initial = store::load(&fixture.db, chrono::Utc::now()).await?;
         fixture.service =
             Service::start_prepared(fixture.db.clone(), None, initial, resources).await?;
+        started(&fixture.service);
         fixture
             .service
             .dispatch_test_ready
@@ -358,6 +368,20 @@ async fn two_turn_resume_survives_caller_rotation_and_restart_without_import_sou
             rotated.secret.as_deref().context("new secret")?,
             &revision,
         )?;
+        // A valid successor can resume this exact receipt. A separate active
+        // principal in the same tenant cannot adopt it or send upstream.
+        let foreign = another_principal(&fixture, &revision).await?;
+        ensure!(
+            invoke(
+                &fixture,
+                &server,
+                foreign,
+                next(&output),
+                Arc::new(Control::default())
+            )
+            .await
+            .is_err()
+        );
         let observed = Arc::new(Control::default());
         let second = invoke(&fixture, &server, ingress, next(&output), observed.clone()).await?;
         ensure!(handle(&second)?.starts_with("btct2."));

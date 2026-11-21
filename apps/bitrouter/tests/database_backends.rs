@@ -126,18 +126,13 @@ async fn exercise(database_url: &str) -> Result<()> {
         let previous_ledger = existing_ledger(&connection).await?;
         db::run_migrations(&connection).await?;
         let ledger = Migrator::get_migration_models(&connection).await?;
-        let expected: Vec<String> = Migrator::migrations()
-            .iter()
-            .map(|migration| migration.name().to_owned())
-            .collect();
-        let actual: Vec<String> = ledger.iter().map(|row| row.version.clone()).collect();
+        let expected = match connection.get_database_backend() {
+            DatabaseBackend::Sqlite => "m20261118_000006_gateway_sqlite",
+            DatabaseBackend::Postgres | DatabaseBackend::MySql => "m20261118_000007_gateway_server",
+        };
         ensure!(
-            expected.len() == 1,
-            "the store must have one current baseline"
-        );
-        ensure!(
-            actual == expected,
-            "migration ledger does not match the complete migrator order"
+            ledger.len() == 1 && ledger[0].version == expected,
+            "unexpected gateway format ledger"
         );
         if let Some(previous) = previous_ledger {
             let current = ledger
@@ -149,16 +144,8 @@ async fn exercise(database_url: &str) -> Result<()> {
                 "current baseline validation changed an existing ledger entry"
             );
         }
-        ensure!(
-            Migrator::get_pending_migrations(&connection)
-                .await?
-                .is_empty()
-        );
-
         write_auth(&connection, &fixture).await?;
         write_evolution(&connection, &fixture).await?;
-        #[cfg(feature = "core")]
-        exercise_reliability(&connection, &fixture).await?;
         write_metering(&connection, &fixture).await?;
         write_trajectory(&connection, &fixture).await?;
         check_auth(&connection, &fixture).await?;
@@ -471,68 +458,6 @@ async fn check_evolution(connection: &DatabaseConnection, fixture: &Fixture) -> 
     Ok(())
 }
 
-#[cfg(feature = "core")]
-async fn exercise_reliability(connection: &DatabaseConnection, fixture: &Fixture) -> Result<()> {
-    use bitrouter::core::adequacy::reliability::{
-        ReliabilityEvent, ReliabilityKey, ReliabilityObservation,
-    };
-    use bitrouter::core::adequacy::store::{AdequacyStore, ReliabilityAppendOutcome};
-
-    let store = AdequacyStore::new(connection.clone());
-    let event = ReliabilityEvent {
-        request_id: fixture.id("reliability-request"),
-        route_key: fixture.id("route"),
-        endpoint_key: ReliabilityKey {
-            provider: fixture.id("provider"),
-            model: fixture.id("model"),
-            credential_class: "api-key".into(),
-            endpoint_scope: "fixture.invalid:443".into(),
-            protocol: "responses".into(),
-        },
-        observation: ReliabilityObservation::TransientFailure,
-        half_open_probe: false,
-        observed_at_unix: 100,
-    };
-    let (first, concurrent) = tokio::join!(
-        store.append_reliability_event(&event),
-        store.append_reliability_event(&event),
-    );
-    let outcomes = [first?, concurrent?];
-    ensure!(
-        outcomes
-            .iter()
-            .filter(|outcome| **outcome == ReliabilityAppendOutcome::Inserted)
-            .count()
-            == 1,
-        "exactly one writer must report a new reliability event"
-    );
-    ensure!(outcomes.contains(&ReliabilityAppendOutcome::Duplicate));
-    let original: Vec<_> = store
-        .load_reliability_events()
-        .await?
-        .into_iter()
-        .filter(|row| row.event.request_id == event.request_id)
-        .collect();
-    ensure!(original.len() == 1 && original[0].event == event);
-    let mut retry = event.clone();
-    retry.observed_at_unix = 101;
-    ensure!(
-        store.append_reliability_event(&retry).await? == ReliabilityAppendOutcome::Duplicate,
-        "a retry observation timestamp does not create another event"
-    );
-    let mut conflict = event.clone();
-    conflict.observation = ReliabilityObservation::Success;
-    ensure!(store.append_reliability_event(&conflict).await.is_err());
-    let retained: Vec<_> = store
-        .load_reliability_events()
-        .await?
-        .into_iter()
-        .filter(|row| row.event.request_id == event.request_id)
-        .collect();
-    ensure!(retained == original, "retries changed reliability evidence");
-    Ok(())
-}
-
 async fn write_metering(connection: &DatabaseConnection, fixture: &Fixture) -> Result<()> {
     let store = MeteringStore::new(connection.clone());
     store
@@ -553,11 +478,12 @@ async fn write_metering(connection: &DatabaseConnection, fixture: &Fixture) -> R
         updated.created_at == initial.created_at,
         "metering upsert reset created_at"
     );
+    // These IDs differ from the first settlement only by case or accent.
     store
-        .record_request(fixture.metric("a", "request-a2", 20, 0)?)
+        .record_request(fixture.metric("a", "REQUEST-a1", 20, 0)?)
         .await?;
     store
-        .record_request(fixture.metric("b", "request-b1", 50, 5)?)
+        .record_request(fixture.metric("b", "réquest-a1", 50, 5)?)
         .await?;
     Ok(())
 }
@@ -567,6 +493,12 @@ async fn check_metering(connection: &DatabaseConnection, fixture: &Fixture) -> R
     for (owner, count, spend, prompt, completion) in [("a", 2, 120, 35, 5), ("b", 1, 150, 50, 5)] {
         let key = fixture.key(owner);
         ensure!(store.get_request_count(&key.id, fixture.window).await? == count);
+        ensure!(
+            store
+                .get_request_count(&key.id.to_ascii_uppercase(), fixture.window)
+                .await?
+                == 0
+        );
         ensure!(store.get_spend(&key.id, fixture.window).await? == spend);
         ensure!(store.get_enforceable_spend(&key.id, fixture.window).await? == Some(spend));
         ensure!(
@@ -595,7 +527,7 @@ async fn check_metering(connection: &DatabaseConnection, fixture: &Fixture) -> R
     }
     let unknown = store
         .spend_summary_for_acp_session(
-            &fixture.id("missing-principal"),
+            &fixture.key("a").id.to_ascii_uppercase(),
             &fixture.id("controller"),
             &fixture.id("session"),
             fixture.window,
@@ -611,14 +543,15 @@ async fn check_metering(connection: &DatabaseConnection, fixture: &Fixture) -> R
     );
     for (owner, request, prompt, completion) in [
         ("a", "request-a1", 15, 5),
-        ("a", "request-a2", 20, 0),
-        ("b", "request-b1", 50, 5),
+        ("a", "REQUEST-a1", 20, 0),
+        ("b", "réquest-a1", 50, 5),
     ] {
         let metric = fixture.metric(owner, request, prompt, completion)?;
         let row = requests::Entity::find_by_id(&metric.request_id)
             .one(connection)
             .await?
             .context("persisted metering request missing")?;
+        ensure!(row.request_id == metric.request_id);
         ensure!(row.user_id == metric.user_id && row.api_key_id == metric.api_key_id);
         ensure!(
             row.prompt_tokens == i64::try_from(prompt)?

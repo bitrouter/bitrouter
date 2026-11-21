@@ -428,7 +428,7 @@ async fn closed(address: SocketAddr) -> Result<()> {
 #[ignore = "requires an unpacked gateway archive and a separately built SDK consumer; see fixtures/sdk_consumer/README.md"]
 async fn packaged_gateway_independent_sdk_consumer() -> Result<()> {
     // Never silently skip when explicitly selected, and never substitute the
-    // workspace CARGO_BIN_EXE_bro for the candidate archive's executable.
+    // workspace CARGO_BIN_EXE_bitrouter for the candidate archive's executable.
     let gateway_binary = binary("BITROUTER_TEST_GATEWAY_BINARY")?;
     let consumer_binary = binary("BITROUTER_TEST_SDK_CONSUMER_BINARY")?;
     ensure!(gateway_binary != consumer_binary);
@@ -556,7 +556,7 @@ async fn packaged_gateway_independent_sdk_consumer() -> Result<()> {
         );
 
         // Stop via the packaged CLI's explicit private socket, after proving
-        // readiness belongs to our child. Drop cleanup never calls `bro stop`.
+        // readiness belongs to our child. Drop cleanup never calls `bitrouter stop`.
         ensure!(
             server.child.try_wait()?.is_none(),
             "gateway exited before graceful stop"
@@ -637,7 +637,7 @@ async fn bundled_auto_source_dispatches_with_tools_effort_and_complete_context()
         policy::Document,
     };
 
-    let binary = Path::new(env!("CARGO_BIN_EXE_bro"));
+    let binary = Path::new(env!("CARGO_BIN_EXE_bitrouter"));
     let home = tempfile::tempdir()?;
     let logs = tempfile::tempdir()?;
     // A static fixture credential supplies Codex's account-identity claim so
@@ -834,7 +834,7 @@ async fn shipped_template_service_case(name: &str) -> Result<()> {
     };
     use bitrouter_sdk::tenancy::TenancyClient;
 
-    let binary = Path::new(env!("CARGO_BIN_EXE_bro"));
+    let binary = Path::new(env!("CARGO_BIN_EXE_bitrouter"));
     let home = tempfile::tempdir()?;
     let logs = tempfile::tempdir()?;
     let token = format!("template-operator-{}", uuid::Uuid::new_v4());

@@ -18,8 +18,9 @@ its vendor CLI to acquire or import a credential. It does not need to launch an
 ACP adapter to do so. Credentials, method arguments and provider errors must not
 be exposed as user-visible capability metadata or mixed into model input.
 
-The current [client](../../apps/bitrouter/src/harness/acp/client.rs) and
-[provider commands](../../apps/bitrouter/src/commands.rs) implement these two
-paths. Controller forwarding and harness-native session identity are described
-in the [runtime guide](agent-runtime.md#external-acp-controller); the base ACP
-messages follow the [upstream protocol](https://agentclientprotocol.com/protocol/initialization).
+BRO launches a selected adapter using the gateway endpoint and an explicitly
+supplied client credential. Direct stdio adapters use the configuration provided
+by their local operator. The service handles provider login independently.
+See the [BRO ACP client](../../apps/bro/src/acp.rs), [stdio supervisor](../../apps/bro/src/acp/serve.rs),
+[provider commands](../../apps/bitrouter/src/commands.rs), and
+[ACP initialization protocol](https://agentclientprotocol.com/protocol/initialization).

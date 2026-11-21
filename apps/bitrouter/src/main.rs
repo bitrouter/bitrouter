@@ -1,24 +1,5 @@
-//! `bro` CLI entry point — a thin shell over the `bitrouter` lib.
-//!
-//! Subcommand surface: `serve` / `start` / `stop` / `restart` /
-//! `reload` / `status` / `requests` / `route` / `init` / `key sign` / `models` /
-//! `access-policy create` / `providers (list|check|login|logout)` / `agents` / `run` /
-//! `threads` / `launch` / `cloud` / `skills` / `mcp (list|show|add|edit|remove|check)` / `acp serve`.
-//! Resource configuration administration uses `tenancy` over the HTTP SDK.
-//! Cloud-account sign-in lives under
-//! `cloud (login|logout|whoami)`; per-provider credentials under
-//! `providers (login|logout)`. Daemon control runs over a local IPC endpoint
-//! (a Unix domain socket, or a Windows named pipe) — `start` spawns `serve`
-//! detached; the client subcommands send one [`DaemonCommand`] each.
-//!
-//! OWS wallet integration is out of scope for v1.0 (it lives in the `ows`
-//! workspace); a commented-out `Wallet` variant in `Command` reserves the
-//! name for a future integration without shipping a non-functional command.
+//! BitRouter gateway and operator command-line interface.
 
-#[cfg(all(feature = "core", feature = "harness"))]
-use bitrouter::harness::agent::AgentConfigExt;
-#[cfg(all(feature = "core", feature = "harness"))]
-use bitrouter::harness::service::observation::ThreadViewExt;
 use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::sync::Arc;
@@ -37,26 +18,17 @@ mod windows;
 use tracing_filter::resolve_env_filter;
 
 use anyhow::{Context, Result};
-use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 
 use bitrouter::administration_target::{InspectionTarget, ReloadSubmission};
 use bitrouter::commands;
-#[cfg(any(feature = "harness", test))]
-use bitrouter::commands::agent_options::PromptFormat;
-#[cfg(feature = "harness")]
-use bitrouter::commands::agent_options::SessionSelection;
-use bitrouter::commands::agent_options::{HeadlessOptions, RoutingOptions};
+
 use bitrouter::config;
 use bitrouter::daemon::{self, DaemonCommand, DaemonResponse, process_is_alive};
 use bitrouter::output::reports::admin::{
     KeySignReport, PolicyCreateReport, ProviderLoginReport, ProviderLogoutReport,
 };
-#[cfg(feature = "harness")]
-use bitrouter::output::reports::agents::{
-    AgentCheckRow, AgentConformanceReport, AgentConformanceTier, AgentInstallReport,
-    AgentRegistryRow, AgentRow, AgentSessionMutationReport, AgentSessionsReport, AgentsCheckReport,
-    AgentsListReport, BackgroundRunReport,
-};
+
 use bitrouter::output::reports::config::{UnsetVar, ValidateReport};
 use bitrouter::output::reports::daemon::DaemonActionReport;
 use bitrouter::output::reports::eval::EvalReport;
@@ -118,87 +90,19 @@ struct Cli {
     command: Option<Command>,
 }
 
-#[derive(Args)]
-struct NativeLaunchArgs {
-    /// Pin the harness's model to a daemon-routable id.
-    #[arg(long, value_name = "ID")]
-    model: Option<String>,
-    /// Path to `bitrouter.yaml`.
-    #[arg(short, long)]
-    config: Option<PathBuf>,
-    /// Override the BitRouter inference base URL.
-    #[arg(long)]
-    base_url: Option<String>,
-    /// Fail instead of offering to install a missing supported harness.
-    #[arg(long)]
-    no_install: bool,
-    /// Do not auto-start a missing local daemon.
-    #[arg(long)]
-    no_start: bool,
-    /// Verify the executable, endpoint, and route without launching.
-    #[arg(long)]
-    check: bool,
-    /// Arguments forwarded verbatim to the native harness.
-    #[arg(last = true, allow_hyphen_values = true)]
-    agent_args: Vec<String>,
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum AfterSetup {
+    Serve,
+    Exit,
 }
 
-#[derive(Args)]
-struct TaskRunArgs {
-    /// Coding task to submit to the local BRO server.
-    prompt: String,
-    #[command(flatten)]
-    skills: bitrouter::skills::cli::ConstraintArgs,
-    /// Model override; omitted uses chat.model or the bundled automatic router.
-    #[arg(long)]
-    model: Option<String>,
-    /// Fixed reasoning effort for each model turn.
-    #[arg(long)]
-    effort: Option<bitrouter_ai::types::ReasoningEffort>,
-    /// Override the output reservation; omitted follows the selected model.
-    #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
-    max_output_tokens: Option<u32>,
-    /// Bounded project verification command. Without one, verification is not_requested.
-    #[arg(long)]
-    check: Option<String>,
-    /// Restrict this task to read, ls, find, and grep.
-    #[arg(long, conflicts_with = "check")]
-    read_only: bool,
-    /// Server-local workspace (defaults to the client's current directory).
-    #[arg(long)]
-    workspace: Option<PathBuf>,
-    /// Path to `bitrouter.yaml` for the local server.
-    #[arg(short, long)]
-    config: Option<PathBuf>,
-}
-
-#[derive(clap::Args)]
-struct ManagedTaskArgs {
-    #[command(flatten)]
-    task: TaskRunArgs,
-    /// Durable native managed session name; reuse it to continue released work.
-    #[arg(long)]
-    session: Option<String>,
-    /// Stable accepted-input key; retry only the same session and input.
-    #[arg(long)]
-    request_id: Option<String>,
-    /// Require the original managed daemon boot before submitting.
-    #[arg(long)]
-    server_instance: Option<String>,
-}
-
-#[derive(Subcommand)]
-enum TaskAction {
-    /// Submit a native coding task and wait for its terminal result.
-    Run(TaskRunArgs),
-    /// Run the native workspace harness under the model/context routing core.
-    Managed(ManagedTaskArgs),
-    /// Inspect a durable managed session without loading or executing it.
-    ManagedStatus(bitrouter::managed_task::StatusOptions),
-    /// Cancel the exact managed input on its original daemon instance.
-    ManagedCancel(bitrouter::managed_task::CancelOptions),
-    /// Allow or deny one exact MCP skill on its original managed input/boot.
-    ManagedAnswer(bitrouter::managed_task::AnswerOptions),
+impl From<AfterSetup> for bitrouter::onboarding::AfterAction {
+    fn from(action: AfterSetup) -> Self {
+        match action {
+            AfterSetup::Serve => Self::Serve,
+            AfterSetup::Exit => Self::Exit,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -239,34 +143,20 @@ enum Command {
         #[command(subcommand)]
         action: tenancy::Action,
     },
-    /// Run a BRO-owned native coding task through the Thread server.
-    Task {
-        #[command(subcommand)]
-        action: TaskAction,
-    },
     /// Load a config, run migrations, and serve HTTP + control socket
     /// **in the foreground**.
     Serve {
         /// Path to `bitrouter.yaml`. When omitted, the binary resolves
         /// in this order: `./bitrouter.yaml` → `$BITROUTER_HOME/bitrouter.yaml`
         /// → `~/.bitrouter/bitrouter.yaml` → zero-config in-memory defaults
-        /// (`bro init` is the explicit way to scaffold a file).
+        /// (`bitrouter init` is the explicit way to scaffold a file).
         #[arg(short, long)]
         config: Option<PathBuf>,
         /// Set only by the `start` launcher for an owned detached daemon.
         #[arg(long, hide = true)]
         managed_child: bool,
     },
-    /// Internal local-harness process entry, selected by the run/ACP launchers.
-    #[cfg(all(feature = "core", feature = "harness"))]
-    #[command(hide = true)]
-    HarnessHost {
-        #[arg(short, long)]
-        config: Option<PathBuf>,
-        #[arg(long, hide = true)]
-        managed_child: bool,
-    },
-    /// Spawn `bro serve` as a detached background process.
+    /// Spawn `bitrouter serve` as a detached background process.
     Start {
         /// Path to `bitrouter.yaml` (passed through to the child).
         #[arg(short, long)]
@@ -294,7 +184,7 @@ enum Command {
         /// Path to `bitrouter.yaml`. When omitted, the binary resolves
         /// in this order: `./bitrouter.yaml` → `$BITROUTER_HOME/bitrouter.yaml`
         /// → `~/.bitrouter/bitrouter.yaml` → zero-config in-memory defaults
-        /// (`bro init` is the explicit way to scaffold a file).
+        /// (`bitrouter init` is the explicit way to scaffold a file).
         #[arg(short, long)]
         config: Option<PathBuf>,
         /// Explicit control socket path. Overrides the config-derived path.
@@ -383,12 +273,7 @@ enum Command {
         #[arg(long)]
         socket: Option<PathBuf>,
     },
-    /// Guided onboarding wizard that sequences credential, harness, and finish
-    /// steps to first value. Interactive by default; `--yes` (or no TTY) runs
-    /// it headlessly, emitting the JSON result envelope and never blocking on a
-    /// human. Every prompt has a flag equivalent (below) so an agent can drive
-    /// the whole thing. Saves the default ACP harness and optional model in
-    /// the resolved config or BitRouter home; `--force` resets existing settings.
+    /// Configure gateway credentials and write a starter configuration.
     Init {
         /// Configuration to create/update; defaults to the resolved config or BitRouter home.
         #[arg(short, long)]
@@ -425,17 +310,11 @@ enum Command {
         /// (Step 1) Accept the auto-detected credential(s) without prompting.
         #[arg(long)]
         use_detected: bool,
-        /// (Step 2) Optional ACP adapter default: `claude` or `codex` (first is selected).
-        #[arg(long = "harness", value_enum)]
-        harnesses: Vec<bitrouter::providers::cli_install::SpawnAgent>,
         #[command(flatten)]
         resources: bitrouter::onboarding::resources::Options,
-        /// (Step 3) What to do at the end: `launch` | `serve` | `exit`.
+        /// Finish by starting the gateway or returning to the caller.
         #[arg(long, value_enum)]
-        after: Option<bitrouter::onboarding::AfterAction>,
-        /// (Step 3) Optional default daemon-routable model, also used by explicit native launch.
-        #[arg(long, value_name = "ID")]
-        model: Option<String>,
+        after: Option<AfterSetup>,
     },
     /// Configuration tooling (validation against the published schema).
     Config {
@@ -452,7 +331,7 @@ enum Command {
         /// Path to `bitrouter.yaml`. When omitted, the binary resolves
         /// in this order: `./bitrouter.yaml` → `$BITROUTER_HOME/bitrouter.yaml`
         /// → `~/.bitrouter/bitrouter.yaml` → zero-config in-memory defaults
-        /// (`bro init` is the explicit way to scaffold a file).
+        /// (`bitrouter init` is the explicit way to scaffold a file).
         #[arg(short, long)]
         config: Option<PathBuf>,
         /// Show only models declared by this provider.
@@ -507,200 +386,10 @@ enum Command {
         #[command(subcommand)]
         action: ProviderAction,
     },
-    // Reserved for a future OWS wallet integration (delivered by the `ows`
-    // workspace, not bitrouter). Intentionally commented out so v1.0 ships no
-    // non-functional `wallet` command; uncomment this variant AND restore its
-    // match arm in `run` when wiring OWS in.
-    // Wallet,
-    /// Inspect and control native BRO Threads without entering a terminal UI.
-    Threads {
-        #[command(subcommand)]
-        action: bitrouter::thread_cli::Command,
-    },
     /// Show connected agent instances; subcommands inspect catalog and run history.
     Agents {
-        #[command(flatten)]
-        options: bitrouter::connected_agents::Options,
         #[command(subcommand)]
-        action: Option<AgentsAction>,
-    },
-    /// Launch a coding-agent harness as an interactive native-TUI child. Routed
-    /// harnesses are pointed at the local BitRouter daemon; own-auth harnesses
-    /// launch directly and are not redirected. The human drives the harness's
-    /// own TUI directly (use `bro run` for a headless ACP prompt).
-    /// Follows `cargo run`'s separator convention: bitrouter options come
-    /// before `--`, everything after `--` is forwarded to the agent verbatim,
-    /// e.g. `bro launch codex -- --search`.
-    ///
-    /// Harnesses that route by env/args (claude, codex) are launched without
-    /// touching any config file. Those that route by synthesized config
-    /// (opencode, pi, hermes, openclaw) get it under `.bitrouter/launch/` —
-    /// your own agent config is still never modified.
-    ///
-    /// The agent authenticates to BitRouter with `BITROUTER_API_KEY` when it is
-    /// set; otherwise a local placeholder is used (fine under the `skip_auth`
-    /// default written by `bro init`). A missing `claude` / `codex`
-    /// binary is offered for install via its official native installer; other
-    /// harnesses report their own install command instead.
-    #[command(override_usage = "bro launch <AGENT> [OPTIONS] [-- <AGENT_ARGS>...]")]
-    Launch {
-        /// Which agent harness to launch: any catalog harness with an
-        /// interactive binary (`claude`, `codex`, `opencode`, `pi`, `hermes`,
-        /// `openclaw`, `grok`, or `agy`; catalog ids such as `claude-acp`,
-        /// `codex-acp`, `pi-acp`, and `hermes-acp` also resolve). Own-auth
-        /// harnesses such as `grok` and `agy` launch direct and are not
-        /// redirected.
-        #[arg(required_unless_present = "agent_compat")]
-        agent: Option<String>,
-        /// Compatibility spelling for the positional agent.
-        #[arg(
-            short = 'a',
-            long = "agent",
-            value_name = "ID",
-            hide = true,
-            conflicts_with = "agent"
-        )]
-        agent_compat: Option<String>,
-        #[command(flatten)]
-        options: NativeLaunchArgs,
-    },
-    /// Launch Claude Code's native interface through BitRouter.
-    Claude {
-        #[command(flatten)]
-        options: NativeLaunchArgs,
-    },
-    /// Alias for `bro claude`.
-    ClaudeCode {
-        #[command(flatten)]
-        options: NativeLaunchArgs,
-    },
-    /// Launch Codex's native interface through BitRouter.
-    Codex {
-        #[command(flatten)]
-        options: NativeLaunchArgs,
-    },
-    /// Run one ACP agent prompt headlessly. Streams NDJSON by default, or text
-    /// / quiet output when selected explicitly.
-    Run {
-        /// ACP agent id from the bundled catalog or `agents:` config.
-        agent: String,
-        #[command(flatten)]
-        skills: bitrouter::skills::cli::ConstraintArgs,
-        /// Prompt to send. Use `-` to read stdin.
-        #[arg(conflicts_with = "prompt_file")]
-        prompt: Option<String>,
-        /// Read the prompt from a file.
-        #[arg(long, value_name = "PATH", conflicts_with = "prompt")]
-        prompt_file: Option<PathBuf>,
-        /// Load a harness-native session and replay its history.
-        #[arg(long, value_name = "NATIVE_SESSION_ID", conflicts_with = "resume")]
-        load: Option<String>,
-        /// Resume a harness-native session without replaying history.
-        #[arg(long, value_name = "NATIVE_SESSION_ID", conflicts_with = "load")]
-        resume: Option<String>,
-        /// Working directory supplied to the agent session.
-        #[arg(long, value_name = "PATH")]
-        cwd: Option<PathBuf>,
-        #[command(flatten)]
-        routing: RoutingOptions,
-        /// Per-turn deadline in seconds.
-        #[arg(long, value_name = "SECS")]
-        turn_timeout: Option<u64>,
-        /// Return after the prompt is submitted.
-        #[arg(long, hide = true, conflicts_with = "background")]
-        no_wait: bool,
-        /// Submit the turn to the resident supervisor and return an attachable
-        /// agent run id after it has accepted ownership.
-        #[arg(long)]
-        background: bool,
-        /// Allow another potentially writable run to use the same canonical
-        /// Git worktree or non-Git directory. This is unsafe and emits a
-        /// warning before submission.
-        #[arg(long, requires = "background")]
-        allow_shared_directory: bool,
-        /// JSON Schema — inline JSON or `@path` — required of the final reply.
-        #[arg(long, value_name = "JSON|@PATH", conflicts_with = "no_wait")]
-        result_schema: Option<String>,
-        #[command(flatten)]
-        headless: HeadlessOptions,
-        /// Path to `bitrouter.yaml`.
-        #[arg(short, long)]
-        config: Option<PathBuf>,
-    },
-    /// Spawn an ACP-compatible harness as a headless *sub-agent*. Routing is
-    /// attempted by default when the harness supports headless redirection;
-    /// config-synthesis-only catalog agents warn and run direct. Pick a mode:
-    /// `-p "<text>"` streams one prompt as NDJSON then exits; `--serve`
-    /// speaks ACP over stdio for an ACP client; `--check` preflights the route.
-    /// Pass `--direct` to bypass daemon routing. (For an interactive native TUI
-    /// use `bro launch`.)
-    #[command(hide = true)]
-    Spawn {
-        /// ACP agent id: a bundled-catalog id (`claude-acp`, `codex-acp`,
-        /// `opencode`, `pi-acp`, `hermes-acp`, `openclaw`) or a
-        /// configured `agents:` entry. A catalog id needs no config entry; run
-        /// `--check` to see whether it will route or run direct in headless mode.
-        #[arg(required_unless_present = "legacy_agent")]
-        agent: Option<String>,
-        /// Send one prompt, stream NDJSON to stdout, then exit.
-        #[arg(short = 'p', long, value_name = "TEXT")]
-        prompt: Option<String>,
-        /// Serve the session as a vanilla ACP Agent over stdio (ACP client).
-        #[arg(long, conflicts_with = "prompt")]
-        serve: bool,
-        /// Preflight the harness + route without launching anything.
-        #[arg(long, conflicts_with_all = ["prompt", "serve"])]
-        check: bool,
-        /// Do NOT route through the daemon — let the harness use its own
-        /// provider auth. Routing is attempted by default when the harness
-        /// supports headless redirection.
-        #[arg(long)]
-        direct: bool,
-        /// Pin the harness's model (via its model env var / `-c model=`).
-        #[arg(long)]
-        model: Option<String>,
-        /// Override the gateway base URL (else derived from `server.listen`).
-        #[arg(long)]
-        base_url: Option<String>,
-        /// Never auto-start a local daemon when none is running — fail fast.
-        #[arg(long)]
-        no_start: bool,
-        /// Per-turn deadline in seconds.
-        #[arg(long, value_name = "SECS")]
-        turn_timeout: Option<u64>,
-        /// (with `-p`) Return immediately after submitting the prompt.
-        #[arg(long, requires = "prompt")]
-        no_wait: bool,
-        /// (with `-p`) JSON Schema — inline JSON or `@path` — the subagent's
-        /// final reply must satisfy. The schema rides the prompt; the terminal
-        /// NDJSON `result` line gains `result`/`schema_ok` fields, with one
-        /// repair re-prompt on invalid output (then `schema_ok:false` + raw).
-        #[arg(
-            long,
-            value_name = "JSON|@PATH",
-            requires = "prompt",
-            conflicts_with = "no_wait"
-        )]
-        result_schema: Option<String>,
-        /// (with `-p`) How permission requests are answered, and what is
-        /// printed.
-        #[command(flatten)]
-        headless: HeadlessOptions,
-        /// Path to `bitrouter.yaml`. Resolves via the standard chain when
-        /// omitted.
-        #[arg(short, long)]
-        config: Option<PathBuf>,
-        /// Deprecated: the interactive form `spawn --agent <claude|codex>`
-        /// (also `-a`) moved to `bro launch`. Kept as a migration alias.
-        #[arg(long = "agent", short = 'a', hide = true, value_enum)]
-        legacy_agent: Option<bitrouter::providers::cli_install::SpawnAgent>,
-        /// Deprecated (`--agent` path only): forwarded to `launch`.
-        #[arg(long, hide = true)]
-        no_install: bool,
-        /// Forwarded verbatim to the interactive agent in the deprecated
-        /// `--agent` path (everything after `--`).
-        #[arg(last = true, allow_hyphen_values = true)]
-        agent_args: Vec<String>,
+        action: AgentsAction,
     },
     /// Manage your BitRouter Cloud account — sign in/out, namespaces, keys,
     /// usage, requests, billing, policies, budgets, presets, and BYOK. Start
@@ -709,64 +398,28 @@ enum Command {
         #[command(subcommand)]
         action: bitrouter::cloud::cli::CloudAction,
     },
-    /// Inspect and edit local skill directories and explain explicit bindings.
-    Skills {
-        #[command(subcommand)]
-        action: bitrouter::skills::cli::SkillsAction,
-    },
     /// Manage upstream MCP configuration and explicitly check connections.
     Mcp {
         #[command(subcommand)]
         action: McpAction,
     },
-    /// Workflow-state trace/replay utilities.
-    WorkflowState {
-        #[command(subcommand)]
-        action: WorkflowStateAction,
-    },
     /// Update the installed `bitrouter` binary in place to the latest release.
-    /// Follows prereleases by default while pre-1.0. For Homebrew / `cargo
-    /// install` installs it prints the right upgrade command instead.
+    /// Includes prereleases by default. Package-manager installs report an
+    /// upgrade command for the owning package.
     Update {
         /// Report whether a newer version exists, then exit without changing
         /// anything.
         #[arg(long)]
         check: bool,
-        /// Update (or downgrade) to a specific release tag, e.g.
-        /// `1.0.0-alpha.18`. Named `--tag` to avoid clashing with the global
-        /// `--version` flag.
+        /// Select an exact split-release tag, including for rollback.
         #[arg(long)]
         tag: Option<String>,
         /// Only consider stable (non-prerelease) releases.
         #[arg(long)]
         stable: bool,
-        /// Compatibility flag: a safe handoff is now attempted by default.
-        #[arg(long, hide = true)]
-        restart: bool,
         /// Skip the confirmation prompt.
         #[arg(short = 'y', long)]
         yes: bool,
-    },
-    /// Internal update continuation executed by the replacement binary.
-    #[command(name = "__daemon-handoff", hide = true)]
-    DaemonHandoff {
-        #[arg(long)]
-        config: Option<PathBuf>,
-        #[arg(long)]
-        socket: PathBuf,
-    },
-    /// ACP client integration over stdio, plus compatibility commands.
-    ///
-    /// `serve` exposes an ACP-compatible adapter process over protocol-pure stdio.
-    Acp {
-        #[command(subcommand)]
-        cmd: AcpCmd,
-    },
-    /// Migration error for removed first-party terminal interfaces.
-    #[command(name = "code", aliases = ["tui", "chat"], hide = true, disable_help_flag = true)]
-    RemovedUi {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<std::ffi::OsString>,
     },
 }
 
@@ -808,112 +461,6 @@ enum ConfigAction {
 }
 
 #[derive(Subcommand)]
-enum WorkflowStateAction {
-    /// Evaluate a shadow task/role/progress/risk classifier without routing.
-    ClassifierBakeoff {
-        /// Directory tree containing frozen workflow-state fixture JSON files.
-        #[arg(long)]
-        fixtures: PathBuf,
-        /// Optional candidate submission JSON. Omit to evaluate the compiled
-        /// deterministic scorecard as an uncalibrated baseline.
-        #[arg(long)]
-        submission: Option<PathBuf>,
-        /// Output path for the deterministic manifest and evaluation report.
-        #[arg(long)]
-        output: PathBuf,
-    },
-    /// Build a deterministic benchmark trace bundle.
-    Bundle {
-        /// Run label stored in `run-artifact.json`.
-        #[arg(long)]
-        run_label: String,
-        /// Daemon workflow trace JSONL.
-        #[arg(long)]
-        traces: PathBuf,
-        /// BitRouter Cloud usage snapshot JSONL.
-        #[arg(long)]
-        cloud_usage: PathBuf,
-        /// Optional request-scoped benchmark outcome JSONL. Omit when task or
-        /// episode outcomes will be submitted through the Eval Exchange.
-        #[arg(long)]
-        outcomes: Option<PathBuf>,
-        /// Optional policy routing decision JSONL from BITROUTER_POLICY_DECISION_JSONL.
-        #[arg(long)]
-        policy_decisions: Option<PathBuf>,
-        /// Output directory for traces/cloud usage/outcomes/artifacts.
-        #[arg(long)]
-        output_dir: PathBuf,
-    },
-    /// Export daemon metering rows as usage JSONL for benchmark bundles.
-    MeteringUsage {
-        /// Database URL for the daemon metering DB, for example sqlite:///path/bitrouter.db.
-        #[arg(long)]
-        database_url: String,
-        /// Output usage JSONL path.
-        #[arg(long)]
-        output: PathBuf,
-        /// Impute charges as provider:model=uncached,cache_read,cache_write,output.
-        /// Legacy input,output is accepted only for records with no cache usage.
-        #[arg(long = "impute-price")]
-        impute_prices: Vec<String>,
-        /// Inclusive RFC3339 lower bound. Defaults to the current UTC month.
-        #[arg(long)]
-        since: Option<String>,
-        /// Exclusive RFC3339 upper bound. Only used with --since; defaults to now.
-        #[arg(long)]
-        until: Option<String>,
-    },
-    /// Reconcile selected metering rows against request-scoped receipts.
-    ReconcileMetering {
-        /// Database URL for the daemon metering DB.
-        #[arg(long)]
-        database_url: String,
-        /// Inference API root ending in `/v1`.
-        #[arg(long, default_value = "https://api.bitrouter.ai/v1")]
-        api_base: String,
-        /// Environment variable containing the inference key.
-        #[arg(long, default_value = "BITROUTER_API_KEY")]
-        api_key_env: String,
-        /// Protected BitRouter Cloud credential file containing a static API
-        /// key. OAuth credentials are never refreshed for settlement.
-        #[arg(long)]
-        credentials_file: Option<PathBuf>,
-        /// Exact request id to reconcile. Repeat for every selected row.
-        #[arg(long = "request-id", required = true)]
-        request_ids: Vec<String>,
-        /// Frozen price as provider:model=uncached,cache_read,cache_write,output.
-        /// Repeat a provider/model pair for alternative schedules; settlement
-        /// accepts only one distinct candidate that reconstructs the receipt.
-        #[arg(long = "price")]
-        prices: Vec<String>,
-        /// Maximum durable receipt fetches per request.
-        #[arg(long, default_value_t = 12)]
-        max_attempts: u32,
-        /// Delay between pending-receipt polls.
-        #[arg(long, default_value_t = 1_000)]
-        poll_interval_ms: u64,
-    },
-    /// Apply task rewards to cheap replacement transitions before the next round.
-    ApplyRewardFeedback {
-        /// Database URL for the policy daemon DB, for example sqlite:///path/bitrouter.db.
-        #[arg(long)]
-        database_url: String,
-        /// Daemon workflow trace JSONL for the just-finished benchmark group.
-        #[arg(long)]
-        traces: PathBuf,
-        /// Exact, reconciled usage JSONL for the same benchmark group.
-        #[arg(long)]
-        cloud_usage: PathBuf,
-        /// Benchmark outcome JSONL for the just-finished benchmark group.
-        #[arg(long)]
-        outcomes: PathBuf,
-        /// Policy routing decision JSONL from BITROUTER_POLICY_DECISION_JSONL.
-        #[arg(long)]
-        policy_decisions: PathBuf,
-    },
-}
-
-#[derive(Subcommand)]
 enum McpAction {
     /// Connect, negotiate MCP capabilities, and list advertised tools.
     Check {
@@ -941,115 +488,13 @@ enum McpAction {
 
 #[derive(Subcommand)]
 enum AgentsAction {
-    #[command(flatten)]
-    #[cfg(feature = "harness")]
-    Control(bitrouter::agent_sessions::control::Command),
-    /// List BitRouter-supervised agent runs from the local daemon.
-    Sessions {
-        /// Path to `bitrouter.yaml` (used to locate the local control socket).
-        #[arg(short, long)]
-        config: Option<PathBuf>,
-        /// Explicit local control socket path.
-        #[arg(long)]
-        socket: Option<PathBuf>,
-    },
-    /// Migration error for the removed terminal inspector.
-    #[command(name = "attach", hide = true, disable_help_flag = true)]
-    RemovedAttach {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<std::ffi::OsString>,
-    },
-    /// Stop one supervised run without deleting its native harness session.
-    Stop {
-        /// BitRouter agent run id.
-        agent_run_id: String,
-        /// Path to `bitrouter.yaml` (used to locate the local control socket).
-        #[arg(short, long)]
-        config: Option<PathBuf>,
-        /// Explicit local control socket path.
-        #[arg(long)]
-        socket: Option<PathBuf>,
-    },
-    /// Remove settled BitRouter run metadata and ephemeral retained events.
-    Remove {
-        /// BitRouter agent run id.
-        agent_run_id: String,
-        /// Path to `bitrouter.yaml` (used to locate the local control socket).
-        #[arg(short, long)]
-        config: Option<PathBuf>,
-        /// Explicit local control socket path.
-        #[arg(long)]
-        socket: Option<PathBuf>,
-    },
-    /// Show the bundled catalog of well-known agents and which of them are
-    /// present under `agents:` in the loaded config. With `--remote`, also
-    /// fetch and list the official ACP agent registry.
+    /// Inspect the agent catalog advertised through the service control API.
     List {
-        /// Also fetch the ACP agent registry
-        /// (cdn.agentclientprotocol.com) and list its agents.
-        #[arg(long)]
-        remote: bool,
-        /// Path to `bitrouter.yaml`. When omitted, the binary resolves
-        /// in this order: `./bitrouter.yaml` → `$BITROUTER_HOME/bitrouter.yaml`
-        /// → `~/.bitrouter/bitrouter.yaml` → zero-config in-memory defaults
-        /// (`bro init` is the explicit way to scaffold a file).
         #[arg(short, long)]
         config: Option<PathBuf>,
-        /// Explicit local control socket for the daemon's accepted catalog.
         #[arg(long)]
         socket: Option<PathBuf>,
     },
-    /// Inspect commands advertised by a fresh ACP session.
-    Inspect {
-        /// ACP agent id or friendly alias.
-        agent: String,
-        #[command(flatten)]
-        routing: RoutingOptions,
-        /// How long to wait for the advertised command list.
-        #[arg(long, value_name = "MS", default_value_t = 2000)]
-        wait_ms: u64,
-        /// Show only commands answered by one source.
-        #[arg(long, value_enum)]
-        source: Option<CommandSourceArg>,
-        /// Path to `bitrouter.yaml`.
-        #[arg(short, long)]
-        config: Option<PathBuf>,
-    },
-    /// Spawn one agent, or every configured agent, and verify initialization.
-    Check {
-        /// ACP agent id or friendly alias; omit to check configured agents.
-        agent: Option<String>,
-        #[command(flatten)]
-        routing: RoutingOptions,
-        /// Path to `bitrouter.yaml`. When omitted, the binary resolves
-        /// in this order: `./bitrouter.yaml` → `$BITROUTER_HOME/bitrouter.yaml`
-        /// → `~/.bitrouter/bitrouter.yaml` → zero-config in-memory defaults
-        /// (`bro init` is the explicit way to scaffold a file).
-        #[arg(short, long)]
-        config: Option<PathBuf>,
-    },
-    /// Run the ACP-compatibility suite against a catalog agent and print the
-    /// `conformance:` block to record in its runtime entry.
-    ///
-    /// Needs no provider credentials: the agent is launched with its own
-    /// routing pointed at an ephemeral loopback gateway that records what
-    /// reached it. It does spawn the agent, so its package or binary must be
-    /// installed.
-    Conformance {
-        /// Agent id, either `<runtime>/<harness>` or a bare harness id
-        /// (`local/` is the default runtime and may be elided).
-        id: String,
-    },
-    /// Print a YAML stub for an agent (paste under `agents:` in
-    /// `bitrouter.yaml`). Resolves from the bundled catalog first, then the
-    /// ACP registry (`npx`/`uvx` distributions only).
-    Scaffold {
-        /// Agent id (see `bro agents list` / `list --remote`).
-        id: String,
-    },
-    /// Compatibility alias for `agents scaffold`.
-    #[command(hide = true)]
-    Install { id: String },
 }
 
 #[derive(Subcommand)]
@@ -1075,7 +520,7 @@ enum ToolsAction {
         /// Path to `bitrouter.yaml`. When omitted, the binary resolves
         /// in this order: `./bitrouter.yaml` → `$BITROUTER_HOME/bitrouter.yaml`
         /// → `~/.bitrouter/bitrouter.yaml` → zero-config in-memory defaults
-        /// (`bro init` is the explicit way to scaffold a file).
+        /// (`bitrouter init` is the explicit way to scaffold a file).
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
@@ -1084,7 +529,7 @@ enum ToolsAction {
         /// Path to `bitrouter.yaml`. When omitted, the binary resolves
         /// in this order: `./bitrouter.yaml` → `$BITROUTER_HOME/bitrouter.yaml`
         /// → `~/.bitrouter/bitrouter.yaml` → zero-config in-memory defaults
-        /// (`bro init` is the explicit way to scaffold a file).
+        /// (`bitrouter init` is the explicit way to scaffold a file).
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
@@ -1096,7 +541,7 @@ enum ToolsAction {
         /// Path to `bitrouter.yaml`. When omitted, the binary resolves
         /// in this order: `./bitrouter.yaml` → `$BITROUTER_HOME/bitrouter.yaml`
         /// → `~/.bitrouter/bitrouter.yaml` → zero-config in-memory defaults
-        /// (`bro init` is the explicit way to scaffold a file).
+        /// (`bitrouter init` is the explicit way to scaffold a file).
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
@@ -1124,7 +569,7 @@ enum KeyAction {
 enum OperationsAction {
     /// Show one retained reload operation owned by this credential.
     Show {
-        /// Reload request UUID returned by `bro reload`.
+        /// Reload request UUID returned by `bitrouter reload`.
         request_id: String,
         /// Daemon boot instance UUID returned with the operation.
         #[arg(long)]
@@ -1355,7 +800,7 @@ enum ProviderAction {
         /// Path to `bitrouter.yaml`. When omitted, the binary resolves
         /// in this order: `./bitrouter.yaml` → `$BITROUTER_HOME/bitrouter.yaml`
         /// → `~/.bitrouter/bitrouter.yaml` → zero-config in-memory defaults
-        /// (`bro init` is the explicit way to scaffold a file).
+        /// (`bitrouter init` is the explicit way to scaffold a file).
         #[arg(short, long)]
         config: Option<PathBuf>,
         /// Explicit local control socket for the daemon's accepted provider catalog.
@@ -1387,7 +832,7 @@ enum ProviderAction {
     /// paste; `openai-codex` runs the ChatGPT PKCE flow; `github-copilot` the
     /// GitHub device flow; everything else accepts a pasted API key. Logging
     /// in to the built-in `bitrouter` provider runs the same cloud sign-in as
-    /// `bro cloud login`.
+    /// `bitrouter cloud login`.
     Login {
         /// Provider id (e.g. `claude-code`, `openai-codex`, `bitrouter`).
         provider: String,
@@ -1408,7 +853,7 @@ enum ProviderAction {
         #[arg(long, value_name = "KEY", conflicts_with_all = ["import_existing", "no_browser", "key_stdin"])]
         api_key: Option<String>,
         /// Read the API key from stdin (one line) instead of prompting — for
-        /// pipelines, e.g. `printf %s "$KEY" | bro providers login openai
+        /// pipelines, e.g. `printf %s "$KEY" | bitrouter providers login openai
         /// --key-stdin`.
         #[arg(long, conflicts_with_all = ["import_existing", "no_browser"])]
         key_stdin: bool,
@@ -1421,252 +866,11 @@ enum ProviderAction {
     },
 }
 
-#[derive(Subcommand)]
-enum AcpRecordingAction {
-    /// List recorded native sessions under a configured agent source.
-    List {
-        #[arg(long)]
-        agent: String,
-    },
-    /// Export canonical events, replay audit, gaps, and observed request links.
-    Show {
-        #[arg(long)]
-        agent: String,
-        session: String,
-    },
-    /// Delete this session's locally captured content.
-    Delete {
-        #[arg(long)]
-        agent: String,
-        session: String,
-    },
-}
-
-#[derive(Subcommand)]
-enum AcpCheckpointAction {
-    /// Judge an existing checkpoint with an explicitly selected configured model.
-    Judge {
-        checkpoint: String,
-        #[arg(long)]
-        model: String,
-    },
-    /// Inspect a durable judge job, or resume it with its recorded input and model.
-    JudgeJob {
-        job_id: String,
-        #[arg(long)]
-        resume: bool,
-    },
-    /// Prepare or submit evidence-grounded rubric scores from recorded content.
-    Rubric {
-        #[cfg(feature = "core")]
-        #[command(subcommand)]
-        action: bitrouter::core::evolution::scoring::ScoringCommand,
-        #[cfg(not(feature = "core"))]
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        arguments: Vec<String>,
-    },
-    /// Freeze exactly the currently observed prefix; rejects a stale watermark.
-    Create {
-        #[arg(long)]
-        watermark: i64,
-    },
-    /// List immutable prefixes for this native session.
-    List,
-    /// Read the original content versions referenced by a checkpoint.
-    Show { checkpoint: String },
-    /// Inspect resource snapshots, or refresh them from existing local records.
-    Resources {
-        checkpoint: String,
-        #[arg(long)]
-        refresh: bool,
-    },
-    /// Import an idempotent assessment revision or explicit retraction from JSON.
-    Submit { file: PathBuf },
-    /// Read immutable assessment revisions and their selection decisions.
-    History,
-    /// Inspect the selected assessment, including unassessed appends.
-    Effective,
-    /// Inspect related native forks with a union of observed request costs.
-    Family,
-}
-
-#[derive(Subcommand)]
-enum AcpCmd {
-    /// Control checkpoint feedback and policy-block evolution on the local daemon.
-    Evolution {
-        #[command(flatten)]
-        endpoint: bitrouter::control_output::Endpoint,
-        #[cfg(feature = "core")]
-        #[command(subcommand)]
-        action: bitrouter::core::evolution::operator::EvolutionAction,
-        #[cfg(not(feature = "core"))]
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        arguments: Vec<String>,
-    },
-    /// Freeze and evaluate already recorded native-session prefixes locally.
-    Checkpoints {
-        #[arg(long)]
-        agent: String,
-        session: String,
-        #[arg(short, long)]
-        config: Option<PathBuf>,
-        #[command(subcommand)]
-        action: AcpCheckpointAction,
-    },
-    /// Inspect or delete locally recorded ACP conversation content.
-    Recordings {
-        #[command(subcommand)]
-        action: AcpRecordingAction,
-        /// Config selecting the local content database.
-        #[arg(short, long)]
-        config: Option<PathBuf>,
-    },
-    /// Serve native BRO over ACP stdio, or proxy an explicit external agent.
-    #[command(override_usage = "bro acp serve [AGENT] [OPTIONS]")]
-    Serve {
-        /// Agent id — a bundled-catalog id (`claude-acp`, `codex-acp`,
-        /// `opencode`, `pi-acp`, `hermes-acp`, `openclaw`)
-        /// or an entry under `agents:` in the config. A catalog id needs no
-        /// config entry; `bro agents check <agent>` previews whether it
-        /// will route or run direct.
-        agent: Option<String>,
-        /// Compatibility spelling for the positional agent.
-        #[arg(
-            long = "agent",
-            value_name = "ID",
-            hide = true,
-            conflicts_with = "agent"
-        )]
-        agent_compat: Option<String>,
-        /// Native BRO: permit reads only, excluding shell, writes and MCP.
-        #[arg(long)]
-        read_only: bool,
-        /// Per-turn deadline in seconds. On elapse the agent is asked to
-        /// cancel cooperatively; a turn that still doesn't finish errors.
-        #[arg(long, value_name = "SECS")]
-        turn_timeout: Option<u64>,
-        #[command(flatten)]
-        routing: RoutingOptions,
-        /// Path to `bitrouter.yaml`. Resolves via the standard chain when
-        /// omitted: `./bitrouter.yaml` → `$BITROUTER_HOME` →
-        /// `~/.bitrouter/bitrouter.yaml` → zero-config defaults.
-        #[arg(short, long)]
-        config: Option<PathBuf>,
-    },
-    /// Launch a session, send one prompt, and stream NDJSON output to stdout.
-    ///
-    /// Each streamed agent update is emitted as one JSON object per line with
-    /// a `type` field (e.g. `message_chunk`, `tool_call`). The final line has
-    /// `type: result` with a `stop_reason` field.
-    #[command(hide = true)]
-    Prompt {
-        /// Agent id — a bundled-catalog id (`claude-acp`, `codex-acp`,
-        /// `opencode`, `pi-acp`, `hermes-acp`, `openclaw`)
-        /// or an entry under `agents:` in the config. A catalog id needs no
-        /// config entry; `bro agents check <agent>` previews whether it
-        /// will route or run direct.
-        #[arg(long)]
-        agent: String,
-        /// Per-turn deadline in seconds. On elapse the agent is asked to
-        /// cancel cooperatively; a turn that still doesn't finish errors.
-        #[arg(long, value_name = "SECS")]
-        turn_timeout: Option<u64>,
-        /// Return immediately after submitting the prompt (emit
-        /// `{"type":"submitted"}`). The session is torn down after ack.
-        #[arg(long)]
-        no_wait: bool,
-        #[command(flatten)]
-        routing: RoutingOptions,
-        #[command(flatten)]
-        headless: HeadlessOptions,
-        /// Path to `bitrouter.yaml`. Resolves via the standard chain when
-        /// omitted: `./bitrouter.yaml` → `$BITROUTER_HOME` →
-        /// `~/.bitrouter/bitrouter.yaml` → zero-config defaults.
-        #[arg(short, long)]
-        config: Option<PathBuf>,
-        /// The prompt text to send.
-        text: String,
-    },
-    /// List the slash commands a session offers, and who answers each.
-    ///
-    /// Opens a session, waits briefly for the agent to advertise its
-    /// commands, prints the list, and tears the session down. **No prompt is
-    /// sent.** The session is a fresh one, so this reports what a session with
-    /// this agent would offer. Inspect an existing supervised run with
-    /// `bro agents show` instead.
-    #[command(hide = true)]
-    Commands {
-        /// Agent id — a bundled-catalog id or an entry under `agents:`.
-        #[arg(long)]
-        agent: String,
-        #[command(flatten)]
-        routing: RoutingOptions,
-        /// How long to wait for the agent's command list, in milliseconds.
-        ///
-        /// An agent that has not answered by then is reported as not having
-        /// answered — distinct from one that answered with an empty list.
-        #[arg(long, value_name = "MS", default_value_t = 2000)]
-        wait_ms: u64,
-        /// Show only the commands one source answers.
-        #[arg(long, value_enum)]
-        source: Option<CommandSourceArg>,
-        /// Path to `bitrouter.yaml`. Resolves via the standard chain when
-        /// omitted.
-        #[arg(short, long)]
-        config: Option<PathBuf>,
-    },
-}
-
-/// `--source` as clap spells it.
-///
-/// A separate enum from [`bitrouter::actions::commands::CommandSource`] so the
-/// shared report type owes clap nothing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-enum CommandSourceArg {
-    /// BitRouter's own commands.
-    Bitrouter,
-    /// Prompt-expansion commands from the config.
-    Config,
-    /// Commands the agent advertises.
-    Agent,
-}
-
-#[cfg(feature = "harness")]
-impl From<CommandSourceArg> for bitrouter::actions::commands::CommandSource {
-    fn from(arg: CommandSourceArg) -> Self {
-        match arg {
-            CommandSourceArg::Bitrouter => Self::Bitrouter,
-            CommandSourceArg::Config => Self::Config,
-            CommandSourceArg::Agent => Self::Agent,
-        }
-    }
-}
-
 const CLI_MAIN_STACK_SIZE: usize = 8 * 1024 * 1024;
 
-/// The retired invocation. Installers keep it as an alias for `bro`; reaching
-/// the binary through it earns one deprecation line on stderr.
-const DEPRECATED_INVOCATION: &str = "bitrouter";
-
-/// Build clap with every usage override derived from the name in `argv[0]`.
-///
-/// The explicit overrides are required for the compact `launch` and `acp
-/// serve` forms, but must not pin those help pages to the canonical spelling
-/// when an operator reaches the binary through the compatibility alias.
+/// Render runnable command examples with the executable name used by the operator.
 fn command_for_invocation(invoked: &'static str) -> clap::Command {
-    Cli::command()
-        .name(invoked)
-        .bin_name(invoked)
-        .mut_subcommand("launch", |command| {
-            command.override_usage(format!(
-                "{invoked} launch <AGENT> [OPTIONS] [-- <AGENT_ARGS>...]"
-            ))
-        })
-        .mut_subcommand("acp", |command| {
-            command.mut_subcommand("serve", |command| {
-                command.override_usage(format!("{invoked} acp serve [AGENT] [OPTIONS]"))
-            })
-        })
+    Cli::command().name(invoked).bin_name(invoked)
 }
 
 /// Parse the process arguments after applying the invocation-derived help.
@@ -1678,18 +882,6 @@ fn parse_cli(invoked: &'static str) -> Cli {
         Ok(cli) => cli,
         Err(error) => error.exit(),
     }
-}
-
-/// Emit the compatibility notice on stderr, leaving structured stdout clean.
-fn warn_deprecated_invocation() {
-    let palette = bitrouter::style::Palette::for_stderr();
-    eprintln!(
-        "{cyan}note:{reset} `{old}` is now `{new}`. This alias is removed in 1.0.0.",
-        cyan = palette.cyan,
-        reset = palette.reset,
-        old = DEPRECATED_INVOCATION,
-        new = bitrouter::commands::invocation::DEFAULT,
-    );
 }
 
 fn main() {
@@ -1724,34 +916,14 @@ async fn async_main() {
     // render the *result* — a success report or the error envelope — through the
     // single `Output` driver. Diagnostics during execution go to stderr; the
     // result (this match) goes to stdout in the selected format, so
-    // `bro <cmd> 2>/dev/null | jq` always sees one clean JSON value.
+    // `bitrouter <cmd> 2>/dev/null | jq` always sees one clean JSON value.
     let invoked = bitrouter::commands::invocation::record_argv0();
-    if invoked == DEPRECATED_INVOCATION {
-        warn_deprecated_invocation();
-    }
     let cli = parse_cli(invoked);
     let raw_cloud_api = matches!(
         &cli.command,
         Some(Command::Cloud {
             action: bitrouter::cloud::cli::CloudAction::Api(_)
         })
-    );
-    let raw_agent_stream = matches!(
-        &cli.command,
-        Some(Command::Run {
-            background: false,
-            ..
-        }) | Some(Command::Acp {
-            cmd: AcpCmd::Prompt { .. } | AcpCmd::Serve { .. },
-        }) | Some(Command::Spawn {
-            prompt: Some(_),
-            legacy_agent: None,
-            ..
-        }) | Some(Command::Spawn {
-            serve: true,
-            legacy_agent: None,
-            ..
-        }) | Some(Command::Task { .. })
     );
     let output = bitrouter::output::Output::from_flags(cli.json, cli.human || cli.human_short);
     // Box the dispatch future onto the heap. `run` is a large `async fn` whose
@@ -1769,7 +941,7 @@ async fn async_main() {
             // `error` line on that stream itself. Keyed off the error's type
             // rather than the command shape, so it cannot misclassify a
             // sibling mode (`spawn --check` still gets its JSON report).
-            if raw_cloud_api || raw_agent_stream {
+            if raw_cloud_api {
                 eprintln!("error: {e:#}");
             } else {
                 emit_command_error(&e, &output);
@@ -1786,49 +958,7 @@ fn emit_command_error(error: &anyhow::Error, output: &Output) {
         return;
     }
 
-    #[cfg(feature = "harness")]
-    if let Some(routing) = error.downcast_ref::<bitrouter::acp_cli::RoutingError>() {
-        eprintln!("error: {routing}");
-        return;
-    }
     let _ = output.emit(&bitrouter::output::error::envelope_from_anyhow(error));
-}
-
-#[cfg(not(feature = "harness"))]
-const HARNESS_REQUIRED: &str = "agent commands require the harness feature";
-
-/// Reject unavailable execution before logs, target resolution, or input reads.
-#[cfg(not(feature = "harness"))]
-fn validate_harness_availability(command: Option<&Command>) -> Result<()> {
-    match command {
-        // The accepted catalog is a control read, including on a remote daemon.
-        Some(Command::Agents {
-            action: Some(AgentsAction::List { remote: false, .. }),
-            ..
-        }) => Ok(()),
-        Some(
-            Command::Run { .. }
-            | Command::Spawn { .. }
-            | Command::Launch { .. }
-            | Command::Claude { .. }
-            | Command::ClaudeCode { .. }
-            | Command::Codex { .. }
-            | Command::Threads { .. }
-            | Command::Agents { .. }
-            | Command::Acp {
-                cmd: AcpCmd::Serve { .. } | AcpCmd::Prompt { .. } | AcpCmd::Commands { .. },
-            },
-        ) => anyhow::bail!(HARNESS_REQUIRED),
-        _ => Ok(()),
-    }
-}
-
-fn retired_ui_error(attach: bool) -> anyhow::Error {
-    bitrouter::gateway::error::BitrouterError::bad_request(if attach {
-        "the first-party agents inspector has been removed; use bro agents show/events/pending/answer for single operations, or bro agents stop/remove for lifecycle control"
-    } else {
-        "the first-party code/tui/chat interface has been removed; use bro threads for native session control, bro run for a single ACP prompt, or bro launch <agent> for the harness's native interface"
-    }).into()
 }
 
 async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
@@ -1842,20 +972,6 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             "shared administration requires explicit targets and does not use named contexts"
         );
     }
-    match &cli.command {
-        Some(Command::RemovedUi { .. }) => return Err(retired_ui_error(false)),
-        Some(Command::Agents {
-            action: Some(AgentsAction::RemovedAttach { .. }),
-            ..
-        }) => return Err(retired_ui_error(true)),
-        _ => {}
-    }
-    #[cfg(not(feature = "harness"))]
-    validate_harness_availability(cli.command.as_ref())?;
-    #[cfg(not(all(feature = "core", feature = "harness")))]
-    if matches!(&cli.command, Some(Command::Task { .. })) {
-        anyhow::bail!("native task execution requires the core feature and harness feature");
-    }
     #[cfg(not(feature = "mcp"))]
     if matches!(
         &cli.command,
@@ -1868,62 +984,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
     ) {
         anyhow::bail!("MCP diagnostics require the mcp feature");
     }
-    #[cfg(not(feature = "core"))]
-    if matches!(
-        &cli.command,
-        Some(Command::Acp {
-            cmd: AcpCmd::Evolution { .. }
-                | AcpCmd::Checkpoints {
-                    action: AcpCheckpointAction::Judge { .. }
-                        | AcpCheckpointAction::JudgeJob { .. }
-                        | AcpCheckpointAction::Rubric { .. },
-                    ..
-                }
-        })
-    ) {
-        anyhow::bail!("checkpoint evaluation and evolution require the core feature");
-    }
-
-    // Subscriber init splits by command: the long-running `serve` defers
-    // its init until after the OTel exporter has installed a real tracer
-    // provider globally (see `serve` below). Every other command — and
-    // the foreground supervisor in `start` — gets a basic fmt subscriber
-    // here so config-loading errors surface as log lines.
-    //
-    // `tracing-opentelemetry`'s bridge layer captures its tracer at
-    // construction, so registering it before the exporter exists would
-    // lock the bridge to the default no-op and silently drop every later
-    // span. The two-stage init is the simplest way around that.
-    //
-    // The ACP integration commands and headless agent commands keep stdout
-    // exclusively for their machine-readable protocol — JSON-RPC or NDJSON —
-    // so their logging must go to stderr instead of the default (stdout)
-    // writer, or it would interleave with and corrupt that stream. The exclusion of
-    // `Command::Serve` mirrors how it defers its subscriber init to after the
-    // OTel exporter is available.
-    let is_acp = matches!(
-        &cli.command,
-        Some(
-            Command::Acp { .. }
-                | Command::Run { .. }
-                | Command::Task { .. }
-                | Command::Spawn { .. }
-        )
-    );
-    if defers_tracing_to_host(cli.command.as_ref()) {
-        // Both host entries install tracing after constructing their exporter.
-    } else if is_acp && (cfg!(feature = "harness") || cli.command.is_some()) {
-        // Any `acp` subcommand: stderr so stdout stays pristine, plus a
-        // per-session file so the substrate's log and the agent child's
-        // captured stderr can be read back interleaved.
-        if let Some(path) = init_session_log_tracing_subscriber(true) {
-            tracing::debug!(log = %path.display(), "session log");
-            // Remembered so a session that dies badly can show the end of it
-            // and say where the rest is. Set once, at init, because that is
-            // the only place the path exists.
-            bitrouter::session_diagnostics::remember_session_log(path);
-        }
-    } else {
+    if !defers_tracing_to_host(cli.command.as_ref()) {
         init_basic_tracing_subscriber();
     }
 
@@ -1934,7 +995,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             )
             .into());
         }
-        // Bare `bro` — the onboarding front door (wizard when
+        // Bare `bitrouter` — the onboarding front door (wizard when
         // unconfigured; background ensure-start when configured).
         return bitrouter::onboarding::entry(output).await;
     };
@@ -1973,75 +1034,11 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         Command::Shared { action } => run_shared(action, output).await,
         Command::Tenancy { action } => tenancy::run(&action, cli.context.as_deref(), output).await,
         Command::BuildInfo => {
-            output.emit(&bitrouter::artifact::current())?;
+            output.emit(&bitrouter::output::reports::artifact::BuildInfo {
+                product: env!("CARGO_PKG_NAME"),
+                artifact: bitrouter::artifact::current(),
+            })?;
             Ok(())
-        }
-        #[cfg(not(feature = "harness"))]
-        Command::Run { .. }
-        | Command::Spawn { .. }
-        | Command::Launch { .. }
-        | Command::Claude { .. }
-        | Command::ClaudeCode { .. }
-        | Command::Codex { .. } => anyhow::bail!(HARNESS_REQUIRED),
-        #[cfg(not(all(feature = "core", feature = "harness")))]
-        Command::Task { .. } => {
-            anyhow::bail!("native task execution requires the core feature and harness feature")
-        }
-        #[cfg(all(feature = "core", feature = "harness"))]
-        Command::Task { action } => match action {
-            TaskAction::Run(args) => run_native_task(args, remote_context.is_some()).await,
-            TaskAction::Managed(args) => {
-                anyhow::ensure!(
-                    remote_context.is_none(),
-                    "managed native tasks run on the local host"
-                );
-                let task = args.task;
-                let skills = task.skills.constraints()?;
-                bitrouter::managed_task::run(bitrouter::managed_task::Options {
-                    prompt: task.prompt,
-                    model: task.model,
-                    effort: task.effort,
-                    check: task.check,
-                    read_only: task.read_only,
-                    workspace: task.workspace,
-                    config: task.config,
-                    session: args.session,
-                    max_output_tokens: task.max_output_tokens,
-                    request_id: args.request_id,
-                    server_instance: args.server_instance,
-                    skills,
-                })
-                .await
-            }
-            TaskAction::ManagedStatus(args) => {
-                anyhow::ensure!(
-                    remote_context.is_none(),
-                    "managed native inspection requires the owner-local endpoint"
-                );
-                bitrouter::managed_task::status(args, output).await
-            }
-            TaskAction::ManagedCancel(args) => {
-                anyhow::ensure!(
-                    remote_context.is_none(),
-                    "managed native cancellation requires the owner-local endpoint"
-                );
-                bitrouter::managed_task::cancel(args, output).await
-            }
-            TaskAction::ManagedAnswer(args) => {
-                anyhow::ensure!(
-                    remote_context.is_none(),
-                    "managed skill consent requires the owner-local endpoint"
-                );
-                bitrouter::managed_task::answer(args, output).await
-            }
-        },
-        #[cfg(all(feature = "core", feature = "harness"))]
-        Command::HarnessHost {
-            config,
-            managed_child,
-        } => {
-            let source = bitrouter::paths::resolve_config(config.as_deref())?;
-            bitrouter::host::serve_harness_cli(&source, managed_child).await
         }
         Command::Serve {
             config,
@@ -2190,10 +1187,8 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             providers,
             provider_api_keys,
             use_detected,
-            harnesses,
             resources,
             after,
-            model,
         } => {
             let flags = bitrouter::onboarding::OnboardingFlags {
                 config,
@@ -2205,10 +1200,8 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                 providers,
                 provider_api_keys,
                 use_detected,
-                harnesses,
                 resources,
-                after,
-                model,
+                after: after.map(Into::into),
             };
             bitrouter::onboarding::run(flags, output).await
         }
@@ -2285,328 +1278,25 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             )
             .await
         }
-        Command::Threads { action } => {
-            anyhow::ensure!(
-                remote_context.is_none(),
-                "native Thread control requires an owner-local context"
-            );
-            bitrouter::thread_cli::run(action, output).await
-        }
-        Command::Agents { action, options } => {
-            administration_agents(
-                action,
-                &options,
-                output,
+        Command::Agents {
+            action: AgentsAction::List { config, socket },
+        } => {
+            let target = inspection_target(
                 remote_context.as_ref(),
                 cli.context.as_deref(),
+                config.as_deref(),
+                socket.as_deref(),
             )
-            .await
-        }
-        #[cfg(feature = "harness")]
-        Command::Launch {
-            agent,
-            agent_compat,
-            options,
-        } => {
-            if agent_compat.is_some() {
-                eprintln!(
-                    "note: `{cli} launch --agent <agent>` is a compatibility form; use \
-                     `{cli} launch <agent>`.",
-                    cli = bitrouter::commands::invocation::name()
-                );
-            }
-            let agent = agent.or(agent_compat).ok_or_else(|| {
-                bitrouter::gateway::error::BitrouterError::bad_request(format!(
-                    "launch requires an agent, for example `{} launch claude`",
-                    bitrouter::commands::invocation::name()
-                ))
-            })?;
-            run_native_launch(&agent, options, output).await
-        }
-        #[cfg(feature = "harness")]
-        Command::Claude { options } | Command::ClaudeCode { options } => {
-            run_native_launch("claude", options, output).await
-        }
-        #[cfg(feature = "harness")]
-        Command::Codex { options } => run_native_launch("codex", options, output).await,
-        #[cfg(feature = "harness")]
-        Command::Run {
-            agent,
-            skills,
-            prompt,
-            prompt_file,
-            load,
-            resume,
-            cwd,
-            routing,
-            turn_timeout,
-            no_wait,
-            background,
-            allow_shared_directory,
-            result_schema,
-            headless,
-            config,
-        } => {
-            let skills = skills.constraints()?;
-            anyhow::ensure!(
-                background || skills.is_none(),
-                "unsupported: workflow skill delivery requires daemon-owned --background"
-            );
-            anyhow::ensure!(
-                !skills
-                    .as_ref()
-                    .is_some_and(|constraints| constraints.include.iter().any(
-                        |selector| matches!(
-                            selector,
-                            bitrouter::managed_contract::harness::skills::SkillSelector::Mcp { .. }
-                        )
-                    )),
-                "unsupported: ACP skill delivery cannot preserve MCP-origin manifest/consent/cache/execution boundaries"
-            );
-            if no_wait {
-                eprintln!(
-                    "note: `--no-wait` is deprecated and does not detach; use `acp serve \
-                     <agent>` when an ACP client should own the connection."
-                );
-            }
-            let prompt = resolve_prompt_input(prompt, prompt_file.as_deref()).await?;
-            let source = bitrouter::paths::resolve_config(config.as_deref())?;
-            let cfg = bitrouter::paths::load_config(&source).await?;
-            let agent = bitrouter::acp_cli::resolve_agent_id(&cfg, &agent)?;
-            let session = match (load, resume) {
-                (Some(id), None) => SessionSelection::Load(id),
-                (None, Some(id)) => SessionSelection::Resume(id),
-                (None, None) => SessionSelection::New,
-                (Some(_), Some(_)) => {
-                    return Err(bitrouter::gateway::error::BitrouterError::bad_request(
-                        "--load and --resume cannot be combined",
-                    )
-                    .into());
-                }
-            };
-            if background {
-                if headless.format != PromptFormat::Ndjson {
-                    return Err(bitrouter::gateway::error::BitrouterError::bad_request(
-                        "`--format text|quiet` is unavailable with `--background`; the command returns a structured run report",
-                    )
-                    .into());
-                }
-                let schema = result_schema
-                    .as_deref()
-                    .map(bitrouter::harness::result_contract::ResultContract::from_flag)
-                    .transpose()?
-                    .map(|contract| contract.schema().clone());
-                let permission_policy = headless.supervised_permission_policy()?;
-                let cwd = match cwd {
-                    Some(cwd) => cwd,
-                    None => {
-                        std::env::current_dir().context("resolving the run working directory")?
-                    }
-                };
-                if allow_shared_directory {
-                    eprintln!(
-                        "warning: --allow-shared-directory disables BitRouter's single-writer protection for this supervised run; concurrent agents may overwrite each other's work"
-                    );
-                }
-                let no_start = routing.no_start;
-                let mut launch = bitrouter::acp_cli::launch_options(turn_timeout);
-                launch.skills = skills;
-                let snapshot = bitrouter::agent_sessions::start_background(
-                    &source,
-                    &cfg,
-                    no_start,
-                    bitrouter::client::sessions::wire::StartRunRequest {
-                        action_request_id: uuid::Uuid::new_v4().to_string(),
-                        client_id: None,
-                        label: None,
-                        agent_id: agent,
-                        prompt: Some(prompt),
-                        cwd,
-                        routing,
-                        launch,
-                        session,
-                        presentation: bitrouter::client::sessions::wire::Presentation::Background,
-                        parent_run_id: None,
-                        allow_shared_directory,
-                        permission_policy,
-                        result_schema: schema,
-                    },
-                )
-                .await?;
-                output.emit(&BackgroundRunReport::from_snapshot(&snapshot))?;
-                return Ok(());
-            }
-            run_agent_prompt(
-                &source,
-                cfg,
-                &agent,
-                AgentPromptRequest {
-                    prompt: &prompt,
-                    routing,
-                    turn_timeout,
-                    no_wait,
-                    result_schema: result_schema.as_deref(),
-                    headless,
-                    session,
-                    cwd,
-                },
-            )
-            .await
-        }
-        #[cfg(feature = "harness")]
-        Command::Spawn {
-            agent,
-            prompt,
-            serve,
-            check,
-            direct,
-            model,
-            base_url,
-            no_start,
-            turn_timeout,
-            no_wait,
-            result_schema,
-            headless,
-            config,
-            legacy_agent,
-            no_install,
-            agent_args,
-        } => {
-            // Deprecated interactive alias: `spawn --agent <claude|codex>` (or
-            // `-a`) → `launch`. Kept working for one or two alpha releases.
-            if let Some(legacy) = legacy_agent {
-                // The interactive alias and the ACP sub-agent modes are
-                // mutually exclusive — reject the mix rather than silently
-                // dropping the ACP args and launching an interactive TUI.
-                if agent.is_some() || prompt.is_some() || serve {
-                    anyhow::bail!(
-                        "`--agent` selects the deprecated interactive launcher; it cannot be \
-                         combined with a positional agent id, `-p`, or `--serve`. Use \
-                         `{cli} launch {}` for the TUI, or drop `--agent` to spawn \
-                         an ACP sub-agent.",
-                        legacy.spec().id,
-                        cli = bitrouter::commands::invocation::name()
-                    );
-                }
-                eprintln!(
-                    "note: `{cli} spawn --agent` is deprecated — use \
-                     `{cli} launch {}` (this alias will be removed).",
-                    legacy.spec().id,
-                    cli = bitrouter::commands::invocation::name()
-                );
-                let opts = bitrouter::spawn::SpawnOptions {
-                    agent: bitrouter::spawn::resolve_launch_agent(legacy.spec().id)?,
-                    model: model.clone(),
-                    agent_args,
-                    base_url,
-                    no_install,
-                    no_start,
-                    check,
-                };
-                return run_launch(config.as_deref(), opts, output).await;
-            }
-            let Some(agent) = agent else {
-                anyhow::bail!(
-                    "spawn: provide an agent id and a mode, e.g. \
-                     `{cli} spawn claude-acp -p \"summarize README\"`, \
-                     `{cli} spawn codex-acp --serve`, or `--check`.",
-                    cli = bitrouter::commands::invocation::name()
-                );
-            };
-            let source = bitrouter::paths::resolve_config(config.as_deref())?;
-            let cfg = bitrouter::paths::load_config(&source).await?;
-            let agent = bitrouter::acp_cli::resolve_agent_id(&cfg, &agent)?;
-            let routing = RoutingOptions {
-                direct,
-                base_url,
-                model,
-                no_start,
-            };
-            // A flattened struct cannot say `requires = "prompt"` for itself,
-            // so the modes that hand permissions to someone else refuse the
-            // flags that would answer them here.
-            if prompt.is_none() && headless != HeadlessOptions::default() {
-                anyhow::bail!(
-                    "spawn: `--approve-all`, `--approve-reads`, `--deny-all`, \
-                     `--permission-policy`, and `--format` apply to `-p` only; \
-                     `--serve` hands permissions to the ACP client and `--check` asks nothing."
-                );
-            }
-
-            if check {
-                eprintln!(
-                    "note: `{cli} spawn <agent> --check` is a compatibility form; use \
-                     `{cli} agents check <agent>`.",
-                    cli = bitrouter::commands::invocation::name()
-                );
-                let report = bitrouter::acp_cli::spawn_check(cfg, &agent, &routing).await?;
-                output.emit(&report)?;
-                if report.exit_code() == 0 {
-                    Ok(())
-                } else {
-                    std::process::exit(report.exit_code());
-                }
-            } else if serve {
-                let options = bitrouter::acp_cli::launch_options(turn_timeout);
-                let ctx = bitrouter::acp_cli::SpawnContext {
-                    source: &source,
-                    config: cfg,
-                    agent_id: &agent,
-                    options,
-                    routing,
-                };
-                bitrouter::acp_cli::serve(ctx).await
-            } else if let Some(text) = prompt {
-                eprintln!(
-                    "note: `{cli} spawn <agent> -p` is a compatibility form; use \
-                     `{cli} run <agent> <prompt>`.",
-                    cli = bitrouter::commands::invocation::name()
-                );
-                run_agent_prompt(
-                    &source,
-                    cfg,
-                    &agent,
-                    AgentPromptRequest {
-                        prompt: &text,
-                        routing,
-                        turn_timeout,
-                        no_wait,
-                        result_schema: result_schema.as_deref(),
-                        headless,
-                        session: SessionSelection::New,
-                        cwd: None,
-                    },
-                )
-                .await
-            } else {
-                anyhow::bail!(
-                    "spawn: choose a mode — `-p \"<prompt>\"` (NDJSON), \
-                     `--serve` (ACP over stdio), or `--check` (preflight)."
-                );
-            }
+            .await?;
+            output.emit(&target.agents().await?)?;
+            Ok(())
         }
         Command::Cloud { action } => bitrouter::cloud::cli::run(action, output.format()).await,
-        Command::Skills { action } => {
-            anyhow::ensure!(
-                remote_context.is_none()
-                    || !matches!(&action, bitrouter::skills::cli::SkillsAction::Explain(_)),
-                "skills explain requires the explicitly selected history database; remote control does not fall back to local history"
-            );
-            bitrouter::skills::cli::run(action, output).await
-        }
         Command::Mcp { action } => mcp_cmd(action, output).await,
-        Command::WorkflowState { action } => workflow_state_cmd(action).await,
-        Command::Acp { cmd } => acp_cmd(cmd, output).await,
-        Command::RemovedUi { .. } => Err(retired_ui_error(false)),
-        Command::DaemonHandoff { config, socket } => {
-            let source = bitrouter::paths::resolve_config(config.as_deref())?;
-            bitrouter::upgrade::ensure_compatible(&source, &socket, false).await
-        }
         Command::Update {
             check,
             tag,
             stable,
-            restart: restart_after,
             yes,
         } => {
             let source = bitrouter::paths::resolve_config(None)?;
@@ -2615,7 +1305,6 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                 check,
                 tag,
                 stable,
-                restart: restart_after,
                 yes,
             };
             // Preserve the installation pathname before its inode is replaced.
@@ -2623,93 +1312,15 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             // https://man7.org/linux/man-pages/man5/proc_pid_exe.5.html
             let candidate = std::env::current_exe()?.canonicalize()?;
             let mut outcome = bitrouter::update::run(opts, &socket).await?;
-            if outcome.report.status == "updated" {
+            if outcome.status == "updated" {
                 let verification = read_candidate_artifact(&candidate)
                     .await
                     .map_err(|error| format!("{error:#}"));
                 outcome.record_target_verification(verification);
             }
-            if outcome.restart_needed {
-                let before_pid = match daemon::send_command(&socket, &DaemonCommand::Status).await {
-                    Ok(DaemonResponse::Status { pid, .. }) => Some(pid),
-                    _ => None,
-                };
-                // The binary on disk now contains the new migrator. Run its
-                // harness-independent handoff path so the old in-memory
-                // binary cannot preflight with a stale migration list.
-                let mut handoff = tokio::process::Command::new(&candidate);
-                handoff
-                    .args(["--json", "__daemon-handoff", "--socket"])
-                    .arg(&socket);
-                if let bitrouter::paths::ConfigSource::File(path) = &source {
-                    handoff.arg("--config").arg(path);
-                }
-                let attempt = handoff.output().await;
-                let (completed, reason) = match attempt {
-                    Ok(result) if result.status.success() => {
-                        let hello =
-                            daemon::send_command(&socket, &DaemonCommand::HandoffHello).await;
-                        let matches_target = matches!(hello,
-                            Ok(DaemonResponse::HandoffHello { ref version, protocol: bitrouter::upgrade::HANDOFF_PROTOCOL, ref artifact, .. })
-                                if Some(version.as_str()) == outcome.report.target_version.as_deref()
-                                    && artifact.is_some() && artifact == &outcome.report.target_artifact);
-                        (
-                            matches_target,
-                            "replacement daemon artifact was not verified".to_string(),
-                        )
-                    }
-                    Ok(result) => {
-                        let message = serde_json::from_slice::<serde_json::Value>(&result.stdout)
-                            .ok()
-                            .and_then(|value| {
-                                value["error"]["message"].as_str().map(str::to_string)
-                            })
-                            .unwrap_or_else(|| {
-                                "the newly installed binary declined safe handoff".to_string()
-                            });
-                        (false, message)
-                    }
-                    Err(error) => (
-                        false,
-                        format!("could not launch the newly installed binary: {error}"),
-                    ),
-                };
-                if let Ok(DaemonResponse::Status {
-                    pid,
-                    listen,
-                    daemon_version,
-                    ..
-                }) = daemon::send_command(&socket, &DaemonCommand::Status).await
-                {
-                    outcome.report.daemon_pid = Some(pid);
-                    outcome.report.daemon_listen = Some(listen);
-                    outcome.report.daemon_version = daemon_version;
-                }
-                if let Ok(DaemonResponse::HandoffHello { instance_id, .. }) =
-                    daemon::send_command(&socket, &DaemonCommand::HandoffHello).await
-                {
-                    outcome.report.daemon_instance_id = Some(instance_id);
-                }
-                let completed = completed
-                    && outcome.report.daemon_pid.is_some()
-                    && outcome.report.daemon_instance_id.is_some();
-                outcome.report.daemon = Some(if !completed {
-                    "deferred"
-                } else if before_pid.is_some()
-                    && outcome.report.daemon_pid.is_some()
-                    && before_pid != outcome.report.daemon_pid
-                {
-                    "restarted"
-                } else {
-                    "compatible"
-                });
-                if !completed {
-                    outcome.report.daemon_reason = Some(reason);
-                }
-            }
-            output.emit(&outcome.report)?;
-            if outcome.report.exit_code() != 0 {
-                std::process::exit(outcome.report.exit_code());
+            output.emit(&outcome)?;
+            if outcome.exit_code() != 0 {
+                std::process::exit(outcome.exit_code());
             }
             Ok(())
         }
@@ -2727,218 +1338,21 @@ async fn read_candidate_artifact(path: &Path) -> Result<bitrouter_ai::artifact::
     .await
     .context("replacement build-info timed out")??;
     anyhow::ensure!(output.status.success(), "replacement build-info failed");
-    serde_json::from_slice(&output.stdout).context("decoding replacement build-info")
-}
-
-#[cfg(all(feature = "core", feature = "harness"))]
-async fn run_native_task(args: TaskRunArgs, remote: bool) -> Result<()> {
-    use bitrouter::client::agent_local::{Operation, ReplyResult};
-    use bitrouter::managed_contract::harness::turn::TurnStatus;
-
-    let skills = args.skills.constraints()?;
-
+    let info: serde_json::Value =
+        serde_json::from_slice(&output.stdout).context("decoding replacement build-info")?;
     anyhow::ensure!(
-        !remote,
-        "remote native tasks require an explicitly configured task API; no local fallback was attempted"
+        info["product"] == env!("CARGO_PKG_NAME"),
+        "replacement product mismatch"
     );
-    let source = bitrouter::paths::resolve_config(args.config.as_deref())?;
-    let cfg = bitrouter::paths::load_config(&source).await?;
-    let control_socket = daemon::socket_path_for(&source, &cfg);
-    let task_socket =
-        bitrouter::client::agent_local::connect_or_start(&source, &control_socket).await?;
-    let workspace = match args.workspace {
-        Some(workspace) => workspace,
-        None => std::env::current_dir()?,
-    };
-    let client = bitrouter::client::agent_local::ThreadClient::connect(&task_socket).await?;
-    let model = args
-        .model
-        .or_else(|| bitrouter::policy_lock::native_default_model(&cfg).map(str::to_owned))
-        .context("no native model configured; pass --model or enable defaults")?;
-    let model_mode = bitrouter::policy_lock::native_model_mode(&cfg, &model)?;
-    let config =
-        bitrouter::managed_contract::harness::agent::AgentConfig::fixed(model, args.effort)
-            .with_model_mode(model_mode)
-            .with_skill_constraints(skills)
-            .with_output_reservation(args.max_output_tokens);
-    let config = if args.read_only {
-        config.read_only()
-    } else {
-        config
-    };
-    let (thread, accepted) = client
-        .create_and_start(workspace, config, args.check, args.prompt)
-        .await?;
-    emit_task_json(
-        serde_json::json!({ "type": "accepted", "thread_id": thread.thread_id, "turn_id": accepted.turn_id, "host": "local", "server_instance_id": thread.server_instance_id, "workspace": thread.workspace, "permission_profile": thread.permission_profile, "cursor": thread.cursor }),
-    )?;
-    let mut stream = client
-        .observe(&thread.thread_id, Some(thread.cursor))
-        .await?;
-    let mut view = match client
-        .request(Operation::ReadThread {
-            thread_id: thread.thread_id.clone(),
-        })
-        .await?
-    {
-        ReplyResult::View { view } => *view,
-        _ => anyhow::bail!("unexpected Thread view"),
-    };
-    let mut answered = None;
-    let mut cancelling = false;
-    loop {
-        let observation = tokio::select! {
-            signal = tokio::signal::ctrl_c(), if !cancelling => {
-                signal?;
-                client.request(Operation::CancelTurn { thread_id: thread.thread_id.clone(), turn_id: accepted.turn_id.clone(), idempotency_key: "headless-cancel".into() }).await?;
-                cancelling = true;
-                continue;
-            }
-            next = stream.next() => next?.ok_or_else(|| anyhow::anyhow!("task observation disconnected; task {} may still be running; no task was resubmitted", accepted.turn_id))?,
-        };
-        match observation {
-            bitrouter::managed_contract::harness::thread::ThreadObservation::Snapshot {
-                view: fresh,
-                resynchronized,
-                catchup,
-            } => {
-                for event in catchup {
-                    emit_task_event(&event)?;
-                }
-                view = *fresh;
-                emit_task_json(
-                    serde_json::json!({"type":"snapshot", "view":view, "resynchronized":resynchronized}),
-                )?;
-            }
-            bitrouter::managed_contract::harness::thread::ThreadObservation::Event { event } => {
-                view.apply(&event);
-                emit_task_event(&event)?;
-            }
-            bitrouter::managed_contract::harness::thread::ThreadObservation::Live {
-                event,
-                after_cursor,
-            } => {
-                emit_task_json(
-                    serde_json::json!({"type":"live", "event":event, "after_cursor":after_cursor}),
-                )?;
-            }
-        }
-        // Another local client can enqueue on this Thread. The one-shot client
-        // observes and approves only the Turn it accepted, even after resync.
-        let historical = if view
-            .latest_turn
-            .as_ref()
-            .is_some_and(|turn| turn.turn_id != accepted.turn_id)
-        {
-            match client
-                .request(Operation::ReadTurn {
-                    thread_id: thread.thread_id.clone(),
-                    turn_id: accepted.turn_id.clone(),
-                })
-                .await?
-            {
-                ReplyResult::Turn { snapshot } => Some(snapshot),
-                _ => anyhow::bail!("unexpected targeted Turn reply"),
-            }
-        } else {
-            None
-        };
-        let Some(snapshot) = historical.as_deref().or(view.latest_turn.as_ref()) else {
-            continue;
-        };
-        if snapshot.status == TurnStatus::WaitingForInput
-            && snapshot
-                .pending_input
-                .as_ref()
-                .is_some_and(|request| request.tool_name != "mcp_skill.activate")
-            && let Some(request_id) = snapshot.pending_input_id.as_ref()
-            && answered.as_ref() != Some(request_id)
-            && !cancelling
-        {
-            // Explicit headless tasks retain ordinary tool approvals. An MCP
-            // skill requires its own visible, exact pending-input answer.
-            let result = client
-                .request(Operation::Input {
-                    thread_id: thread.thread_id.clone(),
-                    turn_id: snapshot.turn_id.clone(),
-                    request_id: request_id.clone(),
-                    approved: true,
-                    idempotency_key: request_id.clone(),
-                })
-                .await;
-            if let Err(error) = result
-                && !error
-                    .downcast_ref::<bitrouter::client::agent_local::ReplyError>()
-                    .is_some_and(|error| {
-                        error.code
-                            == bitrouter::managed_contract::harness::runtime::ErrorCode::Conflict
-                    })
-            {
-                return Err(error);
-            }
-            answered = Some(request_id.clone());
-        }
-        if snapshot.status == TurnStatus::RecoveryRequired {
-            emit_task_json(serde_json::json!({"type": "blocked", "snapshot": snapshot}))?;
-            anyhow::bail!("BRO execution is blocked; inspect recovery state before continuing");
-        }
-        if snapshot.status.terminal() {
-            emit_task_json(serde_json::json!({
-                "type": "terminal", "thread_id": thread.thread_id, "turn_id": snapshot.turn_id, "status": snapshot.status,
-                "server_instance_id": snapshot.server_instance_id,
-                "verification": snapshot.verification, "verification_evidence": snapshot.verification_evidence,
-                "final_answer": snapshot.final_answer, "detail": snapshot.detail, "unknown_effect": snapshot.unknown_effect,
-                "host": "local", "workspace": snapshot.workspace, "cursor": snapshot.cursor,
-            }))?;
-            drop(stream);
-            let _ = client
-                .request(Operation::UnloadThread {
-                    thread_id: thread.thread_id.clone(),
-                })
-                .await;
-            anyhow::ensure!(
-                snapshot.status == TurnStatus::Completed,
-                "BRO task ended with {:?}",
-                snapshot.status
-            );
-            return Ok(());
-        }
-    }
+    serde_json::from_value(info).context("decoding replacement artifact identity")
 }
 
-#[cfg(all(feature = "core", feature = "harness"))]
-fn emit_task_event(
-    event: &bitrouter::managed_contract::harness::thread::ThreadEvent,
-) -> Result<()> {
-    // Private execution fences still advance the durable cursor. The client
-    // applies them locally, but NDJSON consumers only need public changes.
-    if !event.changes.is_empty() {
-        emit_task_json(serde_json::json!({"type":"event", "event":event}))?;
-    }
-    Ok(())
-}
-
-#[cfg(all(feature = "core", feature = "harness"))]
-fn emit_task_json(value: serde_json::Value) -> Result<()> {
-    use std::io::Write;
-    let mut stdout = std::io::stdout().lock();
-    serde_json::to_writer(&mut stdout, &value)?;
-    writeln!(stdout)?;
-    stdout.flush()?;
-    Ok(())
-}
-
-// ===== `bro config …` (config tooling) =====
+// ===== `bitrouter config …` (config tooling) =====
 
 async fn config_cmd(action: ConfigAction, output: &Output) -> Result<()> {
     match action {
         ConfigAction::Validate { config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
-            // A `chat.commands` name that shadows one of BitRouter's own is a
-            // configuration error, and this is where a reader expects to be
-            // told before starting an agent.
-            let loaded = bitrouter::paths::load_config(&source).await?;
-            bitrouter::actions::session::prompt_commands(&loaded.chat)?;
             let report = validate_config(&source).await?;
             output.emit(&report)?;
             if report.valid {
@@ -2948,291 +1362,6 @@ async fn config_cmd(action: ConfigAction, output: &Output) -> Result<()> {
             }
         }
     }
-}
-
-#[cfg(any(feature = "core", test))]
-async fn settlement_api_key(
-    explicit_api_key: Option<&str>,
-    credentials_file: Option<&Path>,
-    api_base: &str,
-) -> Result<String> {
-    if let Some(api_key) = explicit_api_key.filter(|api_key| !api_key.is_empty()) {
-        return Ok(api_key.to_owned());
-    }
-
-    let credentials_file = credentials_file.ok_or_else(|| {
-        anyhow::anyhow!("settlement requires a static BitRouter API key or credentials file")
-    })?;
-    let manager = bitrouter::cloud::account::manager::CredentialManager::new(credentials_file)
-        .context("build settlement credential manager")?;
-    manager
-        .session()
-        .resolve_api_key(None, Some(api_base))
-        .await
-        .map(|credential| credential.secret().to_owned())
-        .map_err(anyhow::Error::from)
-}
-
-#[cfg(not(feature = "core"))]
-async fn workflow_state_cmd(_action: WorkflowStateAction) -> Result<()> {
-    anyhow::bail!("workflow-state requires the core feature")
-}
-
-#[cfg(feature = "core")]
-async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
-    match action {
-        WorkflowStateAction::ClassifierBakeoff {
-            fixtures,
-            submission,
-            output,
-        } => {
-            use bitrouter::core::workflow_state::classifier_bakeoff::ClassifierBakeoffArtifact;
-            use bitrouter::core::workflow_state::fixture::WorkflowTraceFixture;
-            use bitrouter::core::workflow_state::shadow_classifier::ShadowClassifierSubmission;
-
-            let fixtures = WorkflowTraceFixture::load_tree(&fixtures)
-                .with_context(|| format!("read classifier fixtures {}", fixtures.display()))?;
-            let submission = submission
-                .as_ref()
-                .map(ShadowClassifierSubmission::load_json)
-                .transpose()?;
-            let artifact = ClassifierBakeoffArtifact::build(&fixtures, submission)?;
-            artifact.write_json(&output)?;
-            println!(
-                "✓ wrote shadow classifier bake-off to {} (accepted: {}/{})",
-                output.display(),
-                artifact.report.accepted_count,
-                artifact.report.total_count
-            );
-            Ok(())
-        }
-        WorkflowStateAction::Bundle {
-            run_label,
-            traces,
-            cloud_usage,
-            outcomes,
-            policy_decisions,
-            output_dir,
-        } => {
-            use bitrouter::core::workflow_state::archive::{
-                CloudUsageRecord, TraceArchive, WorkflowRunArtifact,
-            };
-            use bitrouter::core::workflow_state::real_trace::TraceSanitizer;
-            use bitrouter::core::workflow_state::reward::BenchmarkOutcomeRecord;
-            use bitrouter::gateway::routing::workflow::decision::PolicyDecisionRecord;
-
-            let traces = TraceArchive::read_jsonl(&traces)
-                .with_context(|| format!("read workflow traces {}", traces.display()))?;
-            let usage = CloudUsageRecord::load_snapshot_jsonl(&cloud_usage)
-                .with_context(|| format!("read cloud usage {}", cloud_usage.display()))?;
-            let outcomes = match outcomes {
-                Some(path) => BenchmarkOutcomeRecord::load_jsonl(&path)
-                    .with_context(|| format!("read benchmark outcomes {}", path.display()))?,
-                None => Vec::new(),
-            };
-            let decisions = match policy_decisions {
-                Some(path) => PolicyDecisionRecord::load_jsonl(&path)
-                    .with_context(|| format!("read policy decisions {}", path.display()))?,
-                None => Vec::new(),
-            };
-            let artifact = WorkflowRunArtifact::write_bundle_with_decisions(
-                run_label,
-                &output_dir,
-                &traces,
-                &usage,
-                &outcomes,
-                &decisions,
-                &TraceSanitizer::default(),
-            )
-            .with_context(|| format!("write workflow bundle {}", output_dir.display()))?;
-            println!(
-                "✓ wrote workflow bundle to {} (traces: {}, reward matches: {})",
-                output_dir.display(),
-                artifact.trace_count,
-                artifact.reward_join.matched_trace_count
-            );
-            Ok(())
-        }
-        WorkflowStateAction::MeteringUsage {
-            database_url,
-            output,
-            impute_prices,
-            since,
-            until,
-        } => {
-            use bitrouter::metering::{
-                MeteringStore, MeteringUsageRecord, TimeWindow, UsagePriceOverride,
-            };
-
-            let impute_prices = impute_prices
-                .iter()
-                .map(|value| UsagePriceOverride::parse(value))
-                .collect::<std::result::Result<Vec<_>, _>>()
-                .map_err(anyhow::Error::from)?;
-            let window = match since {
-                Some(since) => {
-                    let start = parse_rfc3339_utc(&since, "--since")?;
-                    let end = match until {
-                        Some(until) => parse_rfc3339_utc(&until, "--until")?,
-                        None => chrono::Utc::now(),
-                    };
-                    TimeWindow::Custom { start, end }
-                }
-                None => TimeWindow::ThisMonth,
-            };
-            let db = bitrouter::db::connect(&database_url)
-                .await
-                .context("connect metering database")?;
-            let mut records = MeteringStore::new(db)
-                .export_usage(window)
-                .await
-                .with_context(|| format!("export metering usage from {database_url}"))?;
-            MeteringUsageRecord::apply_price_overrides(&mut records, &impute_prices);
-            MeteringUsageRecord::write_jsonl(&output, &records)
-                .with_context(|| format!("write metering usage {}", output.display()))?;
-            println!(
-                "✓ wrote {} metering usage records to {}",
-                records.len(),
-                output.display()
-            );
-            Ok(())
-        }
-        WorkflowStateAction::ReconcileMetering {
-            database_url,
-            api_base,
-            api_key_env,
-            credentials_file,
-            request_ids,
-            prices,
-            max_attempts,
-            poll_interval_ms,
-        } => {
-            use std::time::Duration;
-
-            use bitrouter::cloud::settlement::SettlementClient;
-            use bitrouter::metering::{MeteringStore, UsagePriceOverride, reconcile_requests};
-
-            let prices = prices
-                .iter()
-                .map(|value| UsagePriceOverride::parse(value))
-                .collect::<std::result::Result<Vec<_>, _>>()
-                .map_err(anyhow::Error::from)?;
-            let explicit_api_key = std::env::var(&api_key_env)
-                .ok()
-                .filter(|api_key| !api_key.is_empty());
-            let api_key = match settlement_api_key(
-                explicit_api_key.as_deref(),
-                credentials_file.as_deref(),
-                &api_base,
-            )
-            .await
-            {
-                Ok(api_key) => api_key,
-                Err(error) if credentials_file.is_none() => {
-                    return Err(error.context(format!(
-                        "provide a non-empty {api_key_env} environment variable or a credentials file containing a static BitRouter API key"
-                    )));
-                }
-                Err(error) => return Err(error),
-            };
-            let client = SettlementClient::new(&api_base, api_key)
-                .context("build request settlement client")?;
-            let db = bitrouter::db::connect(&database_url)
-                .await
-                .context("connect metering database")?;
-            bitrouter::db::run_migrations(&db)
-                .await
-                .context("run metering reconciliation migrations")?;
-            let summary = reconcile_requests(
-                &MeteringStore::new(db),
-                &client,
-                &request_ids,
-                &prices,
-                max_attempts,
-                Duration::from_millis(poll_interval_ms),
-            )
-            .await
-            .context("reconcile selected metering requests")?;
-            if !summary.accepted() {
-                anyhow::bail!(
-                    "metering reconciliation failed closed: requested={}, computed={}, \
-                     not_charged={}, unknown={}, attempts={}",
-                    summary.requested,
-                    summary.computed,
-                    summary.not_charged,
-                    summary.unknown,
-                    summary.attempts
-                );
-            }
-            println!(
-                "✓ reconciled {} metering requests (computed: {}, not charged: {}, attempts: {})",
-                summary.requested, summary.computed, summary.not_charged, summary.attempts
-            );
-            Ok(())
-        }
-        WorkflowStateAction::ApplyRewardFeedback {
-            database_url,
-            traces,
-            cloud_usage,
-            outcomes,
-            policy_decisions,
-        } => {
-            use bitrouter::core::workflow_state::archive::{
-                CloudUsageRecord, TraceArchive, WorkflowRunArtifact,
-            };
-            use bitrouter::core::workflow_state::reward::BenchmarkOutcomeRecord;
-            use bitrouter::core::workflow_state::reward_feedback::import_semantic_reward_feedback;
-            use bitrouter::eval::EvalService;
-            use bitrouter::eval::store::EvalStore;
-            use bitrouter::gateway::routing::workflow::decision::PolicyDecisionRecord;
-
-            let traces = TraceArchive::read_jsonl(&traces)
-                .with_context(|| format!("read workflow traces {}", traces.display()))?;
-            let outcomes = BenchmarkOutcomeRecord::load_jsonl(&outcomes)
-                .with_context(|| format!("read benchmark outcomes {}", outcomes.display()))?;
-            let usage = CloudUsageRecord::load_snapshot_jsonl(&cloud_usage)
-                .with_context(|| format!("read cloud usage {}", cloud_usage.display()))?;
-            let decisions = PolicyDecisionRecord::load_jsonl(&policy_decisions)
-                .with_context(|| format!("read policy decisions {}", policy_decisions.display()))?;
-            WorkflowRunArtifact::validate_reward_feedback_integrity(
-                &traces, &usage, &outcomes, &decisions,
-            )
-            .context("validate reward feedback admission")?;
-            let artifact = WorkflowRunArtifact::build_with_decisions(
-                "reward-feedback",
-                &traces,
-                &usage,
-                &outcomes,
-                &decisions,
-            )
-            .context("build workflow artifact for reward feedback")?;
-            let db = bitrouter::db::connect(&database_url)
-                .await
-                .context("connect eval exchange database")?;
-            bitrouter::db::run_migrations(&db).await?;
-            let summary = import_semantic_reward_feedback(
-                &EvalService::new(EvalStore::new(db), Default::default()),
-                &artifact.semantic_policy_transition_candidates,
-            )
-            .await
-            .context("import reward feedback into generic eval exchange")?;
-            println!(
-                "✓ imported reward feedback: {} candidates, {} admitted eval results, {} skipped",
-                summary.candidate_count, summary.admitted_count, summary.skipped_count
-            );
-            for eval_id in summary.eval_ids {
-                println!("  admitted {eval_id}");
-            }
-            Ok(())
-        }
-    }
-}
-
-#[cfg(feature = "core")]
-fn parse_rfc3339_utc(value: &str, flag: &str) -> Result<chrono::DateTime<chrono::Utc>> {
-    chrono::DateTime::parse_from_rfc3339(value)
-        .map(|dt| dt.with_timezone(&chrono::Utc))
-        .with_context(|| format!("{flag} must be RFC3339, got {value:?}"))
 }
 
 /// Validate a config file and print a short summary. Returns `Err` (→ exit 1)
@@ -3281,9 +1410,9 @@ async fn validate_config(source: &bitrouter::paths::ConfigSource) -> Result<Vali
     let missing = missing.into_inner();
 
     match parsed {
-        Ok(cfg) => match bitrouter::policy_lock::load_for_config(&cfg, Some(path)).await {
+        Ok(cfg) => match bitrouter::policy_source::load_for_config(&cfg, Some(path)).await {
             Ok(_) => {
-                let mut report = ValidateReport::valid(
+                let report = ValidateReport::valid(
                     path.display().to_string(),
                     cfg.providers.len(),
                     cfg.models.len(),
@@ -3299,13 +1428,6 @@ async fn validate_config(source: &bitrouter::paths::ConfigSource) -> Result<Vali
                 // every start (`assemble::ignored_config_warnings`) — that is the path
                 // that reaches an operator who never runs `validate`.
                 .with_ignored_config(bitrouter::assemble::ignored_config_file_warnings(&cfg));
-                if cfg.chat.agent.is_some() {
-                    let note = "The first-party code/tui/chat UI is removed. chat.agent only selects an explicit onboarding native launch; chat.model and chat.commands remain headless defaults. code-hotkeys.json is no longer read; remove obsolete UI bindings when convenient. Existing configuration and history are retained.";
-                    report.migration_hint = Some(match report.migration_hint {
-                        Some(previous) => format!("{previous} {note}"),
-                        None => note.to_string(),
-                    });
-                }
                 Ok(report)
             }
             Err(error) => Ok(ValidateReport::invalid(
@@ -3320,7 +1442,7 @@ async fn validate_config(source: &bitrouter::paths::ConfigSource) -> Result<Vali
     }
 }
 
-// ===== `bro mcp …` (upstream gateway inspection) =====
+// ===== `bitrouter mcp …` (upstream gateway inspection) =====
 
 async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
     match action {
@@ -3429,17 +1551,11 @@ async fn resolve_client_socket(config: Option<&Path>, socket: Option<&Path>) -> 
 // ===== tracing subscriber init =====
 
 fn defers_tracing_to_host(command: Option<&Command>) -> bool {
-    match command {
-        Some(Command::Serve { .. }) => true,
-        #[cfg(all(feature = "core", feature = "harness"))]
-        Some(Command::HarnessHost { .. }) => true,
-        _ => false,
-    }
+    matches!(command, Some(Command::Serve { .. }))
 }
 
 /// Install a basic fmt-only tracing subscriber. Used for every command
-/// except `serve` and the `acp` subcommands — see
-/// `bitrouter::host` and [`init_stderr_tracing_subscriber`].
+/// except `serve`, which installs its exporter through `bitrouter::host`.
 ///
 /// Runs before any config is read, so `RUST_LOG` is the only input.
 fn init_basic_tracing_subscriber() {
@@ -3452,97 +1568,6 @@ fn init_basic_tracing_subscriber() {
         .init();
     if let Some(warning) = warning {
         tracing::warn!("{warning}");
-    }
-}
-
-/// Install a tracing subscriber that writes to **stderr**. Used for the `acp`
-/// subcommands, which keep stdout exclusively for their machine-readable
-/// protocol stream (JSON-RPC for `acp serve`, NDJSON for `acp prompt`) —
-/// logging on stdout would corrupt the stream the caller parses.
-///
-/// Runs before any config is read, so `RUST_LOG` is the only input.
-fn init_stderr_tracing_subscriber() {
-    let (env_filter, warning) = resolve_env_filter(None);
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_env_filter(env_filter)
-        .init();
-    if let Some(warning) = warning {
-        tracing::warn!("{warning}");
-    }
-}
-
-/// Where this process's session log lives: `~/.bitrouter/logs/`, one file per
-/// session, named for the wall-clock start and the pid.
-///
-/// The pid is what makes it unique — two sessions started in the same second
-/// must not share a file, and at this point in startup there is no session id
-/// to name it after (the log has to exist before the agent that would produce
-/// one is spawned).
-fn session_log_path() -> anyhow::Result<PathBuf> {
-    let dir = bitrouter::paths::runtime_home()?.join("logs");
-    std::fs::create_dir_all(&dir)?;
-    let stamp = chrono::Local::now().format("%Y%m%dT%H%M%S");
-    Ok(dir.join(format!("session-{stamp}-{}.log", std::process::id())))
-}
-
-/// Install a tracing subscriber that writes to **stderr and a session log
-/// file**. Used for the `acp` subcommands.
-///
-/// The fourth initializer, alongside [`init_basic_tracing_subscriber`],
-/// [`init_stderr_tracing_subscriber`], and `bitrouter::host`.
-/// It exists because an ACP session has *two* diagnostic streams — the
-/// substrate's own and the agent child's, which `spawn_agent_process` now
-/// captures and re-emits through `tracing` — and reading them means reading
-/// them interleaved, in one place, after the fact. stderr is kept as well as
-/// the file: dropping it would silently change what an operator running the
-/// command in a terminal sees.
-///
-/// Returns the log's path so the caller can name it in a failure. A file that
-/// cannot be opened is **not** fatal — the session still runs, logging to
-/// stderr alone — because losing the transcript is not a reason to refuse to
-/// start.
-fn init_session_log_tracing_subscriber(also_stderr: bool) -> Option<PathBuf> {
-    use tracing_subscriber::fmt::writer::MakeWriterExt;
-
-    let env_filter = || {
-        tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
-    };
-    let opened = session_log_path().and_then(|path| {
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)?;
-        Ok((path, file))
-    });
-    match opened {
-        Ok((path, file)) => {
-            let file = std::sync::Arc::new(file);
-            // `chat` passes `false`: it draws on this terminal, and a log line
-            // between two frames scrolls the screen underneath its renderer.
-            // Everything is still in the file, and `chat` shows the tail of it
-            // when a session ends badly.
-            if also_stderr {
-                tracing_subscriber::fmt()
-                    .with_ansi(false)
-                    .with_writer(std::io::stderr.and(file))
-                    .with_env_filter(env_filter())
-                    .init();
-            } else {
-                tracing_subscriber::fmt()
-                    .with_ansi(false)
-                    .with_writer(file)
-                    .with_env_filter(env_filter())
-                    .init();
-            }
-            Some(path)
-        }
-        Err(e) => {
-            init_stderr_tracing_subscriber();
-            tracing::warn!("no session log ({e}); logging to stderr only");
-            None
-        }
     }
 }
 
@@ -3584,20 +1609,6 @@ async fn resolve_client_socket_from(
         }
         bitrouter::paths::ConfigSource::Default { home } => Ok(home.join("bitrouter.sock")),
     }
-}
-
-/// Session verbs need the new daemon protocol before sending `sessions`.
-#[cfg(feature = "harness")]
-async fn resolve_supervisor_socket(
-    config: Option<&Path>,
-    socket: Option<&Path>,
-) -> Result<PathBuf> {
-    let selected = resolve_client_socket(config, socket).await?;
-    if daemon::probe_status(&selected).await?.is_some() {
-        let source = bitrouter::paths::resolve_config(config)?;
-        bitrouter::upgrade::ensure_compatible(&source, &selected, false).await?;
-    }
-    Ok(selected)
 }
 
 fn reject_remote_local_target_flags(config: Option<&Path>, socket: Option<&Path>) -> Result<()> {
@@ -3662,58 +1673,28 @@ fn validate_remote_invocation(command: &Command, remote: bool) -> Result<()> {
     if !remote {
         return Ok(());
     }
-    match command {
-        Command::Agents {
-            action:
-                Some(AgentsAction::List {
-                    remote: true, ..
-                }),
-            ..
-        } => Err(bitrouter::gateway::error::BitrouterError::bad_request(
-            "`agents list --remote` fetches the external ACP registry and cannot run against a remote BitRouter context",
-        )
-        .into()),
-        Command::Agents {
-            action:
-                Some(AgentsAction::List {
-                    remote: false,
-                    config,
-                    socket,
-                }),
-            ..
-        } => reject_remote_local_target_flags(config.as_deref(), socket.as_deref()),
-        Command::Agents {
-            action: Some(AgentsAction::Check { .. }),
-            ..
-        } => Err(bitrouter::gateway::error::BitrouterError::bad_request(
-            "`agents check` launches an agent and is unavailable for a remote context",
-        )
-        .into()),
-        _ => {
-            if let Some(leaf) = remote_cli_leaf(command) {
-                bitrouter::remote_control::inventory::by_cli(leaf).ok_or_else(|| {
-                    anyhow::anyhow!("control inventory has no action for CLI leaf `{leaf}`")
-                })?;
-                let (config, socket) = remote_target_flags(command).ok_or_else(|| {
-                    anyhow::anyhow!("remote CLI leaf `{leaf}` has no target-flag contract")
-                })?;
-                return reject_remote_local_target_flags(config, socket);
-            }
-            if let Some(leaf) = remote_resource_leaf(command) {
-                bitrouter::remote_control::inventory::RESOURCES
-                    .iter()
-                    .find(|resource| resource.cli_leaf == Some(leaf))
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("control inventory has no resource for CLI leaf `{leaf}`")
-                    })?;
-                return Ok(());
-            }
-            Err(bitrouter::gateway::error::BitrouterError::bad_request(
-                "this command is local-only for a remote context",
-            )
-            .into())
-        }
+    if let Some(leaf) = remote_cli_leaf(command) {
+        bitrouter::remote_control::inventory::by_cli(leaf).ok_or_else(|| {
+            anyhow::anyhow!("control inventory has no action for CLI leaf `{leaf}`")
+        })?;
+        let (config, socket) = remote_target_flags(command).ok_or_else(|| {
+            anyhow::anyhow!("remote CLI leaf `{leaf}` has no target-flag contract")
+        })?;
+        return reject_remote_local_target_flags(config, socket);
     }
+    if let Some(leaf) = remote_resource_leaf(command) {
+        bitrouter::remote_control::inventory::RESOURCES
+            .iter()
+            .find(|resource| resource.cli_leaf == Some(leaf))
+            .ok_or_else(|| {
+                anyhow::anyhow!("control inventory has no resource for CLI leaf `{leaf}`")
+            })?;
+        return Ok(());
+    }
+    Err(bitrouter::gateway::error::BitrouterError::bad_request(
+        "this command is local-only for a remote context",
+    )
+    .into())
 }
 
 fn remote_cli_leaf(command: &Command) -> Option<&'static str> {
@@ -3738,7 +1719,7 @@ fn remote_cli_leaf(command: &Command) -> Option<&'static str> {
             action: PolicyAction::Show { .. },
         } => Some("policy show"),
         Command::Agents {
-            action: Some(AgentsAction::List { remote: false, .. }),
+            action: AgentsAction::List { .. },
             ..
         } => Some("agents list"),
         _ => None,
@@ -3771,7 +1752,7 @@ fn remote_target_flags(command: &Command) -> Option<(Option<&Path>, Option<&Path
                 PolicyAction::Status { config, socket, .. } | PolicyAction::Show { config, socket, .. },
         }
         | Command::Agents {
-            action: Some(AgentsAction::List { config, socket, .. }),
+            action: AgentsAction::List { config, socket },
             ..
         } => Some((config.as_deref(), socket.as_deref())),
         Command::Models { config, .. } => Some((config.as_deref(), None)),
@@ -3980,49 +1961,14 @@ async fn restart(
 ) -> Result<DaemonActionReport> {
     bitrouter::host::validate_startup_features()?;
     bitrouter::paths::ensure_home_directory(source.home())?;
-    let restart_lock = bitrouter::upgrade::prepare_restart(source, socket, log_path).await?;
-    let Some(_lock) = restart_lock else {
-        let replacement = bitrouter::daemon_locator::locate_source(source)
-            .await?
-            .context("replacement daemon locator disappeared after restart")?;
-        let DaemonResponse::Status {
-            pid,
-            listen,
-            models,
-            artifact: Some(artifact),
-            ..
-        } = daemon::send_command(replacement.socket(), &DaemonCommand::Status).await?
-        else {
-            anyhow::bail!("replacement daemon status was not verified");
-        };
-        anyhow::ensure!(
-            artifact == bitrouter::artifact::current() && pid == replacement.pid(),
-            "replacement daemon artifact changed after restart"
-        );
-        return Ok(DaemonActionReport::started(
-            "restart",
-            "started",
-            pid,
-            listen,
-            models,
-            log_path.display().to_string(),
-        ));
-    };
-    if daemon::endpoint_in_use(socket) {
-        let cfg = bitrouter::paths::load_config(source).await?;
-        if cfg.database.url.starts_with("sqlite:") && !cfg.database.url.contains(":memory:") {
-            let preflight = bitrouter::upgrade_preflight::Preflight::check_explicit(source).await?;
-            let backup = preflight.backup(source).await?;
-            eprintln!(
-                "note: explicit restart may interrupt active agent runs; SQLite recovery backup: {}",
-                backup.display()
-            );
-        } else {
-            eprintln!(
-                "note: explicit restart may interrupt active agent runs; database migration preflight is unavailable for this backend"
-            );
-        }
-    }
+    let _lock = bitrouter::daemon_locator::lock_restart(source).await?;
+    bitrouter::host::validate_local_daemon_source(source).await?;
+    let config = bitrouter::paths::load_config(source).await?;
+    let replacement = daemon::socket_path_for(source, &config);
+    anyhow::ensure!(
+        replacement == socket || !daemon::endpoint_in_use(&replacement),
+        "replacement control endpoint is already in use"
+    );
     let pid_path = pid_path_for(socket);
     let pidfile_pid = daemon::read_pid_file(&pid_path)
         .await
@@ -4050,7 +1996,7 @@ async fn restart(
 async fn reload(socket: &Path) -> Result<DaemonActionReport> {
     // Snapshot every env-var-credentialed built-in provider's key from
     // *this* (CLI) process and hand them to the daemon along with the
-    // reload command, so `export OPENAI_API_KEY=…; bro reload`
+    // reload command, so `export OPENAI_API_KEY=…; bitrouter reload`
     // propagates the new value into the running daemon instead of
     // requiring a full stop+start. The daemon writes them into its
     // env-override map before re-parsing config / re-running
@@ -4222,67 +2168,6 @@ async fn observe_status(socket: &Path) -> Result<ObserveStatusReport> {
     })
 }
 
-async fn administration_agents(
-    action: Option<AgentsAction>,
-    options: &bitrouter::connected_agents::Options,
-    output: &Output,
-    remote_context: Option<&bitrouter::contexts::RemoteContext>,
-    context_name: Option<&str>,
-) -> Result<()> {
-    if action.is_some()
-        && (options.config.is_some()
-            || options.socket.is_some()
-            || options.after.is_some()
-            || usize::from(options.limit) != bitrouter::connected_agents::MAX_PAGE)
-    {
-        anyhow::bail!(
-            "place subcommand options after the agents subcommand; --after/--limit apply only to bare agents"
-        );
-    }
-    match action {
-        #[cfg(not(feature = "harness"))]
-        None => anyhow::bail!(HARNESS_REQUIRED),
-        #[cfg(feature = "harness")]
-        None => {
-            if remote_context.is_some() {
-                return Err(bitrouter::gateway::error::BitrouterError::bad_request(
-                    "connected agent snapshots require an owner-local context",
-                )
-                .into());
-            }
-            output.emit(&bitrouter::connected_agents::query(options).await?)?;
-            Ok(())
-        }
-        Some(AgentsAction::List {
-            remote: false,
-            config,
-            socket,
-        }) => {
-            let target = inspection_target(
-                remote_context,
-                context_name,
-                config.as_deref(),
-                socket.as_deref(),
-            )
-            .await?;
-            output.emit(&target.agents().await?)?;
-            Ok(())
-        }
-        #[cfg(not(feature = "harness"))]
-        Some(_) => anyhow::bail!(HARNESS_REQUIRED),
-        #[cfg(feature = "harness")]
-        Some(action) => {
-            if remote_context.is_some() {
-                return Err(bitrouter::gateway::error::BitrouterError::bad_request(
-                    "agent launch and external-registry actions are local-only for a remote context",
-                )
-                .into());
-            }
-            agents_cmd(action, output).await
-        }
-    }
-}
-
 async fn administration_policy(
     action: PolicyAction,
     output: &Output,
@@ -4314,14 +2199,14 @@ async fn administration_policy(
             let config_path = require_policy_config_path(&source)?;
             let cfg = config::load(config_path).await?;
             if let Some(model) = strong.as_deref() {
-                bitrouter::policy_lock::validate_routable_model(&cfg, model).await?;
-                bitrouter::policy_lock::validate_routable_effort(&cfg, model, strong_effort)
+                bitrouter::policy_source::validate_routable_model(&cfg, model).await?;
+                bitrouter::policy_source::validate_routable_effort(&cfg, model, strong_effort)
                     .await?;
             }
-            bitrouter::policy_lock::validate_routable_model(&cfg, &economy).await?;
-            bitrouter::policy_lock::validate_routable_effort(&cfg, &economy, economy_effort)
+            bitrouter::policy_source::validate_routable_model(&cfg, &economy).await?;
+            bitrouter::policy_source::validate_routable_effort(&cfg, &economy, economy_effort)
                 .await?;
-            let update = bitrouter::policy_lock::initialize_router_files_with_efforts(
+            let update = bitrouter::policy_source::initialize_router_files_with_efforts(
                 config_path,
                 &name,
                 &router,
@@ -4393,9 +2278,9 @@ async fn administration_policy(
             output.emit(&reload(&socket).await?)?;
         }
         PolicyAction::Diff { active, candidate } => {
-            let active_source = bitrouter::policy_lock::load(&active).await?;
-            let candidate_source = bitrouter::policy_lock::load(&candidate).await?;
-            let changes = bitrouter::policy_lock::diff_explanations(
+            let active_source = bitrouter::policy_source::load(&active).await?;
+            let candidate_source = bitrouter::policy_source::load(&candidate).await?;
+            let changes = bitrouter::policy_source::diff_explanations(
                 &active_source.document,
                 &candidate_source.document,
             );
@@ -4421,7 +2306,7 @@ async fn administration_policy(
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let config_path = require_policy_config_path(&source)?;
-            let update = bitrouter::policy_lock::publish_candidate_file(
+            let update = bitrouter::policy_source::publish_candidate_file(
                 config_path,
                 &candidate,
                 &expected_digest,
@@ -4442,7 +2327,7 @@ async fn administration_policy(
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let config_path = require_policy_config_path(&source)?;
             let update =
-                bitrouter::policy_lock::rollback_files(config_path, &digest, &expected_digest)
+                bitrouter::policy_source::rollback_files(config_path, &digest, &expected_digest)
                     .await?;
             reload_published_policy_or_restore(&source, &update, socket.as_deref()).await?;
             output.emit(
@@ -4648,7 +2533,7 @@ async fn reload_policy_if_reachable(
 
 async fn reload_published_policy_or_restore(
     source: &bitrouter::paths::ConfigSource,
-    update: &bitrouter::policy_lock::PolicyFileUpdate,
+    update: &bitrouter::policy_source::PolicyFileUpdate,
     socket_override: Option<&Path>,
 ) -> Result<()> {
     reload_published_policy_or_restore_with(update, || {
@@ -4658,7 +2543,7 @@ async fn reload_published_policy_or_restore(
 }
 
 async fn reload_published_policy_or_restore_with<Reload, ReloadFuture>(
-    update: &bitrouter::policy_lock::PolicyFileUpdate,
+    update: &bitrouter::policy_source::PolicyFileUpdate,
     reload: Reload,
 ) -> Result<()>
 where
@@ -4672,8 +2557,8 @@ where
     let parent_digest = update.parent_digest.as_deref().ok_or_else(|| {
         anyhow::anyhow!("daemon rejected publication; publication has no previous source digest: {initial_error:#}")
     })?;
-    let history = bitrouter::policy_lock::default_history_dir(&update.path);
-    match bitrouter::policy_lock::rollback_to_digest(
+    let history = bitrouter::policy_source::default_history_dir(&update.path);
+    match bitrouter::policy_source::rollback_to_digest(
         &update.path,
         &update.digest,
         parent_digest,
@@ -4710,8 +2595,8 @@ async fn routing_policy_report(
     changes: Vec<String>,
 ) -> Result<PolicyReport> {
     let mut cfg = config::load(config_path).await?;
-    bitrouter::policy_lock::apply_defaults(&mut cfg, Some(config_path));
-    let loaded = bitrouter::policy_lock::load_for_config(&cfg, Some(config_path)).await?;
+    bitrouter::policy_source::apply_defaults(&mut cfg, Some(config_path));
+    let loaded = bitrouter::policy_source::load_for_config(&cfg, Some(config_path)).await?;
     let bindings = cfg
         .router_policy_bindings()
         .map(|(name, policy, _)| (name.to_owned(), policy.to_owned()))
@@ -4973,759 +2858,6 @@ async fn tools(action: ToolsAction, output: &Output) -> Result<()> {
     }
 }
 
-#[cfg(feature = "harness")]
-async fn agents_cmd(action: AgentsAction, output: &Output) -> Result<()> {
-    use bitrouter::agents as agents_cmd;
-
-    match action {
-        AgentsAction::Control(action) => {
-            bitrouter::agent_sessions::control::run(action, output).await
-        }
-        AgentsAction::Sessions { config, socket } => {
-            let socket = resolve_supervisor_socket(config.as_deref(), socket.as_deref()).await?;
-            let runs = bitrouter::agent_sessions::BackgroundClient::list_only(socket)
-                .summaries()
-                .await?;
-            output.emit(&AgentSessionsReport { runs })?;
-            Ok(())
-        }
-        AgentsAction::RemovedAttach { .. } => Err(retired_ui_error(true)),
-        AgentsAction::Stop {
-            agent_run_id,
-            config,
-            socket,
-        } => {
-            let socket = resolve_supervisor_socket(config.as_deref(), socket.as_deref()).await?;
-            let acknowledgement = bitrouter::agent_sessions::BackgroundClient::stop_only(socket)
-                .stop(&agent_run_id)
-                .await?;
-            output.emit(&AgentSessionMutationReport {
-                action: "stopped",
-                agent_run_id: acknowledgement.snapshot.run_id,
-                state: format!("{:?}", acknowledgement.snapshot.process).to_ascii_lowercase(),
-            })?;
-            Ok(())
-        }
-        AgentsAction::Remove {
-            agent_run_id,
-            config,
-            socket,
-        } => {
-            let socket = resolve_supervisor_socket(config.as_deref(), socket.as_deref()).await?;
-            let removed = bitrouter::agent_sessions::BackgroundClient::remove_only(socket)
-                .remove(&agent_run_id)
-                .await?;
-            output.emit(&AgentSessionMutationReport {
-                action: "removed",
-                agent_run_id: removed,
-                state: "removed".to_string(),
-            })?;
-            Ok(())
-        }
-        AgentsAction::List { remote, config, .. } => {
-            let source = bitrouter::paths::resolve_config(config.as_deref())?;
-            let cfg = bitrouter::paths::load_config(&source).await?;
-            let agents = agents_cmd::list(&cfg)
-                .into_iter()
-                .map(|row| AgentRow {
-                    id: row.id,
-                    configured: row.configured,
-                    in_catalog: row.in_catalog,
-                    description: row.description,
-                })
-                .collect();
-            // `--remote`: append the ACP registry as an optional section of the
-            // same report (one JSON document either way).
-            let registry = if remote {
-                let fetched =
-                    bitrouter::agent_registry::fetch(bitrouter::agent_registry::REGISTRY_URL)
-                        .await?;
-                Some(
-                    agents_cmd::registry_rows(&fetched)
-                        .into_iter()
-                        .map(|row| AgentRegistryRow {
-                            id: row.id,
-                            version: row.version,
-                            install: row.install.to_string(),
-                            description: row.description,
-                        })
-                        .collect(),
-                )
-            } else {
-                None
-            };
-            output.emit(&AgentsListReport::new(agents, registry))?;
-            Ok(())
-        }
-        AgentsAction::Inspect {
-            agent,
-            routing,
-            wait_ms,
-            source: only,
-            config,
-        } => {
-            let source = bitrouter::paths::resolve_config(config.as_deref())?;
-            let cfg = bitrouter::paths::load_config(&source).await?;
-            let agent = bitrouter::acp_cli::resolve_agent_id(&cfg, &agent)?;
-            let ctx = bitrouter::acp_cli::SpawnContext {
-                source: &source,
-                config: cfg,
-                agent_id: &agent,
-                options: bitrouter::acp_cli::launch_options(None),
-                routing,
-            };
-            let mut report = bitrouter::acp_cli::commands(ctx, wait_ms).await?;
-            if let Some(only) = only {
-                let only = only.into();
-                report.commands.retain(|row| row.source == only);
-            }
-            output.emit(&report)?;
-            Ok(())
-        }
-        AgentsAction::Check {
-            agent,
-            routing,
-            config,
-        } => {
-            let source = bitrouter::paths::resolve_config(config.as_deref())?;
-            let cfg = bitrouter::paths::load_config(&source).await?;
-            if let Some(agent) = agent {
-                let agent = bitrouter::acp_cli::resolve_agent_id(&cfg, &agent)?;
-                let report = bitrouter::acp_cli::spawn_check(cfg, &agent, &routing).await?;
-                let code = report.exit_code();
-                output.emit(&report)?;
-                return exit_with(code);
-            }
-            if routing != RoutingOptions::default() {
-                return Err(bitrouter::gateway::error::BitrouterError::bad_request(
-                    "routing flags on `agents check` require a specific agent",
-                )
-                .into());
-            }
-            let agents = agents_cmd::check(&cfg)
-                .await
-                .into_iter()
-                .map(|row| {
-                    let (ok, latency_ms, error) = match row.outcome {
-                        Ok(d) => (true, Some(d.as_millis()), None),
-                        Err(e) => (false, None, Some(e)),
-                    };
-                    AgentCheckRow {
-                        id: row.id,
-                        ok,
-                        latency_ms,
-                        error,
-                    }
-                })
-                .collect();
-            let report = AgentsCheckReport { agents };
-            let ok = report.agents.iter().all(|agent| agent.ok);
-            output.emit(&report)?;
-            if ok { Ok(()) } else { exit_with(1) }
-        }
-        AgentsAction::Conformance { id } => {
-            let harness_id = id
-                .split_once('/')
-                .map_or(id.as_str(), |(runtime, harness)| {
-                    if runtime == "local" {
-                        harness
-                    } else {
-                        id.as_str()
-                    }
-                });
-            let harness = bitrouter::harness::catalog::by_id(harness_id).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "'{id}' is not a catalog agent. Run `{cli} agents list` to see the ids.",
-                    cli = bitrouter::commands::invocation::name()
-                )
-            })?;
-            // Synthesized configs land in a scratch directory that goes away
-            // with the run: a conformance check must not leave a routed config
-            // behind in the user's repo.
-            let scratch = tempfile::tempdir()?;
-            let report = bitrouter::conformance::run(harness, &id, scratch.path()).await;
-            // A run where every tier skipped verified nothing, so it must not
-            // hand back a record — `bro agents conformance grok` would
-            // otherwise print a paste-able block for an agent with no registry
-            // entry at all.
-            let verified = report
-                .tiers
-                .iter()
-                .any(|result| matches!(result.outcome, bitrouter::conformance::Outcome::Pass));
-            let passed = report.passed() && verified;
-            let registry_block = report.registry_block();
-            output.emit(&AgentConformanceReport {
-                agent: report.agent.clone(),
-                suite: report.suite.to_string(),
-                suite_version: report.suite_version.to_string(),
-                agent_version: report.agent_version.clone(),
-                passed,
-                tiers: report
-                    .tiers
-                    .iter()
-                    .map(|result| {
-                        use bitrouter::conformance::Outcome;
-                        let (outcome, reason) = match &result.outcome {
-                            Outcome::Pass => ("pass".to_string(), None),
-                            Outcome::Fail { reason } => ("fail".to_string(), Some(reason.clone())),
-                            Outcome::Skipped { reason } => {
-                                ("skipped".to_string(), Some(reason.clone()))
-                            }
-                        };
-                        AgentConformanceTier {
-                            tier: result.tier.key().to_string(),
-                            outcome,
-                            reason,
-                            duration_ms: result.duration_ms,
-                        }
-                    })
-                    .collect(),
-                registry_block,
-            })?;
-            // A failing suite is a failing command, so CI does not need to
-            // parse the report to know the answer.
-            if passed {
-                Ok(())
-            } else if verified {
-                anyhow::bail!("{id} did not pass {}", report.suite)
-            } else {
-                anyhow::bail!(
-                    "{} checked nothing for {id} — no record is emitted",
-                    report.suite
-                )
-            }
-        }
-        AgentsAction::Scaffold { id } => scaffold_agent(&id, output).await,
-        AgentsAction::Install { id } => {
-            eprintln!(
-                "note: `{cli} agents install` is a compatibility form; use \
-                 `{cli} agents scaffold`.",
-                cli = bitrouter::commands::invocation::name()
-            );
-            scaffold_agent(&id, output).await
-        }
-    }
-}
-
-#[cfg(feature = "harness")]
-async fn scaffold_agent(id: &str, output: &Output) -> Result<()> {
-    use bitrouter::agents as agents_cmd;
-
-    match agents_cmd::install(id) {
-        Ok(yaml) => {
-            output.emit(&AgentInstallReport {
-                id: id.to_string(),
-                yaml,
-            })?;
-            Ok(())
-        }
-        // Not in the compiled catalog: fall back to the ACP registry
-        // (npx/uvx distributions only).
-        Err(catalog_miss) => {
-            let registry =
-                match bitrouter::agent_registry::fetch(bitrouter::agent_registry::REGISTRY_URL)
-                    .await
-                {
-                    Ok(registry) => registry,
-                    Err(fetch_err) => {
-                        anyhow::bail!(
-                            "{catalog_miss}\n(also failed to consult the ACP registry: {fetch_err})"
-                        )
-                    }
-                };
-            match agents_cmd::install_from_registry(&registry, id) {
-                Ok(yaml) => {
-                    output.emit(&AgentInstallReport {
-                        id: id.to_string(),
-                        yaml,
-                    })?;
-                    Ok(())
-                }
-                Err(e) => anyhow::bail!(e),
-            }
-        }
-    }
-}
-
-/// Shared body for `bro launch` and the deprecated `spawn --agent`
-/// alias: resolve config, then either preflight (`--check`) or exec the
-/// interactive harness with its traffic routed through the daemon.
-#[cfg(feature = "harness")]
-async fn run_launch(
-    config: Option<&std::path::Path>,
-    opts: bitrouter::spawn::SpawnOptions,
-    output: &bitrouter::output::Output,
-) -> Result<()> {
-    let source = bitrouter::paths::resolve_config(config)?;
-    let cfg = bitrouter::paths::load_config(&source).await?;
-    if opts.check {
-        let report = bitrouter::spawn::check(&cfg, &opts).await?;
-        output.emit(&report)?;
-        if report.exit_code() == 0 {
-            Ok(())
-        } else {
-            std::process::exit(report.exit_code());
-        }
-    } else {
-        bitrouter::spawn::run(&source, &cfg, opts).await
-    }
-}
-
-#[cfg(feature = "harness")]
-async fn run_native_launch(
-    agent: &str,
-    options: NativeLaunchArgs,
-    output: &bitrouter::output::Output,
-) -> Result<()> {
-    let NativeLaunchArgs {
-        model,
-        config,
-        base_url,
-        no_install,
-        no_start,
-        check,
-        agent_args,
-    } = options;
-    let opts = bitrouter::spawn::SpawnOptions {
-        agent: bitrouter::spawn::resolve_launch_agent(agent)?,
-        model,
-        agent_args,
-        base_url,
-        no_install,
-        no_start,
-        check,
-    };
-    run_launch(config.as_deref(), opts, output).await
-}
-
-#[cfg(feature = "harness")]
-async fn resolve_prompt_input(
-    prompt: Option<String>,
-    prompt_file: Option<&Path>,
-) -> Result<String> {
-    use std::io::IsTerminal;
-    use tokio::io::AsyncReadExt;
-
-    if let Some(path) = prompt_file {
-        return tokio::fs::read_to_string(path)
-            .await
-            .with_context(|| format!("reading prompt file {}", path.display()));
-    }
-    match prompt {
-        Some(prompt) if prompt == "-" => {}
-        Some(prompt) => return Ok(prompt),
-        None if std::io::stdin().is_terminal() => {
-            return Err(bitrouter::gateway::error::BitrouterError::bad_request(
-                "run requires a prompt, `--prompt-file <path>`, or piped stdin",
-            )
-            .into());
-        }
-        None => {}
-    }
-    let mut prompt = String::new();
-    tokio::io::stdin()
-        .read_to_string(&mut prompt)
-        .await
-        .context("reading prompt from stdin")?;
-    Ok(prompt)
-}
-// ===== `bro acp …` (per-session ACP substrate) =====
-
-async fn acp_cmd(cmd: AcpCmd, output: &Output) -> Result<()> {
-    match cmd {
-        #[cfg(not(feature = "harness"))]
-        AcpCmd::Serve { .. } | AcpCmd::Prompt { .. } | AcpCmd::Commands { .. } => {
-            anyhow::bail!(HARNESS_REQUIRED)
-        }
-        #[cfg(not(feature = "core"))]
-        AcpCmd::Evolution { .. } => {
-            anyhow::bail!("checkpoint evolution requires the core feature")
-        }
-        #[cfg(feature = "core")]
-        AcpCmd::Evolution { endpoint, action } => {
-            let socket = endpoint.socket().await?;
-            let daemon::DaemonResponse::EvolutionHello {
-                version,
-                server_instance_id,
-            } = daemon::send_command(&socket, &daemon::DaemonCommand::EvolutionHello).await?
-            else {
-                anyhow::bail!(
-                    "daemon does not support instance-fenced evolution control; restart before using these controls"
-                );
-            };
-            anyhow::ensure!(
-                version == daemon::EVOLUTION_CONTROL_VERSION,
-                "unsupported evolution control version {version}; expected {}",
-                daemon::EVOLUTION_CONTROL_VERSION
-            );
-            endpoint.check_instance(&server_instance_id)?;
-            let command = daemon::DaemonCommand::EvolutionFenced {
-                version,
-                server_instance_id,
-                operation: action.operation().await?,
-            };
-            match daemon::send_command(&socket, &command)
-                .await
-                .context("checkpoint evolution requires the local serving daemon")?
-            {
-                daemon::DaemonResponse::Evolution { report } => output.emit(report.as_ref())?,
-                daemon::DaemonResponse::Error { message } => anyhow::bail!(message),
-                _ => anyhow::bail!("daemon returned an unexpected evolution response"),
-            }
-            Ok(())
-        }
-        AcpCmd::Checkpoints {
-            agent,
-            session,
-            config,
-            action,
-        } => {
-            use bitrouter::acp_trajectory::checkpoint::types::{CheckpointReport, RevisionInput};
-            #[cfg(not(feature = "core"))]
-            if matches!(
-                action,
-                AcpCheckpointAction::Judge { .. }
-                    | AcpCheckpointAction::JudgeJob { .. }
-                    | AcpCheckpointAction::Rubric { .. }
-            ) {
-                anyhow::bail!("checkpoint evaluation requires the core feature");
-            }
-            let source = bitrouter::paths::resolve_config(config.as_deref())?;
-            let cfg = bitrouter::paths::load_config(&source).await?;
-            let db = bitrouter::db::connect(&bitrouter::db::anchor_url(
-                &cfg.database.url,
-                source.home(),
-            ))
-            .await?;
-            bitrouter::db::run_migrations(&db).await?;
-            let store = bitrouter::acp_trajectory::CanonicalStore::new(db.clone());
-            let identity = bitrouter::storage::session_identity::SessionIdentity {
-                owner: "local".into(),
-                source: agent,
-                native_session_id: session,
-            };
-            let report = match action {
-                #[cfg(not(feature = "core"))]
-                AcpCheckpointAction::Judge { .. }
-                | AcpCheckpointAction::JudgeJob { .. }
-                | AcpCheckpointAction::Rubric { .. } => {
-                    anyhow::bail!("checkpoint evaluation requires the core feature");
-                }
-                #[cfg(feature = "core")]
-                AcpCheckpointAction::Judge { checkpoint, model } => {
-                    let jobs = bitrouter::core::evolution::jobs::JudgeJobs::new(
-                        bitrouter::storage::evolution::EvolutionStore::new(db, &identity.owner)?,
-                    );
-                    let job = jobs.enqueue(&identity, &checkpoint, &model, None).await?;
-                    let mut judge_config = cfg.clone();
-                    judge_config.database.url =
-                        bitrouter::db::anchor_url(&cfg.database.url, source.home());
-                    judge_config.server_tools = Default::default();
-                    judge_config.mcp_servers.clear();
-                    let judge_path = match &source {
-                        bitrouter::paths::ConfigSource::File(path) => path.clone(),
-                        bitrouter::paths::ConfigSource::Default { home } => {
-                            home.join("bitrouter.yaml")
-                        }
-                    };
-                    let assembled =
-                        bitrouter::build_app_with_path(&judge_config, Some(&judge_path)).await?;
-                    let pipeline = assembled
-                        .app
-                        .language_model()
-                        .context("judge requires a language model pipeline")?;
-                    let result = jobs.run(&job.job_id, pipeline).await.with_context(|| {
-                        format!("judge job {} failed; inspect it with judge-job", job.job_id)
-                    })?;
-                    output.emit(
-                        &bitrouter::core::evolution::scoring::ScoringReport::JudgeJob(result),
-                    )?;
-                    return Ok(());
-                }
-                #[cfg(feature = "core")]
-                AcpCheckpointAction::JudgeJob { job_id, resume } => {
-                    let jobs = bitrouter::core::evolution::jobs::JudgeJobs::new(
-                        bitrouter::storage::evolution::EvolutionStore::new(db, &identity.owner)?,
-                    );
-                    let job = jobs.get(&job_id).await?;
-                    anyhow::ensure!(
-                        job.identity == identity,
-                        "judge job belongs to another native session"
-                    );
-                    let result = if resume {
-                        let mut judge_config = cfg.clone();
-                        judge_config.database.url =
-                            bitrouter::db::anchor_url(&cfg.database.url, source.home());
-                        judge_config.server_tools = Default::default();
-                        judge_config.mcp_servers.clear();
-                        let judge_path = match &source {
-                            bitrouter::paths::ConfigSource::File(path) => path.clone(),
-                            bitrouter::paths::ConfigSource::Default { home } => {
-                                home.join("bitrouter.yaml")
-                            }
-                        };
-                        let assembled =
-                            bitrouter::build_app_with_path(&judge_config, Some(&judge_path))
-                                .await?;
-                        jobs.run(
-                            &job_id,
-                            assembled
-                                .app
-                                .language_model()
-                                .context("judge requires a language model pipeline")?,
-                        )
-                        .await?
-                    } else {
-                        job
-                    };
-                    output.emit(
-                        &bitrouter::core::evolution::scoring::ScoringReport::JudgeJob(result),
-                    )?;
-                    return Ok(());
-                }
-                #[cfg(feature = "core")]
-                AcpCheckpointAction::Rubric { action } => {
-                    output.emit(
-                        &bitrouter::core::evolution::scoring::command(&store, &identity, action)
-                            .await?,
-                    )?;
-                    return Ok(());
-                }
-                AcpCheckpointAction::Create { watermark } => CheckpointReport::Checkpoint(
-                    store.freeze_checkpoint(&identity, watermark).await?,
-                ),
-                AcpCheckpointAction::List => {
-                    CheckpointReport::Checkpoints(store.checkpoints(&identity).await?)
-                }
-                AcpCheckpointAction::Show { checkpoint } => CheckpointReport::Content(Box::new(
-                    store.checkpoint_content(&identity, &checkpoint).await?,
-                )),
-                AcpCheckpointAction::Resources {
-                    checkpoint,
-                    refresh,
-                } => {
-                    if refresh {
-                        CheckpointReport::Resources(
-                            store
-                                .observe_checkpoint_resources(&identity, &checkpoint)
-                                .await?,
-                        )
-                    } else {
-                        CheckpointReport::ResourceHistory(
-                            store
-                                .checkpoint_resource_history(&identity, &checkpoint)
-                                .await?,
-                        )
-                    }
-                }
-                AcpCheckpointAction::Submit { file } => {
-                    let input: RevisionInput = serde_json::from_slice(
-                        &tokio::fs::read(&file)
-                            .await
-                            .context("reading assessment JSON")?,
-                    )?;
-                    CheckpointReport::Revision(store.submit_assessment(&identity, input).await?)
-                }
-                AcpCheckpointAction::History => {
-                    CheckpointReport::History(store.assessment_history(&identity).await?)
-                }
-                AcpCheckpointAction::Effective => CheckpointReport::Effective(Box::new(
-                    store.effective_assessment(&identity).await?,
-                )),
-                AcpCheckpointAction::Family => {
-                    CheckpointReport::Family(Box::new(store.checkpoint_family(&identity).await?))
-                }
-            };
-            output.emit(&report)?;
-            Ok(())
-        }
-        AcpCmd::Recordings { action, config } => {
-            let source = bitrouter::paths::resolve_config(config.as_deref())?;
-            let cfg = bitrouter::paths::load_config(&source).await?;
-            let url = bitrouter::db::anchor_url(&cfg.database.url, source.home());
-            let db = bitrouter::db::connect(&url).await?;
-            bitrouter::db::run_migrations(&db).await?;
-            let store = bitrouter::acp_trajectory::CanonicalStore::new(db);
-            match action {
-                AcpRecordingAction::List { agent } => {
-                    output.emit(&bitrouter::acp_trajectory::RecordingReport::Sessions(
-                        store.list("local", &agent).await?,
-                    ))?
-                }
-                AcpRecordingAction::Show { agent, session } => {
-                    let identity = bitrouter::storage::session_identity::SessionIdentity {
-                        owner: "local".into(),
-                        source: agent,
-                        native_session_id: session,
-                    };
-                    output.emit(&bitrouter::acp_trajectory::RecordingReport::Transcript(
-                        Box::new(store.transcript(&identity).await?),
-                    ))?;
-                }
-                AcpRecordingAction::Delete { agent, session } => {
-                    let identity = bitrouter::storage::session_identity::SessionIdentity {
-                        owner: "local".into(),
-                        source: agent,
-                        native_session_id: session,
-                    };
-                    store.delete(&identity).await?;
-                    output.emit(&bitrouter::acp_trajectory::RecordingReport::Deleted(
-                        identity,
-                    ))?;
-                }
-            }
-            Ok(())
-        }
-        #[cfg(feature = "harness")]
-        AcpCmd::Serve {
-            agent,
-            agent_compat,
-            read_only,
-            turn_timeout,
-            routing,
-            config,
-        } => {
-            let agent = agent.or(agent_compat);
-            let source = bitrouter::paths::resolve_config(config.as_deref())?;
-            let cfg = bitrouter::paths::load_config(&source).await?;
-            let Some(agent) = agent else {
-                return bitrouter::native_acp::bridge(
-                    &source,
-                    &cfg,
-                    &routing,
-                    read_only,
-                    turn_timeout,
-                )
-                .await;
-            };
-            anyhow::ensure!(
-                !read_only,
-                "--read-only applies to native BRO; external agents retain their own permissions"
-            );
-            let options = bitrouter::acp_cli::launch_options(turn_timeout);
-            let ctx = bitrouter::acp_cli::SpawnContext {
-                source: &source,
-                config: cfg,
-                agent_id: &agent,
-                options,
-                routing,
-            };
-            bitrouter::acp_cli::serve(ctx).await
-        }
-        #[cfg(feature = "harness")]
-        AcpCmd::Prompt {
-            agent,
-            turn_timeout,
-            no_wait,
-            routing,
-            headless,
-            config,
-            text,
-        } => {
-            eprintln!(
-                "note: `{cli} acp prompt` is a compatibility form; use \
-                 `{cli} run <agent> <prompt>`.",
-                cli = bitrouter::commands::invocation::name()
-            );
-            let source = bitrouter::paths::resolve_config(config.as_deref())?;
-            let cfg = bitrouter::paths::load_config(&source).await?;
-            let agent = bitrouter::acp_cli::resolve_agent_id(&cfg, &agent)?;
-            run_agent_prompt(
-                &source,
-                cfg,
-                &agent,
-                AgentPromptRequest {
-                    prompt: &text,
-                    routing,
-                    turn_timeout,
-                    no_wait,
-                    result_schema: None,
-                    headless,
-                    session: SessionSelection::New,
-                    cwd: None,
-                },
-            )
-            .await
-        }
-        #[cfg(feature = "harness")]
-        AcpCmd::Commands {
-            agent,
-            routing,
-            wait_ms,
-            source: only,
-            config,
-        } => {
-            eprintln!(
-                "note: `{cli} acp commands` is a compatibility form; use \
-                 `{cli} agents inspect <agent>`.",
-                cli = bitrouter::commands::invocation::name()
-            );
-            let source = bitrouter::paths::resolve_config(config.as_deref())?;
-            let cfg = bitrouter::paths::load_config(&source).await?;
-            let agent = bitrouter::acp_cli::resolve_agent_id(&cfg, &agent)?;
-            let ctx = bitrouter::acp_cli::SpawnContext {
-                source: &source,
-                config: cfg,
-                agent_id: &agent,
-                options: bitrouter::acp_cli::launch_options(None),
-                routing,
-            };
-            let mut report = bitrouter::acp_cli::commands(ctx, wait_ms).await?;
-            if let Some(only) = only {
-                let only = only.into();
-                report.commands.retain(|row| row.source == only);
-            }
-            output.emit(&report)?;
-            Ok(())
-        }
-    }
-}
-
-#[cfg(feature = "harness")]
-struct AgentPromptRequest<'a> {
-    prompt: &'a str,
-    routing: RoutingOptions,
-    turn_timeout: Option<u64>,
-    no_wait: bool,
-    result_schema: Option<&'a str>,
-    headless: HeadlessOptions,
-    session: SessionSelection,
-    cwd: Option<PathBuf>,
-}
-
-#[cfg(feature = "harness")]
-async fn run_agent_prompt(
-    source: &bitrouter::paths::ConfigSource,
-    config: bitrouter::config::Config,
-    agent: &str,
-    request: AgentPromptRequest<'_>,
-) -> Result<()> {
-    // A malformed schema or policy fails fast, before any session side effect.
-    let contract = request
-        .result_schema
-        .map(bitrouter::harness::result_contract::ResultContract::from_flag)
-        .transpose()?;
-    let prompt_options = bitrouter::acp_cli::PromptOptions {
-        no_wait: request.no_wait,
-        contract,
-        policy: request.headless.policy()?,
-        format: request.headless.format,
-        session: request.session,
-        cwd: request.cwd,
-    };
-    let mut stdout = tokio::io::stdout();
-    let ctx = bitrouter::acp_cli::SpawnContext {
-        source,
-        config,
-        agent_id: agent,
-        options: bitrouter::acp_cli::launch_options(request.turn_timeout),
-        routing: request.routing,
-    };
-    let tally =
-        bitrouter::acp_cli::prompt(ctx, request.prompt, prompt_options, &mut stdout).await?;
-    exit_with(tally.exit_code())
-}
-
 /// Leave with a status a successful command chose for itself — `providers
 /// check`, `spawn --check`, and a headless prompt's permission tally — or
 /// return normally for zero.
@@ -5753,397 +2885,25 @@ mod tests {
     use clap::CommandFactory;
 
     #[test]
-    fn harness_host_is_a_distinct_hidden_feature_gated_process_entry() -> anyhow::Result<()> {
-        let command = Cli::command();
-        #[cfg(all(feature = "core", feature = "harness"))]
-        {
-            assert!(
-                command
-                    .find_subcommand("harness-host")
-                    .is_some_and(clap::Command::is_hide_set)
-            );
-            let cli = Cli::try_parse_from([
-                "bro",
-                "harness-host",
-                "--config",
-                "owned.yaml",
-                "--managed-child",
-            ])?;
-            assert!(defers_tracing_to_host(cli.command.as_ref()));
-            assert!(matches!(cli.command, Some(Command::HarnessHost {
-                    config: Some(path), managed_child: true,
-                }) if path == Path::new("owned.yaml")));
-        }
-        #[cfg(not(all(feature = "core", feature = "harness")))]
-        {
-            assert!(command.find_subcommand("harness-host").is_none());
-            assert!(Cli::try_parse_from(["bro", "harness-host"]).is_err());
-        }
-        let serve =
-            Cli::try_parse_from(["bro", "serve", "--config", "owned.yaml", "--managed-child"])?;
-        assert!(defers_tracing_to_host(serve.command.as_ref()));
-        assert!(matches!(serve.command, Some(Command::Serve {
-                config: Some(path), managed_child: true,
-            }) if path == Path::new("owned.yaml")));
-        let start = Cli::try_parse_from(["bro", "start", "--config", "owned.yaml"])?;
-        assert!(
-            matches!(start.command, Some(Command::Start { config: Some(path), .. })
-                if path == Path::new("owned.yaml"))
-        );
-        for entry in ["serve", "start"] {
-            for flag in ["--bro", "--harness", "--scope", "--harness-host"] {
-                assert!(
-                    Cli::try_parse_from(["bro", entry, flag]).is_err(),
-                    "{entry} unexpectedly accepts the product-scope flag {flag}"
-                );
-            }
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn run_is_the_unambiguous_headless_agent_surface() -> anyhow::Result<()> {
-        let cli = Cli::try_parse_from([
-            "bitrouter",
+    fn gateway_exposes_service_entries_and_rejects_local_execution() -> anyhow::Result<()> {
+        for private in [
+            "harness-host",
+            "task",
             "run",
-            "claude-acp",
-            "summarize this repository",
-            "--format",
-            "quiet",
-        ])?;
-        match cli.command {
-            Some(Command::Run {
-                agent,
-                prompt,
-                headless,
-                ..
-            }) => {
-                assert_eq!(agent, "claude-acp");
-                assert_eq!(prompt.as_deref(), Some("summarize this repository"));
-                assert_eq!(headless.format, PromptFormat::Quiet);
-            }
-            _ => anyhow::bail!("run did not parse as the headless agent command"),
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn run_retains_input_routing_and_permission_options_in_every_profile() -> anyhow::Result<()> {
-        let cli = Cli::try_parse_from([
-            "bro",
-            "run",
-            "codex",
-            "--prompt-file",
-            "prompt.txt",
-            "--load",
-            "native-session",
-            "--cwd",
-            "workspace",
-            "--direct",
-            "--base-url",
-            "http://127.0.0.1:4356/v1",
-            "--model",
-            "provider/model",
-            "--no-start",
-            "--turn-timeout",
-            "60",
-            "--permission-policy",
-            "@permissions.json",
-            "--result-schema",
-            "@schema.json",
-            "--format",
-            "json",
-        ])?;
-        let Some(Command::Run {
-            prompt,
-            prompt_file,
-            load,
-            cwd,
-            routing,
-            turn_timeout,
-            headless,
-            result_schema,
-            ..
-        }) = cli.command
-        else {
-            anyhow::bail!("expected run command");
-        };
-        assert!(prompt.is_none());
-        assert_eq!(prompt_file.as_deref(), Some(Path::new("prompt.txt")));
-        assert_eq!(load.as_deref(), Some("native-session"));
-        assert_eq!(cwd.as_deref(), Some(Path::new("workspace")));
-        assert!(routing.direct);
-        assert!(routing.no_start);
-        assert_eq!(
-            routing.base_url.as_deref(),
-            Some("http://127.0.0.1:4356/v1")
-        );
-        assert_eq!(routing.model.as_deref(), Some("provider/model"));
-        assert_eq!(turn_timeout, Some(60));
-        assert_eq!(
-            headless.permission_policy.as_deref(),
-            Some("@permissions.json")
-        );
-        assert_eq!(headless.format, PromptFormat::Ndjson);
-        assert_eq!(result_schema.as_deref(), Some("@schema.json"));
-
-        let stdin = Cli::try_parse_from(["bro", "run", "codex", "-", "--resume", "session"])?;
-        assert!(matches!(
-            stdin.command,
-            Some(Command::Run {
-                prompt: Some(prompt),
-                resume: Some(session),
-                ..
-            }) if prompt == "-" && session == "session"
-        ));
-        for args in [
-            vec!["bro", "run", "codex", "text", "--prompt-file", "prompt.txt"],
-            vec![
-                "bro", "run", "codex", "text", "--load", "s", "--resume", "s",
-            ],
-            vec![
-                "bro",
-                "run",
-                "codex",
-                "text",
-                "--no-wait",
-                "--result-schema",
-                "{}",
-            ],
-        ] {
-            let error = Cli::try_parse_from(args.iter().copied())
-                .err()
-                .ok_or_else(|| anyhow::anyhow!("conflicting options parsed: {args:?}"))?;
-            assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn offline_acp_inspection_commands_parse_in_every_profile() -> anyhow::Result<()> {
-        for suffix in [
-            vec!["list"],
-            vec!["show", "checkpoint"],
-            vec!["resources", "checkpoint"],
-            vec!["history"],
-            vec!["effective"],
-            vec!["family"],
-        ] {
-            let mut args = vec!["bro", "acp", "checkpoints", "--agent", "codex", "session"];
-            args.extend(suffix);
-            let cli = Cli::try_parse_from(args)?;
-            assert!(matches!(
-                cli.command,
-                Some(Command::Acp {
-                    cmd: AcpCmd::Checkpoints { .. },
-                })
-            ));
-        }
-        for suffix in [
-            vec!["list", "--agent", "codex"],
-            vec!["show", "--agent", "codex", "session"],
-        ] {
-            let mut args = vec!["bro", "acp", "recordings"];
-            args.extend(suffix);
-            let cli = Cli::try_parse_from(args)?;
-            assert!(matches!(
-                cli.command,
-                Some(Command::Acp {
-                    cmd: AcpCmd::Recordings { .. },
-                })
-            ));
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn background_run_is_explicit_and_not_no_wait() -> anyhow::Result<()> {
-        let cli = Cli::try_parse_from([
-            "bitrouter",
-            "run",
-            "codex",
-            "audit this repository",
-            "--background",
-            "--allow-shared-directory",
-        ])?;
-        assert!(matches!(
-            cli.command,
-            Some(Command::Run {
-                background: true,
-                allow_shared_directory: true,
-                no_wait: false,
-                ..
-            })
-        ));
-        assert!(
-            Cli::try_parse_from([
-                "bitrouter",
-                "run",
-                "codex",
-                "audit",
-                "--background",
-                "--no-wait",
-            ])
-            .is_err()
-        );
-        assert!(
-            Cli::try_parse_from([
-                "bitrouter",
-                "run",
-                "codex",
-                "audit",
-                "--allow-shared-directory",
-            ])
-            .is_err()
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn agents_keeps_catalog_verbs_and_adds_session_management() -> anyhow::Result<()> {
-        let manager = Cli::try_parse_from(["bitrouter", "agents"])?;
-        assert!(matches!(
-            manager.command,
-            Some(Command::Agents { action: None, .. })
-        ));
-
-        let sessions = Cli::try_parse_from(["bitrouter", "agents", "sessions", "--json"])?;
-        assert!(sessions.json);
-        assert!(matches!(
-            sessions.command,
-            Some(Command::Agents {
-                action: Some(AgentsAction::Sessions { .. }),
-                ..
-            })
-        ));
-
-        for args in [
-            ["bitrouter", "agents", "stop", "run-1"],
-            ["bitrouter", "agents", "remove", "run-1"],
-            ["bitrouter", "agents", "inspect", "codex"],
-            ["bitrouter", "agents", "check", "codex"],
-            ["bitrouter", "agents", "conformance", "codex"],
-            ["bitrouter", "agents", "scaffold", "codex"],
+            "acp",
+            "threads",
+            "spawn",
+            "workflow-state",
         ] {
             assert!(
-                Cli::try_parse_from(args).is_ok(),
-                "failed to parse {args:?}"
+                Cli::try_parse_from(["bitrouter", private]).is_err(),
+                "{private}"
             );
+            assert!(Cli::command().find_subcommand(private).is_none());
         }
+        Cli::try_parse_from(["bitrouter", "serve", "--config", "service.yaml"])?;
+        Cli::try_parse_from(["bitrouter", "start", "--config", "service.yaml"])?;
         Ok(())
-    }
-
-    #[test]
-    fn removed_ui_names_only_parse_as_migration_errors() -> anyhow::Result<()> {
-        for name in ["code", "tui", "chat"] {
-            let parsed = Cli::try_parse_from(["bro", name, "stub", "--direct", "--help"])?;
-            assert!(matches!(parsed.command, Some(Command::RemovedUi { .. })));
-        }
-        let attached = Cli::try_parse_from(["bro", "agents", "attach", "run-1"])?;
-        assert!(matches!(
-            attached.command,
-            Some(Command::Agents {
-                action: Some(AgentsAction::RemovedAttach { .. }),
-                ..
-            })
-        ));
-        Ok(())
-    }
-
-    #[test]
-    fn canonical_agent_commands_are_positional() -> anyhow::Result<()> {
-        let launch = Cli::try_parse_from(["bitrouter", "launch", "codex", "--", "--search"])?;
-        assert!(matches!(
-            launch.command,
-            Some(Command::Launch {
-                agent: Some(agent),
-                options: NativeLaunchArgs { agent_args, .. },
-                ..
-            }) if agent == "codex" && agent_args == ["--search"]
-        ));
-        let serve = Cli::try_parse_from(["bitrouter", "acp", "serve", "claude"])?;
-        assert!(matches!(
-            serve.command,
-            Some(Command::Acp {
-                cmd: AcpCmd::Serve {
-                    agent: Some(agent),
-                    ..
-                }
-            }) if agent == "claude"
-        ));
-        Ok(())
-    }
-
-    #[test]
-    fn compatibility_commands_are_hidden_from_help() {
-        let command = Cli::command();
-        let visible: Vec<_> = command
-            .get_subcommands()
-            .filter(|command| !command.is_hide_set())
-            .map(clap::Command::get_name)
-            .collect();
-        for hidden in ["spawn", "code", "chat", "tui", "tools"] {
-            assert!(!visible.contains(&hidden), "{hidden} leaked into root help");
-        }
-        for canonical in ["threads", "run", "requests", "launch", "claude", "codex"] {
-            assert!(
-                visible.contains(&canonical),
-                "{canonical} missing from root help"
-            );
-        }
-        assert!(
-            command
-                .find_subcommand("agents")
-                .and_then(|agents| agents.find_subcommand("attach"))
-                .is_some_and(clap::Command::is_hide_set)
-        );
-    }
-
-    #[test]
-    fn agent_and_protocol_help_scopes_global_compatibility_flags() {
-        let mut command = command_for_invocation("bro");
-        for name in ["threads", "run", "launch", "claude", "codex"] {
-            let help = command
-                .find_subcommand_mut(name)
-                .map(clap::Command::render_long_help)
-                .map(|help| help.to_string())
-                .unwrap_or_default();
-            for hidden in ["--json", "--human", "--context"] {
-                assert!(!help.contains(hidden), "{hidden} leaked into {name} help");
-            }
-        }
-        let acp = command
-            .find_subcommand_mut("acp")
-            .and_then(|acp| acp.find_subcommand_mut("serve"))
-            .map(clap::Command::render_long_help)
-            .map(|help| help.to_string())
-            .unwrap_or_default();
-        assert!(acp.contains("bro acp serve [AGENT]"));
-        assert!(!acp.contains("--json"));
-        assert!(!acp.contains("--human"));
-        assert!(!acp.contains("--context"));
-
-        let launch = command
-            .find_subcommand_mut("launch")
-            .map(clap::Command::render_long_help)
-            .map(|help| help.to_string())
-            .unwrap_or_default();
-        assert!(launch.contains("bro launch <AGENT>"));
-
-        let mut alias = command_for_invocation("bitrouter");
-        let alias_acp = alias
-            .find_subcommand_mut("acp")
-            .and_then(|acp| acp.find_subcommand_mut("serve"))
-            .map(clap::Command::render_long_help)
-            .map(|help| help.to_string())
-            .unwrap_or_default();
-        assert!(alias_acp.contains("bitrouter acp serve [AGENT]"));
-        let alias_launch = alias
-            .find_subcommand_mut("launch")
-            .map(clap::Command::render_long_help)
-            .map(|help| help.to_string())
-            .unwrap_or_default();
-        assert!(alias_launch.contains("bitrouter launch <AGENT>"));
     }
 
     enum RestartCommandKind {
@@ -6312,9 +3072,6 @@ mod tests {
                         pid: 4_249,
                         daemon_version: None,
                         artifact: None,
-                        handoff_protocol: None,
-                        handoff_build_id: None,
-                        handoff_activity: None,
                         cli_owned: None,
                         listen: "127.0.0.1:4356".to_string(),
                         models: 0,
@@ -6357,9 +3114,6 @@ mod tests {
                         pid: 4_250,
                         daemon_version: None,
                         artifact: None,
-                        handoff_protocol: None,
-                        handoff_build_id: None,
-                        handoff_activity: None,
                         cli_owned: None,
                         listen: "127.0.0.1:4356".to_string(),
                         models: 0,
@@ -6393,9 +3147,6 @@ mod tests {
                     pid: 0,
                     daemon_version: None,
                     artifact: None,
-                    handoff_protocol: None,
-                    handoff_build_id: None,
-                    handoff_activity: None,
                     cli_owned: None,
                     listen: "127.0.0.1:4356".to_string(),
                     models: 0,
@@ -6629,195 +3380,6 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn reconcile_metering_accepts_explicit_cloud_credentials_file() {
-        use clap::Parser;
-        let cli = Cli::try_parse_from([
-            "bitrouter",
-            "workflow-state",
-            "reconcile-metering",
-            "--database-url",
-            "sqlite:///tmp/usage.db",
-            "--credentials-file",
-            "/tmp/account-credentials.json",
-            "--request-id",
-            "req-1",
-        ])
-        .expect("parse credentials file");
-        match cli.command {
-            Some(Command::WorkflowState {
-                action:
-                    WorkflowStateAction::ReconcileMetering {
-                        credentials_file, ..
-                    },
-            }) => assert_eq!(
-                credentials_file.as_deref(),
-                Some(Path::new("/tmp/account-credentials.json"))
-            ),
-            _ => panic!("expected reconcile-metering"),
-        }
-    }
-
-    #[tokio::test]
-    async fn settlement_explicit_key_bypasses_malformed_credentials_file() -> anyhow::Result<()> {
-        let directory = tempfile::tempdir()?;
-        let path = directory.path().join("account-credentials.json");
-        std::fs::write(&path, b"malformed")?;
-        let key = settlement_api_key(
-            Some("brk_explicit.secret"),
-            Some(&path),
-            "https://api.bitrouter.ai/v1",
-        )
-        .await?;
-        assert_eq!(key, "brk_explicit.secret");
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn settlement_credentials_file_rejects_oauth() -> anyhow::Result<()> {
-        use bitrouter::gateway::providers::hosted::credentials::{Credentials, StoredCredential};
-
-        use bitrouter::cloud::account::manager::CredentialManager;
-
-        let directory = tempfile::tempdir()?;
-        let path = directory.path().join("account-credentials.json");
-        let manager = CredentialManager::with_client(&path, reqwest::Client::new());
-        manager
-            .save(StoredCredential::from(Credentials {
-                access_token: "oauth-access".to_owned(),
-                refresh_token: Some("oauth-refresh".to_owned()),
-                expires_at: chrono::Utc::now() + chrono::Duration::minutes(10),
-                refresh_token_expires_at: None,
-                token_type: "Bearer".to_owned(),
-                scope: "inference:invoke".to_owned(),
-                client_id: "bitrouter-cli".to_owned(),
-                authorization_server: "https://api.bitrouter.ai".to_owned(),
-                namespace_id: Some("ns-test".to_owned()),
-                subject: None,
-            }))
-            .await?;
-        let error = match settlement_api_key(None, Some(&path), "https://api.bitrouter.ai/v1").await
-        {
-            Ok(_) => anyhow::bail!("OAuth unexpectedly resolved for settlement"),
-            Err(error) => error,
-        };
-        assert!(
-            error
-                .to_string()
-                .contains("requires a static BitRouter API key")
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn settlement_credentials_file_rejects_wrong_origin() -> anyhow::Result<()> {
-        use bitrouter::cloud::account::manager::CredentialManager;
-        use bitrouter::gateway::providers::hosted::credentials::StoredCredential;
-
-        let directory = tempfile::tempdir()?;
-        let path = directory.path().join("account-credentials.json");
-        let manager = CredentialManager::with_client(&path, reqwest::Client::new());
-        manager
-            .save(StoredCredential::api_key(
-                "brk_stored.secret".to_owned(),
-                "https://other.example".to_owned(),
-            ))
-            .await?;
-        let error = match settlement_api_key(None, Some(&path), "https://api.bitrouter.ai/v1").await
-        {
-            Ok(_) => anyhow::bail!("credential unexpectedly crossed origins"),
-            Err(error) => error,
-        };
-        assert!(error.to_string().contains("does not match"));
-        Ok(())
-    }
-
-    // ACP command discovery and CLI operations share the same action identities.
-    #[test]
-    fn every_session_command_has_an_actions_row() -> anyhow::Result<()> {
-        use bitrouter::actions::ACTIONS;
-        use bitrouter::commands::chat::{ALIASES, CLIENT_OWNED};
-
-        let named: Vec<&str> = ACTIONS
-            .iter()
-            .filter_map(|row| row.session_command)
-            .collect();
-
-        // 1. The reducer claims only ids the table has, and only ones a
-        //    session can actually type.
-        for owned in CLIENT_OWNED {
-            let row = ACTIONS.iter().find(|row| &row.id == owned);
-            match row {
-                Some(row) => assert!(
-                    row.session_command.is_some(),
-                    "`{owned}` is dispatched by the reducer but its row carries no \
-                     `session_command`, so nothing can reach it"
-                ),
-                None => return Err(anyhow::anyhow!("missing session action {owned}")),
-            }
-        }
-
-        // 2. Two rows cannot answer to one name; the resolver would reach
-        //    whichever came first and the other would be unreachable.
-        for (index, name) in named.iter().enumerate() {
-            assert!(
-                !named[index + 1..].contains(name),
-                "two rows both claim `/{name}`; a name reaches one action"
-            );
-        }
-
-        // 3. An alias points at a real name and is not itself one, so an alias
-        //    can never shadow a command.
-        for (alias, target) in ALIASES {
-            assert!(
-                named.contains(target),
-                "alias `/{alias}` points at `{target}`, which no row offers"
-            );
-            assert!(
-                !named.contains(alias),
-                "`/{alias}` is both an alias and a command's own name"
-            );
-        }
-
-        // 4. Every offered row has a line of help. The reducer renders
-        //    `summary` unconditionally, so a missing arm is a blank row.
-        for row in ACTIONS.iter().filter(|row| row.session_command.is_some()) {
-            assert!(
-                !bitrouter::actions::session::summary_for(row.id).is_empty(),
-                "`{}` is offered in a session but `summary_for` has no arm for it",
-                row.id
-            );
-        }
-        Ok(())
-    }
-
-    /// A row naming a leaf clap does not have is a stale row: renaming
-    /// `bro status` without updating the table fails here.
-    #[test]
-    fn every_actions_row_resolves_to_a_cli_leaf() -> anyhow::Result<()> {
-        use clap::CommandFactory;
-        let root = Cli::command();
-        for action in bitrouter::actions::ACTIONS {
-            let Some(leaf) = action.cli_leaf else {
-                continue;
-            };
-            let mut command = &root;
-            for segment in leaf.split_whitespace() {
-                let found = command
-                    .get_subcommands()
-                    .find(|sub| sub.get_name() == segment);
-                match found {
-                    Some(sub) => command = sub,
-                    None => anyhow::bail!(
-                        "action {} names missing CLI leaf {leaf}: {segment}",
-                        action.id
-                    ),
-                }
-            }
-        }
-        Ok(())
-    }
-
     fn control_action_arguments(leaf: &str) -> Option<Vec<&'static str>> {
         let args = match leaf {
             "reload" => vec!["bitrouter", "--context", "workstation", "reload"],
@@ -7037,59 +3599,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn workflow_bundle_allows_eval_exchange_to_own_task_outcomes() {
-        use clap::Parser;
-
-        let cli = Cli::try_parse_from([
-            "bitrouter",
-            "workflow-state",
-            "bundle",
-            "--run-label",
-            "generic-eval-run",
-            "--traces",
-            "traces.jsonl",
-            "--cloud-usage",
-            "usage.jsonl",
-            "--output-dir",
-            "artifact",
-        ])
-        .expect("parse workflow bundle without request-scoped outcomes");
-
-        assert!(matches!(
-            cli.command,
-            Some(Command::WorkflowState {
-                action: WorkflowStateAction::Bundle { outcomes: None, .. }
-            })
-        ));
-    }
-
-    #[test]
-    fn shadow_classifier_bakeoff_flags_parse_without_a_submission() {
-        use clap::Parser;
-
-        let cli = Cli::try_parse_from([
-            "bitrouter",
-            "workflow-state",
-            "classifier-bakeoff",
-            "--fixtures",
-            "fixtures",
-            "--output",
-            "bakeoff.json",
-        ])
-        .expect("parse shadow classifier bake-off");
-
-        assert!(matches!(
-            cli.command,
-            Some(Command::WorkflowState {
-                action: WorkflowStateAction::ClassifierBakeoff {
-                    submission: None,
-                    ..
-                }
-            })
-        ));
-    }
-
     #[tokio::test]
     async fn eval_subject_seal_derives_a_digest_without_the_ledger() -> Result<()> {
         use clap::Parser;
@@ -7206,53 +3715,6 @@ mod tests {
         Ok(())
     }
 
-    /// The headless permission flags are mutually exclusive, parse on both
-    /// front doors, and default to deny-all with NDJSON.
-    #[test]
-    fn headless_permission_flags_parse_on_both_front_doors() -> anyhow::Result<()> {
-        use clap::Parser;
-
-        let cli = Cli::try_parse_from([
-            "bitrouter",
-            "spawn",
-            "claude-acp",
-            "-p",
-            "hi",
-            "--approve-reads",
-            "--format",
-            "quiet",
-        ])?;
-        match cli.command {
-            Some(Command::Spawn { headless, .. }) => {
-                assert!(headless.approve_reads);
-                assert_eq!(headless.format, PromptFormat::Quiet);
-            }
-            _ => anyhow::bail!("expected `spawn -p`"),
-        }
-        let cli = Cli::try_parse_from(["bitrouter", "acp", "prompt", "--agent", "a", "hi"])?;
-        match cli.command {
-            Some(Command::Acp {
-                cmd: AcpCmd::Prompt { headless, .. },
-            }) => assert_eq!(headless, HeadlessOptions::default()),
-            _ => anyhow::bail!("expected `acp prompt`"),
-        }
-        assert!(
-            Cli::try_parse_from([
-                "bitrouter",
-                "acp",
-                "prompt",
-                "--agent",
-                "a",
-                "--approve-all",
-                "--deny-all",
-                "hi"
-            ])
-            .is_err(),
-            "one mode at a time"
-        );
-        Ok(())
-    }
-
     #[test]
     fn update_flags_parse() {
         use clap::Parser;
@@ -7264,12 +3726,11 @@ mod tests {
                 check,
                 tag,
                 stable,
-                restart,
                 yes,
             }) => {
                 assert!(check);
                 assert_eq!(tag.as_deref(), Some("1.0.0-alpha.18"));
-                assert!(!stable && !restart && !yes);
+                assert!(!stable && !yes);
             }
             _ => panic!("expected Update"),
         }
@@ -7301,14 +3762,8 @@ mod tests {
             "openai",
             "--provider-api-key",
             "sk-openai",
-            "--harness",
-            "claude",
-            "--harness",
-            "codex",
             "--after",
             "exit",
-            "--model",
-            "openai/gpt-5",
         ])
         .expect("parse");
         match cli.command {
@@ -7319,24 +3774,14 @@ mod tests {
                 api_key,
                 providers,
                 provider_api_keys,
-                harnesses,
                 after,
-                model,
                 ..
             }) => {
                 assert!(yes && force && reset);
                 assert_eq!(api_key.as_deref(), Some("brk_abc.secret"));
                 assert_eq!(providers, vec!["openai"]);
                 assert_eq!(provider_api_keys, vec!["sk-openai"]);
-                assert_eq!(
-                    harnesses,
-                    vec![
-                        bitrouter::providers::cli_install::SpawnAgent::Claude,
-                        bitrouter::providers::cli_install::SpawnAgent::Codex
-                    ]
-                );
-                assert_eq!(after, Some(bitrouter::onboarding::AfterAction::Exit));
-                assert_eq!(model.as_deref(), Some("openai/gpt-5"));
+                assert_eq!(after, Some(AfterSetup::Exit));
             }
             _ => panic!("expected Init"),
         }
@@ -7600,19 +4045,25 @@ mod tests {
         )).context("constructing current policy source")
     }
 
-    fn source_recovery_fixture()
-    -> Result<(tempfile::TempDir, bitrouter::policy_lock::PolicyFileUpdate)> {
+    fn source_recovery_fixture() -> Result<(
+        tempfile::TempDir,
+        bitrouter::policy_source::PolicyFileUpdate,
+    )> {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("policy.yaml");
         let parent = recovery_source("fixture:strong")?;
-        let parent_digest = bitrouter::policy_lock::write_atomic(&path, None, &parent)?;
+        let parent_digest = bitrouter::policy_source::write_atomic(&path, None, &parent)?;
         let document = recovery_source("fixture:economy")?;
-        let history = bitrouter::policy_lock::default_history_dir(&path);
-        let publication =
-            bitrouter::policy_lock::publish_candidate(&path, &parent_digest, &document, &history)?;
+        let history = bitrouter::policy_source::default_history_dir(&path);
+        let publication = bitrouter::policy_source::publish_candidate(
+            &path,
+            &parent_digest,
+            &document,
+            &history,
+        )?;
         Ok((
             directory,
-            bitrouter::policy_lock::PolicyFileUpdate {
+            bitrouter::policy_source::PolicyFileUpdate {
                 path,
                 digest: publication.child_digest,
                 document,
@@ -7633,7 +4084,7 @@ mod tests {
             if attempt == 0 {
                 anyhow::bail!("injected candidate rejection");
             }
-            *live.borrow_mut() = bitrouter::policy_lock::load(&update.path).await?.digest;
+            *live.borrow_mut() = bitrouter::policy_source::load(&update.path).await?.digest;
             Ok(())
         })
         .await
@@ -7641,7 +4092,7 @@ mod tests {
         .context("rejected publication unexpectedly succeeded")?;
         anyhow::ensure!(format!("{error:#}").contains("injected candidate rejection"));
         anyhow::ensure!(attempts.get() == 2, "recovery did not reload the parent");
-        let disk = bitrouter::policy_lock::load(&update.path).await?;
+        let disk = bitrouter::policy_source::load(&update.path).await?;
         anyhow::ensure!(Some(disk.digest.as_str()) == update.parent_digest.as_deref());
         anyhow::ensure!(
             *live.borrow() == disk.digest,
@@ -7655,15 +4106,15 @@ mod tests {
     async fn source_recovery_preserves_a_concurrent_publisher() -> Result<()> {
         let (_directory, update) = source_recovery_fixture()?;
         let winner = recovery_source("fixture:winner")?;
-        let winner_digest = bitrouter::policy_lock::semantic_digest(&winner)?;
+        let winner_digest = bitrouter::policy_source::semantic_digest(&winner)?;
         let attempts = std::cell::Cell::new(0);
         let error = reload_published_policy_or_restore_with(&update, || async {
             attempts.set(attempts.get() + 1);
-            bitrouter::policy_lock::publish_candidate(
+            bitrouter::policy_source::publish_candidate(
                 &update.path,
                 &update.digest,
                 &winner,
-                &bitrouter::policy_lock::default_history_dir(&update.path),
+                &bitrouter::policy_source::default_history_dir(&update.path),
             )?;
             anyhow::bail!("injected rejection after concurrent winner");
         })
@@ -7675,7 +4126,7 @@ mod tests {
             attempts.get() == 1,
             "stale recovery reloaded its rejected source"
         );
-        let disk = bitrouter::policy_lock::load(&update.path).await?;
+        let disk = bitrouter::policy_source::load(&update.path).await?;
         anyhow::ensure!(disk.digest == winner_digest && disk.document == winner);
         Ok(())
     }
@@ -7699,7 +4150,7 @@ mod tests {
         anyhow::ensure!(attempts.get() == 2);
         anyhow::ensure!(
             Some(
-                bitrouter::policy_lock::load(&update.path)
+                bitrouter::policy_source::load(&update.path)
                     .await?
                     .digest
                     .as_str()
@@ -7712,7 +4163,7 @@ mod tests {
     async fn successful_source_reload_keeps_the_published_document() -> Result<()> {
         let (_directory, update) = source_recovery_fixture()?;
         reload_published_policy_or_restore_with(&update, || async { Ok(()) }).await?;
-        let disk = bitrouter::policy_lock::load(&update.path).await?;
+        let disk = bitrouter::policy_source::load(&update.path).await?;
         anyhow::ensure!(disk.digest == update.digest && disk.document == update.document);
         Ok(())
     }

@@ -1,89 +1,112 @@
-//! End-to-end coverage for the canonical CLI name and compatibility alias.
+//! Process coverage for the service's canonical executable and structured output.
 
-use std::path::Path;
 use std::process::{Command, Output};
 
 use anyhow::{Context, Result, ensure};
 
-fn run(binary: &Path, args: &[&str], home: &Path) -> Result<Output> {
-    Command::new(binary)
+fn run(args: &[&str], home: &std::path::Path) -> Result<Output> {
+    Command::new(env!("CARGO_BIN_EXE_bitrouter"))
         .args(args)
+        .current_dir(home)
         .env("BITROUTER_HOME", home)
         .env("NO_COLOR", "1")
         .output()
-        .with_context(|| format!("running {}", binary.display()))
-}
-
-fn create_alias(binary: &Path, alias: &Path) -> Result<()> {
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(binary, alias)?;
-    #[cfg(windows)]
-    let _ = std::fs::copy(binary, alias)?;
-    Ok(())
+        .context("running the gateway CLI")
 }
 
 #[test]
-fn canonical_help_is_bro_and_has_no_alias_warning() -> Result<()> {
-    let home = tempfile::tempdir()?;
-    let binary = Path::new(env!("CARGO_BIN_EXE_bro"));
-    let output = run(binary, &["--help"], home.path())?;
-    ensure!(output.status.success(), "bro --help failed");
-    let stdout = String::from_utf8(output.stdout)?;
-    let stderr = String::from_utf8(output.stderr)?;
-    ensure!(stdout.contains("Usage: bro"), "unexpected help: {stdout}");
-    ensure!(
-        !stderr.contains("is now `bro`"),
-        "canonical invocation warned: {stderr}"
-    );
-    Ok(())
-}
-
-#[test]
-fn alias_preserves_help_and_structured_stdout() -> Result<()> {
+fn gateway_help_and_status_use_the_service_identity() -> Result<()> {
     let home = tempfile::tempdir()?;
     std::fs::write(home.path().join("bitrouter.yaml"), "{}\n")?;
-    let binary = Path::new(env!("CARGO_BIN_EXE_bro"));
-    let alias_name = if cfg!(windows) {
-        "bitrouter.exe"
-    } else {
-        "bitrouter"
-    };
-    let alias = home.path().join(alias_name);
-    create_alias(binary, &alias)?;
-
-    for (args, expected_usage) in [
+    for (args, expected) in [
         (&["--help"][..], "Usage: bitrouter"),
-        (
-            &["launch", "--help"][..],
-            "bitrouter launch <AGENT> [OPTIONS] [-- <AGENT_ARGS>...]",
-        ),
-        (
-            &["acp", "serve", "--help"][..],
-            "bitrouter acp serve [AGENT] [OPTIONS]",
-        ),
+        (&["serve", "--help"][..], "bitrouter serve"),
+        (&["tenancy", "--help"][..], "bitrouter tenancy"),
     ] {
-        let output = run(&alias, args, home.path())?;
-        ensure!(output.status.success(), "alias help failed for {args:?}");
+        let output = run(args, home.path())?;
+        ensure!(output.status.success(), "help failed for {args:?}");
         let stdout = String::from_utf8(output.stdout)?;
-        let stderr = String::from_utf8(output.stderr)?;
-        ensure!(
-            stdout.contains(expected_usage),
-            "missing {expected_usage:?} in {stdout}"
-        );
-        ensure!(
-            stderr.contains("note: `bitrouter` is now `bro`. This alias is removed in 1.0.0."),
-            "missing alias warning in {stderr}"
-        );
+        ensure!(stdout.contains(expected), "unexpected help: {stdout}");
+        ensure!(output.stderr.is_empty(), "help emitted a diagnostic");
     }
 
-    let output = run(&alias, &["status"], home.path())?;
-    ensure!(output.status.success(), "alias status failed");
-    serde_json::from_slice::<serde_json::Value>(&output.stdout)
-        .context("alias status stdout was not one JSON value")?;
-    let stderr = String::from_utf8(output.stderr)?;
+    let status = run(&["status"], home.path())?;
+    ensure!(status.status.success(), "gateway status failed");
+    let report: serde_json::Value = serde_json::from_slice(&status.stdout)?;
     ensure!(
-        stderr.contains("note: `bitrouter` is now `bro`. This alias is removed in 1.0.0."),
-        "missing alias warning in {stderr}"
+        report["running"] == false,
+        "unexpected stopped status: {report}"
     );
+    Ok(())
+}
+
+#[test]
+fn gateway_update_delegates_for_the_installed_profile_and_channel() -> Result<()> {
+    let home = tempfile::tempdir()?;
+    std::fs::write(home.path().join("bitrouter.yaml"), "{}\n")?;
+    let info = run(&["build-info"], home.path())?;
+    ensure!(info.status.success());
+    let mut identity: serde_json::Value = serde_json::from_slice(&info.stdout)?;
+    let product = identity
+        .as_object_mut()
+        .context("build-info object")?
+        .remove("product");
+    ensure!(product.as_ref().and_then(serde_json::Value::as_str) == Some("bitrouter"));
+    let full = identity["profile"] == "full";
+    let mut features = Vec::new();
+    for name in identity["features"].as_array().context("feature list")? {
+        features.push(name.as_str().context("feature name")?);
+    }
+    for (method, prefix) in [
+        ("homebrew", "Cellar/bin"),
+        ("npm", "node_modules/.bin_real"),
+        ("cargo", "cargo/bin"),
+        ("unknown", "bin"),
+    ] {
+        let prefix = home.path().join(prefix);
+        std::fs::create_dir_all(&prefix)?;
+        let exe = prefix.join(format!("bitrouter{}", std::env::consts::EXE_SUFFIX));
+        if std::fs::hard_link(env!("CARGO_BIN_EXE_bitrouter"), &exe).is_err() {
+            std::fs::copy(env!("CARGO_BIN_EXE_bitrouter"), &exe)?;
+        }
+        for flags in [&[][..], &["--stable"], &["--tag", "v1.0.0-beta.1"]] {
+            let out = Command::new(&exe)
+                .arg("update")
+                .args(flags)
+                .current_dir(home.path())
+                .env("BITROUTER_HOME", home.path())
+                .env("XDG_CONFIG_HOME", home.path())
+                .env("LOCALAPPDATA", home.path())
+                .env("CARGO_HOME", home.path().join("cargo"))
+                .output()?;
+            ensure!(
+                out.status.success(),
+                "{method}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            let report: serde_json::Value = serde_json::from_slice(&out.stdout)?;
+            ensure!(
+                report["status"] == "delegated" && report["install_method"] == method,
+                "{report}"
+            );
+            ensure!(report["current_artifact"] == identity);
+            let command = report["upgrade_command"]
+                .as_str()
+                .context("delegated command")?;
+            if full {
+                ensure!(command.contains("bitrouter"));
+            } else {
+                ensure!(command.contains(
+                    "cargo install bitrouter --bin bitrouter --force --no-default-features"
+                ));
+                ensure!(command.contains("--features") != features.is_empty());
+                ensure!(command.contains(&features.join(",")));
+                ensure!(command.contains("--version") == flags.contains(&"--tag"));
+                if flags.contains(&"--tag") {
+                    ensure!(command.contains("=1.0.0-beta.1"));
+                }
+            }
+        }
+    }
     Ok(())
 }

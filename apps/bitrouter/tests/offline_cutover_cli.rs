@@ -45,7 +45,7 @@ fn historical_upgrade_and_eval_import_fail_before_touching_files() -> Result<()>
             "report",
         ],
     ] {
-        let output = Command::new(env!("CARGO_BIN_EXE_bro"))
+        let output = Command::new(env!("CARGO_BIN_EXE_bitrouter"))
             .current_dir(home)
             .env("BITROUTER_HOME", home)
             .args(["tenancy", "offline"])

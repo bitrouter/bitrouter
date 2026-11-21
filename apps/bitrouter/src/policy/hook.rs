@@ -12,7 +12,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::gateway::error::Result;
-use crate::gateway::extensions::legacy::PluginId;
+use crate::gateway::extensions::plugin::PluginId;
 use crate::gateway::pipeline::context::PipelineContext;
 use crate::gateway::pipeline::hooks::DenyReason;
 use crate::gateway::pipeline::hooks::HookDecision;

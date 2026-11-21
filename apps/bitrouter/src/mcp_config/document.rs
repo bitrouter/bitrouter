@@ -139,7 +139,7 @@ impl Snapshot {
             crate::paths::ensure_home_directory(parent)?;
         }
         // Shared with router/policy config writers. Held across version check and rename.
-        let _lock = crate::policy_lock::acquire_publication_lock(&self.path)?;
+        let _lock = crate::policy_source::acquire_publication_lock(&self.path)?;
         let exists = regular(&self.path)?;
         match self.raw {
             Some(raw) => {
@@ -147,7 +147,7 @@ impl Snapshot {
                     exists,
                     "configuration changed since it was loaded; refusing to overwrite"
                 );
-                crate::policy_lock::write_text_atomic_unlocked(&self.path, &raw, updated)
+                crate::policy_source::write_text_atomic_unlocked(&self.path, &raw, updated)
                     .context("publishing MCP configuration; if a directory sync failed, inspect saved state before retrying because rename may already have completed")
             }
             None => {
@@ -155,7 +155,7 @@ impl Snapshot {
                     !exists,
                     "configuration appeared since it was loaded; refusing to overwrite"
                 );
-                crate::policy_lock::write_new_file_atomic(&self.path, updated.as_bytes())
+                crate::policy_source::write_new_file_atomic(&self.path, updated.as_bytes())
                     .context("creating MCP configuration; inspect saved state before retrying after a directory sync failure")
             }
         }

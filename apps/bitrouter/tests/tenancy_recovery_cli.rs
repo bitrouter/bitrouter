@@ -30,7 +30,7 @@ async fn recover_requires_explicit_private_plan_without_loading_ambient_configur
     file.sync_all()?;
     drop(file);
     let report = directory.path().join("report");
-    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_bro"))
+    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_bitrouter"))
         .args(["--json", "tenancy", "offline", "recover", "--plan"])
         .arg(&plan)
         .arg("--report")

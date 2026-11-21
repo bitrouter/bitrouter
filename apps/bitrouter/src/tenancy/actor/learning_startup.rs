@@ -1,5 +1,4 @@
-//! Common readiness fence: feature removal is not proof that accepted work settled.
-//! This reads only an indexed existence projection; execution remains core+harness.
+//! Before serving, scan tenant-owned pending indexes for unresolved predecessor work.
 use super::{Control, ErrorCode, Failure, Worker};
 use crate::{
     storage::operation_budget::OperationBudget,
@@ -12,12 +11,7 @@ use sea_orm::{
 };
 
 impl Worker {
-    pub(super) async fn learning_startup(
-        &self,
-        control: &Control,
-        #[cfg(all(feature = "core", feature = "harness"))]
-        retained: &crate::tenancy::learning::store::recovery::Bootstrap,
-    ) -> Result<(), Failure> {
+    pub(super) async fn learning_startup(&self, control: &Control) -> Result<(), Failure> {
         let check = || {
             control
                 .check_read()
@@ -30,132 +24,6 @@ impl Worker {
             .header()
             .clone();
         let budget = OperationBudget::with_row_limit(&check, 1024);
-        #[cfg(all(feature = "core", feature = "harness"))]
-        if let Some(origin) = &self.startup {
-            use crate::tenancy::learning::store::recovery;
-            let projection = self.admission.unknown_read(true).map_err(Failure::from)?;
-            let tx = control
-                .begin_repeatable_read(&self.db)
-                .await
-                .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
-            let access = recovery::Access {
-                state: &current,
-                origin,
-                proof: &self.proof,
-                resources: &self.resources,
-            };
-            let proposal = recovery::prepare(&tx, &access, &budget).await;
-            // Install before the consuming rollback. The fixed proposal belongs
-            // to the outer Worker frame even if rollback unwinds or never ACKs.
-            let installed = proposal.and_then(|plan| retained.install(plan));
-            control
-                .rollback(tx)
-                .await
-                .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
-            installed.map_err(|_| self.unavailable(ErrorCode::AuthorityUnavailable))?;
-            let plan = retained
-                .plan()
-                .map_err(|_| self.unavailable(ErrorCode::AuthorityUnavailable))?;
-            if plan.has_writes() {
-                retained
-                    .reserve(&self.admission, &projection)
-                    .map_err(|_| self.unavailable(ErrorCode::CapacityExceeded))?;
-                // Cover the entire fixed repair program, including job and
-                // assessment updates whose receipt is already durable. This is
-                // separate from logical missing-receipt reservations above.
-                control
-                    .reserve_write(32 * 1024 * 1024, true)
-                    .map_err(Failure::from)?;
-                let tx = control
-                    .begin_write_repeatable_read(&self.db)
-                    .await
-                    .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
-                let result = async {
-                    recovery::apply(&tx, &access, plan, &budget).await?;
-                    let changes = retained
-                        .prepare_inventory(&tx, &current.installation, &budget)
-                        .await?;
-                    // Both redundant active/pending fences must clear in this
-                    // transaction, before receipt/job/assessment writes commit.
-                    pending(&tx, &current, &budget).await?;
-                    budget.check()?;
-                    Ok::<_, anyhow::Error>(changes)
-                }
-                .await;
-                let changes = match result {
-                    Ok(changes) => changes,
-                    Err(error) => {
-                        control
-                            .rollback(tx)
-                            .await
-                            .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
-                        return Err(self.unavailable(match error
-                            .downcast_ref::<crate::storage::operation_budget::Error>(
-                        ) {
-                            Some(crate::storage::operation_budget::Error::Capacity) => {
-                                ErrorCode::CapacityExceeded
-                            }
-                            _ => ErrorCode::AuthorityUnavailable,
-                        }));
-                    }
-                };
-                // Repairs own their separate byte reservations. Publish only
-                // the coalesced obligation changes here; Repair::finish settles
-                // bytes after the same confirmed transaction outcome.
-                let publication = match self.admission.prepare_unknown(
-                    &projection,
-                    changes,
-                    Vec::new(),
-                    self.proof.clone(),
-                ) {
-                    Ok(publication) => publication,
-                    Err(code) => {
-                        control
-                            .rollback(tx)
-                            .await
-                            .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
-                        return Err(Failure::from(code));
-                    }
-                };
-                #[cfg(test)]
-                let observed = plan.observe_receipt_commits_for_test(&self.proof);
-                let committed = control.commit(tx).await;
-                #[cfg(test)]
-                for index in observed {
-                    self.proof.receipt_result_for_test(
-                        index,
-                        crate::tenancy::transaction::receipt_observation::Step::Commit,
-                        &committed,
-                    );
-                }
-                committed.map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
-                retained.committed();
-                publication.publish().map_err(|_| {
-                    self.proof.quarantine();
-                    self.unavailable(ErrorCode::AuthorityUnavailable)
-                })?;
-                // A fixed known commit is marked before any await or late check.
-                let tx = control
-                    .begin_repeatable_read(&self.db)
-                    .await
-                    .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
-                let inventory =
-                    crate::tenancy::receipts::store::inventory(&tx, &current.installation).await;
-                control
-                    .rollback(tx)
-                    .await
-                    .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
-                let inventory =
-                    inventory.map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
-                retained
-                    .verify_inventory(&inventory)
-                    .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
-                budget
-                    .check()
-                    .map_err(|_| self.unavailable(ErrorCode::AuthorityUnavailable))?;
-                return Ok(());
-            }
-        }
         let tx = control
             .begin_repeatable_read(&self.db)
             .await
@@ -169,8 +37,7 @@ impl Worker {
     }
 }
 
-/// First profile does not turn stored identities into an execution capability.
-/// Any interrupted accepted job requires explicit recovery; never infer unsent.
+/// A pending paid job requires recovery before this service may admit work.
 async fn pending(
     tx: &DatabaseTransaction,
     state: &AuthorityHeader,

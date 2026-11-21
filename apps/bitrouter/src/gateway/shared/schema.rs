@@ -54,6 +54,24 @@ pub(super) async fn current(db: &impl ConnectionTrait) -> anyhow::Result<bool> {
     Ok(true)
 }
 
+/// Validate both schemas in the replica's read transaction before registering.
+pub(super) async fn validate_replica(db: &impl ConnectionTrait) -> anyhow::Result<()> {
+    anyhow::ensure!(current(db).await?, "shared schema is not initialized");
+    // Standalone shared authority has no ordinary tables. Any ordinary object
+    // requires the complete gateway role and its independently reviewed catalog.
+    let ordinary = db.query_one(Statement::from_string(DatabaseBackend::Postgres,
+        "SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema() AND c.relkind IN ('r','p','v','m','f','S') AND NOT starts_with(c.relname,'gateway_shared_') LIMIT 1"
+    )).await?;
+    if ordinary.is_some() {
+        anyhow::ensure!(
+            crate::db::store_format::inspect(db).await? == crate::db::store_format::State::Current,
+            "ordinary gateway schema is not initialized"
+        );
+        crate::db::current_schema::validate(db).await?;
+    }
+    Ok(())
+}
+
 /// Authenticate the shared schema and ledger before excluding its exact tables
 /// and identity columns from an ordinary-store inventory. No ordinary-store
 /// validator is called here, and an absent schema grants no exclusions.

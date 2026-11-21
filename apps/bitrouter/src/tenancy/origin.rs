@@ -56,31 +56,6 @@ impl StartupOwner {
         self.ready.store(true, Ordering::Release);
         Ok(())
     }
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(super) fn stamp(&self, proof: &Arc<Proof>) -> Result<Stamp> {
-        ensure!(
-            Arc::ptr_eq(&self.proof, proof) && self.ready.load(Ordering::Acquire),
-            "startup origin is not ready"
-        );
-        self.bootstrap_stamp(proof)
-    }
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(super) fn excludes(&self, proof: &Arc<Proof>, previous: &Stamp) -> Result<()> {
-        self.stamp(proof)?;
-        self.bootstrap_excludes(proof, previous)
-    }
     // The paid bootstrap participant can reuse this same claimed pool origin.
     // This method grants no Service readiness, current scope or effect permission.
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(super) fn bootstrap_excludes(&self, proof: &Arc<Proof>, previous: &Stamp) -> Result<()> {
-        previous.validate()?;
-        let current = self.bootstrap_stamp(proof)?;
-        if current.acquisition == previous.acquisition {
-            return Err(crate::tenancy::session::Rejected(
-                bitrouter_ai::tenancy::operation::ErrorCode::CapabilityMismatch,
-            )
-            .into());
-        }
-        Ok(())
-    }
 }

@@ -70,23 +70,4 @@ mod tests {
         );
         Ok(())
     }
-
-    #[cfg(all(feature = "core", feature = "harness"))]
-    #[test]
-    fn full_scope_pending_key_matches_common_readiness_partition() -> Result<()> {
-        use crate::storage::scope::{KeyDomain, Scope};
-        let installation: InstallationId = "installation".try_into()?;
-        let tenant: TenantId = "tenant".try_into()?;
-        let (scope, _) =
-            Scope::for_test(installation.clone(), tenant.clone(), "creator".try_into()?);
-        assert_eq!(
-            scope.physical_key(KeyDomain::LearningPending, "unused Legacy spelling", &[])?,
-            learning_pending(&installation, &tenant)?
-        );
-        assert_eq!(
-            scope.physical_key(KeyDomain::EvalSubject, "unused", &["logical"])?,
-            "628cef0903080bc46e65b72bdc091f6d5cc51e17468c4bce830d73db3c6ab0e9"
-        );
-        Ok(())
-    }
 }

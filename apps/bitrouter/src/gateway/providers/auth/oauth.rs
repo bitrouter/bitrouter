@@ -369,7 +369,7 @@ mod tests {
     -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // OAuthToken with no refresh_token → refresh() bails before any
         // network call with a `Malformed` containing the user-facing
-        // "re-run `bro providers login <provider>`" hint.
+        // "re-run `bitrouter providers login <provider>`" hint.
         let client = reqwest::Client::new();
         let token = OAuthToken {
             access_token: "stale".into(),

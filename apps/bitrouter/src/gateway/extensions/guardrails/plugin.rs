@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use crate::gateway::assembly::AppBuilder;
 use crate::gateway::assembly::Plugin;
-use crate::gateway::extensions::legacy::PluginId;
+use crate::gateway::extensions::plugin::PluginId;
 
 use super::hooks::{DepositRulesHook, GuardrailPreHook, GuardrailStreamHook};
 use bitrouter_guardrails::rules::RuleSet;

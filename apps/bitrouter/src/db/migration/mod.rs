@@ -4,15 +4,25 @@
 //! must carry its exact marker and pass the current catalog validators before
 //! startup. Component builders do not participate in a historical ledger.
 
+// Metering compares these persisted identifiers for deduplication, ownership
+// and scoped spend. The MySQL gateway must compare every byte in each lookup.
+pub(super) const MYSQL_METERING_IDENTITIES: &[&str] = &[
+    "request_id",
+    "user_id",
+    "api_key_id",
+    "route_scope_id",
+    "launch_id",
+    "controller_instance_id",
+    "acp_session_id",
+    "native_root_session_id",
+    "native_agent_thread_id",
+];
+
 mod m20240101_000001_create_auth_tables;
 mod m20240101_000002_create_metering_tables;
 
-mod m20240101_000004_create_adequacy_table;
-mod m20240101_000005_create_adequacy_exploration_table;
-mod m20240101_000006_create_adequacy_semantic_success_table;
 mod m20240101_000007_add_metering_evidence;
 mod m20240101_000008_add_metering_reconciliation;
-mod m20240101_000009_create_adequacy_reliability_events;
 mod m20240101_000010_create_eval_exchange;
 mod m20240101_000011_scope_eval_exchange;
 mod m20240101_000012_create_trajectory_ledger;
@@ -21,25 +31,15 @@ mod m20240101_000015_add_metering_launch_id;
 mod m20240101_000016_add_acp_metering_identity;
 mod m20240101_000017_add_metering_route_scope;
 
-mod m20240101_000018_create_acp_capture;
-mod m20240101_000019_create_acp_checkpoints;
 mod m20240101_000020_create_checkpoint_evolution;
 mod m20240101_000021_add_router_request_identity;
-mod m20240101_000022_create_bro_execution_records;
-mod m20240101_000023_create_bro_acceptance_keys;
-mod m20240101_000024_create_bro_runtime_ownership;
-mod m20240101_000025_create_bro_execution_index;
-mod m20240101_000026_bro_runtime_format;
-mod m20240101_000027_bro_managed_sessions;
 mod m20240101_000028_resource_tenancy;
 mod m20240101_000029_tenancy_configurations;
 mod m20240101_000030_eval_storage_scope;
 mod m20240101_000031_native_continuation_epoch;
 mod m20240101_000032_trajectory_storage_scope;
-mod m20240101_000033_capture_legacy_scope;
 mod m20240101_000034_continuation_storage_scope;
 mod m20240101_000035_execution_receipts;
-mod m20240101_000036_native_harness_scope;
 mod m20240101_000037_owned_oauth;
 mod m20240101_000038_eval_import_provenance;
 mod m20240101_000039_resource_lifecycle;
@@ -54,6 +54,8 @@ mod m20240101_000045_ordered_receipts;
 pub(crate) mod provider_technical;
 
 mod baseline;
+#[cfg(all(test, any(feature = "db-postgres", feature = "db-mysql")))]
+pub(crate) mod server_fixture;
 
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
 
@@ -330,7 +332,10 @@ mod tests {
     {
         let migrations = Migrator::migrations();
         assert_eq!(migrations.len(), 1);
-        assert_eq!(migrations[0].name(), crate::db::store_format::BASELINE);
+        assert_eq!(
+            migrations[0].name(),
+            crate::db::store_format::GATEWAY_SERVER
+        );
 
         let db = crate::db::connect("sqlite::memory:").await?;
         Migrator::up(&db, None).await?;

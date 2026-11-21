@@ -1,14 +1,12 @@
 //! Minimum builds reject unavailable execution and retired syntax before effects.
 
-#![cfg(not(feature = "core"))]
-
 use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 
 fn command(directory: &Path) -> tokio::process::Command {
-    let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_bro"));
+    let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_bitrouter"));
     command
         .current_dir(directory)
         .env_clear()
@@ -33,7 +31,10 @@ async fn rejection(command: &mut tokio::process::Command) -> Result<String> {
     let message = envelope["error"]["message"]
         .as_str()
         .context("missing CLI error message")?;
-    ensure!(message.contains("core feature"), "{message}");
+    ensure!(
+        message.contains("BITROUTER_WORKFLOW_TRACE_JSONL"),
+        "{message}"
+    );
     Ok(message.to_owned())
 }
 
@@ -96,12 +97,7 @@ async fn experimental_commands_reject_before_input_or_storage_access() -> Result
         ],
     ];
     for arguments in cases {
-        let directory = tempfile::tempdir()?;
-        rejection(command(directory.path()).args(*arguments)).await?;
-        ensure!(
-            std::fs::read_dir(directory.path())?.count() == 0,
-            "{arguments:?} created state before rejecting unavailable execution"
-        );
+        parser_rejection(arguments, "unrecognized subcommand").await?;
     }
     Ok(())
 }
