@@ -836,6 +836,7 @@ impl TrajectoryStore {
         Ok(())
     }
 
+    #[cfg(any(test, feature = "eval-publication"))]
     pub async fn mark_outbox_delivered(
         &self,
         owner_user_id: &str,

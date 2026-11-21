@@ -483,6 +483,7 @@ impl PipelineContext {
     /// every other header is ignored. This keeps a read-only observer from
     /// mutating authentication or other transport semantics through the trace
     /// propagation seam. Replaces any previously-set trace headers.
+    #[cfg(any(test, feature = "otel-http", feature = "otel-grpc"))]
     pub fn set_outbound_trace_headers(&self, headers: http::HeaderMap) {
         let mut trace_headers = http::HeaderMap::new();
         for (name, value) in headers.iter() {
@@ -704,6 +705,7 @@ impl PipelineContext {
     /// `ToolContext` (when the `server-tools` feature is enabled)
     /// for a server-tool execution, which may outlive this borrow (e.g. on the
     /// streaming path).
+    #[cfg(any(test, feature = "server-tools"))]
     pub fn metadata(&self) -> &HashMap<PluginId, serde_json::Value> {
         &self.metadata
     }
@@ -913,6 +915,7 @@ impl PipelineContext {
             caller: self.caller.clone(),
             target,
             model_id,
+            #[cfg(any(test, feature = "eval-publication"))]
             reasoning_effort: self
                 .generation_prompt()
                 .and_then(|prompt| prompt.params.reasoning_effort),
