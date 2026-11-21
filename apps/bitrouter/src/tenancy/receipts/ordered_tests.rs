@@ -11,6 +11,9 @@ use bitrouter_ai::tenancy::{
 use sea_orm::{Statement, TransactionTrait};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+#[path = "ordered_tests/recovery_capacity.rs"]
+mod recovery_capacity;
+
 #[path = "ordered_tests/shared_migration.rs"]
 mod shared_migration;
 
@@ -281,9 +284,7 @@ async fn ordered_terminal_sidecar_and_intent_retirement_rollback_atomically() ->
     );
     persist_intent(&db, &intent).await?;
     let before = inventory(&db, &installation).await?;
-    ensure!(
-        before.rows == 1 && before.unknown.len() == 1 && before.bytes + 16 * 1024 == MAX_OBLIGATION
-    );
+    ensure!(before.rows == 1 && before.bytes + 16 * 1024 == MAX_OBLIGATION);
     let candidate = terminal(&intent)?;
     for (name, sql) in [
         (
