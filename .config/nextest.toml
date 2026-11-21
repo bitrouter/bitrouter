@@ -32,11 +32,13 @@ archive.include = [
 core-tree-pressure = { max-threads = 1 }
 shared-gateway-process = { max-threads = 1 }
 
-# Complete history checks each retain the ordinary five-minute deadline. Reserve
-# the runner while hashing/revalidating their real histories and archive cycles.
+# Complete history checks revalidate bulk receipt evidence across three
+# archive cycles and real snapshot/restore children in an unoptimized build.
+# Reserve the runner and bound the whole campaign without changing SQL deadlines.
 [[profile.default.overrides]]
 filter = 'test(=tenancy::tests::capacity_history::archive_cycles_preserve_unknowns_and_current_read_authority)'
 threads-required = "num-test-threads"
+slow-timeout = { period = "60s", terminate-after = 10 }
 
 # Each shared process campaign owns a PostgreSQL workload and multiple servers.
 # Keep separate campaigns from competing for host resources, including the
