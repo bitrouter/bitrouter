@@ -558,7 +558,9 @@ async fn claude_code_cli_marker_non_expiring_is_reread_live_each_request() -> Te
 #[tokio::test]
 async fn stored_claude_oauth_wins_over_allowed_environment_and_invalid_slot_fails()
 -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    use crate::gateway::providers::auth::store::{CredentialKey, MemoryCredentialStore};
+    use crate::gateway::providers::auth::store::{
+        CredentialKey, memory_fixture::MemoryCredentialStore,
+    };
     let store = MemoryCredentialStore::new([
         (
             CredentialKey {

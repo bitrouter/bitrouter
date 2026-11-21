@@ -115,7 +115,7 @@ pub(super) async fn exercise(first: &Store, second: &Store) -> Result<()> {
         let slot = key.clone();
         let owned = tokio::spawn(async move {
             match rejected {
-                None => session.resolve(&slot).await,
+                None => session.resolve_with_fallback(&slot, None).await,
                 Some(rejected) => session.recover(&slot, Some(rejected)).await,
             }
         });
@@ -129,7 +129,7 @@ pub(super) async fn exercise(first: &Store, second: &Store) -> Result<()> {
             "refresh I/O preceded durable intent"
         );
         ensure!(
-            session_b.resolve(&key).await.is_err(),
+            session_b.resolve_with_fallback(&key, None).await.is_err(),
             "another worker reused an in-progress refresh token"
         );
         ensure!(b.load(&key).await.is_err());
@@ -157,14 +157,14 @@ pub(super) async fn exercise(first: &Store, second: &Store) -> Result<()> {
         b.begin(&key).await.is_err(),
         "expired refresh intent was replayable"
     );
-    ensure!(session_b.resolve(&key).await.is_err());
+    ensure!(session_b.resolve_with_fallback(&key, None).await.is_err());
     ensure!(refresh.calls.load(Ordering::SeqCst) == 2);
     let replacement = Credential::Oauth(token("operator-replacement", 0));
     let replaced = b
         .import(&key, &pool, Some(current.version), &replacement)
         .await?;
     ensure!(
-        session_b.resolve(&key).await?
+        session_b.resolve_with_fallback(&key, None).await?
             == *replacement.as_oauth().context("fixture type mismatch")?
     );
 
@@ -201,9 +201,9 @@ pub(super) async fn exercise(first: &Store, second: &Store) -> Result<()> {
     .await?;
     let failed = Arc::new(FailedRefresh(AtomicUsize::new(0)));
     let session = OAuthSession::new_inline(Arc::new(a), failed.clone(), Duration::from_secs(30));
-    ensure!(session.resolve(&key).await.is_err());
+    ensure!(session.resolve_with_fallback(&key, None).await.is_err());
     expire(first, &stamp.id).await?;
-    ensure!(session.resolve(&key).await.is_err());
+    ensure!(session.resolve_with_fallback(&key, None).await.is_err());
     ensure!(
         failed.0.load(Ordering::SeqCst) == 1,
         "network ambiguity replayed refresh I/O"
