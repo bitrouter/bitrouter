@@ -1,4 +1,4 @@
-//! Separate AP SDK process; its loopback server is a normal Core test process.
+//! Separate AP SDK process against a loopback gateway with ordinary JSON numbers.
 use bitrouter_ai::{
     stream::{ProtocolEnd, StreamItem},
     tenancy::{

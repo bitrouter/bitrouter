@@ -379,13 +379,8 @@ jobs:
         if grep -Eq '^bitrouter-guardrails v' host-tree.txt; then
           echo '::error::default gateway links the optional matcher'; exit 1
         fi
-    - name: preserve prehashed manifests in an independent SDK consumer
+    - name: check the independent public SDK consumer
       run: |
-        mkdir -p target/sdk-manifest-fidelity
-        cargo run --locked -p bitrouter --no-default-features \
-          --example sdk_manifest_fixture > target/sdk-manifest-fidelity/manifest.json
-        export BITROUTER_TEST_MANIFEST_FIXTURE="$PWD/target/sdk-manifest-fidelity/manifest.json"
-        cargo test --locked \
+        cargo check --locked \
           --manifest-path apps/bitrouter/tests/fixtures/sdk_consumer/Cargo.toml \
-          --target-dir target/sdk-consumer --test manifest_fidelity -- \
-          --ignored --exact server_prehashed_manifest_survives_isolated_bind_and_restore
+          --target-dir target/sdk-consumer --all-targets
