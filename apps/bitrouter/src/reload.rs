@@ -3089,12 +3089,14 @@ policies:
                 } else {
                     "beta:m"
                 };
-            let access_model = fixture
-                .policy_store
-                .effective_for(&["operator"])
-                .allowed_models
-                .and_then(|models| models.into_iter().next());
-            assert_eq!(access_model.as_deref(), Some(expected_access_model));
+            let policy = fixture.policy_store.effective_for(&["operator"]);
+            assert!(policy.check_model(expected_access_model).is_ok());
+            let other = if expected_access_model == "alpha:m" {
+                "beta:m"
+            } else {
+                "alpha:m"
+            };
+            assert!(policy.check_model(other).is_err());
 
             let expected_policy_digest =
                 if failed_participant == ReloadParticipant::NamedPolicyRuntime {
@@ -3198,12 +3200,9 @@ policies:
                 .api_base,
             "https://beta.example.com/v1"
         );
-        let access_model = fixture
-            .policy_store
-            .effective_for(&["operator"])
-            .allowed_models
-            .and_then(|models| models.into_iter().next());
-        assert_eq!(access_model.as_deref(), Some("beta:m"));
+        let policy = fixture.policy_store.effective_for(&["operator"]);
+        assert!(policy.check_model("beta:m").is_ok());
+        assert!(policy.check_model("alpha:m").is_err());
         assert_eq!(
             fixture
                 .policy_runtime

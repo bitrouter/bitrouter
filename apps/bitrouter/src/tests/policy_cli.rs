@@ -449,7 +449,10 @@ fn unsupported_sources_and_configuration_are_rejected_without_rewriting() -> Res
     ] {
         std::fs::write(&config, raw)?;
         let output = invoke(home, &["config", "validate", "--config", "bitrouter.yaml"])?;
-        ensure!(!output.status.success(), "unsupported config accepted: {raw}");
+        ensure!(
+            !output.status.success(),
+            "unsupported config accepted: {raw}"
+        );
         ensure!(std::fs::read_to_string(&config)? == raw);
         ensure!(std::fs::read_to_string(&policy)? == source);
     }

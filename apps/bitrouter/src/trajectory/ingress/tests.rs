@@ -11,7 +11,7 @@ use crate::{
         db::{self, NewApiKey},
         keys,
     },
-    gateway::http::{AppState, build_router},
+    gateway::http::{AppState, RouterOptions, build_router_with_options},
     trajectory::{
         store::TrajectoryStore,
         types::{RequestStatus, TrajectoryEventKind},
@@ -91,17 +91,20 @@ routers:
     )?;
     tokio::fs::write(home.path().join("policy.yaml"), "spec_version: policy/1.0.0-beta.1\npolicies:\n  coding:\n    tiers:\n      economy: {model: vendor:economy}\n    default_tier: economy\n").await?;
     let assembled = crate::assemble::build_app_with_path(&config, Some(&config_path)).await?;
-    let router = build_router(AppState {
-        language_model: assembled
-            .app
-            .language_model()
-            .ok_or_else(|| anyhow::anyhow!("missing pipeline"))?
-            .clone(),
-        mcp: None,
-        skip_auth: false,
-        metrics_renderer: None,
-        prompt_transforms: Vec::new(),
-    });
+    let router = build_router_with_options(
+        AppState {
+            language_model: assembled
+                .app
+                .language_model()
+                .ok_or_else(|| anyhow::anyhow!("missing pipeline"))?
+                .clone(),
+            mcp: None,
+            skip_auth: false,
+            metrics_renderer: None,
+            prompt_transforms: Vec::new(),
+        },
+        RouterOptions::default(),
+    );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let url = format!("http://{}/v1/chat/completions", listener.local_addr()?);
     let _server = ServerTask(tokio::spawn(
