@@ -405,11 +405,8 @@ mod tests {
         assert!(!migrate_legacy_anthropic_marker(path.clone()));
 
         let reloaded = CredentialStore::load(&path).unwrap();
-        assert_eq!(
-            reloaded
-                .get_any(LEGACY_PROVIDER_ID, DEFAULT_ACCOUNT)
-                .and_then(Credential::as_api_key),
-            Some("sk-ant-api03-platform"),
+        assert!(
+            matches!(reloaded.get_any(LEGACY_PROVIDER_ID, DEFAULT_ACCOUNT), Some(Credential::ApiKey { value }) if value == "sk-ant-api03-platform"),
             "the anthropic platform API key must be left in place"
         );
         assert!(
@@ -451,11 +448,8 @@ mod tests {
             ),
             "the anthropic marker must be left as-is when claude-code already has a credential"
         );
-        assert_eq!(
-            reloaded
-                .get_any(PROVIDER_ID, DEFAULT_ACCOUNT)
-                .and_then(Credential::as_api_key),
-            Some("sk-ant-oat-existing"),
+        assert!(
+            matches!(reloaded.get_any(PROVIDER_ID, DEFAULT_ACCOUNT), Some(Credential::ApiKey { value }) if value == "sk-ant-oat-existing"),
             "the pre-existing claude-code credential must not be clobbered"
         );
     }

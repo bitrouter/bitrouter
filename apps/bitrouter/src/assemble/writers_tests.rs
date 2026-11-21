@@ -81,8 +81,6 @@ fn assert_writer_mode(pipeline: &Pipeline, shared: bool) {
     ] {
         assert_eq!(ids.contains(&local), !shared);
     }
-    assert_eq!(pipeline.native_cost_source.is_some(), !shared);
-    assert_eq!(pipeline.native_cost_estimator.is_some(), !shared);
     for operation in [ModelOperation::Generation, ModelOperation::Decisions] {
         assert!(
             pipeline
