@@ -1145,6 +1145,7 @@ async fn assemble_app(
     let eval_service = EvalService::new(eval_store.clone(), config.eval.clone());
     #[cfg(feature = "eval-publication")]
     let mut trajectory_outbox_publisher = None;
+    let mut trajectory_for_ingress = None;
     let trajectory_for_settlement = if config.trajectory.enabled && !config.tenancy.enabled {
         let trajectory_store = TrajectoryStore::new(db.clone());
         let retention = chrono::TimeDelta::try_days(i64::from(config.trajectory.retention_days))
@@ -1216,6 +1217,12 @@ async fn assemble_app(
         };
         // The shared engine owns durable settlement; local execution uses this recorder.
         (!is_shared).then(|| {
+            trajectory_for_ingress = Some(crate::trajectory::ingress::CaptureIngress::new(
+                crate::trajectory::correlation::TrajectoryRuntime::new(
+                    trajectory_store.clone(),
+                    crate::trajectory::canonical::Canonicalizer::new(correlation_key.clone()),
+                ),
+            ));
             TrajectorySettlementRecorder::new(trajectory_store, notify_outbox, correlation_key)
         })
     } else {
@@ -1385,6 +1392,9 @@ async fn assemble_app(
                 AuthHook::new(db_for_hooks.clone()).with_tenancy(tenancy_enabled),
                 OperationScope::Both,
             );
+            if let Some(capture) = trajectory_for_ingress {
+                lm.pre_resolution_hook(capture);
+            }
             lm.pre_resolution_hook_for(session_context, OperationScope::Both);
             if let Some(policy) = private_context {
                 lm.pre_resolution_hook(policy);

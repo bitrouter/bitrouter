@@ -73,23 +73,43 @@ impl EvalSettlementRecorder {
             ("provider".to_string(), context.provider_id.clone()),
             ("model".to_string(), context.model_id.clone()),
             (
-                "prompt_tokens".to_string(),
-                context.prompt_tokens.to_string(),
-            ),
-            (
-                "completion_tokens".to_string(),
-                context.completion_tokens.to_string(),
-            ),
-            (
-                "reasoning_tokens".to_string(),
-                context.reasoning_tokens.to_string(),
-            ),
-            (
                 "request_duration_ms".to_string(),
                 context.request_duration_ms.to_string(),
             ),
             ("success".to_string(), context.error.is_none().to_string()),
         ]);
+        // Metering retains the observed provenance even when accounting later
+        // normalizes an unexecuted rejection to a zero charge.
+        let metering = context.get_event::<crate::metering::MeteringSettlementEvent>();
+        if metering.is_some_and(|event| event.request_id != context.request_id) {
+            anyhow::bail!("request evaluation metering identity mismatch");
+        }
+        let usage_origin = metering.map_or(context.usage_origin, |event| event.usage_origin);
+        attributes.insert("usage_origin".into(), usage_origin.as_str().into());
+        if usage_origin != bitrouter_ai::types::UsageOrigin::Unknown {
+            for (name, value) in [
+                (
+                    "prompt_tokens",
+                    metering.map_or(Some(context.prompt_tokens), |event| event.prompt_tokens),
+                ),
+                (
+                    "completion_tokens",
+                    metering.map_or(Some(context.completion_tokens), |event| {
+                        event.completion_tokens
+                    }),
+                ),
+                (
+                    "reasoning_tokens",
+                    metering.map_or(Some(context.reasoning_tokens), |event| {
+                        event.reasoning_tokens
+                    }),
+                ),
+            ] {
+                if let Some(value) = value {
+                    attributes.insert(name.into(), value.to_string());
+                }
+            }
+        }
         if let Some(error) = &context.error {
             attributes.insert("error_code".into(), error.error_code().into());
         }
@@ -344,11 +364,10 @@ mod tests {
             // No original observation means no subject or successful-persist cleanup.
             assert!(pending.peek(&invocation, "local").is_some());
         }
-        let events = context.events.dump_json();
-        assert_eq!(
-            events[1],
-            serde_json::json!({"event": "eval.settlement_snapshot", "data": {}})
-        );
+        let snapshots =
+            context.get_events::<crate::gateway::observability::decision::CapturedEvalDecision>();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(serde_json::to_value(snapshots[0])?, serde_json::json!({}));
         Ok(())
     }
 
@@ -567,6 +586,44 @@ mod tests {
             crate::storage::evaluation::subject_digest(&first)?,
             crate::storage::evaluation::subject_digest(&second)?
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn usage_attributes_require_provenance_and_preserve_its_kind() -> anyhow::Result<()> {
+        use bitrouter_ai::types::UsageOrigin;
+
+        let db = crate::db::connect("sqlite::memory:").await?;
+        let recorder =
+            EvalSettlementRecorder::new(EvalStore::new(db), PendingEvalDecisionStore::default());
+        for origin in [
+            UsageOrigin::Unknown,
+            UsageOrigin::ProviderReported,
+            UsageOrigin::AuthoritativeReceipt,
+            UsageOrigin::Estimated,
+        ] {
+            let mut context = settlement_context();
+            context.usage_origin = origin;
+            context.prompt_tokens = 7;
+            context.completion_tokens = 9;
+            context.reasoning_tokens = 2;
+            let subject = recorder.subject(&test_decision("request-1"), &context)?;
+            let attributes = &subject.evidence[0].attributes;
+            assert_eq!(
+                attributes.get("usage_origin").map(String::as_str),
+                Some(origin.as_str())
+            );
+            for (name, value) in [
+                ("prompt_tokens", "7"),
+                ("completion_tokens", "9"),
+                ("reasoning_tokens", "2"),
+            ] {
+                assert_eq!(
+                    attributes.get(name).map(String::as_str),
+                    (origin != UsageOrigin::Unknown).then_some(value)
+                );
+            }
+        }
         Ok(())
     }
 
