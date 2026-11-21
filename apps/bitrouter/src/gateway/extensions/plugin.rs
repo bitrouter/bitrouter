@@ -12,11 +12,6 @@ impl PluginId {
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
     }
-
-    /// The id as a string slice.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
 }
 
 impl From<&str> for PluginId {

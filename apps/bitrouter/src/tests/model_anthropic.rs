@@ -12,7 +12,7 @@ use crate::gateway::providers::anthropic::{AnthropicApiKeyApplier, headers};
 use crate::gateway::providers::auth::credentials::{Credential, OAuthToken};
 use crate::gateway::providers::auth::oauth::{REFRESH_WINDOW, RefreshGrant};
 use crate::gateway::providers::auth::store::{
-    CredentialKey, CredentialStore, MemoryCredentialStore, OAuthSession,
+    CredentialKey, CredentialStore, OAuthSession, memory_fixture::MemoryCredentialStore,
 };
 use crate::gateway::providers::auth::{AuthApplier, AuthAppliers};
 use crate::gateway::providers::claude_code::ClaudeCodeAuthApplier;

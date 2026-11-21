@@ -18,7 +18,7 @@ use crate::gateway::pipeline::types::RoutingTarget;
 use crate::gateway::providers::anthropic::{AnthropicApiKeyApplier, PROVIDER_ID, headers};
 use crate::gateway::providers::auth::credentials::Credential;
 use crate::gateway::providers::auth::store::{
-    CredentialKey, CredentialStore, DEFAULT_ACCOUNT, MemoryCredentialStore,
+    CredentialKey, CredentialStore, DEFAULT_ACCOUNT, memory_fixture::MemoryCredentialStore,
 };
 use crate::gateway::providers::auth::{AuthApplier, ContinuationAuthority, CredentialAuthority};
 use async_trait::async_trait;

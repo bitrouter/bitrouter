@@ -161,7 +161,7 @@ async fn cached_fresh_token_skips_exchange()
     let applier = copilot_with_url(reqwest::Client::new(), server.uri(), path)?;
     for _ in 0..2 {
         assert_eq!(
-            applier.obtain_copilot_token(&copilot_target()).await?.token,
+            applier.fixture_token(&copilot_target()).await?.token,
             "tid=cached"
         );
     }
@@ -200,14 +200,14 @@ async fn cache_tracks_selected_github_source_and_logout_never_reuses_it()
         file.set(PROVIDER_ID, "selected", credential(access))?;
         authorities.push(applier.continuation_authority(&target).await?);
         assert_eq!(
-            applier.obtain_copilot_token(&target).await?.token,
+            applier.fixture_token(&target).await?.token,
             format!("copilot-{access}")
         );
     }
     assert_ne!(authorities[0], authorities[1]);
     file.remove(PROVIDER_ID, "selected")?;
     assert!(matches!(
-        applier.obtain_copilot_token(&target).await,
+        applier.fixture_token(&target).await,
         Err(ModelError::Provider { status: 401, .. })
     ));
     Ok(())

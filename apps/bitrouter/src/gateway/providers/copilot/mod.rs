@@ -165,7 +165,8 @@ impl CopilotAuthApplier {
         Ok(auth)
     }
     /// Resolve an ephemeral Copilot token for this exact selected source/account.
-    pub async fn obtain_copilot_token(&self, target: &ModelTarget) -> Result<CopilotToken> {
+    #[cfg(test)]
+    pub(crate) async fn fixture_token(&self, target: &ModelTarget) -> Result<CopilotToken> {
         Ok(self.obtain_copilot_auth(target, None).await?.token)
     }
 }

@@ -98,9 +98,6 @@ pub enum CredentialError {
         /// Origin stored with the credential.
         actual: String,
     },
-    /// A stored OAuth credential cannot be used where a static key is required.
-    #[error("this operation requires a static BitRouter API key; the stored credential is OAuth")]
-    WrongCredentialKind,
 }
 
 /// A lease over one selected hosted credential. A staged envelope must survive
@@ -323,41 +320,6 @@ impl HostedSession {
         ))
     }
 
-    /// Resolve a static API key, rejecting a stored OAuth credential.
-    pub async fn resolve_api_key(
-        &self,
-        explicit_api_key: Option<&str>,
-        expected_origin: Option<&str>,
-    ) -> Result<ResolvedCredential, CredentialError> {
-        if let Some(api_key) = explicit_api_key.filter(|api_key| !api_key.is_empty()) {
-            return Ok(ResolvedCredential {
-                secret: api_key.to_owned(),
-                source: CredentialSource::ExplicitApiKey,
-                oauth_identity: None,
-            });
-        }
-
-        let transaction = self
-            .store
-            .begin(&self.key)
-            .await
-            .map_err(CredentialError::Storage)?;
-        let credential = transaction
-            .credential()
-            .cloned()
-            .ok_or(CredentialError::NotSignedIn)?;
-        match credential {
-            StoredCredential::Oauth { .. } => Err(CredentialError::WrongCredentialKind),
-            StoredCredential::ApiKey { api_key, base_url } => {
-                self.verify_base_url_origin(&base_url, expected_origin)?;
-                Ok(ResolvedCredential {
-                    secret: api_key,
-                    source: CredentialSource::StoredApiKey,
-                    oauth_identity: None,
-                })
-            }
-        }
-    }
     fn verify_origin(
         &self,
         credential: &StoredCredential,

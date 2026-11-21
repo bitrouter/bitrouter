@@ -612,7 +612,7 @@ async fn ai_client_uses_injected_codex_account_and_shapes_stream_request() -> Au
     use crate::gateway::model::protocol::InboundAdapter;
     use crate::gateway::model::protocol::responses::ResponsesAdapter;
     use crate::gateway::providers::auth::AuthAppliers;
-    use crate::gateway::providers::auth::store::MemoryCredentialStore;
+    use crate::gateway::providers::auth::store::memory_fixture::MemoryCredentialStore;
     use futures::StreamExt;
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, ResponseTemplate};

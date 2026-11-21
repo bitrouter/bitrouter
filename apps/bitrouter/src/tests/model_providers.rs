@@ -12,7 +12,7 @@ use crate::gateway::providers::auth::AuthAppliers;
 use crate::gateway::providers::auth::credentials::{Credential, OAuthToken};
 use crate::gateway::providers::auth::oauth::{REFRESH_WINDOW, RefreshGrant, parse_token_reply};
 use crate::gateway::providers::auth::store::{
-    CredentialKey, CredentialStore, MemoryCredentialStore, OAuthSession,
+    CredentialKey, CredentialStore, OAuthSession, memory_fixture::MemoryCredentialStore,
 };
 use crate::gateway::providers::codex::OpenAiCodexAuthApplier;
 use crate::gateway::providers::copilot::CopilotAuthApplier;

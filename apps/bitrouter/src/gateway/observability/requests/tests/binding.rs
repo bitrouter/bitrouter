@@ -111,7 +111,7 @@ async fn context_revalidation_rejects_stale_fences_without_rewriting_execution()
         }
         .check(&mut ctx)
         .await?;
-        let inventory = fixture.tracker.inventory();
+        let inventory = fixture.tracker.inventory.clone();
         let before = serde_json::to_value(inventory.request("scope", "stale").await?)?;
         ensure!(
             PreRequestHook::revalidate_context(&fixture.binding, &ctx)
@@ -185,7 +185,8 @@ async fn another_controller_cannot_repeat_a_completed_execution_or_replace_its_c
     ensure!(
         fixture
             .tracker
-            .inventory()
+            .inventory
+            .clone()
             .request("different-principal", "paid")
             .await?
             .is_none()

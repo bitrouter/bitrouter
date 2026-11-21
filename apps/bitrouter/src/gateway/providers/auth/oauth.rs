@@ -211,28 +211,6 @@ pub async fn refresh(
     refresh_inner(client, token_endpoint, client_id, None, current).await
 }
 
-/// Like [`refresh`], but for a **confidential** OAuth client — includes
-/// `client_secret` in the grant. Google installed-app clients (e.g. the
-/// Antigravity `agy` CLI) require the secret even though it ships inside the
-/// binary; the application Antigravity integration extracts it from the local `agy` at runtime
-/// rather than embedding Google's secret here.
-pub async fn refresh_with_client_secret(
-    client: &reqwest::Client,
-    token_endpoint: &str,
-    client_id: &str,
-    client_secret: &str,
-    current: &OAuthToken,
-) -> Result<OAuthToken, OAuthError> {
-    refresh_inner(
-        client,
-        token_endpoint,
-        client_id,
-        Some(client_secret),
-        current,
-    )
-    .await
-}
-
 async fn refresh_inner(
     client: &reqwest::Client,
     token_endpoint: &str,
