@@ -3,6 +3,67 @@
 use super::*;
 
 impl TrajectoryStore {
+    pub(crate) async fn events_for_episode(
+        &self,
+        owner_user_id: &str,
+        episode_id: &str,
+    ) -> Result<Vec<TrajectoryEvent>> {
+        validate_owner(owner_user_id)?;
+        let rows = event_entity::Entity::find()
+            .filter(legacy_scope("trajectory_events"))
+            .filter(event_entity::Column::OwnerUserId.eq(owner_user_id))
+            .filter(event_entity::Column::EpisodeId.eq(episode_id))
+            .order_by_asc(event_entity::Column::Sequence)
+            .all(&self.db)
+            .await?;
+        let mut events = Vec::with_capacity(rows.len());
+        for (index, row) in rows.into_iter().enumerate() {
+            let event = stored_event(row)?;
+            let expected = u64::try_from(index)
+                .context("trajectory event count exceeds sequence range")?
+                .checked_add(1)
+                .ok_or_else(|| anyhow::anyhow!("trajectory event sequence overflow"))?;
+            if event.sequence != expected {
+                anyhow::bail!("trajectory event history has a sequence gap at {expected}")
+            }
+            events.push(event);
+        }
+        Ok(events)
+    }
+
+    pub(crate) async fn pending_outbox(&self, owner_user_id: &str) -> Result<Vec<PendingOutbox>> {
+        validate_owner(owner_user_id)?;
+        outbox_entity::Entity::find()
+            .filter(legacy_scope("trajectory_outbox"))
+            .filter(outbox_entity::Column::OwnerUserId.eq(owner_user_id))
+            .filter(outbox_entity::Column::DeliveredAt.is_null())
+            .order_by_asc(outbox_entity::Column::Attempts)
+            .order_by_asc(outbox_entity::Column::CreatedAt)
+            .order_by_asc(outbox_entity::Column::OutboxId)
+            .all(&self.db)
+            .await?
+            .into_iter()
+            .map(stored_outbox)
+            .collect()
+    }
+
+    pub(crate) async fn episode(
+        &self,
+        owner_user_id: &str,
+        episode_id: &str,
+    ) -> Result<Option<StoredEpisode>> {
+        validate_owner(owner_user_id)?;
+        validate_opaque(episode_id, "episode_id")?;
+        episode_entity::Entity::find()
+            .filter(legacy_scope("trajectory_episodes"))
+            .filter(episode_entity::Column::OwnerUserId.eq(owner_user_id))
+            .filter(episode_entity::Column::EpisodeId.eq(episode_id))
+            .one(&self.db)
+            .await?
+            .map(stored_episode)
+            .transpose()
+    }
+
     pub(crate) async fn begin_request(
         &self,
         owner_user_id: &str,
