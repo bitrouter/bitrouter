@@ -128,7 +128,8 @@ pub struct Assembled {
     pub(crate) policy_runtime: Arc<crate::policy_source::PolicyRuntime>,
     /// Generic eval exchange used by the local CLI and REST control plane.
     pub(crate) eval_service: EvalService,
-    /// Always-active encrypted provider continuation registry.
+    /// Registry handle for shared lifecycle control and tests.
+    #[cfg(any(test, feature = "multi-instance"))]
     pub(crate) continuation_registry: ContinuationRegistry,
     #[cfg(test)]
     pub(crate) pending_eval_decisions: PendingEvalDecisionStore,
@@ -1551,6 +1552,7 @@ async fn assemble_app(
         policy_store: policy_store_for_reload,
         policy_runtime,
         eval_service,
+        #[cfg(any(test, feature = "multi-instance"))]
         continuation_registry,
         #[cfg(test)]
         pending_eval_decisions: pending_eval_decisions_for_tests,

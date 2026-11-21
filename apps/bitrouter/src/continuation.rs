@@ -219,6 +219,7 @@ pub struct ContinuationKeySource(Arc<ContinuationKeySourceInner>);
 
 enum ContinuationKeySourceInner {
     Unavailable,
+    #[cfg(any(test, feature = "multi-instance"))]
     Fixed(ContinuationKey),
     Lazy {
         home: PathBuf,
@@ -227,6 +228,7 @@ enum ContinuationKeySourceInner {
 }
 
 impl ContinuationKeySource {
+    #[cfg(any(test, feature = "multi-instance"))]
     pub fn fixed(key: ContinuationKey) -> Self {
         Self(Arc::new(ContinuationKeySourceInner::Fixed(key)))
     }
@@ -243,6 +245,7 @@ impl ContinuationKeySource {
             ContinuationKeySourceInner::Unavailable => {
                 anyhow::bail!("tenant registry has no Legacy key source")
             }
+            #[cfg(any(test, feature = "multi-instance"))]
             ContinuationKeySourceInner::Fixed(key) => Ok(key.clone()),
             ContinuationKeySourceInner::Lazy { home, cached } => cached
                 .get_or_init(|| {

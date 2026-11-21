@@ -65,6 +65,7 @@ impl ObservedActionClass {
         }
     }
 
+    #[cfg(feature = "multi-instance")]
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "reason_or_plan" => Some(Self::ReasonOrPlan),
