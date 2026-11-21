@@ -144,12 +144,14 @@ impl PipelineBuilder {
     }
 
     /// Override the fallback policy (defaults to [`DefaultFallbackPolicy`]).
+    #[cfg(test)]
     pub fn fallback_policy(&mut self, policy: Arc<dyn FallbackPolicy>) -> &mut Self {
         self.fallback_policy = Some(policy);
         self
     }
 
     /// Set the SSE keepalive interval.
+    #[cfg(test)]
     pub fn keepalive_interval(&mut self, interval: Duration) -> &mut Self {
         self.keepalive_interval = interval;
         self
@@ -175,6 +177,7 @@ impl PipelineBuilder {
     ///
     /// Requests without checks retain the legacy SDK order: ordinary hooks
     /// run before the final selector's defaults and may rewrite the selector.
+    #[cfg(test)]
     pub fn pre_request_hook<H: PreRequestHook + 'static>(&mut self, hook: H) -> &mut Self {
         self.pre_request_hook_for(hook, OperationScope::Generation)
     }
@@ -285,6 +288,7 @@ impl PipelineBuilder {
     }
 
     /// Register a Stage-3 execution hook.
+    #[cfg(test)]
     pub fn execution_hook<H: ExecutionHook + 'static>(&mut self, hook: H) -> &mut Self {
         self.execution_hook_for(hook, OperationScope::Generation)
     }
@@ -305,6 +309,7 @@ impl PipelineBuilder {
 
     /// Register a StreamHook-stage hook (runs in registration order; each sees
     /// the previous hook's rewritten output).
+    #[cfg(test)]
     pub fn stream_hook(&mut self, hook: impl StreamHook + 'static) -> &mut Self {
         self.stream_hooks.push(Arc::new(hook));
         self

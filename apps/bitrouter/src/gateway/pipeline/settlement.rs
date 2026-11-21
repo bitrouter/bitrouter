@@ -118,6 +118,7 @@ pub enum DeliveryAcknowledgement {
 
 impl RequiredDeliveryHandshake {
     /// Construct the two ends of a required-delivery rendezvous.
+    #[cfg(test)]
     pub fn new(
         ready: tokio::sync::oneshot::Sender<Result<()>>,
         acknowledged: tokio::sync::oneshot::Receiver<DeliveryAcknowledgement>,

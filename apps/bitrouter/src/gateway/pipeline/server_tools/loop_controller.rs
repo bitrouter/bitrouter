@@ -131,6 +131,7 @@ impl ServerToolLoop {
     /// Returns the final upstream [`ExecutionResult`] (its `usage` replaced by
     /// the accumulated total). On reaching a bound, the result carries a
     /// truncation finish reason.
+    #[cfg(test)]
     pub async fn run(
         &self,
         base: &Prompt,

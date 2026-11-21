@@ -1,10 +1,8 @@
-//! Routing for the `language_model` protocol: the `RoutingTable` trait,
-//! `RoutingPrefs`, `ModelInfo`, and the `FallbackPolicy`. The full cascade
-//! resolution (Strategy 0–3) and config/registry tables land in Phase 4; this
-//! module carries the trait surface plus a `StaticRoutingTable` used by the
-//! pipeline tests and the minimal server path.
+//! Model resolution, routing preferences, and provider fallback policy.
 
+#[cfg(test)]
 use std::collections::HashMap;
+#[cfg(test)]
 use std::sync::RwLock;
 use {
     bitrouter_ai::routing::ModelInfo, bitrouter_ai::routing::RouterRequestIdentity,
@@ -250,10 +248,12 @@ impl FallbackPolicy for DefaultFallbackPolicy {
 /// A trivial in-memory routing table: `model -> ordered targets`. Used by the
 /// Phase-1 pipeline tests and the minimal server path. Phase 4 replaces it with
 /// `ConfigRoutingTable`.
+#[cfg(test)]
 pub struct StaticRoutingTable {
     routes: RwLock<HashMap<String, Vec<RoutingTarget>>>,
 }
 
+#[cfg(test)]
 impl StaticRoutingTable {
     /// An empty table.
     pub fn new() -> Self {
@@ -271,6 +271,7 @@ impl StaticRoutingTable {
     }
 }
 
+#[cfg(test)]
 impl Default for StaticRoutingTable {
     fn default() -> Self {
         Self::new()
@@ -278,6 +279,7 @@ impl Default for StaticRoutingTable {
 }
 
 #[async_trait]
+#[cfg(test)]
 impl RoutingTable for StaticRoutingTable {
     async fn route_chain(
         &self,

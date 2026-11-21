@@ -50,7 +50,6 @@ use stream_bridge::BridgeCapture;
 pub(super) struct NativeStreamCapture(Mutex<Option<Arc<BridgeCapture>>>);
 
 use super::native_continuation::NativeContinuationPlan;
-use super::native_work::{self, NativeProviderWorkKind};
 use crate::managed_contract::evidence::{ContinuationFailure, NativeContinuationInput};
 
 fn native_continuation_plan(
@@ -265,6 +264,7 @@ pub trait Executor: Send + Sync {
 }
 
 /// One canned upstream response for `MockExecutor`.
+#[cfg(test)]
 pub enum MockResponse {
     /// A successful non-streaming result.
     Generate(GenerateResult),
@@ -278,10 +278,12 @@ pub enum MockResponse {
 
 /// A scriptable executor for tests. Each call pops the next scripted response
 /// (keyed by provider name when scripted per-provider, else from a flat queue).
+#[cfg(test)]
 pub struct MockExecutor {
     queue: Mutex<Vec<MockResponse>>,
 }
 
+#[cfg(test)]
 impl MockExecutor {
     /// Build an executor that will serve `responses` in order.
     pub fn new(responses: Vec<MockResponse>) -> Self {
@@ -322,6 +324,7 @@ impl MockExecutor {
 }
 
 #[async_trait]
+#[cfg(test)]
 impl Executor for MockExecutor {
     async fn execute(
         &self,
@@ -975,6 +978,7 @@ impl HttpExecutor {
     /// Replace the global/per-provider timeout clients in-place. Existing
     /// in-flight requests keep the cloned client they already selected; new
     /// requests use the freshly built set.
+    #[cfg(test)]
     pub fn reload_provider_timeouts(
         &self,
         default_timeouts: HttpTimeouts,
@@ -1034,6 +1038,7 @@ impl HttpExecutor {
     }
 
     /// Build an executor with default timeouts and the built-in dispatch.
+    #[cfg(test)]
     pub fn with_defaults() -> Result<Self> {
         Self::new(HttpTimeouts::default())
     }
@@ -1300,13 +1305,7 @@ impl HttpExecutor {
         &self,
         input: &RequestBuildInput<'_>,
     ) -> Result<tenancy::AuthenticatedRequest> {
-        native_work::observe(
-            input.ctx,
-            NativeProviderWorkKind::Authentication,
-            self.build_authenticated_request_inner(input),
-            |_| None,
-        )
-        .await
+        self.build_authenticated_request_inner(input).await
     }
 
     async fn build_authenticated_request_inner(
@@ -1511,22 +1510,17 @@ impl HttpExecutor {
         let Some(applier) = self.auth_applier(target) else {
             return Ok(false);
         };
-        native_work::observe(
-            ctx,
-            NativeProviderWorkKind::AuthenticationRefresh,
-            async {
-                applier
-                    .refresh_after_unauthorized(&target.model_target(), rejected_authorization)
-                    .await
-                    .map_err(|error| {
-                        BitrouterError::from(normalize_auth_extension_error(
-                            error,
-                            AuthOperation::Refresh,
-                        ))
-                    })
-            },
-            |_| None,
-        )
+        async {
+            applier
+                .refresh_after_unauthorized(&target.model_target(), rejected_authorization)
+                .await
+                .map_err(|error| {
+                    BitrouterError::from(normalize_auth_extension_error(
+                        error,
+                        AuthOperation::Refresh,
+                    ))
+                })
+        }
         .await
     }
 
@@ -1697,7 +1691,6 @@ impl HttpExecutor {
         prompt: &Prompt,
         ctx: &PipelineContext,
     ) -> Result<ExecutionResult> {
-        let initial_gate = native_work::gate_duration(ctx);
         let started = Instant::now();
         let technical = super::provider_technical::begin(ctx, target, started, false);
         let capture = Arc::new(BridgeCapture::default());
@@ -1715,11 +1708,7 @@ impl HttpExecutor {
             account_label: target.account_label.clone(),
             result: result.into(),
             request_duration_ms: elapsed,
-            upstream_duration_ms: Some(native_work::elapsed_work_millis(
-                ctx,
-                started,
-                initial_gate,
-            )),
+            upstream_duration_ms: Some(super::timing::elapsed_millis(started)),
             server_tool_calls: Vec::new(),
         })
     }
@@ -2044,7 +2033,6 @@ impl Executor for HttpExecutor {
                 || tenancy::has_execution(ctx),
         );
 
-        let initial_gate = native_work::gate_duration(ctx);
         let started = Instant::now();
         let technical = super::provider_technical::begin(ctx, target, started, false);
         let mut attempted_auth_refresh = false;
@@ -2073,14 +2061,9 @@ impl Executor for HttpExecutor {
             )?;
             let managed_expected = self.managed_expected_body(&body, target, ctx)?;
             if self.needs_body_shaping(target, ctx)? {
-                native_work::observe(
-                    ctx,
-                    NativeProviderWorkKind::AuthenticationPreparation,
-                    self.shape_request_body(&mut body, target, ctx),
-                    |_| None,
-                )
-                .await
-                .map_err(|error| error_scrubber.scrub_error(error))?;
+                self.shape_request_body(&mut body, target, ctx)
+                    .await
+                    .map_err(|error| error_scrubber.scrub_error(error))?;
             }
             let continuation_substitution = apply_provider_continuation(&mut body, target, ctx)?;
             if let Some(continuation) = continuation_substitution {
@@ -2128,36 +2111,31 @@ impl Executor for HttpExecutor {
                 .cloned();
             let mut native_attempt = None;
             let mut private_adapter = false;
-            let response = native_work::observe(
-                ctx,
-                NativeProviderWorkKind::HttpDispatch,
-                async {
-                    let routing_guard = if tenancy::legacy_routing(ctx) {
-                        Some(crate::tenancy::routing::admit(ctx, target)?)
-                    } else {
-                        None
-                    };
-                    record_native_dispatch(prompt, target, ctx)?;
-                    let admission = tenancy::admit_send(
-                        tenant_binding.as_ref(),
-                        &mut tenant_attempt,
-                        &mut request,
-                        target,
-                        ctx,
-                        Some(false),
-                    )?;
-                    if let Some(guard) = routing_guard {
-                        guard.sent()?;
-                    }
-                    let response = admission
-                        .send(&client, request, ctx, &mut error_scrubber)
-                        .await;
-                    private_adapter = admission.adapter.is_some();
-                    native_attempt = admission.attempt_id;
-                    response
-                },
-                |response| Some(response.status().as_u16()),
-            )
+            let response = async {
+                let routing_guard = if tenancy::legacy_routing(ctx) {
+                    Some(crate::tenancy::routing::admit(ctx, target)?)
+                } else {
+                    None
+                };
+                record_native_dispatch(prompt, target, ctx)?;
+                let admission = tenancy::admit_send(
+                    tenant_binding.as_ref(),
+                    &mut tenant_attempt,
+                    &mut request,
+                    target,
+                    ctx,
+                    Some(false),
+                )?;
+                if let Some(guard) = routing_guard {
+                    guard.sent()?;
+                }
+                let response = admission
+                    .send(&client, request, ctx, &mut error_scrubber)
+                    .await;
+                private_adapter = admission.adapter.is_some();
+                native_attempt = admission.attempt_id;
+                response
+            }
             .await?;
 
             let status = response.status();
@@ -2324,11 +2302,7 @@ impl Executor for HttpExecutor {
             account_label: target.account_label.clone(),
             result: result.into(),
             request_duration_ms: elapsed,
-            upstream_duration_ms: Some(native_work::elapsed_work_millis(
-                ctx,
-                started,
-                initial_gate,
-            )),
+            upstream_duration_ms: Some(super::timing::elapsed_millis(started)),
             server_tool_calls: Vec::new(),
         })
     }
@@ -2403,11 +2377,13 @@ impl Executor for HttpExecutor {
 /// registered. The three built-in protocols (`chat_completions` / `responses` /
 /// `messages`) should remain on the default `HttpExecutor`; only
 /// route `ApiProtocol::Custom(_)` protocols away from it.
+#[cfg(test)]
 pub struct DispatchExecutor {
     by_protocol: HashMap<ApiProtocol, Arc<dyn Executor>>,
     default: Arc<dyn Executor>,
 }
 
+#[cfg(test)]
 impl DispatchExecutor {
     /// Build a dispatcher with `default` handling every unregistered protocol.
     /// Typically pass an [`HttpExecutor`] here.
@@ -2433,6 +2409,7 @@ impl DispatchExecutor {
 }
 
 #[async_trait]
+#[cfg(test)]
 impl Executor for DispatchExecutor {
     fn preflight_generate_content(
         &self,
