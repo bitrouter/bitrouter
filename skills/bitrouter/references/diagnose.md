@@ -59,19 +59,20 @@ echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> ~/.zshrc
 exec $SHELL -l
 ```
 
-For Homebrew, check `brew doctor`. For npm, ensure `npm bin -g` is on PATH.
+For Homebrew, check `brew doctor`. For npm, check the global prefix with
+`npm prefix -g` and verify its executable directory is on PATH.
 
 ## Symptom: shell installer fails with SSL error
 
-`curl: (60) SSL certificate problem` means your system trust store is out of date. Update root certs or fall back to `brew install bitrouter/tap/bitrouter` or `npm install -g bitrouter`.
+`curl: (60) SSL certificate problem` means your system trust store is out of date. Update root certificates. To install BRO and the core together, use `brew install bitrouter/tap/bitrouter-bro` or `npm install -g bitrouter-bro`.
 
 ## Symptom: brew can't find the formula
 
-`brew install bitrouter/tap/bitrouter` should auto-tap. If it doesn't:
+`brew install bitrouter/tap/bitrouter-bro` should auto-tap. If it doesn't:
 
 ```bash
 brew tap bitrouter/tap
-brew install bitrouter
+brew install bitrouter-bro
 ```
 
 ## Uninstall
@@ -79,8 +80,8 @@ brew install bitrouter
 | Installed via | Remove with |
 |---|---|
 | Shell installer | `rm "$(command -v bitrouter)"` |
-| Homebrew | `brew uninstall bitrouter` (optionally `brew untap bitrouter/tap`) |
-| npm | `npm uninstall -g bitrouter` |
+| Homebrew | `brew uninstall bitrouter-bro` removes BRO. Remove the separately installed core with `brew uninstall bitrouter` if unused. |
+| npm | `npm uninstall -g bitrouter-bro` removes both commands installed by the BRO package. |
 
 State under `~/.bitrouter/` survives uninstall — `rm -rf ~/.bitrouter` for a clean slate.
 

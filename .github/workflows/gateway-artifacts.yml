@@ -28,7 +28,6 @@ jobs:
           - aarch64-apple-darwin
           - x86_64-unknown-linux-gnu
           - aarch64-unknown-linux-gnu
-          - x86_64-unknown-linux-musl
           - x86_64-pc-windows-msvc
         include:
           - target: aarch64-apple-darwin
@@ -40,8 +39,6 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-24.04-arm
             container: ubuntu:22.04
-          - target: x86_64-unknown-linux-musl
-            runner: ubuntu-22.04
           - target: x86_64-pc-windows-msvc
             runner: windows-2022
     runs-on: ${{ matrix.runner }}
@@ -73,9 +70,6 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           target: ${{ matrix.target }}
-      - name: Install musl linker
-        if: matrix.target == 'x86_64-unknown-linux-musl'
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
       - name: Build and package selected gateway distribution
         shell: bash
         run: |

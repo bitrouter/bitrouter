@@ -204,7 +204,12 @@ pub async fn run(opts: UpdateOptions, socket: &Path) -> Result<UpdateReport> {
         _ => Installation::load(Product::Service, &exe, &current)?,
     };
     let Some(install) = install else {
-        let command = bitrouter_update::manual_command(Product::Service, method);
+        let product = if bitrouter_update::paired_npm_root(Product::Service, &exe).is_some() {
+            Product::Bro
+        } else {
+            Product::Service
+        };
+        let command = bitrouter_update::manual_command(product, method);
         let mut report = UpdateReport::delegated(current, method, command);
         report.manual_reason =
             Some("This executable has no matching self-managed installation.".into());
