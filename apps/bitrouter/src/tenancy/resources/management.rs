@@ -359,6 +359,11 @@ pub(in crate::tenancy) fn apply(
             });
         }
         changes.push(Change::Resource(retained.clone()));
+        for entry in super::admission::index::entries(&retained.reference, &input.definition()?)
+            .map_err(|_| ErrorCode::AuthorityUnavailable)?
+        {
+            changes.push(Change::AdmissionIndex(entry));
+        }
         if input.affects_admission() {
             input.apply(
                 std::sync::Arc::make_mut(&mut state.resource_admission),

@@ -207,7 +207,7 @@ async fn native_campaign(db: &DatabaseConnection, incompatible: Option<&str>) ->
     } else if incompatible != Some("seaql_migrations") {
         db.execute_unprepared(&format!("CREATE TRIGGER reject_native_fence BEFORE INSERT ON seaql_migrations FOR EACH ROW BEGIN IF NEW.version='{NATIVE_FENCE}' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='injected native ledger failure'; END IF; END")).await?;
     }
-    let migrated = crate::db::run_migrations(db).await;
+    let migrated = crate::db::test_migrations::through_native(db).await;
     ensure!(migrated.is_err());
     if incompatible.is_some() {
         let observed = marker(db).await?;
@@ -262,7 +262,7 @@ async fn native_campaign(db: &DatabaseConnection, incompatible: Option<&str>) ->
         db.execute_unprepared("DROP TRIGGER reject_native_fence")
             .await?;
     }
-    crate::db::run_migrations(db).await?;
+    crate::db::test_migrations::through_native(db).await?;
     ensure!(marker(db).await? == 5);
     let installed = Migrator::get_migration_models(db).await?;
     ensure!(installed.len() == ledger.len() + 1);
@@ -283,7 +283,7 @@ async fn native_campaign(db: &DatabaseConnection, incompatible: Option<&str>) ->
     let old = original.usage_evidence.as_ref().context("old evidence")?;
     let saved = current.usage_evidence.as_ref().context("saved evidence")?;
     ensure!(old.json == saved.json && old.digest == saved.digest);
-    crate::db::run_migrations(db).await?;
+    crate::db::test_migrations::through_native(db).await?;
     ensure!(Migrator::get_migration_models(db).await? == installed);
     Ok(())
 }

@@ -924,14 +924,36 @@ V1 and v2 reads are explicit: requesting the wrong format returns
 correlation pagination can list both formats and retains multiplicity. Neither
 an execution ID nor a correlation ID expands receipt-read authority.
 
-Fresh stores use authority format 4. Ordered receipt storage follows the
-receipt archive, obligation, and capacity migrations. On an existing
-format-2 installation, the profiled-authority migration records format 3 and
-the shared-health migration records format 4. Each fence preserves the
-installation identity, operation counters, saturation state, and receipt
-bytes. Retained resource envelopes 1–4 keep their original compiler bindings.
-Shared-health closures use envelope 5. Format-1 installations retain the validated capacity upgrade path,
-including explicit acknowledgment for a stopped legacy count latch.
+Fresh stores use authority format 6. Ordered receipt storage follows the
+receipt archive, obligation, and capacity migrations. Existing format-2 stores
+pass through the profiled-authority (3), shared-health (4), native-generation
+(5), and indexed-admission (6) writer fences. Format 6 prevents a predecessor
+writer from committing resources without their permanent admission witnesses.
+The migration ledger also prevents predecessor binaries from opening the
+upgraded store. Each fence preserves installation identity, authority revision,
+operation counters, saturation state, and all resource and receipt bytes.
+Resource envelopes 1–4 retain their original compiler bindings; shared-health
+closures use envelope 5 and native-generation closures use envelope 6. Envelope
+formats and the internal authority-store version are independent.
+
+Admission history has no retained-row or aggregate authority-view byte quota.
+Permanent byte-exact indexes reference authenticated retained definitions for
+profile immutability, policy/profile type separation, shared health-group rules,
+and route keys that have ever been protected. Rotation, revocation, and legacy
+imports cannot remove those facts. A request reads only its relevant keys, exact
+pins, and current profile heads under one authority revision; publication updates
+these facts together with the resource/CAS and idempotency outcome.
+
+Existing databases backfill authenticated index witnesses in bounded keyset
+pages before readiness. Each page commits its cursor with its witnesses, so
+interruption resumes without skipping uncommitted rows. Startup verifies index
+completeness against every retained definition even after backfill is marked
+complete. The indexes, like persisted heads and grants, rely on database
+transaction integrity during live operation; they do not defend against an
+attacker rewriting the database while it is open. Missing or mismatched witnesses
+fail startup rather than making a protected key available to legacy execution.
+Format-1 installations retain the validated capacity upgrade path, including
+explicit acknowledgment for a stopped legacy count latch.
 
 The older capacity build rejects SQLite stores carrying the ordered migration
 ledger entry. Its immutable audit readers also require the older exact receipt

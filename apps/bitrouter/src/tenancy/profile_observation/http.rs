@@ -116,6 +116,6 @@ async fn read(auth: &Auth, request: Request, query: bool, at: Instant) -> Result
     let request: AdmissionProfileObservationRequestV1 =
         serde_json::from_slice(&bytes).map_err(|_| Failure::from(ErrorCode::InvalidRequest))?;
     drop(bytes);
-    let snapshot = read.sample(&request)?;
+    let snapshot = read.sample(&request).await?;
     read.finish(&snapshot)
 }

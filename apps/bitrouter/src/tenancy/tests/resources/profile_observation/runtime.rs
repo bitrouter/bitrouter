@@ -1,8 +1,12 @@
 use super::*;
 use crate::tenancy::operational::{Hop, state::Denial};
 
-fn charge(fixture: &Fixture, reference: &ResourceRef, status: Option<u16>) -> Result<()> {
-    let state = fixture.service.current().map_err(failure)?;
+async fn charge(fixture: &Fixture, reference: &ResourceRef, status: Option<u16>) -> Result<()> {
+    let state = fixture
+        .service
+        .admission_snapshot_for_test()
+        .await
+        .map_err(failure)?;
     let profile = state
         .resource_admission
         .profile(reference)
@@ -51,8 +55,8 @@ async fn real_charges_preserve_member_rpm_and_v1_local_v2_shared_health() -> Res
         &fixture,
         vec![a.clone(), b.clone(), local.clone(), bypass.clone()],
     )?;
-    charge(&fixture, &a, None)?;
-    let observed = read(&fixture, &input)?;
+    charge(&fixture, &a, None).await?;
+    let observed = read(&fixture, &input).await?;
     ensure!(observed.profiles[0].availability == AvailabilityObservation::RateLimited);
     ensure!(observed.profiles[1].availability == AvailabilityObservation::Eligible);
     ensure!(observed.profiles[0].observed_shared_count == Some(1));
@@ -61,11 +65,11 @@ async fn real_charges_preserve_member_rpm_and_v1_local_v2_shared_health() -> Res
             && observed.profiles[3].observed_shared_count == Some(1)
             && observed.profiles[3].health == HealthObservation::Disabled
     );
-    charge(&fixture, &b, Some(401))?;
+    charge(&fixture, &b, Some(401)).await?;
     let before = operational(&fixture)?;
     let db = durable(&fixture).await?;
     for _ in 0..3 {
-        let observed = read(&fixture, &input)?;
+        let observed = read(&fixture, &input).await?;
         ensure!(
             observed.profiles[..2]
                 .iter()
@@ -79,8 +83,8 @@ async fn real_charges_preserve_member_rpm_and_v1_local_v2_shared_health() -> Res
         );
     }
     ensure!(before == operational(&fixture)? && db == durable(&fixture).await?);
-    charge(&fixture, &bypass, Some(401))?;
-    ensure!(read(&fixture, &input)?.profiles[3].observed_shared_count == Some(2));
+    charge(&fixture, &bypass, Some(401)).await?;
+    ensure!(read(&fixture, &input).await?.profiles[3].observed_shared_count == Some(2));
     fixture.service.shutdown().await?;
     Ok(())
 }
@@ -104,11 +108,12 @@ async fn independent_groups_and_installations_never_share_observations() -> Resu
     )
     .await?;
     let other_ref = provision(&other, "member", "other", None, rules(2, Some(3), true)).await?;
-    charge(&fixture, &first, Some(401))?;
+    charge(&fixture, &first, Some(401)).await?;
     let observed = read(
         &fixture,
         &request(&fixture, vec![first, isolated, other_pool])?,
-    )?;
+    )
+    .await?;
     ensure!(observed.profiles[0].health == HealthObservation::Blocked);
     ensure!(
         observed.profiles[1].health == HealthObservation::Healthy
@@ -128,7 +133,7 @@ async fn independent_groups_and_installations_never_share_observations() -> Resu
                 .shared_count
                 == 0
     );
-    let observed = read(&other, &request(&other, vec![other_ref])?)?;
+    let observed = read(&other, &request(&other, vec![other_ref])?).await?;
     ensure!(
         observed.profiles[0].health == HealthObservation::Healthy
             && observed.profiles[0]
@@ -169,7 +174,7 @@ async fn held_runtime_and_authority_locks_refuse_without_fencing_or_mutation() -
             )
             .map_err(failure)?;
         ensure!(
-            matches!(reader.sample(&input),Err(error) if error.0.code==ErrorCode::CapacityExceeded)
+            matches!(reader.sample(&input).await,Err(error) if error.0.code==ErrorCode::CapacityExceeded)
         );
         drop(held);
     }
@@ -181,7 +186,7 @@ async fn held_runtime_and_authority_locks_refuse_without_fencing_or_mutation() -
     ensure!(
         matches!(fixture.service.profile_observation_read(&fixture.operator,Some(&fixture.installation),Instant::now()),Err(error) if error.0.code==ErrorCode::CapacityExceeded)
     );
-    ensure!(read(&fixture, &input)?.profiles[0].health == HealthObservation::Healthy);
+    ensure!(read(&fixture, &input).await?.profiles[0].health == HealthObservation::Healthy);
     ensure!(before == durable(&fixture).await? && runtime == operational(&fixture)?);
     fixture.service.shutdown().await?;
     ensure!(
@@ -208,14 +213,18 @@ async fn sampling_capacity_denial_preserves_fields_and_allocates_no_health_entri
         );
     }
     let before = operational(&fixture)?;
-    let observed = read(&fixture, &input)?;
+    let observed = read(&fixture, &input).await?;
     ensure!(
         observed.profiles[0].availability == AvailabilityObservation::CapacityDenied
             && observed.profiles[0].health == HealthObservation::Healthy
             && observed.profiles[0].current_profile_revision.is_some()
     );
     ensure!(before == operational(&fixture)?);
-    let state = fixture.service.current().map_err(failure)?;
+    let state = fixture
+        .service
+        .admission_snapshot_for_test()
+        .await
+        .map_err(failure)?;
     ensure!(matches!(
         fixture.service.operational.admit(
             &fixture.installation,
@@ -241,13 +250,15 @@ async fn original_deadline_is_not_reset_between_sampling_and_encoding() -> Resul
             Instant::now() + Duration::from_millis(250),
         )
         .map_err(failure)?;
-    let sampled = reader.sample(&input).map_err(failure)?;
+    let sampled = reader.sample(&input).await.map_err(failure)?;
     tokio::time::sleep(Duration::from_millis(300)).await;
     ensure!(
         matches!(reader.finish(&sampled),Err(error) if error.0.code==ErrorCode::CapacityExceeded)
     );
     drop(reader);
-    ensure!(read(&fixture, &input)?.profiles[0].availability == AvailabilityObservation::Eligible);
+    ensure!(
+        read(&fixture, &input).await?.profiles[0].availability == AvailabilityObservation::Eligible
+    );
     fixture.service.shutdown().await?;
     Ok(())
 }

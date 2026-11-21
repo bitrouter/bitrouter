@@ -72,13 +72,13 @@ pub(super) async fn campaign(db: &DatabaseConnection) -> Result<()> {
     ensure!(evidence.json == old.json && evidence.digest == old.digest);
     db.execute_unprepared("DROP TRIGGER reject_raced_native")
         .await?;
-    crate::db::run_migrations(db).await?;
+    crate::db::test_migrations::through_native(db).await?;
     ensure!(marker(db).await? == 5);
     let completed = Migrator::get_migration_models(db).await?;
     ensure!(
         completed.len() == ledger.len() + 1 && completed.iter().any(|row| row.version == NATIVE)
     );
-    crate::db::run_migrations(db).await?;
+    crate::db::test_migrations::through_native(db).await?;
     ensure!(Migrator::get_migration_models(db).await? == completed);
     Ok(())
 }

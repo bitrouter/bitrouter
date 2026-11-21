@@ -31,6 +31,7 @@ pub(in crate::tenancy) enum Format {
     V3,
     V4,
     V5,
+    V6,
 }
 
 impl Format {
@@ -41,6 +42,7 @@ impl Format {
             Self::V3 => 3,
             Self::V4 => 4,
             Self::V5 => 5,
+            Self::V6 => 6,
         }
     }
 }
@@ -90,6 +92,7 @@ fn decode_header(row: &QueryResult) -> Result<LoadedHeader> {
         3 => Format::V3,
         4 => Format::V4,
         5 => Format::V5,
+        6 => Format::V6,
         _ => anyhow::bail!("unsupported authority store format"),
     };
     let created_at = super::string(row, "created_at")?;

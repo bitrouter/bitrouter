@@ -21,3 +21,19 @@ impl MigratorTrait for ThroughSharedHealth {
 pub(crate) async fn through_shared_health(db: &DatabaseConnection) -> super::Result<()> {
     super::run_migrations_with::<ThroughSharedHealth>(db).await
 }
+
+struct ThroughNative;
+
+#[async_trait::async_trait]
+impl MigratorTrait for ThroughNative {
+    fn migrations() -> Vec<Box<dyn MigrationTrait>> {
+        Migrator::migrations()
+            .into_iter()
+            .take_while(|migration| migration.name() != "m20240101_000049_admission_index")
+            .collect()
+    }
+}
+
+pub(crate) async fn through_native(db: &DatabaseConnection) -> super::Result<()> {
+    super::run_migrations_with::<ThroughNative>(db).await
+}

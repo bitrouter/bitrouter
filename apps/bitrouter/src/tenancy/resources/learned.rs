@@ -282,6 +282,10 @@ impl Resources {
         )
         .await?;
         drop(closure);
+        state.resource_admission = std::sync::Arc::new(
+            self.admission_in(tx, state.revision, &references, &[], &[])
+                .await?,
+        );
         let retained = super::super::configuration::prepare(
             tx,
             self,

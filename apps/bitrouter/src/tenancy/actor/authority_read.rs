@@ -73,7 +73,8 @@ impl Worker {
                 }
                 AuthoritySubject::Caller(caller)
                 | AuthoritySubject::Tenant { caller, .. }
-                | AuthoritySubject::Extend { caller, .. } => caller.clone(),
+                | AuthoritySubject::Extend { caller, .. }
+                | AuthoritySubject::Profiles { caller, .. } => caller.clone(),
             };
             let mut facts = match &read.subject {
                 AuthoritySubject::Tenant { tenant, active, .. } => {
@@ -167,6 +168,25 @@ impl Worker {
             control
                 .check_read()
                 .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
+            let admission_references: Vec<_> = facts
+                .snapshot
+                .resource_lifecycle
+                .records()
+                .map(|r| r.reference.clone())
+                .chain(facts.snapshot.resource_lifecycle.absences().cloned())
+                .collect();
+            facts.snapshot.resource_admission = std::sync::Arc::new(
+                self.resources
+                    .admission_in(
+                        &transaction,
+                        header.revision,
+                        &admission_references,
+                        &[],
+                        &[],
+                    )
+                    .await
+                    .map_err(|error| self.directory_failure(error))?,
+            );
             let view = View::new(facts.snapshot, oauth).map_err(Failure::from)?;
             Ok::<_, Failure>((caller, view))
         }
@@ -234,6 +254,16 @@ fn read_dependencies(
     subject: &AuthoritySubject,
     bytes: usize,
 ) -> Result<Vec<ResourceRef>, Failure> {
+    if let AuthoritySubject::Profiles { references, .. } = subject {
+        if references
+            .len()
+            .checked_mul(512 + std::mem::size_of::<ResourceRef>())
+            .is_none_or(|n| n > bytes)
+        {
+            return Err(ErrorCode::CapacityExceeded.into());
+        }
+        return Ok(references.clone());
+    }
     let AuthoritySubject::Extend {
         lease,
         dependencies,

@@ -80,13 +80,64 @@ async fn put_v2(fixture: &Fixture, input: ResourcePutV2) -> Result<OperationResu
     )
 }
 
+#[tokio::test]
+async fn first_profile_and_group_witnesses_roll_back_with_failed_operation_then_replay_once()
+-> Result<()> {
+    let mut fixture = keyed_fixture().await?;
+    let command = input(&fixture, "first-profile", "first-profile-rollback", 7)?;
+    fixture.db.execute_unprepared("CREATE TRIGGER refuse_first_profile_operation BEFORE INSERT ON tenancy_operations WHEN NEW.operation_id='first-profile-rollback' BEGIN SELECT RAISE(ABORT,'injected operation rollback'); END").await?;
+    ensure!(put_v2(&fixture, command.clone()).await.is_err());
+    for table in [
+        "tenancy_admission_index",
+        "tenancy_resource_revisions",
+        "tenancy_resource_lifecycle",
+    ] {
+        let row = fixture
+            .db
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                format!("SELECT COUNT(*) AS n FROM {table}"),
+            ))
+            .await?
+            .context("rollback count")?;
+        ensure!(row.try_get::<i64>("", "n")? == 0, "orphan {table}");
+    }
+    fixture
+        .db
+        .execute_unprepared("DROP TRIGGER refuse_first_profile_operation")
+        .await?;
+    restart(&mut fixture).await?;
+    let applied = put_v2(&fixture, command.clone()).await?;
+    let replay = put_v2(&fixture, command).await?;
+    ensure!(
+        applied.authority_revision == replay.authority_revision
+            && applied.resource_revision == replay.resource_revision
+    );
+    let row = fixture
+        .db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "SELECT COUNT(*) AS n FROM tenancy_admission_index",
+        ))
+        .await?
+        .context("witness count")?;
+    ensure!(row.try_get::<i64>("", "n")? == 2);
+    ensure!(revision_count(&fixture).await? == 1);
+    fixture.service.shutdown().await?;
+    Ok(())
+}
+
 async fn rejected(
     fixture: &Fixture,
     caller: Caller,
     input: ResourcePutV2,
     code: ErrorCode,
 ) -> Result<()> {
-    let before = fixture.service.current().map_err(failure)?;
+    let before = fixture
+        .service
+        .admission_snapshot_for_test()
+        .await
+        .map_err(failure)?;
     let revision = before.revision;
     let count = revision_count(fixture).await?;
     let head = lifecycle::head(&fixture.db, &fixture.installation, &input.key)
@@ -107,7 +158,11 @@ async fn rejected(
         Ok(StoredResponse::Failure(error)) => ensure!(error.code == code),
         _ => anyhow::bail!("unexpected accepted profile"),
     }
-    let after = fixture.service.current().map_err(failure)?;
+    let after = fixture
+        .service
+        .admission_snapshot_for_test()
+        .await
+        .map_err(failure)?;
     ensure!(
         after.revision == revision
             && after
@@ -166,7 +221,11 @@ async fn conflicting_first_members_have_one_winner_and_never_publish_loser_state
     restart(&mut fixture).await?;
     let (winner, applied) = winners.pop().context("winner")?;
     let mut loser = losers.pop().context("loser")?;
-    let state = fixture.service.current().map_err(failure)?;
+    let state = fixture
+        .service
+        .admission_snapshot_for_test()
+        .await
+        .map_err(failure)?;
     ensure!(revision_count(&fixture).await? == 1);
     ensure!(state.resource_admission.has_profile_key(&winner.key));
     ensure!(!state.resource_admission.has_profile_key(&loser.key));
@@ -427,7 +486,11 @@ async fn revoked_policy_lock_and_shared_profile_keys_cannot_change_family_after_
     ensure!(
         matches!(fixture.service.execute(fixture.operator.clone(),Command::Resource(fixture.tenant.clone(),policy)).await,Err(error) if error.0.code==ErrorCode::InvalidRequest)
     );
-    let state = fixture.service.current().map_err(failure)?;
+    let state = fixture
+        .service
+        .admission_snapshot_for_test()
+        .await
+        .map_err(failure)?;
     ensure!(state.revision == before && revision_count(&fixture).await? == 2);
     for reference in [shared_ref, policy_ref] {
         let record = lifecycle::head(&fixture.db, &fixture.installation, &reference.key())

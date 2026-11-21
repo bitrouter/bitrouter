@@ -408,6 +408,13 @@ impl Worker {
                     outcome = "started",
                     "tenant startup validation"
                 );
+                crate::tenancy::resources::admission::backfill::initialize(
+                    &self.db,
+                    &self.resources,
+                    &control,
+                )
+                .await
+                .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
                 let crypto = crate::tenancy::continuation::initialize(
                     &self.db,
                     &initial,
@@ -417,24 +424,6 @@ impl Worker {
                 )
                 .await
                 .map_err(|_| self.unavailable(ErrorCode::AuthorityUnavailable))?;
-                let tx = control
-                    .begin_repeatable_read(&self.db)
-                    .await
-                    .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
-                let admission = self
-                    .resources
-                    .admission_state(
-                        &crate::tenancy::transaction::ReadConnection::new(&tx, &control),
-                        self.authority.load_budget(),
-                    )
-                    .await;
-                control
-                    .rollback(tx)
-                    .await
-                    .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
-                self.authority
-                    .initialize_admission(admission.map_err(|error| self.directory_failure(error))?)
-                    .map_err(Failure::from)?;
                 crate::tenancy::receipts::ordered::intent::recover(
                     &self.db,
                     &initial.installation,

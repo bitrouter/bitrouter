@@ -84,14 +84,35 @@ describes setup and management operations; permission, CAS and replay behavior
 are defined in the canonical service API.
 
 Operational profile publication uses the same authority writer and immutable
-resource store. The protection index is derived from every authenticated
-profiled-route revision, including revoked and non-head history; there is no
-second mutable protection table. The snapshot publishes protection with the
-resource transaction, and startup reconstructs it before readiness. Existing
-catalog limits bound this index. Retention must never evict those definitions to
-recover capacity. The authority-format-three fence rejects predecessor writers;
-profiled configuration plaintext has envelope format four and its own
-authenticated compiler subtype. Legacy compiler bytes retain their old binding.
+resource store. `tenancy_admission_index` retains one byte-exact witness per
+policy/profile or protected-route key, plus one per owner/health-group pair.
+Each witness points into the authenticated resource-revision store; no profile
+payload is copied into the index, and a witness is never replaced on rotation
+or revocation. Immutable rules are transitive, so one authenticated witness
+validates future rotations without loading historical members. All original
+revisions remain available. A head lookup has a dedicated lifecycle index.
+
+The authority format-6 fence excludes predecessor writers before backfill.
+`tenancy_admission_backfill` stores the installation, authority revision, stable
+resource cursor, and completion marker. The startup actor commits bounded pages
+and their cursor atomically under exclusive startup custody. Incomplete progress
+never publishes readiness. Complete startup authentication independently verifies
+every retained admission definition against its witnesses, including existence,
+identity, immutable rules, and managed profile heads. These checks detect missing
+witnesses even after a completed or interrupted migration. The index shares the
+persisted heads/grants trust model; live SQL tampering is outside that model.
+
+Commands and authority dependency reads batch relevant index keys and load only
+requested immutable pins and current heads in the existing read transaction.
+No normal publication or import scans unrelated history. Resource/index writes,
+lifecycle CAS, and the operation replay result commit in the same transaction.
+Authority publication updates affected live views before final-send checks;
+original pins remain distinct from the current head and both revocation checks
+remain effective. The global history map and its coupled authority byte
+reservation are gone. View memory follows selected references, with head-update
+space reserved per selected key. Profiled configuration plaintext retains
+envelope format four and its own authenticated compiler subtype; legacy compiler
+bytes retain their original binding.
 The format-four compiled document keeps each profiled projection in its original
 immutable artifact. Its visible execution route is reconstructed once from that
 artifact and the bound configuration defaults. The stored ordinary route sequence
@@ -263,7 +284,7 @@ Indexed, resumable maintenance escalates unresolved work after 15 minutes
 without pruning or reclassifying it. The 30-second cleanup window is not
 permission to forget an uncertain transaction or an unjoined producer.
 
-The internal authority store uses format 2 so older strict readers refuse it.
+The internal authority store uses format 6 so predecessor writers refuse it.
 Healthy format-1 stores upgrade during complete validated startup. A legacy
 count-saturated store instead requires the explicit local
 `bro tenancy offline upgrade-capacity` workflow under exclusive stopped custody.

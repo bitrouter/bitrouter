@@ -37,8 +37,11 @@ async fn native_generate_content_actual_predecessor_refuses_new_and_upgraded_wri
             } else {
                 owned_connection(&source).await?
             };
-            crate::db::run_migrations(&db).await?;
+            crate::db::test_migrations::through_native(&db).await?;
             authority::load(&db, chrono::Utc::now()).await?;
+            // Historical native-fence fixture, deliberately before admission indexes.
+            db.execute_unprepared("UPDATE tenancy_installation SET schema_version=5")
+                .await?;
             if mutated {
                 management_mutation(&db).await?;
             }
