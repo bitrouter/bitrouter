@@ -568,7 +568,7 @@ impl RetainedRoute {
             )
             || target.api_protocol != ApiProtocol::Responses
             || target.model_constraints.input_token_counting
-                != Some(crate::managed_contract::evidence::InputTokenCounting::Responses)
+                != Some(crate::config::model::InputTokenCounting::Responses)
             || target.headers.iter().any(|rule| rule.passthrough())
         {
             return Err(ErrorCode::CapabilityMismatch);

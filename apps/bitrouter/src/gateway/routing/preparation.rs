@@ -4,8 +4,8 @@ use super::{
     assessment::{self, Assessment},
     input::Input,
 };
+use crate::config::decision::DecisionPolicy;
 use crate::gateway::model::decision::DecisionRuntime;
-use crate::gateway::model::decision::policy::DecisionPolicy;
 use crate::gateway::model::decision::types::DecisionError;
 use crate::gateway::model::decision::types::DecisionFailure;
 use crate::gateway::model::decision::types::DecisionUsage;

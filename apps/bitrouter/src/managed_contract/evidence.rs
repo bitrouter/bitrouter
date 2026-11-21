@@ -5,26 +5,7 @@
 use bitrouter_ai::types::{ApiProtocol, Capability, GenerateResult, NormalizedUsage, UsageOrigin};
 use serde::{Deserialize, Serialize};
 
-/// Independently declared token limits. An input limit is not a combined
-/// context window, and an absent limit is unknown rather than unbounded.
-#[derive(schemars::JsonSchema, Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct ModelTokenLimits {
-    /// Maximum input tokens, independently of the output allowance.
-    pub max_input_tokens: Option<u64>,
-    /// Maximum generated tokens for one request.
-    pub max_output_tokens: Option<u64>,
-    /// Combined input and output capacity, only when explicitly known.
-    pub context_window: Option<u64>,
-}
-
-/// Explicit provider support, never inferred from a compatible generation API.
-#[derive(schemars::JsonSchema, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum InputTokenCounting {
-    /// POST /responses/input_tokens on the same provider endpoint.
-    Responses,
-}
+use crate::config::model::{InputTokenCounting, ModelTokenLimits};
 
 /// Provider-reported input size bound to the finalized generation request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -311,7 +311,7 @@ fn frozen_tariffs_keep_rates_and_endpoint_billing_conditions() -> anyhow::Result
 
 #[test]
 fn published_global_tariffs_cannot_rebind_to_configured_regional_endpoints() -> anyhow::Result<()> {
-    use crate::gateway::catalog::types::PricingEndpointProfile;
+    use crate::config::PricingEndpointProfile;
     let mut target = target();
     for (base, regional_profile) in [
         (

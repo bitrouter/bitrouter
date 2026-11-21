@@ -1,5 +1,5 @@
 use super::*;
-use crate::gateway::model::capabilities::ReasoningEffortConfig;
+use crate::config::model::ReasoningEffortConfig;
 use crate::gateway::{model::target::AuthScheme, pipeline::types::OutboundHeaderRule};
 use bitrouter_ai::types::ChatTokenLimitField;
 

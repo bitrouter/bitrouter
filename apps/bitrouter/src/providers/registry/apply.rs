@@ -777,7 +777,7 @@ mod tests {
             bitrouter_ai::types::Capability::Tools,
         ];
         registry_provider.models[0].reasoning_effort =
-            Some(crate::gateway::model::capabilities::ReasoningEffortConfig {
+            Some(crate::config::model::ReasoningEffortConfig {
                 levels: vec![
                     bitrouter_ai::types::ReasoningEffort::Low,
                     bitrouter_ai::types::ReasoningEffort::High,
@@ -1341,7 +1341,7 @@ mod tests {
             .context("native override missing")?;
         assert_eq!(
             native.endpoint_profile,
-            Some(crate::gateway::catalog::types::PricingEndpointProfile::OpenaiGlobal)
+            Some(crate::config::PricingEndpointProfile::OpenaiGlobal)
         );
         assert_eq!(native.input_micro_usd_per_token, Some(0.1));
         assert_eq!(native.cache_read_micro_usd_per_token, None);
