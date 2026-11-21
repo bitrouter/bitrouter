@@ -828,13 +828,10 @@ async fn assemble_app(
         }
         crate::config::discover_models(&mut resolved).await;
     }
-    let routing_table = Arc::new(match config_path {
-        Some(path) => ConfigRoutingTable::from_config_with_path(resolved, path),
-        None => ConfigRoutingTable::from_config(resolved),
-    });
+    let routing_table = Arc::new(ConfigRoutingTable::from_config(resolved));
     // Hand-off clone — the builder closure below moves `routing_table`
     // into the App pipeline, but the daemon's reloader needs the
-    // concrete type to call `replace_config` in zero-config mode.
+    // concrete type to install its prepared configuration.
     let routing_table_for_reload = routing_table.clone();
     let continuation_for_pre_request = continuation_runtime.clone();
     let continuation_for_route = continuation_runtime.clone();

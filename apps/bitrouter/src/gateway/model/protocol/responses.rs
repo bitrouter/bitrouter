@@ -2173,10 +2173,6 @@ fn ingress_admission(
 }
 
 impl InboundAdapter for ResponsesAdapter {
-    fn protocol(&self) -> ApiProtocol {
-        ApiProtocol::Responses
-    }
-
     fn parse_request(&self, body: serde_json::Value) -> Result<Prompt> {
         // The envelope deserializes strictly; `input` stays `Value` and is
         // checked by ingress admission before parse_input can omit a shape.
@@ -2989,11 +2985,6 @@ fn render_responses_tool_choice(tc: &ToolChoice) -> serde_json::Value {
 
 #[async_trait]
 impl Transport for ResponsesTransport {
-    fn input_token_count_endpoint(&self, target: &ModelTarget) -> Option<String> {
-        // https://developers.openai.com/api/docs/guides/token-counting
-        Some(format!("{}/input_tokens", self.endpoint_url(target, false)))
-    }
-
     fn protocol(&self) -> ApiProtocol {
         ApiProtocol::Responses
     }

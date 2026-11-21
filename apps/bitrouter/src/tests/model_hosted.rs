@@ -1,6 +1,7 @@
-//! Hosted JSON/SSE invocation and full-envelope transactions using only AI.
+//! Provider authentication and protocol regressions through gateway HTTP.
 
-use crate::gateway::model::client::{HttpTimeouts, ModelClient};
+use super::model_http::HttpGateway;
+use crate::gateway::model::client::HttpTimeouts;
 use crate::gateway::model::error::ModelError;
 use crate::gateway::model::protocol::InboundAdapter;
 use crate::gateway::model::protocol::chat_completions::ChatCompletionsAdapter;
@@ -145,8 +146,8 @@ fn session(store: Arc<MemoryStore>) -> HostedSession {
 fn applier(session: HostedSession) -> BitrouterAuthApplier {
     BitrouterAuthApplier::new(session, "caller-owned onboarding".into())
 }
-fn client(session: HostedSession) -> crate::gateway::model::error::Result<ModelClient> {
-    Ok(ModelClient::new(HttpTimeouts::default())?
+fn client(session: HostedSession) -> crate::gateway::model::error::Result<HttpGateway> {
+    Ok(HttpGateway::new(HttpTimeouts::default())?
         .with_auth_appliers(AuthAppliers::new().with(PROVIDER_ID, Arc::new(applier(session)))))
 }
 
@@ -265,9 +266,7 @@ async fn failed_commit_retains_full_rotation_and_retries_write_without_another_g
         client
             .generate(&target, &source, &CancellationToken::new())
             .await,
-        Err(ModelError::CredentialStorage {
-            failure: StoreError::Unavailable
-        })
+        Err(ModelError::HttpResponse { status: 500, .. })
     ));
     {
         let state = store.0.lock().await;
@@ -292,7 +291,7 @@ async fn failed_commit_retains_full_rotation_and_retries_write_without_another_g
 async fn dropping_model_caller_after_rotation_staging_still_finishes_commit() -> TestResult {
     let server = MockServer::start().await;
     rotation(&server, rotated()).await;
-    model(&server, 1).await;
+    model(&server, 2).await;
     let store = Arc::new(MemoryStore::new(Some(
         credential(&format!("{}/issuer", server.uri())).into(),
     )));
@@ -323,6 +322,7 @@ async fn dropping_model_caller_after_rotation_staging_still_finishes_commit() ->
     client
         .generate(&target, &source, &CancellationToken::new())
         .await?;
+    assert_eq!(client.wait_for_settlements(2).await?.len(), 2);
     assert_eq!(
         store
             .0
@@ -356,7 +356,7 @@ async fn contradictory_identity_retains_rotation_and_never_dispatches_or_reexcha
                     &CancellationToken::new()
                 )
                 .await,
-            Err(ModelError::Provider { status: 401, .. })
+            Err(ModelError::HttpResponse { status: 502, .. })
         ));
     }
     let state = store.0.lock().await;
@@ -403,7 +403,10 @@ async fn bad_native_http_replies_fail_closed_without_echoing_or_committing_mater
             .await
             .err()
             .ok_or("unexpected native authentication success")?;
-        assert!(matches!(error, ModelError::Provider { status: 401, .. }));
+        assert!(matches!(
+            error,
+            ModelError::HttpResponse { status: 502, .. }
+        ));
         let text = format!("{error:?}");
         assert!(!text.contains("secret"));
         let state = store.0.lock().await;

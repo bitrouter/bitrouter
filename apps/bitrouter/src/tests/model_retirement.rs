@@ -1,6 +1,6 @@
 //! Retired execution is rejected; historical catalog/credential bytes survive.
 
-use crate::gateway::model::client::{HttpTimeouts, ModelClient};
+use super::model_http::render_request;
 use crate::gateway::model::protocol::InboundAdapter;
 use crate::gateway::model::protocol::chat_completions::ChatCompletionsAdapter;
 use crate::gateway::model::target::ModelTarget;
@@ -38,15 +38,14 @@ fn historical_protocol_and_credentials_remain_readable_but_uncallable() -> TestR
         compatibility: Default::default(),
     };
     assert!(
-        ModelClient::new(HttpTimeouts::default())?
-            .render_request(
-                &selected,
-                &ChatCompletionsAdapter.parse_request(
-                    json!({"model":"fixture","messages":[{"role":"user","content":"saved"}]})
-                )?,
-                false
-            )
-            .is_err()
+        render_request(
+            &selected,
+            &ChatCompletionsAdapter.parse_request(
+                json!({"model":"fixture","messages":[{"role":"user","content":"saved"}]})
+            )?,
+            false
+        )
+        .is_err()
     );
     assert_eq!(std::fs::read(&path)?, bytes);
     Ok(())

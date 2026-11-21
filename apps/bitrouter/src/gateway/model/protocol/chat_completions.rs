@@ -497,10 +497,6 @@ fn ingress_admission(
 }
 
 impl InboundAdapter for ChatCompletionsAdapter {
-    fn protocol(&self) -> ApiProtocol {
-        ApiProtocol::ChatCompletions
-    }
-
     fn parse_request(&self, body: serde_json::Value) -> Result<Prompt> {
         let req: ChatRequest = serde_json::from_value(body.clone())
             .map_err(|e| describe_deser_error("ChatRequest", &e, &body))?;

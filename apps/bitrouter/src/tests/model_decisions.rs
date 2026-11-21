@@ -1,6 +1,7 @@
-//! Native decision fidelity and selected-target invocation contracts.
+//! Provider authentication and protocol regressions through gateway HTTP.
 
-use crate::gateway::model::client::{HttpTimeouts, ModelClient};
+use super::model_http::HttpGateway;
+use crate::gateway::model::client::HttpTimeouts;
 use crate::gateway::model::error::ModelError;
 use crate::gateway::model::protocol::decisions::DecisionsCodec;
 use crate::gateway::model::target::{AuthScheme, ModelTarget};
@@ -287,7 +288,7 @@ async fn authentication_refresh_rebuilds_once_for_the_same_selected_account() ->
         .mount(&server)
         .await;
     let auth = Arc::new(SelectedAuth::default());
-    let client = ModelClient::new(HttpTimeouts::default())?.with_auth_appliers(
+    let client = HttpGateway::new(HttpTimeouts::default())?.with_auth_appliers(
         crate::gateway::providers::auth::AuthAppliers::new().with("fixture", auth.clone()),
     );
     let mut target = target(server.uri());
@@ -308,7 +309,7 @@ async fn authentication_refresh_rebuilds_once_for_the_same_selected_account() ->
 }
 
 #[tokio::test]
-async fn malformed_answers_return_usage_without_replaying_or_exposing_credentials() -> TestResult {
+async fn malformed_answers_fail_http_without_replaying_or_exposing_credentials() -> TestResult {
     let server = MockServer::start().await;
     let mut body = response();
     body["answers"] = json!([{ "type":"private-key", "name":null }]);
@@ -317,17 +318,19 @@ async fn malformed_answers_return_usage_without_replaying_or_exposing_credential
         .respond_with(ResponseTemplate::new(200).set_body_json(body))
         .mount(&server)
         .await;
-    let client = ModelClient::new(HttpTimeouts::default())?;
+    let client = HttpGateway::new(HttpTimeouts::default())?;
     let request = DecisionsCodec::parse_request(request())?;
     let error = client
         .decide(&target(server.uri()), &request, &CancellationToken::new())
         .await
         .err()
         .ok_or("malformed response succeeded")?;
-    assert!(error.is_completed_decision_failure());
-    let usage = error.decision_usage().ok_or("usage was lost")?;
-    assert_eq!(usage.prompt_tokens, 42);
-    assert!(!format!("{error:?} {error} {:?}", usage.raw).contains("private-key"));
+    assert!(matches!(
+        &error,
+        ModelError::HttpResponse { status: 502, .. }
+    ));
+    assert!(!format!("{error:?}").contains("private-key"));
+    assert_eq!(client.wait_for_settlements(1).await?, vec![(42, 0)]);
     assert!(
         server
             .received_requests()
@@ -351,7 +354,7 @@ async fn selected_call_projects_model_without_mutating_source() -> TestResult {
         .respond_with(ResponseTemplate::new(200).set_body_json(response()))
         .mount(&server)
         .await;
-    let client = ModelClient::new(HttpTimeouts::default())?;
+    let client = HttpGateway::new(HttpTimeouts::default())?;
     let result = client
         .decide(&target(server.uri()), &request, &CancellationToken::new())
         .await?;
@@ -370,7 +373,7 @@ async fn selected_call_projects_model_without_mutating_source() -> TestResult {
 async fn operation_mismatch_and_cancellation_stop_before_dispatch() -> TestResult {
     let server = MockServer::start().await;
     let request = DecisionsCodec::parse_request(request())?;
-    let client = ModelClient::new(HttpTimeouts::default())?;
+    let client = HttpGateway::new(HttpTimeouts::default())?;
     let mut wrong = target(server.uri());
     wrong.api_protocol = ApiProtocol::Responses;
     assert!(
@@ -386,7 +389,7 @@ async fn operation_mismatch_and_cancellation_stop_before_dispatch() -> TestResul
             client
                 .decide(&retired, &request, &CancellationToken::new())
                 .await,
-            Err(ModelError::Configuration { .. })
+            Err(ModelError::HttpResponse { status: 500, .. })
         ));
     }
     let cancellation = CancellationToken::new();
@@ -428,7 +431,7 @@ async fn admitted_native_io_cancels_and_times_out_without_replay() -> TestResult
             },
             ..Default::default()
         };
-        let client = ModelClient::new(timeouts)?;
+        let client = HttpGateway::new(timeouts)?;
         let native = DecisionsCodec::parse_request(request())?;
         let selected = target(server.uri());
         let cancellation = CancellationToken::new();
@@ -448,7 +451,10 @@ async fn admitted_native_io_cancels_and_times_out_without_replay() -> TestResult
         if cancel {
             assert!(matches!(error, ModelError::Cancelled));
         } else {
-            assert!(matches!(error, ModelError::Timeout));
+            assert!(matches!(
+                error,
+                ModelError::HttpResponse { status: 504, .. }
+            ));
         }
         assert!(
             server
