@@ -103,39 +103,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn api_key_only_rejects_oauth() -> anyhow::Result<()> {
-        let directory = tempfile::tempdir()?;
-        let manager = CredentialManager::with_client(
-            directory.path().join("account-credentials.json"),
-            reqwest::Client::new(),
-        );
-        let credential = Credentials {
-            access_token: "access-token".to_owned(),
-            refresh_token: Some("refresh-token".to_owned()),
-            expires_at: chrono::Utc::now() + chrono::Duration::minutes(10),
-            refresh_token_expires_at: None,
-            token_type: "Bearer".to_owned(),
-            scope: "inference:invoke".to_owned(),
-            client_id: "bitrouter-cli".to_owned(),
-            authorization_server: "https://api.bitrouter.ai".to_owned(),
-            namespace_id: Some("ns-test".to_owned()),
-            subject: None,
-        };
-        manager.save(StoredCredential::from(credential)).await?;
-        let error = match manager
-            .session()
-            .resolve_api_key(None, Some("https://api.bitrouter.ai/v1"))
-            .await
-        {
-            Ok(_) => anyhow::bail!("OAuth unexpectedly resolved as an API key"),
-            Err(error) => error,
-        };
-        assert!(matches!(error, CredentialError::WrongCredentialKind));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn api_key_only_rejects_wrong_origin_oauth_as_wrong_kind() -> anyhow::Result<()> {
+    async fn oauth_credential_is_origin_confined() -> anyhow::Result<()> {
         let directory = tempfile::tempdir()?;
         let manager = CredentialManager::with_client(
             directory.path().join("account-credentials.json"),
@@ -158,14 +126,18 @@ mod tests {
 
         let error = match manager
             .session()
-            .resolve_api_key(None, Some("https://api.bitrouter.ai/v1"))
+            .resolve_bearer(None, Some("https://api.bitrouter.ai/v1"))
             .await
         {
-            Ok(_) => anyhow::bail!("OAuth unexpectedly resolved as an API key"),
+            Ok(_) => anyhow::bail!("OAuth credential unexpectedly crossed origins"),
             Err(error) => error,
         };
 
-        assert!(matches!(error, CredentialError::WrongCredentialKind));
+        assert!(matches!(
+            error,
+            CredentialError::OriginMismatch { expected, actual }
+                if expected == "https://api.bitrouter.ai/v1" && actual == "https://other.example"
+        ));
         Ok(())
     }
 

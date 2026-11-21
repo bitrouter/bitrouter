@@ -1,6 +1,5 @@
 //! Service release updates and package-manager delegation.
 
-use crate::commands::invocation;
 use crate::output::reports::update::UpdateReport;
 use crate::{daemon, style};
 use anyhow::Result;
