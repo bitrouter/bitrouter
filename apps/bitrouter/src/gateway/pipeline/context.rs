@@ -27,8 +27,8 @@ use crate::gateway::pipeline::types::{
 use crate::gateway::providers::auth::ContinuationAuthority;
 use bitrouter_ai::routing::RouterRequestIdentity;
 use bitrouter_ai::types::{
-    ApiProtocol, ChatStreamOptions, Content, FinishReason, GenerationParams, Message,
-    ModelOperation, Prompt, StreamPart, Usage,
+    ApiProtocol, ChatStreamOptions, Content, FinishReason, GenerationParams, ModelOperation,
+    Prompt, StreamPart, Usage,
 };
 
 // Pure post-parse merge shared by router and request-local defaults.
@@ -632,12 +632,12 @@ impl PipelineContext {
         self.completed_decision_failure.load(Ordering::Acquire)
     }
 
-    /// A managed runtime may explicitly rebuild visible context before any
-    /// attempt. Every other prepared request field and hook binding stays fixed.
-    pub(crate) fn replace_managed_messages(&mut self, messages: Vec<Message>) -> Result<()> {
-        // Validate the complete original source before any private part can be
-        // omitted, including parts after a target-mismatch diagnostic.
-        super::native_context::validate_managed_history(self)?;
+    /// Test fixture for retaining an ordered subset of prepared messages.
+    #[cfg(test)]
+    pub(crate) fn replace_managed_messages(
+        &mut self,
+        messages: Vec<bitrouter_ai::types::Message>,
+    ) -> Result<()> {
         let prompt = self
             .input
             .generation_prompt_mut()
@@ -814,11 +814,6 @@ impl PipelineContext {
         self.events.get_all::<E>()
     }
 
-    /// Shared access to the event bus (e.g. for `dump_json` into a receipt).
-    pub fn events(&self) -> &EventBus {
-        &self.events
-    }
-
     /// Rough `char` count of model-visible prompt payloads — system instruction
     /// plus message text, reasoning, tool call args, and tool results. Used to
     /// seed the [`UsageAccumulator`] so a stream without an upstream usage frame
@@ -847,11 +842,9 @@ impl PipelineContext {
 
     /// Borrow a `StreamContext` for the StreamHook stage.
     pub fn stream_context(&self) -> StreamContext {
-        let target = self.serving_target();
         StreamContext {
             request_id: self.request_id.clone(),
             caller: self.caller.clone(),
-            target,
             accumulated_usage: UsageAccumulator::with_prompt_chars(self.prompt_text_chars()),
             parts_emitted: 0,
             final_usage: None,
@@ -866,7 +859,6 @@ impl PipelineContext {
             terminal_assistant_turn_commitment: None,
             response_id: None,
             events: EventBus::new(),
-            metadata: HashMap::new(),
             // Refcount-bump copy: a value a pre-request hook deposited (e.g. the
             // resolved guardrail rule set) rides along into the stream stage.
             extensions: self.extensions.clone(),
@@ -1059,18 +1051,6 @@ impl PipelineContext {
             result,
         })
     }
-
-    /// Render the final non-streaming HTTP response.
-    pub fn into_response(self) -> Result<PipelineResponse> {
-        let result = self
-            .execution_result
-            .map(|e| e.result)
-            .ok_or_else(|| BitrouterError::internal("response requires a completed execution"))?;
-        Ok(PipelineResponse {
-            request_id: self.request_id,
-            result,
-        })
-    }
 }
 
 fn prompt_content_chars(content: &Content) -> u64 {
@@ -1101,8 +1081,6 @@ pub struct StreamContext {
     pub request_id: String,
     /// The caller.
     pub caller: CallerContext,
-    /// The target actually serving the stream (chain head).
-    pub target: Option<RoutingTarget>,
     /// Per-part usage accumulator.
     pub accumulated_usage: UsageAccumulator,
     /// Count of parts that entered the StreamHook stage.
@@ -1125,7 +1103,6 @@ pub struct StreamContext {
     /// but the raw value must never enter durable events or storage.
     response_id: Option<String>,
     events: EventBus,
-    metadata: HashMap<PluginId, serde_json::Value>,
     extensions: Extensions,
 }
 
@@ -1208,43 +1185,21 @@ impl StreamContext {
     }
 
     /// The first semantic output timing captured so far.
+    #[cfg(test)]
     pub fn first_token_timing(&self) -> Option<FirstTokenTiming> {
         self.first_token_timing
     }
 
     /// Time from the first to the most recent semantic stream delta.
+    #[cfg(test)]
     pub fn generation_duration_ms(&self) -> Option<u64> {
         self.generation_duration_ms
     }
 
     /// Canonical terminal reason observed from the upstream stream.
+    #[cfg(test)]
     pub fn finish_reason(&self) -> Option<&FinishReason> {
         self.finish_reason.as_ref()
-    }
-
-    /// Emit a typed event from within the StreamHook stage.
-    pub fn emit<E: PipelineEvent>(&mut self, event: E) {
-        self.events.emit(event);
-    }
-
-    /// Whether an event of type `E` was emitted in this stream context.
-    pub fn has_event<E: PipelineEvent>(&self) -> bool {
-        self.events.has::<E>()
-    }
-
-    /// The first emitted event of type `E`.
-    pub fn get_event<E: PipelineEvent>(&self) -> Option<&E> {
-        self.events.get::<E>()
-    }
-
-    /// Write this plugin's metadata blob.
-    pub fn set_metadata(&mut self, plugin_id: &PluginId, value: serde_json::Value) {
-        self.metadata.insert(plugin_id.clone(), value);
-    }
-
-    /// Read another plugin's metadata blob.
-    pub fn get_metadata(&self, plugin_id: &PluginId) -> Option<&serde_json::Value> {
-        self.metadata.get(plugin_id)
     }
 
     /// Read a typed, request-scoped extension propagated from the

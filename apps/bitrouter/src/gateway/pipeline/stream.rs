@@ -19,9 +19,6 @@ use bitrouter_ai::types::{ApiProtocol, StreamPart, Usage};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-/// Stable identifier for the SDK's character-count fallback estimator.
-pub const STREAM_USAGE_ESTIMATOR_VERSION: &str = "bitrouter-sdk/stream-char-div-ceil-4-v1";
-
 /// Characters per token used by the SDK's fallback stream estimator.
 pub const STREAM_USAGE_ESTIMATOR_CHARS_PER_TOKEN: u64 = 4;
 
@@ -61,11 +58,6 @@ impl StreamInterest {
         Self(self.0 | Self::TEXT_DELTA)
     }
 
-    /// Add interest in `ReasoningDelta`.
-    pub const fn with_reasoning_delta(self) -> Self {
-        Self(self.0 | Self::REASONING_DELTA)
-    }
-
     /// Add interest in `ToolCallDelta`.
     pub const fn with_tool_call_delta(self) -> Self {
         Self(self.0 | Self::TOOL_CALL_DELTA)
@@ -79,11 +71,6 @@ impl StreamInterest {
     /// Add interest in `Finish`.
     pub const fn with_finish(self) -> Self {
         Self(self.0 | Self::FINISH)
-    }
-
-    /// Add interest in `ResponseStarted`.
-    pub const fn with_response_started(self) -> Self {
-        Self(self.0 | Self::RESPONSE_STARTED)
     }
 
     /// Whether this interest set matches `part`.
@@ -116,11 +103,6 @@ impl StreamInterest {
             StreamPart::Finish { .. } | StreamPart::ResponseCompleted { .. } => Self::FINISH,
         };
         self.0 & bit != 0
-    }
-
-    /// Whether the set is empty.
-    pub fn is_empty(&self) -> bool {
-        self.0 == 0
     }
 }
 
@@ -170,6 +152,7 @@ pin_project! {
 impl<S> SseKeepaliveStream<S> {
     /// Wrap `inner`, emitting a `:keepalive` comment after each `interval` of
     /// inner-stream silence.
+    #[cfg(test)]
     pub fn new(inner: S, interval: Duration) -> Self {
         Self {
             inner,
@@ -530,6 +513,7 @@ impl StreamProcessor {
     }
 
     /// Shared access to the in-flight stream context.
+    #[cfg(test)]
     pub fn context(&self) -> &StreamContext {
         &self.ctx
     }
@@ -714,7 +698,6 @@ impl StreamProcessor {
             let estimate = if estimator_used {
                 self.ctx.final_usage.as_ref().map(|usage| Estimate {
                     algorithm: EstimatorAlgorithm::StreamCharacterCeiling,
-                    // STREAM_USAGE_ESTIMATOR_VERSION: stream-char-div-ceil-4-v1.
                     version: 1,
                     characters_per_token: 4,
                     coverage: EstimateCoverage::PromptTextAndObservedTextReasoning,

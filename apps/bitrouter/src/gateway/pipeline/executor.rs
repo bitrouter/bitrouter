@@ -46,25 +46,7 @@ use stream_bridge::BridgeCapture;
 
 /// Request-local terminal capture for controlled streaming. The HTTP executor
 /// retains full Responses output privately until the collected attempt settles.
-#[derive(Default)]
-pub(super) struct NativeStreamCapture(Mutex<Option<Arc<BridgeCapture>>>);
-
-use super::native_continuation::NativeContinuationPlan;
-use crate::managed_contract::evidence::{ContinuationFailure, NativeContinuationInput};
-
-fn native_continuation_plan(
-    target: &RoutingTarget,
-    prompt: &Prompt,
-    ctx: &PipelineContext,
-) -> Result<Option<NativeContinuationPlan>> {
-    ctx.extension::<super::native_context::NativePrivateContextRuntime>()
-        .map(|runtime| {
-            runtime
-                .continuation_plan(prompt, ctx.caller(), target)
-                .map_err(crate::gateway::pipeline::native_continuation::continuation_error)
-        })
-        .transpose()
-}
+use crate::managed_contract::evidence::ContinuationFailure;
 
 fn record_native_dispatch(
     prompt: &Prompt,
@@ -75,17 +57,7 @@ fn record_native_dispatch(
     if let Some(attempts) = ctx.get_event::<crate::metering::tariff::RegistryPhysicalAttempts>() {
         attempts.dispatched(target.registry.is_some());
     }
-    if let Some(runtime) = ctx.extension::<super::native_context::NativePrivateContextRuntime>() {
-        let plan = runtime
-            .continuation_plan(prompt, ctx.caller(), target)
-            .map_err(crate::gateway::pipeline::native_continuation::continuation_error)?;
-        runtime.dispatched(
-            &plan
-                .execution_prompt(prompt)
-                .map_err(crate::gateway::pipeline::native_continuation::continuation_error)?,
-        );
-        runtime.continuation_dispatched(&plan);
-    }
+
     Ok(())
 }
 
@@ -140,38 +112,6 @@ pub trait Executor: Send + Sync {
             super::types::generate_content::Input::unavailable(&target.api_protocol)
         })?;
         self.execute_stream(target, prompt, ctx).await
-    }
-
-    /// Complete a collected managed stream using protocol-native terminal
-    /// evidence. This callback is local: it must perform no I/O or retry.
-    /// The default preserves the canonical parts emitted by custom executors.
-    fn finish_native_stream(
-        &self,
-        _target: &RoutingTarget,
-        _prompt: &Prompt,
-        _ctx: &PipelineContext,
-        collected: GenerateResult,
-    ) -> Result<GenerateResult> {
-        Ok(collected)
-    }
-    /// Pure local assessment, distinct from actual generation dispatch evidence.
-    fn native_continuation(
-        &self,
-        _target: &RoutingTarget,
-        _prompt: &Prompt,
-        _ctx: &PipelineContext,
-    ) -> NativeContinuationInput {
-        NativeContinuationInput::Unknown
-    }
-    /// Pure local assessment before counting or admission. Implementations must
-    /// not perform provider/auth I/O, consume a response or modify the request.
-    fn native_protocol_validation(
-        &self,
-        _target: &RoutingTarget,
-        _prompt: &Prompt,
-        _ctx: &PipelineContext,
-    ) -> crate::managed_contract::evidence::NativeProtocolValidation {
-        Default::default()
     }
 
     /// Count the exact managed input when explicitly configured. Unsupported
@@ -638,62 +578,6 @@ fn apply_provider_continuation(
         });
     }
 
-    if let Some(plan) = native_continuation_plan(target, ctx.require_generation_prompt()?, ctx)? {
-        if ctx.extension::<ProviderContinuation>().is_some()
-            || ctx.extension::<SuppressProviderContinuation>().is_some()
-        {
-            return Err(
-                crate::gateway::pipeline::native_continuation::continuation_error(
-                    ContinuationFailure::BindingChanged,
-                ),
-            );
-        }
-        match plan {
-            NativeContinuationPlan::Resume(binding) => {
-                if target.api_protocol != ApiProtocol::Responses
-                    || body
-                        .get("previous_response_id")
-                        .and_then(serde_json::Value::as_str)
-                        != Some(binding.response_id())
-                    || body
-                        .get("reasoning")
-                        .and_then(|reasoning| reasoning.get("effort"))
-                        .cloned()
-                        .unwrap_or(serde_json::Value::Null)
-                        != serde_json::to_value(
-                            ctx.require_generation_prompt()?.params.reasoning_effort,
-                        )
-                        .map_err(|_| {
-                            crate::gateway::pipeline::native_continuation::continuation_error(
-                                ContinuationFailure::BindingChanged,
-                            )
-                        })?
-                {
-                    return Err(
-                        crate::gateway::pipeline::native_continuation::continuation_error(
-                            ContinuationFailure::BindingChanged,
-                        ),
-                    );
-                }
-                return Ok(Some(ProviderContinuationSubstitution {
-                    native: binding.response_id().to_owned(),
-                    public_or_redacted: "[redacted provider continuation]".into(),
-                }));
-            }
-            NativeContinuationPlan::FullHistory(_) => {
-                if body
-                    .get("previous_response_id")
-                    .is_some_and(|value| !value.is_null())
-                {
-                    return Err(
-                        crate::gateway::pipeline::native_continuation::continuation_error(
-                            ContinuationFailure::BindingChanged,
-                        ),
-                    );
-                }
-            }
-        }
-    }
     if ctx.extension::<SuppressProviderContinuation>().is_some() {
         if target.api_protocol != ApiProtocol::Responses {
             return Err(BitrouterError::internal(
@@ -752,11 +636,6 @@ fn validate_continuation_authority(
         return runtime.authenticated(target, ctx, actual);
     }
 
-    if let Some(runtime) = ctx.extension::<super::native_context::NativePrivateContextRuntime>() {
-        runtime
-            .validate_continuation_authority(ctx, target, actual)
-            .map_err(crate::gateway::pipeline::native_continuation::continuation_error)?;
-    }
     if target.api_protocol == ApiProtocol::Responses
         && ctx.extension::<RequireContinuationAuthority>().is_some()
         && actual.is_none()
@@ -1188,52 +1067,12 @@ impl HttpExecutor {
                 .render(&target.service_id, stream)
                 .map(|body| (body, Default::default()));
         }
-        let plan = native_continuation_plan(target, prompt, ctx)?;
-        let mut upstream = match plan.as_ref() {
-            Some(plan) => plan
-                .execution_prompt(prompt)
-                .map_err(crate::gateway::pipeline::native_continuation::continuation_error)?,
-            None => prompt.clone(),
-        };
+        let mut upstream = prompt.clone();
         upstream.model = target.service_id.clone();
         upstream.stream = stream;
-        let (mut body, report) = if let Some(runtime) =
-            ctx.extension::<super::native_context::NativePrivateContextRuntime>()
-        {
-            runtime
-                .validate_history(ctx)
-                .map_err(crate::gateway::pipeline::native_context::private_context_error)?;
-            runtime
-                .validate_target(prompt, ctx, target)
-                .map_err(crate::gateway::pipeline::native_context::private_context_error)?;
-            adapter.render_managed_request_for_target(&upstream, &target.model_target())?
-        } else {
-            let report = adapter.admission(&upstream);
-            report.require_admitted()?;
-            (
-                adapter.render_request_for_target(&upstream, &target.model_target())?,
-                report,
-            )
-        };
-        if let Some(NativeContinuationPlan::Resume(binding)) = plan {
-            if body
-                .get("previous_response_id")
-                .is_some_and(|value| !value.is_null())
-            {
-                return Err(
-                    crate::gateway::pipeline::native_continuation::continuation_error(
-                        ContinuationFailure::BindingChanged,
-                    ),
-                );
-            }
-            body.as_object_mut()
-                .ok_or_else(|| {
-                    crate::gateway::pipeline::native_continuation::continuation_error(
-                        ContinuationFailure::BindingChanged,
-                    )
-                })?
-                .insert("previous_response_id".into(), binding.response_id().into());
-        }
+        let report = adapter.admission(&upstream);
+        report.require_admitted()?;
+        let body = adapter.render_request_for_target(&upstream, &target.model_target())?;
         if let Some(execution) = tenancy::execution(ctx) {
             execution.validate_native_controls_body(prompt, target, &body)?;
         }
@@ -1279,15 +1118,6 @@ impl HttpExecutor {
             .is_some_and(|value| !value.is_null())
             && ctx.extension::<ProviderContinuation>().is_none()
             && ctx.extension::<SuppressProviderContinuation>().is_none()
-            && !matches!(
-                native_continuation_plan(
-                    target,
-                    ctx.generation_prompt()
-                        .ok_or("managed_generation_required")?,
-                    ctx
-                ),
-                Ok(Some(NativeContinuationPlan::Resume(_)))
-            )
         {
             return Err("provider_continuation_unbound");
         }
@@ -1382,14 +1212,7 @@ impl HttpExecutor {
                     "managed authentication changed endpoint",
                 ));
             }
-            if let Some(runtime) = input
-                .ctx
-                .extension::<super::native_context::NativePrivateContextRuntime>()
-            {
-                runtime
-                    .validate_authority(input.ctx, input.target, credential_authority.as_ref())
-                    .map_err(crate::gateway::pipeline::native_context::private_context_error)?;
-            }
+
             let expected = input.managed_expected.ok_or_else(|| {
                 BitrouterError::bad_request("managed request baseline unavailable")
             })?;
@@ -1699,7 +1522,7 @@ impl HttpExecutor {
                 .await?,
         )
         .await?;
-        let result = capture.complete(self, target, prompt, ctx, collected)?;
+        let result = capture.complete(self, target, collected)?;
         let elapsed = started.elapsed().as_millis() as u64;
         technical.completed();
         Ok(ExecutionResult {
@@ -1860,91 +1683,6 @@ impl Executor for HttpExecutor {
                 super::types::generate_content::Input::unavailable(&target.api_protocol)
             })?;
             self.execute_stream(target, prompt, ctx).await
-        }
-    }
-    fn finish_native_stream(
-        &self,
-        target: &RoutingTarget,
-        prompt: &Prompt,
-        ctx: &PipelineContext,
-        collected: GenerateResult,
-    ) -> Result<GenerateResult> {
-        let capture = ctx.extension::<NativeStreamCapture>().and_then(|runtime| {
-            runtime
-                .0
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .take()
-        });
-        match capture {
-            Some(capture) => capture.complete_observed(self, target, prompt, ctx, collected),
-            None => Ok(collected),
-        }
-    }
-
-    fn native_continuation(
-        &self,
-        target: &RoutingTarget,
-        prompt: &Prompt,
-        ctx: &PipelineContext,
-    ) -> NativeContinuationInput {
-        match ctx.extension::<super::native_context::NativePrivateContextRuntime>() {
-            Some(runtime) => match runtime.continuation_plan(prompt, ctx.caller(), target) {
-                Ok(plan) => plan.observation(),
-                Err(reason) => NativeContinuationInput::Rejected { reason },
-            },
-            None => NativeContinuationInput::Unknown,
-        }
-    }
-    fn native_protocol_validation(
-        &self,
-        target: &RoutingTarget,
-        prompt: &Prompt,
-        ctx: &PipelineContext,
-    ) -> crate::managed_contract::evidence::NativeProtocolValidation {
-        let validate = || -> std::result::Result<(), &'static str> {
-            if let Some(runtime) =
-                ctx.extension::<super::native_context::NativePrivateContextRuntime>()
-            {
-                runtime
-                    .validate_target(prompt, ctx, target)
-                    .map_err(crate::managed_contract::evidence::PrivateContextFailure::reason)?;
-            }
-            let (adapter, _) = self
-                .dispatch
-                .lookup(&target.api_protocol)
-                .ok_or("outbound_adapter_unavailable")?;
-            let plan = ctx
-                .extension::<super::native_context::NativePrivateContextRuntime>()
-                .map(|runtime| runtime.continuation_plan(prompt, ctx.caller(), target))
-                .transpose()
-                .map_err(ContinuationFailure::reason)?;
-            let effective = match plan.as_ref() {
-                Some(plan) => plan
-                    .execution_prompt(prompt)
-                    .map_err(ContinuationFailure::reason)?,
-                None => prompt.clone(),
-            };
-            adapter.validate_managed_prompt(&effective)?;
-            Self::check_response_format(prompt, adapter, target)
-                .map_err(|_| "response_format_unsupported")?;
-            let body = self
-                .render_execution_request(
-                    adapter.as_ref(),
-                    target,
-                    prompt,
-                    ctx,
-                    target.provider_name == "openai-codex",
-                )
-                .map_err(|_| "protocol_render_failed")?;
-            self.prepare_managed_baseline(&body, target, ctx)?;
-            Ok(())
-        };
-        match validate() {
-            Ok(()) => crate::managed_contract::evidence::NativeProtocolValidation::Compatible,
-            Err(reason) => crate::managed_contract::evidence::NativeProtocolValidation::Rejected {
-                reason: reason.into(),
-            },
         }
     }
 
@@ -2219,7 +1957,7 @@ impl Executor for HttpExecutor {
         let replayable = crate::gateway::model::protocol::responses::output_replayable(&json);
         let result = ModelClient::parse_response(adapter.as_ref(), &target.api_protocol, &text)
             .map_err(|error| error_scrubber.scrub_error(error.into()))?;
-        let mut result =
+        let result =
             crate::gateway::providers::google_chat::bind_result(result, &target.model_target())
                 .map_err(|error| error_scrubber.scrub_error(error.into()))?;
         if (shared_attempt.is_shared() || tenant_attempt.is_some())
@@ -2268,31 +2006,6 @@ impl Executor for HttpExecutor {
             );
         }
         let elapsed = started.elapsed().as_millis() as u64;
-        if let Some(runtime) = ctx.extension::<super::native_context::NativePrivateContextRuntime>()
-        {
-            if target.api_protocol == ApiProtocol::Responses && !replayable {
-                super::native_continuation::mark_required_state(&mut result.content);
-            }
-            if let (Some(binding), Some(attempt), Some(authority)) = (
-                successful_binding.as_ref(),
-                successful_attempt,
-                successful_authority.as_ref(),
-            ) {
-                binding.record_native_source(
-                    attempt,
-                    authority,
-                    prompt,
-                    &result,
-                    tenancy::native::Storage {
-                        stored: stored_response,
-                        replayable,
-                        effort_bound,
-                    },
-                );
-            }
-            runtime.succeeded(prompt, target, successful_authority, &result);
-            runtime.stored_response(stored_response, replayable, effort_bound);
-        }
 
         drop(tenant_attempt);
         technical.completed();
@@ -2358,15 +2071,7 @@ impl Executor for HttpExecutor {
         prompt: &Prompt,
         ctx: &PipelineContext,
     ) -> Result<StreamPartStream> {
-        let capture = ctx.extension::<NativeStreamCapture>().map(|runtime| {
-            let capture = Arc::new(BridgeCapture::default());
-            *runtime
-                .0
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(capture.clone());
-            capture
-        });
-        self.execute_http_stream(target, prompt, ctx, capture).await
+        self.execute_http_stream(target, prompt, ctx, None).await
     }
 }
 
@@ -2446,19 +2151,6 @@ impl Executor for DispatchExecutor {
             .unwrap_or(&self.default)
             .execute_generate_content_stream(target, input, ctx)
             .await
-    }
-
-    fn finish_native_stream(
-        &self,
-        target: &RoutingTarget,
-        prompt: &Prompt,
-        ctx: &PipelineContext,
-        collected: GenerateResult,
-    ) -> Result<GenerateResult> {
-        self.by_protocol
-            .get(&target.api_protocol)
-            .unwrap_or(&self.default)
-            .finish_native_stream(target, prompt, ctx, collected)
     }
 
     fn preflight_managed(

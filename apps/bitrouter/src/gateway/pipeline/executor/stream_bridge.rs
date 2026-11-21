@@ -2,16 +2,9 @@
 //! <https://developers.openai.com/api/docs/guides/streaming-responses>
 
 use super::*;
-use bitrouter_ai::types::Content;
 
 #[derive(Default)]
 struct Source {
-    tenant_binding: Option<super::tenancy::BoundAuthentication>,
-    tenant_attempt: Option<bitrouter_ai::tenancy::identity::AttemptId>,
-    canonical_prompt: Option<[u8; 32]>,
-    authority: Option<ContinuationAuthority>,
-    storage_allowed: bool,
-    effort_bound: bool,
     terminal: Option<serde_json::Value>,
     reasoning_streamed: bool,
     opened: std::collections::BTreeSet<u64>,
@@ -22,177 +15,11 @@ struct Source {
 #[derive(Default)]
 pub(super) struct BridgeCapture(Mutex<Source>);
 
-fn tenant_native_responses(target: &RoutingTarget, ctx: &PipelineContext) -> bool {
-    target.api_protocol == ApiProtocol::Responses
-        && super::tenancy::has_execution(ctx)
-        && ctx
-            .extension::<super::super::native::NativeManagedRequest>()
-            .is_some()
-}
-
-fn stream_binding_error() -> BitrouterError {
-    super::super::native_continuation::continuation_error(ContinuationFailure::BindingChanged)
-}
-
-/// The bridge may force SSE without changing the admitted canonical request.
-/// Exhaustive fields prevent a future Prompt field from silently escaping this
-/// check. Borrowed comparison adds no prompt/history allocation.
-fn verify_native_stream_prompt(transport: &Prompt, canonical: &Prompt) -> Result<()> {
-    let Prompt {
-        model,
-        system,
-        system_provider_metadata,
-        messages,
-        tools,
-        params,
-        response_format,
-        tool_choice,
-        stream,
-    } = transport;
-    let Prompt {
-        model: expected_model,
-        system: expected_system,
-        system_provider_metadata: expected_metadata,
-        messages: expected_messages,
-        tools: expected_tools,
-        params: expected_params,
-        response_format: expected_format,
-        tool_choice: expected_choice,
-        stream: expected_stream,
-    } = canonical;
-    if (
-        model,
-        system,
-        system_provider_metadata,
-        messages,
-        tools,
-        params,
-        response_format,
-        tool_choice,
-    ) != (
-        expected_model,
-        expected_system,
-        expected_metadata,
-        expected_messages,
-        expected_tools,
-        expected_params,
-        expected_format,
-        expected_choice,
-    ) || (*expected_stream && !*stream)
-    {
-        return Err(stream_binding_error());
-    }
-    Ok(())
-}
-
-fn verify_native_stream_request(
-    transport: &Prompt,
-    canonical: &Prompt,
-    wire: Option<&serde_json::Value>,
-) -> Result<()> {
-    verify_native_stream_prompt(transport, canonical)?;
-    // Authenticated request bytes retain stream=true; the source proof does not
-    // substitute the canonical flag for the actual dispatch/send gate digest.
-    if wire.and_then(|body| body.get("stream")) != Some(&serde_json::Value::Bool(true)) {
-        return Err(stream_binding_error());
-    }
-    Ok(())
-}
-
 impl BridgeCapture {
-    /// Full terminal output owns private continuation state. Stream policy must
-    /// not rewrite actionable text/calls and then silently restore their original
-    /// values from that terminal. Refuse such a mismatch before tool admission.
-    pub(super) fn complete_observed(
-        &self,
-        executor: &HttpExecutor,
-        target: &RoutingTarget,
-        prompt: &Prompt,
-        ctx: &PipelineContext,
-        folded: GenerateResult,
-    ) -> Result<GenerateResult> {
-        fn visible(result: &GenerateResult, reasoning_streamed: bool) -> Vec<serde_json::Value> {
-            result
-                .content
-                .iter()
-                .filter_map(|part| match part {
-                    Content::Text { text, .. } if !text.is_empty() => {
-                        Some(serde_json::json!({"text":text}))
-                    }
-                    Content::Reasoning { text, .. } if reasoning_streamed => {
-                        Some(serde_json::json!({"reasoning":text}))
-                    }
-                    Content::ToolCall {
-                        id,
-                        name,
-                        arguments,
-                        provider_executed: false,
-                        ..
-                    } => Some(serde_json::json!({"id":id,"name":name,"arguments":arguments})),
-                    _ => None,
-                })
-                .collect()
-        }
-        let reasoning_streamed = self.source().reasoning_streamed;
-        let observed = visible(&folded, reasoning_streamed);
-        let complete = self.complete(executor, target, prompt, ctx, folded)?;
-        if observed != visible(&complete, reasoning_streamed) {
-            return Err(BitrouterError::UpstreamInvalidResponse {
-                message: "managed stream and complete terminal output differ".into(),
-                usage: complete.usage.clone().map(Box::new),
-            });
-        }
-        Ok(complete)
-    }
-
     fn source(&self) -> std::sync::MutexGuard<'_, Source> {
         self.0
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
-
-    fn authenticated(
-        &self,
-        request: &reqwest::Request,
-        authority: Option<ContinuationAuthority>,
-        prompt: &Prompt,
-        target: &RoutingTarget,
-        ctx: &PipelineContext,
-    ) -> Result<()> {
-        let wire: Option<serde_json::Value> = request
-            .body()
-            .and_then(reqwest::Body::as_bytes)
-            .and_then(|bytes| serde_json::from_slice(bytes).ok());
-        let canonical_prompt = if tenant_native_responses(target, ctx) {
-            let canonical = ctx.generation_prompt().ok_or_else(stream_binding_error)?;
-            // The canonical prompt may be nonstreaming while its verified
-            // executor transport uses SSE. Prove that actual request separately.
-            verify_native_stream_request(prompt, canonical, wire.as_ref())?;
-            Some(
-                super::tenancy::native::prompt_digest(canonical)
-                    .ok_or_else(stream_binding_error)?,
-            )
-        } else {
-            None
-        };
-        let effort = serde_json::to_value(prompt.params.reasoning_effort).map_err(|_| {
-            crate::gateway::pipeline::native_continuation::continuation_error(
-                ContinuationFailure::BindingChanged,
-            )
-        })?;
-        let mut source = self.source();
-        source.canonical_prompt = canonical_prompt;
-        source.authority = authority;
-        source.storage_allowed = wire
-            .as_ref()
-            .is_some_and(|body| body.get("store") != Some(&serde_json::Value::Bool(false)));
-        source.effort_bound = wire.as_ref().is_some_and(|body| {
-            body.get("reasoning")
-                .and_then(|reasoning| reasoning.get("effort"))
-                .unwrap_or(&serde_json::Value::Null)
-                == &effort
-        });
-        Ok(())
     }
 
     fn terminal(&self, event: &SseEvent) -> Result<()> {
@@ -279,8 +106,6 @@ impl BridgeCapture {
         &self,
         executor: &HttpExecutor,
         target: &RoutingTarget,
-        prompt: &Prompt,
-        ctx: &PipelineContext,
         mut folded: GenerateResult,
     ) -> Result<GenerateResult> {
         if target.api_protocol != ApiProtocol::Responses {
@@ -291,9 +116,6 @@ impl BridgeCapture {
             return Ok(folded);
         };
         validate_nonstream_responses_terminal(&terminal)?;
-        let replayable = crate::gateway::model::protocol::responses::output_replayable(&terminal);
-        let stored =
-            source.storage_allowed && terminal.get("store") == Some(&serde_json::Value::Bool(true));
         // The terminal response carries the full output, including private reasoning
         // items and provider tools omitted from the delta IR. Do not concatenate it
         // with deltas or certify the lossy delta projection as complete history.
@@ -305,12 +127,7 @@ impl BridgeCapture {
             // An incomplete terminal cannot bind the delta projection to its
             // provider state. Keep received usage, but certify neither its
             // private origin nor a continuation prefix.
-            if ctx
-                .extension::<super::super::native_context::NativePrivateContextRuntime>()
-                .is_some()
-            {
-                super::super::native_continuation::mark_required_state(&mut folded.content);
-            }
+
             return Ok(folded);
         }
         let (adapter, _) = executor
@@ -324,48 +141,7 @@ impl BridgeCapture {
                     None => error,
                 }
             })?;
-        if let Some(runtime) =
-            ctx.extension::<super::super::native_context::NativePrivateContextRuntime>()
-        {
-            if !replayable {
-                super::super::native_continuation::mark_required_state(&mut folded.content);
-            }
-            let prompt = if tenant_native_responses(target, ctx) {
-                let Some(canonical) = ctx.generation_prompt() else {
-                    return Ok(folded);
-                };
-                if verify_native_stream_prompt(prompt, canonical).is_err()
-                    || source.canonical_prompt.is_none()
-                    || super::tenancy::native::prompt_digest(canonical) != source.canonical_prompt
-                {
-                    // Keep already observed output/usage, but issue no proof
-                    // from a canonical view changed since request validation.
-                    return Ok(folded);
-                }
-                canonical
-            } else {
-                prompt
-            };
-            if let (Some(binding), Some(attempt), Some(authority)) = (
-                source.tenant_binding.as_ref(),
-                source.tenant_attempt.as_ref(),
-                source.authority.as_ref(),
-            ) {
-                binding.record_native_source(
-                    attempt.clone(),
-                    authority,
-                    prompt,
-                    &folded,
-                    super::tenancy::native::Storage {
-                        stored,
-                        replayable,
-                        effort_bound: source.effort_bound,
-                    },
-                );
-            }
-            runtime.succeeded(prompt, target, source.authority.take(), &folded);
-            runtime.stored_response(stored, replayable, source.effort_bound);
-        }
+
         Ok(folded)
     }
 }
@@ -440,9 +216,6 @@ impl HttpExecutor {
                 super::shared::Attempt::begin(self.shared_authority, &applied, target, ctx).await?;
             let tenant_binding = applied.tenant_binding();
             let (mut request, authority, mut tenant_attempt) = applied.into_parts();
-            if let Some(capture) = &capture {
-                capture.authenticated(&request, authority.clone(), prompt, target, ctx)?;
-            }
             if let Some(source) = &mut http_source {
                 source.authenticated(&request, authority, prompt);
             }
@@ -508,8 +281,6 @@ impl HttpExecutor {
                 if let Some(capture) = &capture {
                     let mut source = capture.source();
                     source.scrubber = Some(error_scrubber.clone());
-                    source.tenant_binding = tenant_binding;
-                    source.tenant_attempt = native_attempt;
                 }
                 break (response, shared_attempt, tenant_attempt);
             }
@@ -886,76 +657,6 @@ mod lite_tests {
     use crate::gateway::model::protocol::OutboundAdapter;
     use crate::gateway::model::protocol::responses::ResponsesAdapter;
     use bitrouter_ai::types::Content;
-
-    #[test]
-    fn native_sse_binding_allows_only_the_transport_flag_and_requires_actual_sse()
-    -> anyhow::Result<()> {
-        use bitrouter_ai::types::{Message, Role};
-        let canonical = Prompt {
-            model: "literal-route".into(),
-            system: None,
-            system_provider_metadata: Default::default(),
-            messages: vec![Message::text(Role::User, "original")],
-            tools: Vec::new(),
-            params: Default::default(),
-            response_format: None,
-            tool_choice: None,
-            stream: false,
-        };
-        let wire = serde_json::json!({"stream":true});
-        let mut transport = canonical.clone();
-        transport.stream = true;
-        verify_native_stream_request(&transport, &canonical, Some(&wire))?;
-        // Forced-SSE providers can render stream=true from a canonical prompt
-        // without an intermediate stream=true Prompt clone.
-        verify_native_stream_request(&canonical, &canonical, Some(&wire))?;
-        for invalid in [
-            None,
-            Some(serde_json::json!({})),
-            Some(serde_json::json!({"stream":false})),
-        ] {
-            assert!(
-                verify_native_stream_request(&transport, &canonical, invalid.as_ref()).is_err()
-            );
-        }
-        for (field, changed) in [
-            ("model", serde_json::json!("other")),
-            ("system", serde_json::json!("changed instruction")),
-            (
-                "system_provider_metadata",
-                serde_json::json!({"provider":{"changed":true}}),
-            ),
-            (
-                "messages",
-                serde_json::to_value(vec![Message::text(Role::User, "changed")])?,
-            ),
-            (
-                "tools",
-                serde_json::json!([{"type":"function","name":"changed","parameters":{"type":"object"}}]),
-            ),
-            ("params", serde_json::json!({"max_tokens":7})),
-            (
-                "response_format",
-                serde_json::json!({"type":"json_schema","schema":{"type":"object"}}),
-            ),
-            ("tool_choice", serde_json::json!("required")),
-        ] {
-            let mut value = serde_json::to_value(&transport)?;
-            value[field] = changed;
-            let changed: Prompt = serde_json::from_value(value)?;
-            assert!(
-                verify_native_stream_request(&changed, &canonical, Some(&wire)).is_err(),
-                "{field}"
-            );
-        }
-        // The actual prompt proof stays exact; neither the hash function nor
-        // NativePrivateContextRuntime's final canonical equality is weakened.
-        assert_ne!(
-            super::super::tenancy::native::prompt_digest(&transport),
-            super::super::tenancy::native::prompt_digest(&canonical)
-        );
-        Ok(())
-    }
 
     fn event(value: serde_json::Value) -> SseEvent {
         SseEvent {
