@@ -14,7 +14,6 @@ use std::{sync::atomic::AtomicUsize, time::Duration};
 use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 use tower::ServiceExt;
 
-mod owned;
 #[cfg(any(feature = "db-postgres", feature = "db-mysql"))]
 mod server;
 

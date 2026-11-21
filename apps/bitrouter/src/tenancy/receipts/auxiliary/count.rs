@@ -1,5 +1,5 @@
 //! Validation of retained input-count evidence from existing terminal receipts.
-use bitrouter_ai::tenancy::{configuration::ResourceRef, operation::ErrorCode};
+use bitrouter_ai::tenancy::configuration::ResourceRef;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Serialize, Deserialize)]

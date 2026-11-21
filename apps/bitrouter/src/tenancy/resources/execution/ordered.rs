@@ -161,9 +161,7 @@ impl RetainedRoute {
         let Some(attachments) = &self.data.admission else {
             return Ok(None);
         };
-        let RouteSelection::Wire(inbound) = &self.selection else {
-            return Err(ErrorCode::CapabilityMismatch);
-        };
+        let RouteSelection::Wire(inbound) = &self.selection;
         let protocol = generation_protocol(inbound).map_err(|_| ErrorCode::CapabilityMismatch)?;
         attachments
             .iter()
@@ -192,9 +190,7 @@ impl RetainedRoute {
         }) {
             return Err(ErrorCode::CapabilityMismatch);
         }
-        let RouteSelection::Wire(inbound) = &self.selection else {
-            return Err(ErrorCode::CapabilityMismatch);
-        };
+        let RouteSelection::Wire(inbound) = &self.selection;
         let root = self
             .data
             .chains
