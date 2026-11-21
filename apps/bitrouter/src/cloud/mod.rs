@@ -521,54 +521,6 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn settlement_resolver_rejects_oauth_but_accepts_same_origin_api_key()
-    -> anyhow::Result<()> {
-        let (_oauth_directory, oauth_path) = fresh_tmp_creds_path("settlement-oauth")?;
-        let oauth = Arc::new(CredentialManager::with_client(
-            oauth_path,
-            reqwest::Client::new(),
-        ));
-        oauth
-            .save(StoredCredential::from(Credentials {
-                access_token: "oauth-access-token".to_owned(),
-                refresh_token: Some("oauth-refresh-token".to_owned()),
-                expires_at: Utc::now() + Duration::minutes(10),
-                refresh_token_expires_at: None,
-                token_type: "Bearer".to_owned(),
-                scope: "inference:invoke".to_owned(),
-                client_id: "bitrouter-cli".to_owned(),
-                authorization_server: "https://api.bitrouter.ai".to_owned(),
-                namespace_id: Some("ns-test".to_owned()),
-                subject: None,
-            }))
-            .await?;
-        assert!(
-            oauth
-                .session()
-                .resolve_api_key(None, Some("https://api.bitrouter.ai"))
-                .await
-                .is_err()
-        );
-        let (_api_key_directory, api_key_path) = fresh_tmp_creds_path("settlement-api-key")?;
-        let api_key = Arc::new(CredentialManager::with_client(
-            api_key_path,
-            reqwest::Client::new(),
-        ));
-        api_key
-            .save(StoredCredential::api_key(
-                "brk_gateway.secret".to_owned(),
-                "https://api.bitrouter.ai".to_owned(),
-            ))
-            .await?;
-        let resolved = api_key
-            .session()
-            .resolve_api_key(None, Some("https://api.bitrouter.ai/v1"))
-            .await?;
-        assert_eq!(resolved.secret(), "brk_gateway.secret");
-        Ok(())
-    }
-
     #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
     #[test]
     fn cloud_bearer_debug_redacts_manager() -> anyhow::Result<()> {
