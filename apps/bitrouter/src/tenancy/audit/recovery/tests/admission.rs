@@ -31,7 +31,7 @@ async fn admission_fresh_metadata_requires_complete_progress_and_bidirectional_p
         db.clone(),
         None,
         initial,
-        std::sync::Arc::new(Resources::with_key(installation.clone(), [43; 32])?),
+        std::sync::Arc::new(Resources::with_key(installation.clone(), rand::random())?),
         Some(manifest),
         None,
     )

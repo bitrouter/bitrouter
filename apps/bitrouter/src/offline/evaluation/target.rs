@@ -219,6 +219,7 @@ mod tests {
 
     #[tokio::test]
     async fn admission_bootstrap_marker_keeps_service_sdk_eval_target_fresh() -> Result<()> {
+        let digest_key = rand::random();
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("eval-target.sqlite");
         let live = producer::Live::open(&path, None, None).await?;
@@ -227,7 +228,7 @@ mod tests {
         let before = std::fs::read(&path)?;
         let mut db =
             SqliteConnection::connect_with(&SqliteConnectOptions::new().filename(&path)).await?;
-        let inventory = crate::offline::inventory::inspect_in(&mut db, &[7; 32]).await?;
+        let inventory = crate::offline::inventory::inspect_in(&mut db, &digest_key).await?;
         let operations = ["tenant", "principal", "binding", "credential"].map(str::to_owned);
         let assignments = BTreeMap::from([(
             "owner".to_owned(),
@@ -257,7 +258,7 @@ mod tests {
         ] {
             sea_orm::sqlx::query("BEGIN").execute(&mut db).await?;
             sea_orm::sqlx::query(mutation).execute(&mut db).await?;
-            let inventory = crate::offline::inventory::inspect_in(&mut db, &[7; 32]).await?;
+            let inventory = crate::offline::inventory::inspect_in(&mut db, &digest_key).await?;
             ensure!(
                 validate(
                     &mut db,

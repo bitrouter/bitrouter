@@ -2,8 +2,12 @@
 use super::*;
 use sea_orm::sqlx::{Connection, Row, SqliteConnection, sqlite::SqliteConnectOptions};
 
-async fn catalogs(db: &mut SqliteConnection, target: &plan::Target) -> Result<()> {
-    let measured = inventory::inspect_in(db, &[7; 32]).await?;
+async fn catalogs(
+    db: &mut SqliteConnection,
+    target: &plan::Target,
+    digest_key: &[u8; 32],
+) -> Result<()> {
+    let measured = inventory::inspect_in(db, digest_key).await?;
     catalog::fresh(db, &measured, target).await?;
     crate::tenancy::audit::recovery::fresh_catalog_v2_for_test(
         db,
@@ -41,6 +45,7 @@ fn policy(installation: &bitrouter_ai::tenancy::identity::InstallationId) -> Res
 async fn admission_metadata_preserves_fresh_service_sdk_policy_and_upgraded_targets() -> Result<()>
 {
     crate::runtime_crypto::DeploymentKey::from_environment(fixture::KEY_ENV)?;
+    let digest_key = rand::random();
     let fixture = Fixture::new().await?;
     let manifest = policy(&fixture.target_provision.installation)?;
     let import = fixture.directory.path().join("admission-policy.json");
@@ -170,7 +175,7 @@ async fn admission_metadata_preserves_fresh_service_sdk_policy_and_upgraded_targ
                 .fetch_one(&mut db)
                 .await?;
         ensure!(witnesses == 1);
-        catalogs(&mut db, &target).await?;
+        catalogs(&mut db, &target, &digest_key).await?;
         db.close().await?;
         let output = fixture.directory.path().join(if upgraded {
             "admission-upgraded"
@@ -217,7 +222,7 @@ async fn admission_metadata_preserves_fresh_service_sdk_policy_and_upgraded_targ
         } else {
             sea_orm::sqlx::query(mutation).execute(&mut db).await?;
         }
-        let measured = inventory::inspect_in(&mut db, &[7; 32]).await?;
+        let measured = inventory::inspect_in(&mut db, &digest_key).await?;
         ensure!(
             catalog::fresh(&mut db, &measured, &target).await.is_err(),
             "v1 accepted {mutation}"
@@ -253,7 +258,7 @@ async fn admission_metadata_preserves_fresh_service_sdk_policy_and_upgraded_targ
     .await?;
     #[cfg(feature = "core")]
     {
-        let measured = inventory::inspect_in(&mut db, &[7; 32]).await?;
+        let measured = inventory::inspect_in(&mut db, &digest_key).await?;
         crate::tenancy::audit::recovery::fresh_catalog_v2_for_test(
             &mut db,
             &measured,
