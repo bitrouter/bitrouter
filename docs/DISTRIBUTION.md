@@ -1,10 +1,24 @@
 # Distribution profiles and packaging
 
 The Cargo package `bitrouter` installs the `bitrouter` gateway and operator CLI.
-The package `bitrouter-bro` installs the `bro` local harness. Each has its own
-shell and PowerShell installer, npm package, Homebrew formula and install
-receipt. The default service, minimal gateway, PostgreSQL shared gateway and BRO
-are available for the five targets below.
+The Cargo package `bitrouter-bro` installs the `bro` local harness. The default
+service, minimal gateway, PostgreSQL shared gateway and BRO are available for the
+four targets below.
+
+On joint releases, the `bitrouter-bro` npm package provides both commands and
+the BRO Homebrew formula depends on the service formula. The joint BRO
+PowerShell installer installs both products by default and accepts `-BroOnly`.
+The individual shell installers and service PowerShell installer each install
+one product and keep their product-specific receipts.
+
+Install both commands with `brew install bitrouter/tap/bitrouter-bro` or
+`npm install -g bitrouter-bro`. If a previous global npm install of
+`bitrouter` owns the CLI shim, remove that package with
+`npm uninstall -g bitrouter` before installing BRO.
+
+Joint tags publish the combined npm package and both Homebrew formulas.
+Service-only tags publish the service formula. BRO-only tags distribute their
+artifacts through GitHub Releases.
 
 | Distribution | Executable | Owner and update path |
 | --- | --- | --- |
@@ -22,7 +36,7 @@ or `cargo install --locked --path apps/bro` from the checkout. Each product's
 ## Gateway archives
 
 The release workflow builds `bitrouter-gateway-<target>.tar.gz` on Unix and
-`bitrouter-gateway-<target>.zip` on Windows, together with `<archive>.sha256`.
+`bitrouter-gateway-<target>.zip` on Windows.
 The two product installers and manual archives support the following targets.
 
 Official macOS distributions and CI support Apple Silicon (`arm64`) only.
@@ -33,13 +47,12 @@ The same platform policy applies to both products.
 | `aarch64-apple-darwin` | `.tar.gz` |
 | `aarch64-unknown-linux-gnu` | `.tar.gz` |
 | `x86_64-unknown-linux-gnu` | `.tar.gz` |
-| `x86_64-unknown-linux-musl` | `.tar.gz` |
 | `x86_64-pc-windows-msvc` | `.zip` |
 
-Download the archive and checksum from the same release. Verify the checksum
-before extraction with `sha256sum -c <archive>.sha256` on Linux or
-`shasum -a 256 -c <archive>.sha256` on macOS. On Windows, compare
-`Get-FileHash <archive> -Algorithm SHA256` with the downloaded checksum.
+Download the archive and `distribution-manifest.json` from the same release.
+Find the entry by its exact `archive` filename and compare its `sha256` before
+extraction. Use `sha256sum <archive>` on Linux, `shasum -a 256 <archive>` on
+macOS or `Get-FileHash <archive> -Algorithm SHA256` on Windows.
 Extract the archive into a dedicated version directory. It contains `bitrouter`
 (`bitrouter.exe` on Windows), `manifest.json`, the README and license.
 
@@ -67,6 +80,23 @@ Use the product's installer receipt for a matching installed product, or the
 owning package manager. Check `bitrouter update --help` and `bro update --help`
 on the two installations for their update options.
 
+Run `bro core status` to locate the installed core and its owner. From a pure
+BRO installation, use `bro core install --prefix <absolute-bin-directory>`
+to install a verified full gateway into a directory you own. Add the bin
+directory to your PATH to invoke `bitrouter` directly. `bro core update`
+updates that local executable or invokes the owning npm or Homebrew package
+manager. The npm operation updates the combined package. Use
+`bro core update --check` to query availability and `--help` for release and
+directory selection options. Restart a running local gateway through its
+service manager after updating the executable.
+
+The release manifest identifies its format with
+`"schema": "bitrouter.distribution.v1"`. The `tag` and `source_revision` bind
+the inventory to one release. Each product lists its version, executable,
+installers and target distributions. Each distribution records its archive,
+binary, optional service profile and lowercase SHA-256 digest. Older releases
+with `distribution-plan.json` use the sidecar linked by that plan.
+
 For a self-managed gateway, `bitrouter update` replaces the installed
 executable and prompts you to run `bitrouter restart`. Restart closes admission
 and drains in-flight requests before starting the replacement. For a foreground
@@ -81,8 +111,9 @@ and the [operator update guide](../skills/bitrouter/references/updating.md).
 
 ### Recovering an interrupted product install
 
-Retry the same product's guarded installer at the original prefix. When its
-executable still runs, its native `update` command can also finish an interrupted
+Retry the same product's guarded installer at the original prefix. On a joint
+Windows release, use `-BroOnly` to recover only BRO. When the executable still
+runs, its native `update` command can also finish an interrupted
 transaction. `--check` leaves the receipt and locks intact. New writers hold OS
 leases while changing the binary and receipt. They can reuse a marked lock
 after the OS releases the lease. The persistent `.lease` files can remain in
@@ -144,10 +175,12 @@ revision. The artifact identity describes that source revision and compiled
 capabilities; archive and binary hashes identify the exact bytes. A local dirty
 checkout is not a reproducible release merely because its base revision is known.
 
-The reusable `gateway-artifacts.yml` workflow builds the configured targets, verifies
-archive checksums, extracts each candidate and runs the
+The reusable `gateway-artifacts.yml` workflow builds the configured targets,
+verifies internal archive checksums, extracts each candidate and runs the
 [independent SDK acceptance](../apps/bitrouter/tests/fixtures/sdk_consumer/README.md).
-PR CI uses development candidates. Release builds use distribution candidates
-and require the packaged SDK checks before upload. Release planning and archive
-validation cover both cargo-dist products. See the
+Packaging and shared changes in pull requests run Release acceptance. Tags also
+run Release acceptance before publication. The global build assembles the
+manifest after verifying archive bytes against their internal sidecars. GitHub
+Releases publish the resulting manifest with the installers and native archives.
+The sidecars stay in CI artifacts. See the
 [shared gateway process checks](SHARED_GATEWAY_DISTRIBUTION.md).

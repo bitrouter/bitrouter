@@ -1,0 +1,75 @@
+//! Verify the Windows install directory belongs to the running account.
+
+use std::{ffi::c_void, io, os::windows::ffi::OsStrExt, path::Path, ptr};
+
+use windows_sys::Win32::{
+    Foundation::{ERROR_INSUFFICIENT_BUFFER, HANDLE},
+    Security::{
+        EqualSid, GetFileSecurityW, GetSecurityDescriptorOwner, GetTokenInformation,
+        OWNER_SECURITY_INFORMATION, SECURITY_MAX_SID_SIZE, TOKEN_USER, TokenUser,
+    },
+};
+
+pub(super) fn owned_by_user(path: &Path) -> io::Result<bool> {
+    let path: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+    let mut needed = 0;
+    // SAFETY: path is NUL-terminated. This call only reads the required length.
+    let error = unsafe {
+        GetFileSecurityW(
+            path.as_ptr(),
+            OWNER_SECURITY_INFORMATION,
+            ptr::null_mut(),
+            0,
+            &mut needed,
+        );
+        io::Error::last_os_error()
+    };
+    if error.raw_os_error() != Some(ERROR_INSUFFICIENT_BUFFER as i32) || needed == 0 {
+        return Err(error);
+    }
+    let mut descriptor = vec![0usize; (needed as usize).div_ceil(size_of::<usize>())];
+    let descriptor_ptr = descriptor.as_mut_ptr().cast::<c_void>();
+    let mut owner = ptr::null_mut();
+    let mut owner_defaulted = 0;
+    // SAFETY: descriptor is aligned, has at least needed bytes, and lives
+    // through comparison of the SID returned inside it.
+    unsafe {
+        if GetFileSecurityW(
+            path.as_ptr(),
+            OWNER_SECURITY_INFORMATION,
+            descriptor_ptr,
+            needed,
+            &mut needed,
+        ) == 0
+            || GetSecurityDescriptorOwner(descriptor_ptr, &mut owner, &mut owner_defaulted) == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    if owner.is_null() {
+        return Ok(false);
+    }
+
+    // GetCurrentProcessToken() yields this read-only pseudo-handle.
+    const CURRENT_PROCESS_TOKEN: HANDLE = -4isize as HANDLE;
+    const WORDS: usize =
+        (size_of::<TOKEN_USER>() + SECURITY_MAX_SID_SIZE as usize).div_ceil(size_of::<usize>());
+    let mut token_info = [0usize; WORDS];
+    let mut returned = 0;
+    // SAFETY: the aligned buffer holds TOKEN_USER and the longest valid SID.
+    // On success both SID pointers refer to buffers still owned by this call.
+    unsafe {
+        if GetTokenInformation(
+            CURRENT_PROCESS_TOKEN,
+            TokenUser,
+            token_info.as_mut_ptr().cast(),
+            size_of::<[usize; WORDS]>() as u32,
+            &mut returned,
+        ) == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        let user = &*token_info.as_ptr().cast::<TOKEN_USER>();
+        Ok(EqualSid(owner, user.User.Sid) != 0)
+    }
+}
