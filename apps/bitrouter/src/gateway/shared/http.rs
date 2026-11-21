@@ -195,8 +195,8 @@ impl Serving {
 
     /// This proves only local request/reader quiescence after publication.
     /// Native compensation and exporter drains are separate retirement barriers.
-    /// The caller must be the sole remaining owner of the retired snapshot;
-    /// snapshots and custody never expose weak handles or lend retired work.
+    /// The caller must be the sole remaining owner of the drained snapshot;
+    /// snapshots and custody never expose weak handles or lend draining work.
     pub fn retired_quiescent(&self, snapshot: &Arc<Snapshot>) -> bool {
         let current = self
             .current

@@ -269,9 +269,8 @@ policies:
     Ok(())
 }
 
-/// Current-source fixture replacing continuation cases formerly embedded in the
-/// guard suite. Source reloads provide explicit model changes; no guard, learning
-/// state or trajectory activation is involved.
+/// Source reloads change the selected model while continuation claims remain
+/// bound to the original provider and credential authority.
 struct SourceContinuationFixture {
     home: tempfile::TempDir,
     config: config::Config,
