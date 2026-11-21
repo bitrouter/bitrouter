@@ -10,5 +10,6 @@ runs:
       shell: bash
       run: |
         cargo nextest run --locked -p bitrouter --no-default-features \
-          --features otel-grpc --test telemetry_grpc_transport --build-jobs 2 \
-          --profile ci --test-threads 1 --retries 0 --no-tests fail
+          --features otel-grpc --lib --build-jobs 2 \
+          --profile ci --test-threads 1 --retries 0 --no-tests fail \
+          -E 'test(/^tests::telemetry_grpc_transport::/)'
