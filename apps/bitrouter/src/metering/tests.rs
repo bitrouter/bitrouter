@@ -363,7 +363,10 @@ async fn routing_failure_keeps_unknown_target_usage_and_charge_absent() -> Resul
         .expect("unknown charge evidence");
     assert_eq!(evidence.status, super::pricing::ChargeStatus::Unknown);
     assert_eq!(evidence.charge_micro_usd, None);
-    assert_eq!(evidence.pricing_source, super::pricing::PricingSource::Unknown);
+    assert_eq!(
+        evidence.pricing_source,
+        super::pricing::PricingSource::Unknown
+    );
     assert_eq!(
         evidence.unknown_reason.as_deref(),
         Some("usage_unavailable")
@@ -458,7 +461,10 @@ async fn recorder_marks_charge_unknown_when_pricing_is_missing() -> Result<()> {
     assert_eq!(count, 1);
     let records = store.export_usage(TimeWindow::ThisMonth).await?;
     assert_eq!(records[0].final_charge_micro_usd, None);
-    assert_eq!(records[0].charge_status, super::pricing::ChargeStatus::Unknown);
+    assert_eq!(
+        records[0].charge_status,
+        super::pricing::ChargeStatus::Unknown
+    );
     assert_eq!(
         records[0]
             .charge_evidence
@@ -703,7 +709,10 @@ async fn authoritative_half_micro_charge_matches_provider_rounding() -> Result<(
 
     assert_eq!(status, super::ReconciliationStatus::Computed);
     assert_eq!(records[0].final_charge_micro_usd, Some(1_985));
-    assert_eq!(records[0].charge_status, super::pricing::ChargeStatus::Computed);
+    assert_eq!(
+        records[0].charge_status,
+        super::pricing::ChargeStatus::Computed
+    );
     Ok(())
 }
 
@@ -740,7 +749,10 @@ async fn authoritative_equal_rate_buckets_share_one_multiplication() -> Result<(
     assert_eq!(status, super::ReconciliationStatus::Computed);
     assert_eq!(records[0].provider_id, "ambient");
     assert_eq!(records[0].final_charge_micro_usd, Some(31_175));
-    assert_eq!(records[0].charge_status, super::pricing::ChargeStatus::Computed);
+    assert_eq!(
+        records[0].charge_status,
+        super::pricing::ChargeStatus::Computed
+    );
     Ok(())
 }
 
@@ -776,7 +788,10 @@ async fn authoritative_charge_mismatch_fails_closed() -> Result<()> {
 
     assert_eq!(status, super::ReconciliationStatus::Unknown);
     assert_eq!(records[0].reconciliation_status, status);
-    assert_eq!(records[0].charge_status, super::pricing::ChargeStatus::Unknown);
+    assert_eq!(
+        records[0].charge_status,
+        super::pricing::ChargeStatus::Unknown
+    );
     assert_eq!(records[0].final_charge_micro_usd, None);
     Ok(())
 }
@@ -809,7 +824,10 @@ async fn not_charged_receipt_is_terminal_but_never_a_computed_zero() -> Result<(
     let records = store.export_usage(TimeWindow::ThisMonth).await?;
 
     assert_eq!(status, super::ReconciliationStatus::NotCharged);
-    assert_eq!(records[0].charge_status, super::pricing::ChargeStatus::NotCharged);
+    assert_eq!(
+        records[0].charge_status,
+        super::pricing::ChargeStatus::NotCharged
+    );
     assert_eq!(records[0].final_charge_micro_usd, None);
     Ok(())
 }
@@ -1009,7 +1027,10 @@ async fn recorder_never_computes_zero_charge_from_unknown_usage() -> Result<()> 
     let records = store.export_usage(TimeWindow::ThisMonth).await?;
 
     assert_eq!(records[0].final_charge_micro_usd, None);
-    assert_eq!(records[0].charge_status, super::pricing::ChargeStatus::Unknown);
+    assert_eq!(
+        records[0].charge_status,
+        super::pricing::ChargeStatus::Unknown
+    );
     assert_eq!(
         records[0]
             .charge_evidence
@@ -1422,7 +1443,10 @@ fn usage_price_override_imputes_missing_charges() {
     super::store::MeteringUsageRecord::apply_price_overrides(&mut records, &[price]);
 
     assert_eq!(records[0].final_charge_micro_usd, Some(530));
-    assert_eq!(records[0].charge_status, super::pricing::ChargeStatus::Computed);
+    assert_eq!(
+        records[0].charge_status,
+        super::pricing::ChargeStatus::Computed
+    );
     assert_eq!(
         records[0]
             .charge_evidence
@@ -1510,7 +1534,10 @@ fn four_rate_override_prices_cache_buckets() {
     assert_eq!(records[0].final_charge_micro_usd, Some(438));
     assert_eq!(records[0].uncached_input_tokens, 40);
     assert_eq!(records[0].output_tokens, 20);
-    assert_eq!(records[0].charge_status, super::pricing::ChargeStatus::Computed);
+    assert_eq!(
+        records[0].charge_status,
+        super::pricing::ChargeStatus::Computed
+    );
 }
 
 #[test]
@@ -1535,7 +1562,10 @@ fn legacy_two_rate_override_refuses_cached_usage() {
     super::store::MeteringUsageRecord::apply_price_overrides(&mut records, &[price]);
 
     assert_eq!(records[0].final_charge_micro_usd, None);
-    assert_eq!(records[0].charge_status, super::pricing::ChargeStatus::LegacyUnknown);
+    assert_eq!(
+        records[0].charge_status,
+        super::pricing::ChargeStatus::LegacyUnknown
+    );
 }
 
 #[test]
