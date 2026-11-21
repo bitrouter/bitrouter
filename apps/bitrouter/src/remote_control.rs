@@ -1469,7 +1469,7 @@ providers:
         assert_eq!(route.effective_model, "test-model");
         assert_eq!(route.provider_chain.len(), 1);
         let requests = client
-            .requests_filtered(&crate::actions::requests::RequestFilters::with_limit(1))
+            .requests_filtered(&bitrouter_ai::control::requests::RequestFilters::with_limit(1))
             .await?;
         assert!(requests.rows.is_empty());
 

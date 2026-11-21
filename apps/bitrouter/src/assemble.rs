@@ -743,8 +743,8 @@ async fn assemble_app(
                 .context("local credential manager is unavailable")?,
         )?,
     };
-    let (continuation_registry, private_context, continuation_runtime) = if tenancy_enabled {
-        (None, None, None)
+    let (continuation_registry, continuation_runtime) = if tenancy_enabled {
+        (None, None)
     } else {
         #[cfg(feature = "multi-instance")]
         let shared_continuation =
@@ -761,9 +761,6 @@ async fn assemble_app(
                 ContinuationKeySource::lazy(runtime_home)
             }
         };
-        let private_context = crate::continuation::native_context::PrivateContextPolicy::new(
-            continuation_keys.clone(),
-        );
         let continuation_registry = ContinuationRegistry::new(
             db.clone(),
             continuation_keys,
@@ -793,11 +790,7 @@ async fn assemble_app(
             continuation_registry.clone(),
             auth_appliers.clone(),
         );
-        (
-            Some(continuation_registry),
-            Some(private_context),
-            Some(continuation_runtime),
-        )
+        (Some(continuation_registry), Some(continuation_runtime))
     };
     // A SQLite database file holds SHA-256 hashes of every virtual key,
     // plus the metering audit trail. On Unix, tighten the file
@@ -1396,9 +1389,6 @@ async fn assemble_app(
                 lm.pre_resolution_hook(capture);
             }
             lm.pre_resolution_hook_for(session_context, OperationScope::Both);
-            if let Some(policy) = private_context {
-                lm.pre_resolution_hook(policy);
-            }
             if let Some(runtime) = continuation_for_pre_request {
                 lm.pre_resolution_hook(runtime);
             }
