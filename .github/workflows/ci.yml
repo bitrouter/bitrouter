@@ -122,7 +122,7 @@ jobs:
     - changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       BITROUTER_BUILD_REVISION: ${{ github.sha }}
       CARGO_BUILD_JOBS: '1'
@@ -161,7 +161,7 @@ jobs:
         set -euo pipefail
         mkdir -p ci-evidence
         command -v vmstat
-        vmstat -w -t 30 120 &
+        vmstat -w -t 30 &
         sampler_pid=$!
         finish_build() {
           result=$?

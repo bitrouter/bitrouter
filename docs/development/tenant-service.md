@@ -243,6 +243,13 @@ amplification and filesystem exhaustion still require measurement and fault
 qualification. Terminal archived history is accounted separately from live
 receipt bytes; neither operation IDs nor retained history has a lifetime quota.
 
+Stopped-owner recovery validates ordered dispatch intents in keyset pages before
+converting them to unknown receipts, regardless of the current admission budgets.
+Each conversion commits its receipt, usage evidence and intent retirement together.
+Interrupted recovery resumes from the remaining intents on the next startup;
+already committed receipts retain their original bytes and execution identities.
+Recovery does not reissue provider requests.
+
 Unknown obligations default to admission budgets of 100 per tenant and 1,000
 per instance, configurable in the same group. The transactionally maintained
 indexed projection covers both receipts and pending OAuth work, deduplicated by

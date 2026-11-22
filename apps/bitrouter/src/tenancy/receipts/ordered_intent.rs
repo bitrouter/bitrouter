@@ -344,7 +344,6 @@ pub(in crate::tenancy) struct PendingInventory {
     pub rows: u64,
     #[cfg(test)]
     pub bytes: u64,
-    pub unknown: Vec<(TenantId, ExecutionId, chrono::DateTime<chrono::Utc>)>,
 }
 
 /// Bounded scalar inventory includes every outstanding obligation, even before repair.
@@ -370,50 +369,94 @@ pub(in crate::tenancy) async fn inventory(
         db.query_one(backend.build(&foreign)).await?.is_none(),
         "foreign dispatch intent"
     );
-    let query = Query::select()
-        .from(Alias::new(TABLE))
-        .columns(["tenant_id", "execution_id"].map(Alias::new))
-        .order_by(Alias::new("tenant_id"), Order::Asc)
-        .order_by(Alias::new("execution_id"), Order::Asc)
-        .limit(1001)
-        .to_owned();
-    let rows = db.query_all(backend.build(&query)).await?;
-    ensure!(rows.len() <= 1000, "intent instance capacity");
-    let mut unknown = Vec::with_capacity(rows.len());
-    let mut counts = std::collections::BTreeMap::new();
+    let mut after = None;
+    let mut count = 0_u64;
     let mut bytes = 0_u64;
-    for row in rows {
-        let tenant: TenantId = row.try_get::<String>("", "tenant_id")?.try_into()?;
-        let id: ExecutionId = row.try_get::<String>("", "execution_id")?.try_into()?;
-        let n = counts.entry(tenant.clone()).or_insert(0_usize);
-        *n += 1;
-        ensure!(*n <= 100, "intent tenant capacity");
-        let intent = load(db, installation, &tenant, &id)
-            .await?
-            .context("intent inventory missing")?;
-        ensure!(
-            store::lookup_terminal(db, installation, &tenant, &id)
+    loop {
+        let page = pending_page(db, installation, after.as_ref()).await?;
+        if page.is_empty() {
+            break;
+        }
+        for (tenant, id) in &page {
+            let intent = load(db, installation, tenant, id)
                 .await?
-                .is_none(),
-            "intent coexists with terminal receipt"
-        );
-        // Reserve the whole obligation during startup, not just its tiny seed.
-        bytes = bytes
-            .checked_add(MAX_OBLIGATION - 16 * 1024)
-            .context("intent inventory overflow")?;
-        unknown.push((
-            tenant,
-            id,
-            chrono::DateTime::parse_from_rfc3339(intent.admitted_at.as_str())?
-                .with_timezone(&chrono::Utc),
-        ));
+                .context("intent inventory missing")?;
+            let _admitted_at = chrono::DateTime::parse_from_rfc3339(intent.admitted_at.as_str())?;
+            ensure!(
+                store::lookup_terminal(db, installation, tenant, id)
+                    .await?
+                    .is_none(),
+                "intent coexists with terminal receipt"
+            );
+            count = count.checked_add(1).context("intent count overflow")?;
+            // Reserve the whole obligation, not just its tiny seed.
+            bytes = bytes
+                .checked_add(MAX_OBLIGATION - 16 * 1024)
+                .context("intent inventory overflow")?;
+        }
+        after = page.into_iter().next_back();
     }
     Ok(PendingInventory {
         #[cfg(test)]
         bytes,
-        rows: unknown.len() as u64,
-        unknown,
+        rows: count,
     })
+}
+
+// A page bounds temporary key storage, independently of the retained backlog.
+fn pending_query(
+    backend: DatabaseBackend,
+    installation: &InstallationId,
+    after: Option<&(TenantId, ExecutionId)>,
+) -> sea_orm::Statement {
+    let mut query = Query::select();
+    query
+        .from(Alias::new(TABLE))
+        .columns(["tenant_id", "execution_id"].map(Alias::new))
+        .and_where(Expr::col(Alias::new("installation_id")).eq(installation.as_str()))
+        .order_by(Alias::new("tenant_id"), Order::Asc)
+        .order_by(Alias::new("execution_id"), Order::Asc)
+        .limit(64);
+    if let Some((tenant, execution)) = after {
+        let tenant_key = Expr::col(Alias::new("tenant_id"));
+        let execution_key = Expr::col(Alias::new("execution_id"));
+        if backend == DatabaseBackend::Sqlite {
+            query.and_where(Expr::tuple([tenant_key.into(), execution_key.into()]).gt(
+                Expr::tuple([
+                    Expr::val(tenant.as_str()).into(),
+                    Expr::val(execution.as_str()).into(),
+                ]),
+            ));
+        } else {
+            query.and_where(
+                tenant_key.clone().gt(tenant.as_str()).or(tenant_key
+                    .eq(tenant.as_str())
+                    .and(execution_key.gt(execution.as_str()))),
+            );
+        }
+    }
+    backend.build(&query)
+}
+
+async fn pending_page(
+    db: &impl ConnectionTrait,
+    installation: &InstallationId,
+    after: Option<&(TenantId, ExecutionId)>,
+) -> Result<Vec<(TenantId, ExecutionId)>> {
+    db.query_all(pending_query(
+        db.get_database_backend(),
+        installation,
+        after,
+    ))
+    .await?
+    .into_iter()
+    .map(|row| {
+        Ok((
+            row.try_get::<String>("", "tenant_id")?.try_into()?,
+            row.try_get::<String>("", "execution_id")?.try_into()?,
+        ))
+    })
+    .collect()
 }
 
 pub(in crate::tenancy) async fn recover(
@@ -423,39 +466,55 @@ pub(in crate::tenancy) async fn recover(
     proof: &Arc<crate::tenancy::transaction::Proof>,
     control: &Control,
 ) -> Result<()> {
-    let pending = inventory(db, installation).await?;
+    let tx = control.begin_repeatable_read(db).await?;
+    let pending = inventory(
+        &crate::tenancy::transaction::ReadConnection::new(&tx, control),
+        installation,
+    )
+    .await;
+    control.rollback(tx).await?;
+    let pending = pending?;
     if pending.rows == 0 {
         return Ok(());
     }
     let current = startup
         .context("ordered recovery requires exclusive owner")?
         .bootstrap_stamp(proof)?;
-    for (tenant, id, _) in pending.unknown {
+    let mut after = None;
+    loop {
         control.check_read()?;
-        let tx = control.begin(db).await?;
-        let result = async {
-            let intent = load(&tx, installation, &tenant, &id)
-                .await?
-                .context("recovery intent missing")?;
-            ensure!(
-                intent.origin != current,
-                "cannot recover work from current owner"
-            );
-            let terminal = intent.unknown()?;
-            let staged = store::stage_dispatch_terminal(&tx, &terminal).await?;
-            let _change = staged.reconcile(&|_, _| control.check_read()).await?;
-            Ok::<_, anyhow::Error>(())
+        let page = pending_page(db, installation, after.as_ref()).await?;
+        control.check_read()?;
+        if page.is_empty() {
+            return Ok(());
         }
-        .await;
-        match result {
-            Ok(()) => control.commit(tx).await?,
-            Err(error) => {
-                control.rollback(tx).await?;
-                return Err(error);
+        for (tenant, id) in &page {
+            control.check_read()?;
+            let tx = control.begin(db).await?;
+            let result = async {
+                let intent = load(&tx, installation, tenant, id)
+                    .await?
+                    .context("recovery intent missing")?;
+                ensure!(
+                    intent.origin != current,
+                    "cannot recover work from current owner"
+                );
+                let terminal = intent.unknown()?;
+                let staged = store::stage_dispatch_terminal(&tx, &terminal).await?;
+                let _change = staged.reconcile(&|_, _| control.check_read()).await?;
+                Ok::<_, anyhow::Error>(())
+            }
+            .await;
+            match result {
+                Ok(()) => control.commit(tx).await?,
+                Err(error) => {
+                    control.rollback(tx).await?;
+                    return Err(error);
+                }
             }
         }
+        after = page.into_iter().next_back();
     }
-    Ok(())
 }
 
 #[cfg(test)]
