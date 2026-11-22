@@ -3,13 +3,13 @@ use super::*;
 #[test]
 fn reviewed_model_has_complete_receipt_and_dispatch_shapes() -> Result<()> {
     let tables = expected()?;
-    ensure!(tables.len() == 52);
+    ensure!(tables.len() == 53);
     ensure!(
         tables
             .iter()
             .map(|table| table.columns.len())
             .sum::<usize>()
-            == 449
+            == 455
     );
     for name in ["tenancy_execution_receipts", "tenancy_dispatch_intents"] {
         let table = tables
