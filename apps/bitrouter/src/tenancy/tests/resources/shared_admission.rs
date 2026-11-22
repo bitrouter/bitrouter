@@ -88,7 +88,7 @@ async fn first_profile_and_group_witnesses_roll_back_with_failed_operation_then_
     let mut fixture = keyed_fixture().await?;
     let command = input(&fixture, "first-profile", "first-profile-rollback", 7)?;
     fixture.db.execute_unprepared("CREATE TRIGGER refuse_first_profile_operation BEFORE INSERT ON tenancy_operations WHEN NEW.operation_id='first-profile-rollback' BEGIN SELECT RAISE(ABORT,'injected operation rollback'); END").await?;
-    ensure!(put_v2(&fixture, command.clone()).await.is_err());
+    ensure!(put_profile(&fixture, command.clone()).await.is_err());
     for table in [
         "tenancy_admission_index",
         "tenancy_resource_revisions",
@@ -109,8 +109,8 @@ async fn first_profile_and_group_witnesses_roll_back_with_failed_operation_then_
         .execute_unprepared("DROP TRIGGER refuse_first_profile_operation")
         .await?;
     restart(&mut fixture).await?;
-    let applied = put_v2(&fixture, command.clone()).await?;
-    let replay = put_v2(&fixture, command).await?;
+    let applied = put_profile(&fixture, command.clone()).await?;
+    let replay = put_profile(&fixture, command).await?;
     ensure!(
         applied.authority_revision == replay.authority_revision
             && applied.resource_revision == replay.resource_revision
