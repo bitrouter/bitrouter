@@ -173,6 +173,104 @@ async fn history(db: &mut SqliteConnection) -> Result<[u8; 32]> {
 }
 
 #[tokio::test]
+async fn admission_capacity_upgrade_reopens_format_two_without_rewriting_replay_or_latch()
+-> Result<()> {
+    use crate::offline::recovery::tests::fixture::Live;
+    for later_latch in [false, true] {
+        let (_directory, path, request) = fixture().await?;
+        let mut db = open(&path).await?;
+        let original_history = history(&mut db).await?;
+        let evidence: (String, String, i64) = sea_orm::sqlx::query_as(
+            "SELECT receipt_json,content_digest,unknown_outcome FROM tenancy_execution_receipts",
+        )
+        .fetch_one(&mut db)
+        .await?;
+        db.close().await?;
+        let report = crate::offline::upgrade_capacity(
+            &path,
+            request.installation.as_str(),
+            request.revision.get(),
+            request.operation.as_str(),
+            true,
+            ValidationBudget::default(),
+        )
+        .await?;
+        let upgraded: Outcome = serde_json::from_value(serde_json::to_value(
+            &report as &dyn crate::output::CliReport,
+        )?)?;
+        assert_eq!(upgraded.to_format, 2);
+        let mut db = open(&path).await?;
+        let version: i64 =
+            sea_orm::sqlx::query_scalar("SELECT schema_version FROM tenancy_installation")
+                .fetch_one(&mut db)
+                .await?;
+        assert_eq!(version, 2);
+        let saved: (String, String) = sea_orm::sqlx::query_as(
+            "SELECT request_digest,result_json FROM tenancy_capacity_upgrades",
+        )
+        .fetch_one(&mut db)
+        .await?;
+        if later_latch {
+            sea_orm::sqlx::query("UPDATE tenancy_installation SET saturated=1,authority_revision=authority_revision+1").execute(&mut db).await?;
+        }
+        db.close().await?;
+        let live = Live::open(&path, None, None).await?;
+        assert_eq!(
+            live.operator()?.capabilities().await?.installation_id,
+            request.installation
+        );
+        live.close(&path).await?;
+        let mut db = open(&path).await?;
+        let state: (i64, i64, i64, i64, i64) = sea_orm::sqlx::query_as("SELECT schema_version,authority_revision,operation_ids,safety_operation_ids,saturated FROM tenancy_installation").fetch_one(&mut db).await?;
+        assert_eq!(
+            state,
+            (
+                6,
+                i64::try_from(upgraded.new_authority_revision)? + i64::from(later_latch),
+                i64::try_from(upgraded.ordinary_operations)?,
+                i64::try_from(upgraded.safety_operations)?,
+                i64::from(later_latch)
+            )
+        );
+        let complete: i64 =
+            sea_orm::sqlx::query_scalar("SELECT complete FROM tenancy_admission_backfill")
+                .fetch_one(&mut db)
+                .await?;
+        assert_eq!(complete, 1);
+        assert_eq!(original_history, history(&mut db).await?);
+        let retained: (String, String, i64) = sea_orm::sqlx::query_as(
+            "SELECT receipt_json,content_digest,unknown_outcome FROM tenancy_execution_receipts",
+        )
+        .fetch_one(&mut db)
+        .await?;
+        assert_eq!(retained, evidence);
+        let retained_result: (String, String) = sea_orm::sqlx::query_as(
+            "SELECT request_digest,result_json FROM tenancy_capacity_upgrades",
+        )
+        .fetch_one(&mut db)
+        .await?;
+        assert_eq!(saved, retained_result);
+        db.close().await?;
+        let before = std::fs::read(&path)?;
+        let report = crate::offline::upgrade_capacity(
+            &path,
+            request.installation.as_str(),
+            request.revision.get(),
+            request.operation.as_str(),
+            true,
+            ValidationBudget::default(),
+        )
+        .await?;
+        let replayed: Outcome = serde_json::from_value(serde_json::to_value(
+            &report as &dyn crate::output::CliReport,
+        )?)?;
+        assert_eq!(replayed, upgraded);
+        assert_eq!(before, std::fs::read(&path)?);
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn reset_is_atomic_replay_bound_and_never_clears_a_later_fence() -> Result<()> {
     let (_directory, path, mut request) = fixture().await?;
     let mut db = open(&path).await?;

@@ -84,14 +84,45 @@ describes setup and management operations; permission, CAS and replay behavior
 are defined in the canonical service API.
 
 Operational profile publication uses the same authority writer and immutable
-resource store. The protection index is derived from every authenticated
-profiled-route revision, including revoked and non-head history; there is no
-second mutable protection table. The snapshot publishes protection with the
-resource transaction, and startup reconstructs it before readiness. Existing
-catalog limits bound this index. Retention must never evict those definitions to
-recover capacity. The authority-format-three fence rejects predecessor writers;
-profiled configuration plaintext has envelope format four and its own
-authenticated compiler subtype. Legacy compiler bytes retain their old binding.
+resource store. `tenancy_admission_index` retains one byte-exact witness per
+policy/profile or protected-route key, plus one per owner/health-group pair.
+Each witness points into the authenticated resource-revision store; no profile
+payload is copied into the index, and a witness is never replaced on rotation
+or revocation. Immutable rules are transitive, so one authenticated witness
+validates future rotations without loading historical members. All original
+revisions remain available. A head lookup has a dedicated lifecycle index.
+
+The authority format-6 fence excludes predecessor writers before backfill.
+`tenancy_admission_backfill` stores the installation, authority revision, stable
+resource cursor, and completion marker. The startup actor commits bounded pages
+and their cursor atomically under exclusive startup custody. Incomplete progress
+never publishes readiness. Complete startup authentication independently verifies
+every retained admission definition against its witnesses, including existence,
+identity, immutable rules, and managed profile heads. These checks detect missing
+witnesses even after a completed or interrupted migration. The index shares the
+persisted heads/grants trust model; live SQL tampering is outside that model.
+
+Fresh offline recovery recognizes this derived bootstrap metadata only after a
+read-only proof: one completed installation-bound checkpoint, a retained cursor
+when non-null, and matching witnesses for every approved ordinary Policy key.
+Every witness must point back to an existing ordinary Policy revision whose
+definition is authenticated by the approved static closure check. Missing or
+extra witnesses, health/protected-route history, and incomplete progress are
+rejected. Eval freshness accepts only the completed empty-resource checkpoint.
+This includes previously provisioned schema-five targets reopened for upgrade;
+their completed cursor need not be null and their provisioning revision is kept.
+
+Commands and authority dependency reads batch relevant index keys and load only
+requested immutable pins and current heads in the existing read transaction.
+No normal publication or import scans unrelated history. Resource/index writes,
+lifecycle CAS, and the operation replay result commit in the same transaction.
+Authority publication updates affected live views before final-send checks;
+original pins remain distinct from the current head and both revocation checks
+remain effective. The global history map and its coupled authority byte
+reservation are gone. View memory follows selected references, with head-update
+space reserved per selected key. Profiled configuration plaintext retains
+envelope format four and its own authenticated compiler subtype; legacy compiler
+bytes retain their original binding.
 The format-four compiled document keeps each profiled projection in its original
 immutable artifact. Its visible execution route is reconstructed once from that
 artifact and the bound configuration defaults. The stored ordinary route sequence
@@ -263,7 +294,7 @@ Indexed, resumable maintenance escalates unresolved work after 15 minutes
 without pruning or reclassifying it. The 30-second cleanup window is not
 permission to forget an uncertain transaction or an unjoined producer.
 
-The internal authority store uses format 2 so older strict readers refuse it.
+The internal authority store uses format 6 so predecessor writers refuse it.
 Healthy format-1 stores upgrade during complete validated startup. A legacy
 count-saturated store instead requires the explicit local
 `bro tenancy offline upgrade-capacity` workflow under exclusive stopped custody.
@@ -271,6 +302,11 @@ The command checks the expected installation/revision, the actual legacy count
 latch, all retained authority/evidence and an explicit acknowledgment before
 atomically recording the transition and its replay result. It preserves
 identities and evidence and does not clear other storage or cleanup fences.
+That saved result continues to describe format 2. After complete validation,
+normal startup promotes it to the installed format-6 writer fence with an exact
+header CAS; counters, authority revision, later stop latches and saved replay
+bytes remain unchanged. Startup refuses this promotion without the registered
+indexed-admission migration.
 See the [operator procedure](../../skills/bitrouter/references/cli.md#local-db-only-offline-evidence).
 Public strict-v1 request, attempt and evidence limits remain independent of host
 capacity, as do the bounded offline bundle and declared provisioning profiles.

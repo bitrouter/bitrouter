@@ -321,6 +321,7 @@ pub(super) fn oauth_metadata(value: Option<&storage::Metadata>, cloned: bool) ->
 pub(super) fn bytes(view: &View) -> Result<usize> {
     let state = &view.facts;
     let mut bytes = size_of::<Inner>() + 4 * size_of::<usize>();
+    add(&mut bytes, state.resource_admission.working_bytes()?)?;
     add(&mut bytes, state.installation.as_str().len())?;
     add(&mut bytes, state.created_at.capacity())?;
     add(

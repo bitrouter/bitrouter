@@ -11,7 +11,7 @@ use anyhow::{Context, Result, ensure};
 use bitrouter_ai::tenancy::{configuration::ResourceRef, identity::Timestamp};
 use sea_orm::{
     ConnectionTrait, DatabaseBackend,
-    sea_query::{Alias, Cond, Expr, Func, Order, Query},
+    sea_query::{Alias, Expr, Func, Order, Query},
 };
 
 pub(super) async fn has_resources(db: &impl ConnectionTrait) -> Result<bool> {
@@ -82,15 +82,12 @@ pub(super) async fn reference_page(
             after.resource_id.as_str(),
             after.revision_id.as_str(),
         ];
-        let mut cursor = Cond::any();
-        for index in 0..KEYS.len() {
-            let mut greater = Cond::all();
-            for prefix in 0..index {
-                greater = greater.add(Expr::col(Alias::new(KEYS[prefix])).eq(values[prefix]));
-            }
-            cursor = cursor.add(greater.add(Expr::col(Alias::new(KEYS[index])).gt(values[index])));
-        }
-        query.cond_where(cursor);
+        query.and_where(
+            Expr::tuple(KEYS.map(|name| {
+                Expr::col((Alias::new("tenancy_resource_revisions"), Alias::new(name))).into()
+            }))
+            .gt(Expr::tuple(values.map(|value| Expr::val(value).into()))),
+        );
     }
     // As in configuration_store, cap cells in SQL before the driver allocates
     // strings. Do not filter corrupt rows out: NULL projections fail catalog open.
@@ -161,6 +158,7 @@ pub(super) async fn retain(
         );
         return Ok(());
     }
+    super::admission::index::retain(resources, db, artifact).await?;
     configuration_store::insert_resource(db, &record).await
 }
 

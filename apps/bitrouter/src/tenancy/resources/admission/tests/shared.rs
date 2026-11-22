@@ -239,6 +239,7 @@ async fn shared_retained_loader_rejects_missing_heads_and_authenticated_conflict
         let (db, resources) = fixture_with_key(key).await?;
         let original = shared("profile", 1)?;
         import_v2(&resources, &db, vec![original.clone()]).await?;
+        let mut reimport = original.clone();
         if case == "missing_head" {
             db.execute_unprepared("DELETE FROM tenancy_resource_lifecycle")
                 .await?;
@@ -251,6 +252,7 @@ async fn shared_retained_loader_rejects_missing_heads_and_authenticated_conflict
             if case == "conflicting_rules" {
                 invalid["definition"]["profile"]["health"]["probe_lease_seconds"] = json!(6);
             }
+            reimport = invalid.clone();
             let imported: Import = serde_json::from_value(invalid)?;
             let artifact = Artifact {
                 reference: imported.reference.clone(),
@@ -259,7 +261,8 @@ async fn shared_retained_loader_rejects_missing_heads_and_authenticated_conflict
             };
             // Seal a well-formed immutable row directly to isolate loader checks
             // from the public writer/import preflight that already refuses it.
-            storage::retain(&resources, &db, &artifact).await?;
+            configuration_store::insert_resource(&db, &storage::seal(&resources, &artifact)?)
+                .await?;
             let authority = crate::tenancy::store::load_existing(&db, chrono::Utc::now()).await?;
             lifecycle::write(
                 &db,
@@ -276,11 +279,14 @@ async fn shared_retained_loader_rejects_missing_heads_and_authenticated_conflict
                 .await?;
         }
         let restarted = Resources::with_key(resources.installation.clone(), key)?;
-        restarted.authenticate_retained(&db).await?;
+        ensure!(
+            restarted.authenticate_retained(&db).await.is_err(),
+            "authenticated {case}"
+        );
         ensure!(state(&restarted, &db).await.is_err(), "accepted {case}");
         let references = storage::references(&db).await?;
         ensure!(
-            import_v2(&restarted, &db, vec![original]).await.is_err(),
+            import_v2(&restarted, &db, vec![reimport]).await.is_err(),
             "repaired {case}"
         );
         ensure!(storage::references(&db).await? == references);

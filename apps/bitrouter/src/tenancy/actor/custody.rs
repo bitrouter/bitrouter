@@ -380,8 +380,19 @@ impl Worker {
                         loaded.header.safety_operation_ids,
                         totals,
                     ));
-                    let migrate = loaded.format == crate::tenancy::store::startup::Format::V1
-                        && !loaded.header.saturated;
+                    use crate::tenancy::store::startup::Format;
+                    // The durable capacity-upgrade outcome intentionally remains
+                    // format two. Its later startup must enter the installed
+                    // indexed-writer format without rewriting that replay result.
+                    let indexed_promotion = matches!(loaded.format, Format::V2 | Format::V3 | Format::V4 | Format::V5);
+                    if indexed_promotion {
+                        let fence = sea_orm::ConnectionTrait::query_one(&tx, sea_orm::Statement::from_string(
+                            sea_orm::ConnectionTrait::get_database_backend(&tx),
+                            "SELECT 1 FROM seaql_migrations WHERE version='m20240101_000050_admission_index_fence' LIMIT 1",
+                        )).await.map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
+                        if fence.is_none() { return Err(ErrorCode::AuthorityUnavailable.into()); }
+                    }
+                    let migrate = (loaded.format == Format::V1 && !loaded.header.saturated) || indexed_promotion;
                     if migrate {
                         control.reserve_write(4096, true)?;
                         crate::tenancy::store::startup::upgrade_format_in(&tx, &loaded)
@@ -408,6 +419,13 @@ impl Worker {
                     outcome = "started",
                     "tenant startup validation"
                 );
+                crate::tenancy::resources::admission::backfill::initialize(
+                    &self.db,
+                    &self.resources,
+                    &control,
+                )
+                .await
+                .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
                 let crypto = crate::tenancy::continuation::initialize(
                     &self.db,
                     &initial,
@@ -417,24 +435,6 @@ impl Worker {
                 )
                 .await
                 .map_err(|_| self.unavailable(ErrorCode::AuthorityUnavailable))?;
-                let tx = control
-                    .begin_repeatable_read(&self.db)
-                    .await
-                    .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
-                let admission = self
-                    .resources
-                    .admission_state(
-                        &crate::tenancy::transaction::ReadConnection::new(&tx, &control),
-                        self.authority.load_budget(),
-                    )
-                    .await;
-                control
-                    .rollback(tx)
-                    .await
-                    .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
-                self.authority
-                    .initialize_admission(admission.map_err(|error| self.directory_failure(error))?)
-                    .map_err(Failure::from)?;
                 crate::tenancy::receipts::ordered::intent::recover(
                     &self.db,
                     &initial.installation,

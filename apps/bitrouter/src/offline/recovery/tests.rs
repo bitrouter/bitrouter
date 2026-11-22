@@ -4,6 +4,7 @@ use anyhow::Context;
 use serde_json::{Value, json};
 use std::{ffi::OsStr, io::Read, os::unix::fs::PermissionsExt, process::Stdio};
 use tokio::io::AsyncReadExt;
+mod admission;
 pub(crate) mod fixture;
 mod saturation;
 mod selected_files;

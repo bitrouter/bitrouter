@@ -79,7 +79,8 @@ async fn protect(harness: &Harness) -> Result<()> {
         harness
             .fixture
             .service
-            .current()
+            .admission_snapshot_for_test()
+            .await
             .map_err(failure)?
             .resource_admission
             .protected(&harness.route)

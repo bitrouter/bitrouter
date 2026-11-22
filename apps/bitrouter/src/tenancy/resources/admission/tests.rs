@@ -4,6 +4,7 @@ use sea_orm::DatabaseConnection;
 use serde_json::{Value, json};
 
 mod compiled;
+mod history;
 mod shared;
 
 async fn fixture() -> Result<(DatabaseConnection, Resources)> {

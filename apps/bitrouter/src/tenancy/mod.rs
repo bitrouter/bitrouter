@@ -77,7 +77,7 @@ use self::{
 
 /// Current authority store format, shared by live and offline target readers.
 /// Historical migrations keep their own fixed version transitions.
-pub(crate) const AUTHORITY_SCHEMA_VERSION: i32 = 5;
+pub(crate) const AUTHORITY_SCHEMA_VERSION: i32 = 6;
 
 const MANAGEMENT_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -756,6 +756,18 @@ impl Service {
         self.reads
             .try_acquire()
             .map_err(|_| ErrorCode::CapacityExceeded.into())
+    }
+
+    #[cfg(test)]
+    async fn admission_snapshot_for_test(&self) -> Result<Snapshot, Failure> {
+        let mut snapshot = (*self.current()?).clone();
+        snapshot.resource_admission = Arc::new(
+            self.resources
+                .admission_state(&self.db, 0)
+                .await
+                .map_err(|_| Failure::from(ErrorCode::StorageUnavailable))?,
+        );
+        Ok(snapshot)
     }
 
     #[cfg(test)]

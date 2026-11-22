@@ -35,17 +35,25 @@ async fn native_generate_content_writer_fence_is_atomic_and_preserves_original_b
     .with_usage_evidence(crate::tenancy::receipts::usage_evidence::Snapshot::default())?;
     ensure!(commit(&db, &original).await?);
     db.execute_unprepared("CREATE TRIGGER refuse_native_upgrade BEFORE UPDATE ON tenancy_installation WHEN NEW.schema_version=5 BEGIN SELECT RAISE(ABORT,'refuse native format upgrade'); END").await?;
-    ensure!(crate::db::run_migrations(&db).await.is_err());
+    ensure!(
+        crate::db::test_migrations::through_native(&db)
+            .await
+            .is_err()
+    );
     ensure!(version(&db).await? == 4 && !installed(&db).await?);
     db.execute_unprepared("DROP TRIGGER refuse_native_upgrade")
         .await?;
     let ledger = Migrator::get_migration_models(&db).await?;
     db.execute_unprepared(&format!("CREATE TRIGGER refuse_native_ledger BEFORE INSERT ON seaql_migrations WHEN NEW.version='{FENCE}' BEGIN SELECT RAISE(ABORT,'refuse native ledger'); END")).await?;
-    ensure!(crate::db::run_migrations(&db).await.is_err());
+    ensure!(
+        crate::db::test_migrations::through_native(&db)
+            .await
+            .is_err()
+    );
     ensure!(version(&db).await? == 4 && Migrator::get_migration_models(&db).await? == ledger);
     db.execute_unprepared("DROP TRIGGER refuse_native_ledger")
         .await?;
-    crate::db::run_migrations(&db).await?;
+    crate::db::test_migrations::through_native(&db).await?;
     ensure!(version(&db).await? == 5 && installed(&db).await?);
     management_mutation(&db).await?;
     let saved = lookup_candidate(
@@ -88,7 +96,9 @@ async fn native_generate_content_writer_fence_refuses_malformed_and_future_marke
         ))
         .await?;
         ensure!(
-            crate::db::run_migrations(&db).await.is_err(),
+            crate::db::test_migrations::through_native(&db)
+                .await
+                .is_err(),
             "accepted {marker} {identity:?}"
         );
         ensure!(version(&db).await? == marker && !installed(&db).await?);

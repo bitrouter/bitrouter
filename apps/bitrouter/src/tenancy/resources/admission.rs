@@ -1,8 +1,8 @@
 //! Authenticated profile associations and monotonic route-key protection.
 //!
-//! Immutable resource definitions are the durable protection record. The
-//! authority snapshot derives its bounded index from those authenticated rows;
-//! rotation, revocation and later legacy imports cannot remove old definitions.
+//! Permanent SQL witnesses address immutable definitions. Live authority keeps
+//! only the requested pins and current heads; historical cardinality never
+//! consumes publication memory or becomes an admission quota.
 
 use std::collections::{HashMap, HashSet};
 
@@ -30,20 +30,18 @@ use super::{
 #[cfg(test)]
 mod tests;
 
+pub(in crate::tenancy) mod backfill;
+pub(in crate::tenancy) mod index;
 pub(in crate::tenancy) mod profile;
 
 use profile::{Profile, View};
-
-// Limit the feature's retained operational facts, independent of the directory
-// and ordinary resource catalog. One conservative allowance covers each retained
-// profile/route identity, its compact rules, lifecycle facts and map capacity.
-const MAX_ADMISSION_FACTS: usize = 4096;
-const FACT_BYTES: usize = 4096;
 
 /// Shared authenticated admission metadata, published under the authority gate.
 #[derive(Clone, Default)]
 pub(in crate::tenancy) struct State {
     profiles: HashMap<ResourceRef, Profile>,
+    requested: HashSet<ResourceRef>,
+    loaded_keys: HashSet<ResourceKey>,
     lifecycle: lifecycle::State,
     group_rules: HashMap<(OwnerId, ResourceId), HealthProfileV1>,
     policy_keys: HashSet<ResourceKey>,
@@ -53,11 +51,68 @@ pub(in crate::tenancy) struct State {
 
 impl State {
     pub(in crate::tenancy) fn working_bytes(&self) -> std::result::Result<usize, ErrorCode> {
-        let count = self.profiles.len() + self.profiled_routes.len();
-        if count > MAX_ADMISSION_FACTS {
-            return Err(ErrorCode::CapacityExceeded);
+        // Each requested key reserves its permanent witness, current head,
+        // lifecycle and map shapes before a later rotation/revocation arrives.
+        self.loaded_keys
+            .len()
+            .checked_mul(5 * 4096)
+            .and_then(|n| {
+                self.requested
+                    .len()
+                    .checked_mul(8192)
+                    .and_then(|m| n.checked_add(m))
+            })
+            .and_then(|n| {
+                self.group_rules
+                    .len()
+                    .checked_mul(4096)
+                    .and_then(|m| n.checked_add(m))
+            })
+            .ok_or(ErrorCode::CapacityExceeded)
+    }
+
+    pub(in crate::tenancy) fn affected(&self, updates: &Self) -> bool {
+        self.loaded_keys
+            .iter()
+            .any(|key| updates.loaded_keys.contains(key))
+    }
+
+    pub(in crate::tenancy) fn publish(&mut self, updates: &Self) {
+        for key in &self.loaded_keys {
+            if !updates.loaded_keys.contains(key) {
+                continue;
+            }
+            if updates.protected_keys.contains(key) {
+                self.protected_keys.insert(key.clone());
+            }
+            // Keep the original pins; replace the transient witness/head closure.
+            self.profiles.retain(|reference, _| {
+                reference.key() != *key || self.requested.contains(reference)
+            });
+            for (reference, profile) in &updates.profiles {
+                if reference.key() == *key
+                    && (self.requested.contains(reference)
+                        || updates
+                            .lifecycle
+                            .record(reference)
+                            .is_some_and(|record| record.is_head))
+                {
+                    self.profiles.insert(reference.clone(), profile.clone());
+                }
+            }
         }
-        Ok(count * FACT_BYTES)
+        let mut lifecycle = lifecycle::State::default();
+        for record in self.lifecycle.records() {
+            if self.profiles.contains_key(&record.reference) {
+                lifecycle.insert(record.clone());
+            }
+        }
+        for record in updates.lifecycle.records() {
+            if self.profiles.contains_key(&record.reference) {
+                lifecycle.insert(record.clone());
+            }
+        }
+        self.lifecycle = lifecycle;
     }
 
     pub(in crate::tenancy) fn has_profile_key(&self, key: &ResourceKey) -> bool {
@@ -253,13 +308,16 @@ impl State {
     }
 }
 
+// Complete materialization exists only in small component tests. Production
+// startup uses resumable SQL backfill and commands use admission_in.
+#[cfg(test)]
 impl Resources {
     pub(in crate::tenancy) async fn admission_state(
         &self,
         db: &impl ConnectionTrait,
-        budget: usize,
+        _budget: usize,
     ) -> Result<State> {
-        let mut state = State::default();
+        let mut references = Vec::new();
         let mut after = None;
         loop {
             let page = storage::reference_page(db, after.as_ref()).await?;
@@ -267,54 +325,15 @@ impl Resources {
                 break;
             }
             after = page.last().cloned();
-            for reference in page {
-                if !matches!(
-                    reference.resource_kind,
-                    ResourceKind::Policy | ResourceKind::Route
-                ) {
-                    continue;
-                }
-                let artifact = self
-                    .load(db, &reference)
-                    .await
-                    .map_err(|_| anyhow::anyhow!("admission resource unavailable"))?;
-                if !artifact.definition.is_profiled() {
-                    continue;
-                }
-                ensure_admission_capacity(&state, budget)?;
-                state.insert(&artifact)?;
-                if artifact.definition.is_admission_profile() {
-                    let record = lifecycle::exact(db, &self.installation, &reference)
-                        .await?
-                        .context("admission profile has no managed lifecycle")?;
-                    state.apply_lifecycle(&record);
-                }
-            }
+            references.extend(page);
         }
-        for reference in state.profiles.keys() {
-            let revision = state
-                .lifecycle
-                .head(&reference.key())
-                .context("admission profile has no managed head")?;
-            let mut head = reference.clone();
-            head.revision_id = revision.clone();
-            ensure!(
-                state.profiles.contains_key(&head),
-                "admission profile head changes type"
-            );
-        }
-        Ok(state)
+        let header = crate::tenancy::store::startup::read_header_in(db, 4096)
+            .await?
+            .context("admission authority")?
+            .header;
+        self.admission_in(db, header.revision, &references, &[], &[])
+            .await
     }
-}
-
-fn ensure_admission_capacity(state: &State, budget: usize) -> Result<()> {
-    let bytes = state
-        .working_bytes()
-        .map_err(|_| crate::tenancy::store::directory::CapacityExceeded)?;
-    if bytes + FACT_BYTES > budget || bytes / FACT_BYTES >= MAX_ADMISSION_FACTS {
-        return Err(crate::tenancy::store::directory::CapacityExceeded.into());
-    }
-    Ok(())
 }
 
 pub(super) fn validate_graph(artifacts: &[Artifact]) -> Result<()> {
@@ -411,8 +430,24 @@ pub(super) async fn preflight_import(
     }) {
         return Ok(());
     }
-    let budget = crate::config::tenancy::capacity::AuthorityViews::default().bytes / 3;
-    let mut state = resources.admission_state(db, budget).await?;
+    let header = crate::tenancy::store::startup::read_header_in(db, 4096)
+        .await?
+        .context("admission import authority missing")?
+        .header;
+    let keys: Vec<_> = imported.iter().map(|item| item.reference.key()).collect();
+    let groups: Vec<_> = imported
+        .iter()
+        .filter_map(|item| match &item.definition {
+            Definition::AdmissionProfileV2 { profile } => profile
+                .health_group_id
+                .as_ref()
+                .map(|group| (item.reference.owner_id.clone(), group.clone())),
+            _ => None,
+        })
+        .collect();
+    let mut state = resources
+        .admission_in(db, header.revision, &[], &keys, &groups)
+        .await?;
     let mut initial = HashSet::new();
     for item in imported {
         let key = item.reference.key();
@@ -433,9 +468,6 @@ pub(super) async fn preflight_import(
                     "retained admission profile has no managed head"
                 );
             }
-        }
-        if item.definition.is_profiled() {
-            ensure_admission_capacity(&state, budget)?;
         }
         state.insert(&Artifact {
             reference: item.reference.clone(),

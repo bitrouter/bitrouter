@@ -215,7 +215,7 @@ fn mixed_expansion_then_shrink_uses_final_sum_at_full_budget() -> anyhow::Result
         Change::Credential(credential("c1", 256)?),
         Change::Credential(credential("c2", 1)?),
     ];
-    let predicted = forecast::bytes(&view, &changes, None)
+    let predicted = forecast::bytes(&view, &changes, None, None)
         .map_err(failure)?
         .ok_or_else(|| anyhow::anyhow!("affected view"))?;
     assert!(predicted <= view.bytes);
@@ -341,7 +341,7 @@ fn activation_insertion_forecasts_key_and_tree_growth() -> anyhow::Result<()> {
         authority_revision: initial.revision,
     };
     let changes = [change];
-    let predicted = forecast::bytes(&original, &changes, None)
+    let predicted = forecast::bytes(&original, &changes, None, None)
         .map_err(failure)?
         .ok_or_else(|| anyhow::anyhow!("affected view"))?;
     assert!(predicted > original.bytes);

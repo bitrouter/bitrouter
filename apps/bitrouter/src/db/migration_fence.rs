@@ -8,6 +8,7 @@ use sea_orm_migration::{MigrationTrait, MigratorTrait, seaql_migrations};
 use super::migration::{
     m20240101_000047_shared_admission_health::Migration as SharedHealth,
     m20240101_000048_native_generate_content::Migration as NativeGenerateContent,
+    m20240101_000050_admission_index_fence::Migration as AdmissionIndex,
 };
 
 /// Created only after engine checks hold metadata locks in this transaction.
@@ -24,24 +25,31 @@ impl MysqlFence<'_> {
 enum Fence {
     SharedHealth,
     NativeGenerateContent,
+    AdmissionIndex,
 }
 impl Fence {
     fn migration(&self) -> &dyn MigrationTrait {
         match self {
             Self::SharedHealth => &SharedHealth,
             Self::NativeGenerateContent => &NativeGenerateContent,
+            Self::AdmissionIndex => &AdmissionIndex,
         }
     }
     async fn apply(&self, fence: &MysqlFence<'_>) -> Result<(), DbErr> {
         match self {
             Self::SharedHealth => SharedHealth.apply_mysql(fence).await,
             Self::NativeGenerateContent => NativeGenerateContent.apply_mysql(fence).await,
+            Self::AdmissionIndex => AdmissionIndex.apply_mysql(fence).await,
         }
     }
 }
 
 pub(super) async fn mysql<M: MigratorTrait>(db: &DatabaseConnection) -> Result<(), DbErr> {
-    for fence in [Fence::SharedHealth, Fence::NativeGenerateContent] {
+    for fence in [
+        Fence::SharedHealth,
+        Fence::NativeGenerateContent,
+        Fence::AdmissionIndex,
+    ] {
         let pending = M::get_pending_migrations(db).await?;
         let Some(before) = pending
             .iter()

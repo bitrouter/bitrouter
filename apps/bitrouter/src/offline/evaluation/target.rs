@@ -43,6 +43,8 @@ pub(super) async fn validate(
                     | "sqlite_sequence"
                     | "bro_runtime_ownership"
                     | "provider_continuation_key_epoch"
+                    | "tenancy_admission_backfill"
+                    | "tenancy_admission_index"
             );
         ensure!(
             permitted || table.rows == 0,
@@ -96,6 +98,7 @@ pub(super) async fn validate(
             == i64::from(crate::tenancy::AUTHORITY_SCHEMA_VERSION),
         "current authority store format required"
     );
+    crate::tenancy::audit::recovery::fresh_admission_metadata(db, installation, false).await?;
     ensure!(
         row.try_get::<i64, _>("singleton")? == 1
             && row.try_get::<i64, _>("operation_ids")? == operations.len() as i64
@@ -206,4 +209,81 @@ pub(super) async fn validate(
         ensure!(used == 0, "destination has prior Eval sequence history");
     }
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use crate::offline::recovery::tests::fixture as producer;
+    use sea_orm::sqlx::{Connection, sqlite::SqliteConnectOptions};
+
+    #[tokio::test]
+    async fn admission_bootstrap_marker_keeps_service_sdk_eval_target_fresh() -> Result<()> {
+        let digest_key = rand::random();
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("eval-target.sqlite");
+        let live = producer::Live::open(&path, None, None).await?;
+        let provisioned = producer::provision(&live).await?;
+        live.close(&path).await?;
+        let before = std::fs::read(&path)?;
+        let mut db =
+            SqliteConnection::connect_with(&SqliteConnectOptions::new().filename(&path)).await?;
+        let inventory = crate::offline::inventory::inspect_in(&mut db, &digest_key).await?;
+        let operations = ["tenant", "principal", "binding", "credential"].map(str::to_owned);
+        let assignments = BTreeMap::from([(
+            "owner".to_owned(),
+            Assignment {
+                tenant: "tenant".try_into()?,
+                principal: "owner".try_into()?,
+            },
+        )]);
+        validate(
+            &mut db,
+            &inventory,
+            &provisioned.installation,
+            &assignments,
+            &operations,
+        )
+        .await?;
+        crate::tenancy::audit::recovery::fresh_catalog_v2_for_test(
+            &mut db,
+            &inventory,
+            &provisioned.installation,
+            true,
+        )
+        .await?;
+        for mutation in [
+            "DELETE FROM tenancy_admission_backfill",
+            "UPDATE tenancy_admission_backfill SET complete=0",
+        ] {
+            sea_orm::sqlx::query("BEGIN").execute(&mut db).await?;
+            sea_orm::sqlx::query(mutation).execute(&mut db).await?;
+            let inventory = crate::offline::inventory::inspect_in(&mut db, &digest_key).await?;
+            ensure!(
+                validate(
+                    &mut db,
+                    &inventory,
+                    &provisioned.installation,
+                    &assignments,
+                    &operations
+                )
+                .await
+                .is_err()
+            );
+            ensure!(
+                crate::tenancy::audit::recovery::fresh_catalog_v2_for_test(
+                    &mut db,
+                    &inventory,
+                    &provisioned.installation,
+                    true
+                )
+                .await
+                .is_err()
+            );
+            sea_orm::sqlx::query("ROLLBACK").execute(&mut db).await?;
+        }
+        db.close().await?;
+        ensure!(std::fs::read(&path)? == before);
+        Ok(())
+    }
 }

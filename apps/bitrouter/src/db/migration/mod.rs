@@ -60,6 +60,9 @@ mod m20240101_000046_profiled_authority;
 pub(crate) mod m20240101_000047_shared_admission_health;
 pub(crate) mod m20240101_000048_native_generate_content;
 
+mod m20240101_000049_admission_index;
+pub(crate) mod m20240101_000050_admission_index_fence;
+
 // Optional diagnostic schema is deliberately outside Migrator::migrations.
 pub(crate) mod provider_technical;
 
@@ -148,6 +151,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20240101_000046_profiled_authority::Migration),
             Box::new(m20240101_000047_shared_admission_health::Migration),
             Box::new(m20240101_000048_native_generate_content::Migration),
+            Box::new(m20240101_000049_admission_index::Migration),
+            Box::new(m20240101_000050_admission_index_fence::Migration),
         ]
     }
 }

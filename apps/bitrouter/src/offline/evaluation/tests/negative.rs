@@ -211,7 +211,8 @@ async fn target_authority_format_must_match_current_writer_before_import() -> Re
     use sea_orm::sqlx::Connection;
 
     tokio::time::timeout(TIMEOUT, async {
-        for version in [1_i64, 2, 3, 4, 6] {
+        let current = i64::from(crate::tenancy::AUTHORITY_SCHEMA_VERSION);
+        for version in (1..=current + 1).filter(|version| *version != current) {
             let mut fixture = Fixture::new().await?;
             let owner = crate::tenancy::ownership::acquire_path(&fixture.target, false)?;
             let mut db = sea_orm::sqlx::SqliteConnection::connect(&format!(
@@ -242,7 +243,7 @@ async fn target_authority_format_must_match_current_writer_before_import() -> Re
                 result.is_err_and(
                     |error| error.to_string() == "current authority store format required"
                 ),
-                "unsupported target format did not reach its pre-DML guard"
+                "unsupported target format {version} did not reach its pre-DML guard"
             );
             ensure!(!report.join("RECORDED").exists());
             unchanged_target(&fixture, &before).await?;

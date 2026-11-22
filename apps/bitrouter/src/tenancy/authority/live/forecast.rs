@@ -35,11 +35,12 @@ pub(super) fn bytes(
     view: &View,
     changes: &[Change],
     oauth: Option<(&Metadata, &Metadata)>,
+    admission: Option<&crate::tenancy::resources::admission::State>,
 ) -> Result<Option<usize>> {
     let state = &view.facts;
     let mut removed = 0;
     let mut added = 0;
-    let mut affected = false;
+    let mut affected = admission.is_some_and(|updates| state.resource_admission.affected(updates));
     for change in changes {
         let delta = match change {
             Change::Tenant(value) => state

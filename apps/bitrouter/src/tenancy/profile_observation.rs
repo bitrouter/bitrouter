@@ -92,7 +92,7 @@ impl Read<'_> {
         })
     }
 
-    pub(in crate::tenancy) fn sample(
+    pub(in crate::tenancy) async fn sample(
         &self,
         request: &AdmissionProfileObservationRequestV1,
     ) -> Result<AdmissionProfileObservationSnapshotV1, Failure> {
@@ -101,6 +101,28 @@ impl Read<'_> {
             .validate()
             .map_err(|_| Failure::from(ErrorCode::InvalidRequest))?;
         self.revision(request.expected_authority_revision)?;
+        let identity = tokio::time::timeout_at(
+            self.deadline,
+            self.service
+                .authority_read(super::actor::AuthoritySubject::Profiles {
+                    caller: self.caller.clone(),
+                    references: request.profiles.clone(),
+                }),
+        )
+        .await
+        .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))??;
+        let state = self
+            .service
+            .authority
+            .read()
+            .map_err(Failure::from)?
+            .check(&identity.lease, |view| {
+                if view.facts().revision != self.state.revision {
+                    return Err(ErrorCode::RevisionConflict);
+                }
+                Ok(view.facts().clone())
+            })
+            .map_err(Failure::from)?;
         let mut profiles = Vec::new();
         profiles
             .try_reserve_exact(request.profiles.len())
@@ -127,8 +149,7 @@ impl Read<'_> {
                 health: HealthObservation::Unavailable,
                 availability: AvailabilityObservation::AuthorityDenied,
             };
-            if let Some((current, rules)) = self.state.resource_admission.current_profile(reference)
-            {
+            if let Some((current, rules)) = state.resource_admission.current_profile(reference) {
                 let view = runtime.observe(&self.state.installation, &current, rules);
                 entry.current_profile_revision = Some(current.revision_id);
                 entry.rate = view.rate;

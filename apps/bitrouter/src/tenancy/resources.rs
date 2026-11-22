@@ -6,7 +6,7 @@
 //! closure before commit. It never reads the host's ambient routing catalog.
 //!
 //! Internal compiler profile (not public wire maxima): 4 MiB per import,
-//! 256 imported/direct references, 4096 retained/closure references, 1 MiB per
+//! 256 imported/direct references, 4096 closure references per compilation, 1 MiB per
 //! artifact, route envelope and final compiled plaintext, and 8 MiB aggregate
 //! closure plaintext. Aggregate limits are charged before retaining each item.
 //! Route resolution also preflights 256 expanded accounts/endpoints per selector
@@ -387,6 +387,7 @@ impl Resources {
                     anyhow::anyhow!("retained tenancy resource authentication failed")
                 })?;
                 self.authenticate_oauth(db, &artifact).await?;
+                admission::index::verify(self, db, &artifact).await?;
             }
             after = page.last().cloned();
         }
@@ -503,6 +504,10 @@ impl Resources {
                 },
             )
             .await?;
+            // Later members of the same health group can resolve this witness
+            // immediately. Its managed head must already exist in this same
+            // import transaction; a later graph error rolls everything back.
+            admission::initialize_import_heads(self, db, std::slice::from_ref(resource)).await?;
             self.retain_oauth(db, resource).await?;
         }
         for resource in manifest

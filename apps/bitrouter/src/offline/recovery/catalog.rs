@@ -140,6 +140,8 @@ pub(super) async fn fresh(
                 .all(|(a, e)| a.version == e.name()),
         "target schema ledger differs from this verifier"
     );
+    crate::tenancy::audit::recovery::fresh_admission_metadata(db, &target.installation_id, true)
+        .await?;
     for table in &inventory.tables {
         let permitted = matches!(
             table.name.as_str(),
@@ -156,6 +158,8 @@ pub(super) async fn fresh(
                 | "tenancy_resource_revisions"
                 | "tenancy_configurations"
                 | "tenancy_active_configurations"
+                | "tenancy_admission_backfill"
+                | "tenancy_admission_index"
         );
         ensure!(
             permitted || table.rows == 0,

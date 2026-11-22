@@ -1,3 +1,5 @@
+mod history;
+
 use super::*;
 use bitrouter_ai::tenancy::{
     admission::AdmissionAttachmentV1, identity::RevisionId, ordered::GenerationProtocol,
@@ -64,7 +66,11 @@ async fn profile_cas_rotation_has_one_winner_preserves_rules_and_reloads_exact_h
         Err(error) if error.0.code == ErrorCode::InvalidRequest)
     );
     restart(&mut fixture).await?;
-    let state = fixture.service.current().map_err(failure)?;
+    let state = fixture
+        .service
+        .admission_snapshot_for_test()
+        .await
+        .map_err(failure)?;
     ensure!(
         state
             .resource_admission
@@ -87,7 +93,11 @@ async fn profile_cas_rotation_has_one_winner_preserves_rules_and_reloads_exact_h
         )
         .await?;
     restart(&mut fixture).await?;
-    let state = fixture.service.current().map_err(failure)?;
+    let state = fixture
+        .service
+        .admission_snapshot_for_test()
+        .await
+        .map_err(failure)?;
     ensure!(
         state
             .resource_admission
@@ -204,7 +214,8 @@ async fn operator_only_profiled_route_protects_historical_configuration_after_re
     ensure!(
         !fixture
             .service
-            .current()
+            .admission_snapshot_for_test()
+            .await
             .map_err(failure)?
             .resource_admission
             .protected(&old)
@@ -237,7 +248,8 @@ async fn operator_only_profiled_route_protects_historical_configuration_after_re
     ensure!(
         fixture
             .service
-            .current()
+            .admission_snapshot_for_test()
+            .await
             .map_err(failure)?
             .resource_admission
             .protected(&old)

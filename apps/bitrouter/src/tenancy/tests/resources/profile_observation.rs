@@ -113,7 +113,7 @@ fn request(fixture: &Fixture, profiles: Vec<ResourceRef>) -> Result<Request> {
         profiles,
     })
 }
-fn read(fixture: &Fixture, request: &Request) -> Result<Snapshot> {
+async fn read(fixture: &Fixture, request: &Request) -> Result<Snapshot> {
     let read = fixture
         .service
         .profile_observation_read(
@@ -122,7 +122,7 @@ fn read(fixture: &Fixture, request: &Request) -> Result<Snapshot> {
             Instant::now() + Duration::from_secs(5),
         )
         .map_err(failure)?;
-    let snapshot = read.sample(request).map_err(failure)?;
+    let snapshot = read.sample(request).await.map_err(failure)?;
     Ok(serde_json::from_slice(
         &read.finish(&snapshot).map_err(failure)?,
     )?)
@@ -267,7 +267,7 @@ async fn standalone_versions_observe_without_routes_configurations_or_credential
     let before = durable(&fixture).await?;
     let runtime = operational(&fixture)?;
     let input = request(&fixture, vec![shared.clone(), local.clone()])?;
-    let observed = read(&fixture, &input)?;
+    let observed = read(&fixture, &input).await?;
     ensure!(observed.profiles[0].profile == shared && observed.profiles[1].profile == local);
     ensure!(
         observed.profiles[0].rate.is_none() && observed.profiles[0].observed_shared_count.is_none()
@@ -316,19 +316,19 @@ async fn current_head_rotation_retains_pins_and_both_revocation_boundaries() -> 
         )
         .await?;
         let input = request(&fixture, vec![pin.clone(), head.clone()])?;
-        let observed = read(&fixture, &input)?;
+        let observed = read(&fixture, &input).await?;
         ensure!(observed.profiles[0].profile == pin);
         for entry in &observed.profiles {
             ensure!(entry.current_profile_revision.as_ref() == Some(&head.revision_id));
             ensure!(entry.rate.as_ref().context("rate")?.member_rpm == 7);
         }
         revoke(&fixture, pin.clone(), &format!("revoke-pin-{version}")).await?;
-        let observed = read(&fixture, &request(&fixture, input.profiles.clone())?)?;
+        let observed = read(&fixture, &request(&fixture, input.profiles.clone())?).await?;
         ensure!(observed.profiles[0].availability == AvailabilityObservation::AuthorityDenied);
         ensure!(observed.profiles[1].availability == AvailabilityObservation::Eligible);
         revoked_pins.extend(input.profiles.clone());
         revoke(&fixture, head, &format!("revoke-head-{version}")).await?;
-        let observed = read(&fixture, &request(&fixture, input.profiles.clone())?)?;
+        let observed = read(&fixture, &request(&fixture, input.profiles.clone())?).await?;
         ensure!(
             observed
                 .profiles
@@ -342,7 +342,8 @@ async fn current_head_rotation_retains_pins_and_both_revocation_boundaries() -> 
     }
     restart(&mut fixture).await?;
     ensure!(
-        read(&fixture, &request(&fixture, revoked_pins)?)?
+        read(&fixture, &request(&fixture, revoked_pins)?)
+            .await?
             .profiles
             .iter()
             .all(|entry| entry.availability == AvailabilityObservation::AuthorityDenied)
@@ -389,7 +390,7 @@ async fn missing_nonprofile_and_full_ref_transplants_never_substitute_authority(
     let result = put(&fixture, fixture.operator.clone(), policy.clone()).await?;
     cases.push(reference(&policy, &result)?);
     let input = request(&fixture, cases)?;
-    let observed = read(&fixture, &input)?;
+    let observed = read(&fixture, &input).await?;
     ensure!(observed.profiles[0].availability == AvailabilityObservation::Eligible);
     for entry in &observed.profiles[1..] {
         ensure!(
@@ -418,7 +419,7 @@ async fn scheduled_real_authority_publication_between_sampling_and_finish_reject
             Instant::now() + Duration::from_secs(5),
         )
         .map_err(failure)?;
-    let sampled = reader.sample(&input).map_err(failure)?;
+    let sampled = reader.sample(&input).await.map_err(failure)?;
     let guard = fixture
         .service
         .operational
@@ -441,7 +442,9 @@ async fn scheduled_real_authority_publication_between_sampling_and_finish_reject
     );
     drop(reader);
     ensure!(
-        read(&fixture, &request(&fixture, vec![newer])?)?.profiles[0]
+        read(&fixture, &request(&fixture, vec![newer])?)
+            .await?
+            .profiles[0]
             .rate
             .as_ref()
             .context("rate")?

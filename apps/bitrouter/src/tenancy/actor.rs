@@ -134,6 +134,10 @@ pub(super) enum AuthoritySubject {
         reuse: bool,
     },
     Caller(Caller),
+    Profiles {
+        caller: Caller,
+        references: Vec<bitrouter_ai::tenancy::configuration::ResourceRef>,
+    },
     Tenant {
         caller: Caller,
         tenant: bitrouter_ai::tenancy::identity::TenantId,

@@ -73,6 +73,7 @@ pub(super) enum Change {
     Credential(Credential),
     Configuration(StoredConfiguration),
     Resource(configuration_store::StoredResource),
+    AdmissionIndex(super::resources::admission::index::Entry),
     ResourceLifecycle {
         installation: InstallationId,
         record: super::resources::lifecycle::Record,
@@ -157,6 +158,7 @@ async fn installation(db: &impl ConnectionTrait, state: &Snapshot) -> Result<()>
 
 async fn write_change(db: &impl ConnectionTrait, change: &Change) -> Result<()> {
     match change {
+        Change::AdmissionIndex(entry) => super::resources::admission::index::write(db, entry).await,
         Change::Resource(record) => configuration_store::insert_resource(db, record).await,
         Change::ResourceLifecycle {
             installation,
