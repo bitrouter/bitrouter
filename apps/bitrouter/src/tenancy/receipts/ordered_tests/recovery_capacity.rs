@@ -157,6 +157,10 @@ async fn bootstrap_backlog(count: usize, per_tenant: usize) -> Result<()> {
         }
         previous = Some(digests);
         service.shutdown().await?;
+        // A process restart closes its pool before reacquiring the file owner.
+        let db = service.db.clone();
+        drop(service);
+        db.close().await?;
     }
     Ok(())
 }
