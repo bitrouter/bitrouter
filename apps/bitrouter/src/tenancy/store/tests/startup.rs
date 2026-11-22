@@ -1,5 +1,5 @@
 use super::*;
-use crate::tenancy::store::startup::{self as loader, Budget, Format};
+use crate::tenancy::store::startup::{self as loader, Budget};
 use bitrouter_ai::tenancy::operation::OperationStatus;
 
 fn budget(rows: usize) -> Budget {
@@ -69,7 +69,6 @@ async fn header_loader_validates_all_pages_and_returns_no_directory() -> Result<
             credentials: 300
         }
     );
-    assert_eq!(loaded.format, Format::V6);
     assert_eq!(loaded.header.installation, header()?.installation);
     assert_eq!(loaded.header.operation_ids, 1);
     let facts = Snapshot::from_header(&loaded.header);
@@ -93,9 +92,14 @@ async fn header_loader_validates_all_pages_and_returns_no_directory() -> Result<
 }
 
 #[tokio::test]
-async fn historical_authority_formats_refuse_without_changing_stop_or_counters() -> Result<()> {
+async fn unsupported_authority_formats_refuse_without_changing_stop_or_counters() -> Result<()> {
     let db = database().await?;
     seed(&db).await?;
+    let mut current = loader::read_header_in(&db, ROW_BYTES)
+        .await?
+        .context("current header")?
+        .header;
+    current.saturated = true;
     for format in [1, 2, 3, 4, 5, 7] {
         sql(
             &db,
@@ -103,16 +107,24 @@ async fn historical_authority_formats_refuse_without_changing_stop_or_counters()
         )
         .await?;
         assert!(loader::read_header_in(&db, ROW_BYTES).await.is_err());
+        assert!(initial_header(&db, Utc::now()).await.is_err());
+        assert!(loader::write::write_header_in(&db, &current).await.is_err());
+        assert!(
+            installation(&db, &Snapshot::from_header(&current))
+                .await
+                .is_err()
+        );
         let row = db
             .query_one(Statement::from_string(
                 db.get_database_backend(),
-                "SELECT schema_version,saturated,operation_ids FROM tenancy_installation",
+                "SELECT schema_version,saturated,operation_ids,safety_operation_ids FROM tenancy_installation",
             ))
             .await?
             .context("header")?;
         assert_eq!(row.try_get::<i32>("", "schema_version")?, format);
         assert!(row.try_get::<bool>("", "saturated")?);
         assert_eq!(row.try_get::<i64>("", "operation_ids")?, 1);
+        assert_eq!(row.try_get::<i64>("", "safety_operation_ids")?, 0);
     }
     Ok(())
 }
@@ -142,7 +154,6 @@ async fn operation_history_crosses_100000_and_validates_the_last_row() -> Result
         .context("missing header")?;
     assert_eq!(loaded.header.operation_ids, 100001);
     assert!(!loaded.header.saturated);
-    assert_eq!(loaded.format, Format::V6);
     let retained = operation(
         &db,
         &loaded.header.installation,
@@ -209,18 +220,9 @@ async fn header_projection_has_exact_byte_boundary_and_rejects_bad_format() -> R
 }
 
 #[tokio::test]
-async fn current_header_preserves_counts_and_stop_latch_and_refuses_v1() -> Result<()> {
+async fn current_header_preserves_counts_and_stop_latch() -> Result<()> {
     let db = database().await?;
     seed(&db).await?;
-    sql(&db, "UPDATE tenancy_installation SET schema_version=1,operation_ids=99487,safety_operation_ids=511,saturated=0").await?;
-    assert!(loader::read_header_in(&db, ROW_BYTES).await.is_err());
-    let row = db.query_one(Statement::from_string(DatabaseBackend::Sqlite,
-        "SELECT schema_version,operation_ids,safety_operation_ids,saturated FROM tenancy_installation")).await?.context("old rejection fixture disappeared")?;
-    assert_eq!(row.try_get::<i32>("", "schema_version")?, 1);
-    assert_eq!(row.try_get::<i64>("", "operation_ids")?, 99487);
-    assert_eq!(row.try_get::<i64>("", "safety_operation_ids")?, 511);
-    assert!(!row.try_get::<bool>("", "saturated")?);
-    sql(&db, "UPDATE tenancy_installation SET schema_version=5").await?;
     // Current counters have no historical fixed-capacity ceiling. The header
     // preserves both counters and every existing stop cause exactly.
     for (ordinary, safety, saturated) in [
@@ -234,7 +236,6 @@ async fn current_header_preserves_counts_and_stop_latch_and_refuses_v1() -> Resu
         let loaded = loader::read_header_in(&db, ROW_BYTES)
             .await?
             .context("current header")?;
-        assert_eq!(loaded.format, Format::V5);
         assert_eq!(loaded.header.operation_ids, ordinary);
         assert_eq!(loaded.header.safety_operation_ids, safety);
         assert_eq!(loaded.header.saturated, saturated);
@@ -250,6 +251,26 @@ async fn current_header_preserves_counts_and_stop_latch_and_refuses_v1() -> Resu
         assert_eq!(loaded.header.safety_operation_ids, 0);
         assert_eq!(loaded.header.saturated, saturated);
     }
+    let mut next = loader::read_header_in(&db, ROW_BYTES)
+        .await?
+        .context("stopped current header")?
+        .header;
+    next.saturated = false;
+    assert!(loader::write::write_header_in(&db, &next).await.is_err());
+    next.saturated = true;
+    next.operation_ids = u64::from(u32::MAX) + 1;
+    loader::write::write_header_in(&db, &next).await?;
+    let retained = loader::read_header_in(&db, ROW_BYTES)
+        .await?
+        .context("updated current header")?;
+    assert!(retained.header.saturated);
+    assert_eq!(retained.header.operation_ids, next.operation_ids);
+    assert_eq!(
+        retained.header.safety_operation_ids,
+        next.safety_operation_ids
+    );
+    next.operation_ids = u64::MAX;
+    assert!(loader::write::write_header_in(&db, &next).await.is_err());
     for invalid in [
         "UPDATE tenancy_installation SET operation_ids=-1",
         "UPDATE tenancy_installation SET operation_ids=1,safety_operation_ids=-1",

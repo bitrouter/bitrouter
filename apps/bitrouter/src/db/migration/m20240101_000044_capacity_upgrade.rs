@@ -70,10 +70,12 @@ async fn table(db: &impl ConnectionTrait, definition: TableCreateStatement) -> R
         if actual != expected {
             return Err(incompatible());
         }
-    } else if name == "tenancy_resource_lifecycle" && db.query_one(Statement::from_string(DatabaseBackend::Sqlite,
-        "SELECT 1 FROM seaql_migrations WHERE version='m20240101_000049_admission_index' LIMIT 1")).await?.is_some() {
-        let expected = super::m20240101_000049_admission_index::head_index().to_string(SqliteQueryBuilder);
-        if indexes.len() != 1 || normalized(&indexes[0].try_get::<String>("", "sql")?) != normalized(&expected) {
+    } else if name == "tenancy_resource_lifecycle" {
+        let expected =
+            super::m20240101_000049_admission_index::head_index().to_string(SqliteQueryBuilder);
+        if indexes.len() != 1
+            || normalized(&indexes[0].try_get::<String>("", "sql")?) != normalized(&expected)
+        {
             return Err(incompatible());
         }
     } else if !indexes.is_empty() {
@@ -96,6 +98,9 @@ pub(crate) async fn validate_authority(db: &impl ConnectionTrait) -> Result<(), 
         DatabaseBackend::Sqlite,
     ));
     definitions.push(super::m20240101_000039_resource_lifecycle::definition(
+        DatabaseBackend::Sqlite,
+    ));
+    definitions.push(super::m20240101_000049_admission_index::definition(
         DatabaseBackend::Sqlite,
     ));
     for definition in definitions {

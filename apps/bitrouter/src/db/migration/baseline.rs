@@ -34,6 +34,7 @@ pub(super) async fn open(connection: SchemaManagerConnection<'_>) -> Result<(), 
         // validates. SQLite/PostgreSQL commit the schema and marker together.
         // MySQL's implicit DDL commits cannot publish a half-built baseline.
         super::Migrator::install(&tx).await?;
+        validate(&tx).await?;
         tx.execute(Statement::from_sql_and_values(
             tx.get_database_backend(),
             match tx.get_database_backend() {
@@ -48,7 +49,6 @@ pub(super) async fn open(connection: SchemaManagerConnection<'_>) -> Result<(), 
             ],
         ))
         .await?;
-        validate(&tx).await?;
         Ok(())
     }
     .await;
@@ -112,6 +112,7 @@ impl MigrationTrait for Migration {
         super::m20240101_000037_owned_oauth::initialize_current(manager).await?;
         super::m20240101_000038_eval_import_provenance::initialize_current(manager).await?;
         super::m20240101_000039_resource_lifecycle::initialize_current(manager).await?;
+        super::m20240101_000049_admission_index::initialize_current(manager).await?;
         receipts(manager).await?;
         validate_tables(manager.get_connection()).await
     }
@@ -154,7 +155,7 @@ async fn receipts(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
 /// Shared read-only validators remain usable by startup and stopped recovery.
 pub(super) async fn validate(db: &impl ConnectionTrait) -> Result<(), DbErr> {
     if db.get_database_backend() != DatabaseBackend::Sqlite {
-        crate::db::current_schema::validate(db).await?;
+        super::validate_admission_index(db).await?;
     }
     validate_tables(db).await
 }
@@ -163,7 +164,7 @@ async fn validate_tables(db: &impl ConnectionTrait) -> Result<(), DbErr> {
     super::m20240101_000040_usage_evidence::validate(db).await?;
     super::m20240101_000045_ordered_receipts::validate(db).await?;
     if db.get_database_backend() == DatabaseBackend::Sqlite {
-        super::m20240101_000044_capacity_upgrade::validate_authority(db).await?;
+        super::validate_admission_index(db).await?;
         super::m20240101_000043_unknown_obligations::validate(db).await?;
         super::m20240101_000037_owned_oauth::validate(db).await?;
     }
@@ -207,12 +208,11 @@ mod tests {
 
     #[tokio::test]
     async fn sqlite_current_baseline_matches_frozen_catalog() -> Result<()> {
-        // Independently captured sqlite_schema: 55 tables and 59 explicit indexes
-        // from the prior retained fixture. The sole schema retirement is the
-        // capacity-upgrade table. No rows, keys or old executable are included.
+        // The reviewed SQLite catalog includes the admission witness table
+        // and the lifecycle head lookup.
         let frozen: Vec<SchemaObject> =
             serde_json::from_str(include_str!("baseline/fixtures/sqlite-current-schema.json"))?;
-        ensure!(frozen.len() == 113);
+        ensure!(frozen.len() == 115);
         let db = crate::db::connect("sqlite::memory:").await?;
         super::super::Migrator::up(&db, None).await?;
         let rows = db.query_all(Statement::from_string(DatabaseBackend::Sqlite,

@@ -29,11 +29,8 @@ use super::{
 #[cfg(test)]
 mod tests;
 
-pub(in crate::tenancy) mod backfill;
 pub(in crate::tenancy) mod index;
 pub(in crate::tenancy) mod profile;
-
-use profile::View;
 
 /// Shared authenticated admission metadata, published under the authority gate.
 #[derive(Clone, Default)]
@@ -270,7 +267,7 @@ impl State {
 }
 
 // Complete materialization exists only in small component tests. Production
-// startup uses resumable SQL backfill and commands use admission_in.
+// startup authenticates retained witnesses and commands use admission_in.
 #[cfg(test)]
 impl Resources {
     pub(in crate::tenancy) async fn admission_state(
@@ -399,7 +396,7 @@ pub(super) async fn preflight_import(
     let groups: Vec<_> = imported
         .iter()
         .filter_map(|item| match &item.definition {
-            Definition::AdmissionProfileV2 { profile } => profile
+            Definition::AdmissionProfile { profile } => profile
                 .health_group_id
                 .as_ref()
                 .map(|group| (item.reference.owner_id.clone(), group.clone())),

@@ -6,7 +6,7 @@
 
 mod operations;
 mod retained;
-mod write;
+pub(super) mod write;
 
 use anyhow::{Context, Result, ensure};
 use sea_orm::{
@@ -18,27 +18,11 @@ use super::directory::{
     self, CapacityExceeded, PageBudget,
     query::{self, Table},
 };
-use crate::tenancy::model::AuthorityHeader;
+use crate::tenancy::{AUTHORITY_SCHEMA_VERSION, model::AuthorityHeader};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::tenancy) enum Format {
-    V5,
-    V6,
-}
-
-impl Format {
-    fn number(self) -> i32 {
-        match self {
-            Self::V5 => 5,
-            Self::V6 => 6,
-        }
-    }
-}
-
-/// Small publication header with the explicitly retained internal store format.
+/// Small publication header decoded from the current authority store format.
 pub(in crate::tenancy) struct LoadedHeader {
     pub header: AuthorityHeader,
-    pub format: Format,
 }
 
 /// Aggregate transient working reservation, independent of total directory size.
@@ -74,15 +58,13 @@ fn decode_header(row: &QueryResult) -> Result<LoadedHeader> {
         row.try_get::<i32>("", "singleton")? == 1,
         "invalid authority singleton"
     );
-    let format = match row.try_get::<i32>("", "schema_version")? {
-        5 => Format::V5,
-        6 => Format::V6,
-        _ => anyhow::bail!("unsupported authority store format"),
-    };
+    ensure!(
+        row.try_get::<i32>("", "schema_version")? == AUTHORITY_SCHEMA_VERSION,
+        "unsupported authority store format"
+    );
     let created_at = super::string(row, "created_at")?;
     chrono::DateTime::parse_from_rfc3339(&created_at)?;
-    let loaded = LoadedHeader {
-        format,
+    Ok(LoadedHeader {
         header: AuthorityHeader {
             installation: super::string(row, "installation_id")?.try_into()?,
             revision: u64::try_from(row.try_get::<i64>("", "authority_revision")?)?.try_into()?,
@@ -91,8 +73,7 @@ fn decode_header(row: &QueryResult) -> Result<LoadedHeader> {
             saturated: row.try_get("", "saturated")?,
             created_at,
         },
-    };
-    Ok(loaded)
+    })
 }
 
 /// Read only metadata; this alone is NOT a completed startup validation.
@@ -104,8 +85,7 @@ pub(in crate::tenancy) async fn read_header_in(
     query::one(db, query::select(db, Table::Header, bytes)?, decode_header).await
 }
 
-/// Validate every core authority row, returning only its small header/format.
-/// No format upgrade, saturation reset, history deletion or initialization occurs.
+/// Validate every core authority row, returning only its small header.
 /// `None` means all core authority tables are empty; companion recovery owners
 /// must still validate their own epochs, obligations and artifacts before ready.
 pub(in crate::tenancy) async fn load_header_in(
@@ -173,30 +153,7 @@ async fn load_directory_header_with_rows_in(
     let page = budget.page()?;
     let bytes = page.bytes / page.rows;
     let Some(loaded) = read_header_in(db, bytes).await? else {
-        for table in [
-            Table::Tenant,
-            Table::Principal,
-            Table::Binding,
-            Table::Credential,
-            Table::Operation,
-            Table::Lifecycle,
-            Table::Resource,
-            Table::ConfigurationBody,
-            Table::Active,
-        ] {
-            // Only a scalar crosses the driver even for corrupt, oversized cells.
-            let query = sea_orm::sea_query::Query::select()
-                .expr(Expr::val(1_i32))
-                .from(Alias::new(table.name()))
-                .limit(1)
-                .to_owned();
-            ensure!(
-                db.query_one(db.get_database_backend().build(&query))
-                    .await?
-                    .is_none(),
-                "authority has no installation identity"
-            );
-        }
+        super::ensure_empty_authority(db).await?;
         return Ok(None);
     };
     let started = std::time::Instant::now();
@@ -267,24 +224,16 @@ fn order_page(
     Ok(query)
 }
 
-/// Write metadata in caller-owned transaction custody, preserving format and stop.
-pub(in crate::tenancy) async fn write_header_in(
-    db: &impl ConnectionTrait,
-    next: &LoadedHeader,
-) -> Result<()> {
-    write::write_header_in(db, next).await
-}
-
-/// Header-based equivalent of the legacy writer, under the original transaction.
+/// Apply authority metadata and the operation receipt in the caller's transaction.
 pub(in crate::tenancy) async fn write_in(
     tx: &sea_orm::DatabaseTransaction,
-    next: &LoadedHeader,
+    next: &AuthorityHeader,
     changes: &[super::Change],
     operation: &super::Operation,
 ) -> Result<()> {
     for change in changes {
         super::write_change(tx, change).await?;
     }
-    write_header_in(tx, next).await?;
-    super::insert_operation_in(tx, &next.header.installation, operation).await
+    write::write_header_in(tx, next).await?;
+    super::insert_operation_in(tx, &next.installation, operation).await
 }

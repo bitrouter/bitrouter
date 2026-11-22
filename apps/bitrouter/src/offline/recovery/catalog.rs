@@ -159,7 +159,6 @@ pub(super) async fn fresh(
                 | "tenancy_resource_lifecycle"
                 | "tenancy_configurations"
                 | "tenancy_active_configurations"
-                | "tenancy_admission_backfill"
                 | "tenancy_admission_index"
         );
         ensure!(

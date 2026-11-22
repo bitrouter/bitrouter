@@ -1,6 +1,6 @@
 //! Normal Service/SDK producers, then the original stopped offline readers.
 use super::*;
-use sea_orm::sqlx::{Connection, Row, SqliteConnection, sqlite::SqliteConnectOptions};
+use sea_orm::sqlx::{Connection, SqliteConnection, sqlite::SqliteConnectOptions};
 
 async fn catalogs(
     db: &mut SqliteConnection,
@@ -13,37 +13,25 @@ async fn catalogs(
         db,
         &measured,
         &target.installation_id,
-        false,
     )
     .await
 }
 
 fn policy(installation: &bitrouter_ai::tenancy::identity::InstallationId) -> Result<Value> {
-    let mut document = crate::policy_lock::PolicyLock::default();
-    document.policies.insert(
-        "selected".into(),
-        crate::policy_lock::PolicyDefinition {
-            tiers: [(
-                "economy".into(),
-                bitrouter_ai::routing::PolicyModelTarget::model_only("fixture:model-a".into()),
-            )]
-            .into(),
-            default_tier: Some("economy".into()),
-            ..Default::default()
-        },
-    );
+    let document = json!({"spec_version":bitrouter_ai::policy::SPEC_VERSION,"policies":{
+        "selected":{"tiers":{"economy":{"model":"fixture:model-a"}},"default_tier":"economy"}
+    }});
     let mut manifest = fixture::manifest(installation);
     manifest["resources"].as_array_mut().context("resources")?.push(json!({
         "reference":{"owner_kind":"tenant","owner_id":"tenant","resource_kind":"policy","resource_id":"selected","revision_id":"v1"},
-        "definition":{"kind":"policy","name":"selected","document":document}
+        "definition":{"kind":"policy","name":"selected","document":document,"dependencies":[]}
     }));
     Ok(manifest)
 }
 
 #[tokio::test]
 #[ignore = "requires explicit BITROUTER_TEST_RECOVERY_KEY; real Service/SDK and v1/v2 readers, no bro binary"]
-async fn admission_metadata_preserves_fresh_service_sdk_policy_and_upgraded_targets() -> Result<()>
-{
+async fn admission_metadata_preserves_fresh_service_sdk_policy_and_target() -> Result<()> {
     crate::runtime_crypto::DeploymentKey::from_environment(fixture::KEY_ENV)?;
     let digest_key = rand::random();
     let fixture = Fixture::new().await?;
@@ -133,29 +121,7 @@ async fn admission_metadata_preserves_fresh_service_sdk_policy_and_upgraded_targ
     let plan_path = fixture.directory.path().join("admission-plan.json");
     fixture::private_json(&plan_path, &plan)?;
     let target: plan::Target = serde_json::from_value(plan["target"].clone())?;
-    for upgraded in [false, true] {
-        if upgraded {
-            // A previously ready schema-five target with exactly the same
-            // approved resource/configuration/SDK operation history.
-            let mut db = SqliteConnection::connect_with(
-                &SqliteConnectOptions::new().filename(&fixture.target),
-            )
-            .await?;
-            for sql in [
-                "DROP TABLE tenancy_admission_index",
-                "DROP TABLE tenancy_admission_backfill",
-                "DROP INDEX tenancy_resource_head_lookup",
-                "DELETE FROM seaql_migrations WHERE version IN ('m20240101_000049_admission_index','m20240101_000050_admission_index_fence')",
-                "UPDATE tenancy_installation SET schema_version=5",
-            ] {
-                sea_orm::sqlx::query(sql).execute(&mut db).await?;
-            }
-            db.close().await?;
-            fixture::Live::open(&fixture.target, Some(&import), Some(fixture::KEY_ENV))
-                .await?
-                .close(&fixture.target)
-                .await?;
-        }
+    {
         let before = stopped_bytes(&fixture.target)?;
         let mut db = SqliteConnection::connect_with(
             &SqliteConnectOptions::new()
@@ -164,12 +130,6 @@ async fn admission_metadata_preserves_fresh_service_sdk_policy_and_upgraded_targ
                 .immutable(true),
         )
         .await?;
-        let row =
-            sea_orm::sqlx::query("SELECT complete,cursor_json FROM tenancy_admission_backfill")
-                .fetch_one(&mut db)
-                .await?;
-        ensure!(row.try_get::<i64, _>("complete")? == 1);
-        ensure!((row.try_get::<String, _>("cursor_json")? != "null") == upgraded);
         let witnesses: i64 =
             sea_orm::sqlx::query_scalar("SELECT COUNT(*) FROM tenancy_admission_index")
                 .fetch_one(&mut db)
@@ -177,11 +137,7 @@ async fn admission_metadata_preserves_fresh_service_sdk_policy_and_upgraded_targ
         ensure!(witnesses == 1);
         catalogs(&mut db, &target, &digest_key).await?;
         db.close().await?;
-        let output = fixture.directory.path().join(if upgraded {
-            "admission-upgraded"
-        } else {
-            "admission-new"
-        });
+        let output = fixture.directory.path().join("admission-current");
         let report = crate::offline::recover_with_budget(
             &plan_path,
             &output,
@@ -201,12 +157,7 @@ async fn admission_metadata_preserves_fresh_service_sdk_policy_and_upgraded_targ
         SqliteConnection::connect_with(&SqliteConnectOptions::new().filename(&fixture.target))
             .await?;
     for mutation in [
-        "DELETE FROM tenancy_admission_backfill",
         "DELETE FROM tenancy_admission_index",
-        "UPDATE tenancy_admission_backfill SET complete=0",
-        "UPDATE tenancy_admission_backfill SET installation_id='other'",
-        "UPDATE tenancy_admission_backfill SET authority_revision=9007199254740991",
-        "UPDATE tenancy_admission_backfill SET cursor_json='{}'",
         "UPDATE tenancy_admission_index SET index_kind='health'",
         "UPDATE tenancy_admission_index SET reference_json='{}'",
         "extra operational table",
@@ -232,7 +183,6 @@ async fn admission_metadata_preserves_fresh_service_sdk_policy_and_upgraded_targ
                 &mut db,
                 &measured,
                 &target.installation_id,
-                false
             )
             .await
             .is_err(),
@@ -241,8 +191,7 @@ async fn admission_metadata_preserves_fresh_service_sdk_policy_and_upgraded_targ
         sea_orm::sqlx::query("ROLLBACK").execute(&mut db).await?;
     }
     db.close().await?;
-    // Normal unkeyed Service/SDK authority provisioning remains fresh for Eval;
-    // it has the completed empty marker and no resource/key-epoch history.
+    // Unkeyed authority provisioning has no resource witnesses.
     let mut db = SqliteConnection::connect_with(
         &SqliteConnectOptions::new()
             .filename(&fixture.source)
@@ -256,17 +205,6 @@ async fn admission_metadata_preserves_fresh_service_sdk_policy_and_upgraded_targ
         false,
     )
     .await?;
-    #[cfg(feature = "core")]
-    {
-        let measured = inventory::inspect_in(&mut db, &digest_key).await?;
-        crate::tenancy::audit::recovery::fresh_catalog_v2_for_test(
-            &mut db,
-            &measured,
-            &fixture.source_provision.installation,
-            true,
-        )
-        .await?;
-    }
     db.close().await?;
     Ok(())
 }

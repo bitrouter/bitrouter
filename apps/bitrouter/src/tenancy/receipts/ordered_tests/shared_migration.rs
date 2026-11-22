@@ -1,16 +1,16 @@
-//! The existing ordered codec writes the predecessor's exact format-three rows.
+//! The current baseline preserves immutable ordered receipt bytes.
 use super::*;
 use sea_orm_migration::MigratorTrait;
 
 #[tokio::test]
 async fn current_baseline_preserves_ordered_receipt_evidence_and_digest_bytes() -> Result<()> {
     let dir = tempfile::tempdir()?;
-    let path = dir.path().join("format-three.sqlite");
+    let path = dir.path().join("current-receipts.sqlite");
     let (lease, proof, startup) = acquisition(&path)?;
     let db = crate::db::connect_tenancy(&format!("sqlite://{}?mode=rwc", path.display()), &lease)
         .await?;
     crate::db::migration::Migrator::up(&db, None).await?;
-    db.execute_unprepared("INSERT INTO tenancy_installation(singleton,installation_id,schema_version,authority_revision,operation_ids,safety_operation_ids,saturated,created_at) VALUES(1,'installation',5,0,0,0,0,'2026-10-25T00:00:00Z')").await?;
+    db.execute_unprepared(&format!("INSERT INTO tenancy_installation(singleton,installation_id,schema_version,authority_revision,operation_ids,safety_operation_ids,saturated,created_at) VALUES(1,'installation',{},0,0,0,0,'2026-10-25T00:00:00Z')", crate::tenancy::AUTHORITY_SCHEMA_VERSION)).await?;
     let installation = "installation".try_into()?;
     let mut retained = Vec::new();
     for count in [1, 8, 9, 64] {
@@ -32,9 +32,10 @@ async fn current_baseline_preserves_ordered_receipt_evidence_and_digest_bytes() 
     ensure!(
         crate::tenancy::store::startup::read_header_in(&db, 4096)
             .await?
-            .context("historical header")?
-            .format
-            == crate::tenancy::store::startup::Format::V5
+            .context("current header")?
+            .header
+            .installation
+            == installation
     );
     crate::db::run_migrations(&db).await?;
     ensure!(

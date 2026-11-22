@@ -71,7 +71,7 @@ pub(in crate::tenancy::resources) fn entries(
         key: Key::resource(&reference.key())?,
         reference: reference.clone(),
     }];
-    if let Definition::AdmissionProfileV2 { profile } = definition
+    if let Definition::AdmissionProfile { profile } = definition
         && let Some(group) = &profile.health_group_id
     {
         entries.push(Entry {
@@ -92,11 +92,7 @@ fn predicate(key: &Key) -> Cond {
 }
 
 /// Bounded SQL projection before driver allocation, including embedded NULs.
-pub(super) fn bounded(
-    db: &impl ConnectionTrait,
-    column: &str,
-    bytes: u64,
-) -> sea_orm::sea_query::SimpleExpr {
+fn bounded(db: &impl ConnectionTrait, column: &str, bytes: u64) -> sea_orm::sea_query::SimpleExpr {
     let value = Expr::col(Alias::new(column));
     let length = if db.get_database_backend() == sea_orm::DatabaseBackend::Sqlite {
         Func::cust(Alias::new("length")).arg(value.clone().cast_as(Alias::new("BLOB")))
@@ -293,7 +289,7 @@ pub(in crate::tenancy::resources) async fn verify(
         "retained admission witness missing"
     );
     let groups: Vec<_> = match &artifact.definition {
-        Definition::AdmissionProfileV2 { profile } => profile
+        Definition::AdmissionProfile { profile } => profile
             .health_group_id
             .as_ref()
             .map(|group| (artifact.reference.owner_id.clone(), group.clone()))
@@ -332,7 +328,7 @@ pub(in crate::tenancy::resources) async fn retain(
         return Ok(());
     }
     let groups = match &artifact.definition {
-        Definition::AdmissionProfileV2 { profile } => profile
+        Definition::AdmissionProfile { profile } => profile
             .health_group_id
             .as_ref()
             .map(|group| (artifact.reference.owner_id.clone(), group.clone()))

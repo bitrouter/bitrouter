@@ -159,22 +159,20 @@ impl Worker {
             .collect();
         let keys = match command {
             Command::Resource(_, input) => vec![input.key.clone()],
-            Command::ResourceV2(_, input) => vec![input.key.clone()],
-            Command::ResourceV3(_, input) => vec![input.key.clone()],
             _ => Vec::new(),
         };
         let groups = match command {
-            Command::ResourceV2(_, input) => {
-                let bitrouter_ai::tenancy::resources_v2::DefinitionV2::AdmissionProfileV2 {
-                    profile,
-                } = &input.definition;
-                profile
-                    .health_group_id
-                    .as_ref()
-                    .map(|group| (input.key.owner_id.clone(), group.clone()))
-                    .into_iter()
-                    .collect::<Vec<_>>()
-            }
+            Command::Resource(_, input) => match &input.definition {
+                bitrouter_ai::tenancy::resources::Definition::AdmissionProfile { profile } => {
+                    profile
+                        .health_group_id
+                        .as_ref()
+                        .map(|group| (input.key.owner_id.clone(), group.clone()))
+                        .into_iter()
+                        .collect::<Vec<_>>()
+                }
+                _ => Vec::new(),
+            },
             _ => Vec::new(),
         };
         old.resource_admission = std::sync::Arc::new(

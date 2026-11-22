@@ -1,11 +1,11 @@
 use super::*;
-use sea_orm::{Statement, TransactionTrait};
+use sea_orm::{DatabaseTransaction, Statement, TransactionTrait};
 
 impl Resources {
-    /// Synthetic predecessor history: genuine sealed artifacts, no derived index.
+    /// Seed current sealed history, including its lifecycle and permanent witnesses.
     pub(in crate::tenancy) async fn seed_admission_history_for_test(
         &self,
-        db: &impl ConnectionTrait,
+        db: &DatabaseTransaction,
         profiles: usize,
         routes: usize,
     ) -> Result<(ResourceRef, ResourceRef)> {
@@ -19,7 +19,7 @@ impl Resources {
             definition: credential.definition,
             envelope: None,
         };
-        configuration_store::insert_resource(db, &storage::seal(self, &artifact)?).await?;
+        storage::retain(self, db, &artifact).await?;
         let mut latest = reference(ResourceKind::Policy, "profile", "v1")?;
         for n in 0..profiles {
             let revision = if n == 0 {
@@ -33,6 +33,9 @@ impl Resources {
                 definition: imported.definition,
                 envelope: None,
             };
+            if n == 0 {
+                index::retain(self, db, &artifact).await?;
+            }
             configuration_store::insert_resource(db, &storage::seal(self, &artifact)?).await?;
             lifecycle::write(
                 db,
@@ -55,7 +58,7 @@ impl Resources {
                 definition: imported.definition.clone(),
                 envelope: Some(envelope.clone()),
             };
-            configuration_store::insert_resource(db, &storage::seal(self, &artifact)?).await?;
+            storage::retain(self, db, &artifact).await?;
         }
         Ok((latest, reference(ResourceKind::Route, "route", "r000000")?))
     }
@@ -70,61 +73,28 @@ async fn scalar(db: &impl ConnectionTrait, sql: &str) -> Result<i64> {
 }
 
 #[tokio::test]
-async fn admission_backfill_interruption_rollback_and_completeness_fail_closed() -> Result<()> {
+async fn admission_startup_rejects_missing_current_history_witness() -> Result<()> {
     let (db, resources) = fixture().await?;
+    let tx = db.begin().await?;
     resources
-        .seed_admission_history_for_test(&db, 65, 3)
+        .seed_admission_history_for_test(&tx, 65, 3)
         .await?;
-    // Persist one page, then interrupt the next page before COMMIT.
-    let tx = db.begin().await?;
-    ensure!(!backfill::page(&resources, &tx).await?);
     tx.commit().await?;
-    let tx = db.begin().await?;
-    ensure!(!backfill::page(&resources, &tx).await?);
-    tx.rollback().await?;
-    ensure!(scalar(&db, "SELECT COUNT(*) AS n FROM tenancy_admission_index").await? == 1);
-    loop {
-        let tx = db.begin().await?;
-        let complete = backfill::page(&resources, &tx).await?;
-        tx.commit().await?;
-        if complete {
-            break;
-        }
-    }
     ensure!(scalar(&db, "SELECT COUNT(*) AS n FROM tenancy_admission_index").await? == 2);
     resources.authenticate_retained(&db).await?;
     let tx = db.begin().await?;
     tx.execute_unprepared("DELETE FROM tenancy_admission_index WHERE resource_kind='route'")
         .await?;
-    // A completed cursor cannot bless an erased permanent protection witness.
-    ensure!(backfill::page(&resources, &tx).await?);
     ensure!(resources.authenticate_retained(&tx).await.is_err());
     tx.rollback().await?;
     resources.authenticate_retained(&db).await?;
-    for assignment in [
-        "installation_id='other'",
-        "authority_revision=-1",
-        "authority_revision=9007199254740991",
-        "cursor_json=zeroblob(1048576)",
-    ] {
-        let tx = db.begin().await?;
-        tx.execute_unprepared(&format!(
-            "UPDATE tenancy_admission_backfill SET {assignment}"
-        ))
-        .await?;
-        ensure!(
-            backfill::page(&resources, &tx).await.is_err(),
-            "{assignment}"
-        );
-        tx.rollback().await?;
-    }
     Ok(())
 }
 
 #[tokio::test]
 async fn admission_batch_deduplicates_group_keys_and_rejects_foreign_witnesses() -> Result<()> {
     let (db, resources) = fixture().await?;
-    shared::import_v2(
+    import(
         &resources,
         &db,
         vec![shared::shared("first", 1)?, shared::shared("second", 2)?],
@@ -141,16 +111,27 @@ async fn admission_batch_deduplicates_group_keys_and_rejects_foreign_witnesses()
             0.try_into()?,
             &refs,
             &[],
-            &[group.clone(), group.clone(), group],
+            &[group.clone(), group.clone(), group.clone()],
         )
         .await?;
     ensure!(state.profiles.len() == 2 && state.group_rules.len() == 1);
-    for replacement in ["'{}'", "zeroblob(1048576)"] {
+    for replacement in [
+        "'{}'",
+        "zeroblob(1048576)",
+        "(SELECT reference_json FROM tenancy_admission_index WHERE resource_id='second')",
+    ] {
         let tx = db.begin().await?;
         tx.execute_unprepared(&format!(
-            "UPDATE tenancy_admission_index SET reference_json={replacement}"
+            "UPDATE tenancy_admission_index SET reference_json={replacement} WHERE resource_id='first'"
         ))
         .await?;
+        ensure!(
+            resources
+                .admission_in(&tx, 0.try_into()?, &refs, &[], std::slice::from_ref(&group))
+                .await
+                .is_err(),
+            "{replacement}"
+        );
         ensure!(resources.authenticate_retained(&tx).await.is_err());
         tx.rollback().await?;
     }
@@ -160,20 +141,9 @@ async fn admission_batch_deduplicates_group_keys_and_rejects_foreign_witnesses()
 #[tokio::test]
 async fn admission_startup_rejects_missing_middle_profile_lifecycle() -> Result<()> {
     let (db, resources) = fixture().await?;
-    resources.seed_admission_history_for_test(&db, 3, 1).await?;
-    let initial = resources
-        .load(&db, &reference(ResourceKind::Policy, "profile", "v1")?)
-        .await
-        .map_err(|code| anyhow::anyhow!("initial profile: {code:?}"))?;
-    index::retain(&resources, &db, &initial).await?;
-    loop {
-        let tx = db.begin().await?;
-        let complete = backfill::page(&resources, &tx).await?;
-        tx.commit().await?;
-        if complete {
-            break;
-        }
-    }
+    let tx = db.begin().await?;
+    resources.seed_admission_history_for_test(&tx, 3, 1).await?;
+    tx.commit().await?;
     resources.authenticate_retained(&db).await?;
     // Keep the v1 witness and p000002 head intact; remove only the middle pin.
     db.execute_unprepared("DELETE FROM tenancy_resource_lifecycle WHERE revision_id='p000001'")

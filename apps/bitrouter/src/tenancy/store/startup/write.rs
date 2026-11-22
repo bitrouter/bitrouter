@@ -1,8 +1,10 @@
 use super::*;
 use sea_orm::sea_query::Query;
 
-pub(super) async fn write_header_in(db: &impl ConnectionTrait, next: &LoadedHeader) -> Result<()> {
-    let header = &next.header;
+pub(in crate::tenancy::store) async fn write_header_in(
+    db: &impl ConnectionTrait,
+    header: &AuthorityHeader,
+) -> Result<()> {
     chrono::DateTime::parse_from_rfc3339(&header.created_at)?;
     let ordinary = i64::try_from(header.operation_ids)?;
     let safety = i64::try_from(header.safety_operation_ids)?;
@@ -17,7 +19,7 @@ pub(super) async fn write_header_in(db: &impl ConnectionTrait, next: &LoadedHead
             (Alias::new("saturated"), Expr::val(header.saturated).into()),
         ])
         .and_where(Expr::col(Alias::new("singleton")).eq(1_i32))
-        .and_where(Expr::col(Alias::new("schema_version")).eq(next.format.number()))
+        .and_where(Expr::col(Alias::new("schema_version")).eq(AUTHORITY_SCHEMA_VERSION))
         .and_where(Expr::col(Alias::new("installation_id")).eq(header.installation.as_str()))
         .and_where(Expr::col(Alias::new("created_at")).eq(header.created_at.as_str()))
         .and_where(Expr::col(Alias::new("authority_revision")).lte(revision))

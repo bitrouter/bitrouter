@@ -281,7 +281,9 @@ async fn shared_retained_loader_rejects_missing_heads_and_authenticated_conflict
         ensure!(state(&restarted, &db).await.is_err(), "accepted {case}");
         let references = storage::references(&db).await?;
         ensure!(
-            import_current(&restarted, &db, vec![reimport]).await.is_err(),
+            import_current(&restarted, &db, vec![reimport])
+                .await
+                .is_err(),
             "repaired {case}"
         );
         ensure!(storage::references(&db).await? == references);

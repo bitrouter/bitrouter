@@ -44,7 +44,6 @@ pub(crate) async fn recovery(
                     "tenancy_resource_lifecycle",
                     "tenancy_configurations",
                     "tenancy_active_configurations",
-                    "tenancy_admission_backfill",
                     "tenancy_admission_index"
                 ]
                 .contains(&table.name.as_str())

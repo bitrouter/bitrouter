@@ -2864,6 +2864,71 @@
     "indexes": []
   },
   {
+    "name": "tenancy_admission_index",
+    "columns": [
+      {
+        "name": "index_kind",
+        "kind": "varchar(32)",
+        "nullable": false,
+        "binary": true,
+        "automatic": false,
+        "default": null
+      },
+      {
+        "name": "owner_kind",
+        "kind": "varchar(32)",
+        "nullable": false,
+        "binary": true,
+        "automatic": false,
+        "default": null
+      },
+      {
+        "name": "owner_id",
+        "kind": "varchar(128)",
+        "nullable": false,
+        "binary": true,
+        "automatic": false,
+        "default": null
+      },
+      {
+        "name": "resource_kind",
+        "kind": "varchar(32)",
+        "nullable": false,
+        "binary": true,
+        "automatic": false,
+        "default": null
+      },
+      {
+        "name": "resource_id",
+        "kind": "varchar(128)",
+        "nullable": false,
+        "binary": true,
+        "automatic": false,
+        "default": null
+      },
+      {
+        "name": "reference_json",
+        "kind": "text",
+        "nullable": false,
+        "binary": false,
+        "automatic": false,
+        "default": null,
+        "mysql_kind": "longtext"
+      }
+    ],
+    "primary": [
+      "index_kind",
+      "owner_kind",
+      "owner_id",
+      "resource_kind",
+      "resource_id"
+    ],
+    "unique": [],
+    "foreign": [],
+    "checks": [],
+    "indexes": []
+  },
+  {
     "name": "tenancy_bindings",
     "columns": [
       {
@@ -4010,7 +4075,19 @@
     "unique": [],
     "foreign": [],
     "checks": [],
-    "indexes": []
+    "indexes": [
+      {
+        "name": "tenancy_resource_head_lookup",
+        "columns": [
+          "owner_kind",
+          "owner_id",
+          "resource_kind",
+          "resource_id",
+          "is_head"
+        ],
+        "unique": false
+      }
+    ]
   },
   {
     "name": "tenancy_resource_revisions",

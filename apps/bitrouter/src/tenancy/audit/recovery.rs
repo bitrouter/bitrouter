@@ -23,8 +23,7 @@ mod tests;
 /// Validate derived admission metadata without granting any fresh-target work.
 /// Static recovery permits only Policy witnesses whose exact immutable revision
 /// is present; its existing approved-manifest check authenticates those rows.
-/// Eval accepts no resource witnesses. Progress is a completed installation-bound
-/// checkpoint, including a legitimate non-null cursor after a predecessor upgrade.
+/// A target without resources must have no resource witnesses.
 pub(crate) async fn fresh_admission_metadata_in(
     db: &impl ConnectionTrait,
     installation: &InstallationId,
@@ -35,37 +34,11 @@ pub(crate) async fn fresh_admission_metadata_in(
     let loaded = store::startup::read_header_in(db, 4096)
         .await?
         .context("fresh admission authority missing")?;
-    ensure!(
-        loaded.format == store::startup::Format::V6,
-        "fresh admission writer fence missing"
-    );
     let header = loaded.header;
     ensure!(
         &header.installation == installation,
         "fresh admission installation mismatch"
     );
-    let progress = db.query_all(Statement::from_sql_and_values(db.get_database_backend(),
-        "SELECT CASE WHEN typeof(singleton)='integer' AND singleton=1 AND typeof(installation_id)='text' AND installation_id=? COLLATE BINARY AND typeof(authority_revision)='integer' AND authority_revision BETWEEN 0 AND ? AND typeof(complete)='integer' AND complete=1 THEN 1 ELSE 0 END AS valid, CASE WHEN typeof(cursor_json)='text' AND length(CAST(cursor_json AS BLOB))<=1024 THEN cursor_json ELSE NULL END AS cursor_json FROM tenancy_admission_backfill LIMIT 2",
-        [installation.as_str().into(), i64::try_from(header.revision.get())?.into()])).await?;
-    ensure!(
-        progress.len() == 1,
-        "missing or duplicate fresh admission progress"
-    );
-    if let Some(row) = progress.first() {
-        ensure!(
-            row.try_get::<i64>("", "valid")? == 1,
-            "invalid or incomplete fresh admission progress"
-        );
-        let cursor: Option<ResourceRef> =
-            serde_json::from_str(&row.try_get::<String>("", "cursor_json")?)?;
-        if let Some(cursor) = cursor {
-            ensure!(
-                resources_allowed,
-                "Eval target contains admission resource progress"
-            );
-            fresh_admission_reference(db, &cursor, false).await?;
-        }
-    }
     const KEYS: [&str; 5] = [
         "index_kind",
         "owner_kind",
@@ -140,12 +113,12 @@ pub(crate) async fn fresh_admission_metadata_in(
                     && reference.resource_id.as_str() == values[4],
                 "fresh target contains protected-route, health, or foreign admission witnesses"
             );
-            fresh_admission_reference(db, &reference, true).await?;
+            fresh_admission_reference(db, &reference).await?;
             after = Some(values);
         }
     }
     let missing = db.query_one(Statement::from_sql_and_values(db.get_database_backend(),
-        "SELECT 1 FROM tenancy_resource_revisions r WHERE r.resource_kind='policy' AND r.compiler_version=? AND NOT EXISTS (SELECT 1 FROM tenancy_admission_index i WHERE i.index_kind='resource' AND i.owner_kind=r.owner_kind COLLATE BINARY AND i.owner_id=r.owner_id COLLATE BINARY AND i.resource_kind=r.resource_kind COLLATE BINARY AND i.resource_id=r.resource_id COLLATE BINARY) LIMIT 1", [crate::tenancy::resources::COMPILER_VERSION.into()])).await?;
+        "SELECT 1 FROM tenancy_resource_revisions r WHERE r.resource_kind='policy' AND r.compiler_version=? AND NOT EXISTS (SELECT 1 FROM tenancy_admission_index i WHERE i.index_kind='resource' AND i.owner_kind=r.owner_kind COLLATE BINARY AND i.owner_id=r.owner_id COLLATE BINARY AND i.resource_kind=r.resource_kind COLLATE BINARY AND i.resource_id=r.resource_id COLLATE BINARY) LIMIT 1", [crate::tenancy::resources::MODEL_POLICY_COMPILER_VERSION.into()])).await?;
     ensure!(missing.is_none(), "fresh retained Policy witness missing");
     Ok(())
 }
@@ -153,7 +126,6 @@ pub(crate) async fn fresh_admission_metadata_in(
 async fn fresh_admission_reference(
     db: &impl ConnectionTrait,
     reference: &bitrouter_ai::tenancy::configuration::ResourceRef,
-    policy: bool,
 ) -> Result<()> {
     use sea_orm::sea_query::{Alias, Expr, Query};
     let mut query = Query::select();
@@ -177,18 +149,16 @@ async fn fresh_admission_reference(
     ] {
         query.and_where(Expr::col(Alias::new(name)).eq(value));
     }
-    if policy {
-        query.and_where(
-            Expr::col(Alias::new("compiler_version"))
-                .eq(crate::tenancy::resources::COMPILER_VERSION),
-        );
-    }
+    query.and_where(
+        Expr::col(Alias::new("compiler_version"))
+            .eq(crate::tenancy::resources::MODEL_POLICY_COMPILER_VERSION),
+    );
     query.limit(1);
     ensure!(
         db.query_one(db.get_database_backend().build(&query))
             .await?
             .is_some(),
-        "fresh admission witness or cursor references missing/unsupported resource"
+        "fresh admission witness references missing/unsupported resource"
     );
     Ok(())
 }
@@ -207,15 +177,8 @@ pub(crate) async fn fresh_catalog_v2_for_test(
     db: &mut SqliteConnection,
     inventory: &crate::offline::format::Inventory,
     installation: &InstallationId,
-    eval: bool,
 ) -> Result<()> {
     let reader = ReadConnection::new(db);
-    if eval {
-        #[cfg(feature = "core")]
-        return crate::offline::recovery::v2::catalog::eval(&reader, inventory, installation).await;
-        #[cfg(not(feature = "core"))]
-        anyhow::bail!("Eval is not compiled");
-    }
     crate::offline::recovery::v2::catalog::recovery(&reader, inventory, installation).await
 }
 

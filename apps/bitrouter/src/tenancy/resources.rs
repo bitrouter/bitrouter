@@ -62,7 +62,7 @@ fn qualify_model_policies(artifacts: &[Artifact]) -> std::result::Result<(), Err
 }
 
 pub(crate) const COMPILER_VERSION: &str = "tenancy-resources-v1";
-const MODEL_POLICY_COMPILER_VERSION: &str = "tenancy-model-policy-v1";
+pub(in crate::tenancy) const MODEL_POLICY_COMPILER_VERSION: &str = "tenancy-model-policy-v1";
 const BRO_OBLIGATION_COMPILER_VERSION: &str = "tenancy-bro-obligation-v1";
 const PROFILED_COMPILER_VERSION: &str = "tenancy-admission-v1";
 const SHARED_HEALTH_COMPILER_VERSION: &str = "tenancy-admission-v2";

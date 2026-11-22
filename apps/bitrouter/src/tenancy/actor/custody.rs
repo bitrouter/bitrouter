@@ -367,8 +367,7 @@ impl Worker {
                     .await
                     .map_err(|error| self.directory_failure(error))?
                     .ok_or(ErrorCode::AuthorityUnavailable)?;
-                    if loaded.format != crate::tenancy::store::startup::Format::V6
-                        || loaded.header.installation != initial.installation
+                    if loaded.header.installation != initial.installation
                         || loaded.header.revision != initial.revision
                     {
                         return Err(ErrorCode::AuthorityUnavailable.into());

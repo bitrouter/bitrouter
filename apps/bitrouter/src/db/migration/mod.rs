@@ -100,6 +100,16 @@ pub(crate) async fn validate_ordered_receipts(
     m20240101_000045_ordered_receipts::validate(db).await
 }
 
+/// Validate the admission witness catalog and its ordered lifecycle head index.
+///
+/// # Errors
+/// Rejects missing or incompatible current schema objects without changing data.
+pub(crate) async fn validate_admission_index(
+    db: &impl sea_orm::ConnectionTrait,
+) -> Result<(), sea_orm::DbErr> {
+    m20240101_000049_admission_index::validate(db).await
+}
+
 /// Installs the fresh baseline or validates an existing current dataset.
 pub struct Migrator;
 

@@ -1,5 +1,24 @@
-//! Backlogs accepted by an older writer remain recoverable above admission limits.
+//! Current dispatch obligations remain recoverable above startup admission limits.
 use super::*;
+use bitrouter_ai::tenancy::execution::Dispatch;
+use std::path::Path;
+
+async fn reopen(path: &Path, lease: &ownership::Lease) -> Result<DatabaseConnection> {
+    Ok(crate::db::connect_tenancy(&format!("sqlite://{}?mode=rw", path.display()), lease).await?)
+}
+
+fn tenant_identity(
+    installation: &InstallationId,
+    tenant: &str,
+    execution: &str,
+    candidates: usize,
+) -> Result<Identity> {
+    let mut identity = identity(installation, execution, candidates)?;
+    identity.tenant = tenant.try_into()?;
+    let (selection, _) = identity.ordered.as_mut().context("ordered identity")?;
+    selection.route.owner_id = tenant.try_into()?;
+    Ok(identity)
+}
 
 async fn seed(
     db: &DatabaseConnection,
@@ -10,11 +29,12 @@ async fn seed(
 ) -> Result<()> {
     let tx = db.begin().await?;
     for index in 0..count {
-        let mut identity = identity(installation, &format!("execution-{index:05}"), 9)?;
-        identity.tenant = format!("tenant-{:05}", index / per_tenant).try_into()?;
-        if let Some((selection, _)) = &mut identity.ordered {
-            selection.route.owner_id = identity.tenant.as_str().try_into()?;
-        }
+        let identity = tenant_identity(
+            installation,
+            &format!("tenant-{:05}", index / per_tenant),
+            &format!("execution-{index:05}"),
+            9,
+        )?;
         insert(&tx, &Intent::new(&identity, origin.clone())?).await?;
     }
     tx.commit().await?;
@@ -33,15 +53,38 @@ async fn receipts(
         let execution = format!("execution-{index:05}").try_into()?;
         let terminal = store::lookup_terminal(db, installation, &tenant, &execution)
             .await?
-            .context("recovered receipt missing")?;
-        ensure!(terminal.unknown());
+            .with_context(|| format!("missing recovered receipt for {tenant}/{execution}"))?;
         let Terminal::V2(value) = &terminal else {
-            anyhow::bail!("recovered format changed")
+            anyhow::bail!("expected ordered receipt for {tenant}/{execution}");
         };
-        ensure!(value.receipt.tenant_id == tenant && value.receipt.execution_id == execution);
-        ensure!(value.receipt.attempts.is_empty() && value.evidence.document.frames.is_empty());
+        let receipt = &value.receipt;
+        let evidence = &value.evidence.document;
+        ensure!(receipt.tenant_id == tenant && receipt.execution_id == execution);
         ensure!(
-            value.receipt.accepted_selection.candidate_indices == [24, 21, 18, 15, 12, 9, 6, 3, 0]
+            receipt.state == ReceiptState::Unknown
+                && receipt.outcome == Outcome::Unknown
+                && receipt.usage.provenance == Provenance::Unknown
+                && receipt.attempts.is_empty(),
+            "expected unobserved execution for {tenant}/{execution}"
+        );
+        ensure!(
+            evidence.dispatch == receipt.dispatch
+                && evidence.capture == Capture::Unavailable
+                && evidence.estimation == Estimation::NotCaptured
+                && evidence.estimate.is_none()
+                && evidence.attempts.is_empty()
+                && evidence.frames.is_empty()
+                && !evidence.truncated
+                && evidence.dropped_frames == 0,
+            "expected unavailable evidence for {tenant}/{execution}"
+        );
+        ensure!(
+            matches!(
+                &receipt.dispatch,
+                Dispatch::Ordered { accepted_selection, attempt_limit: 64 }
+                    if accepted_selection.candidate_indices == [24, 21, 18, 15, 12, 9, 6, 3, 0]
+            ),
+            "accepted dispatch changed for {tenant}/{execution}"
         );
         digests.push(terminal.digest().to_owned());
     }
@@ -50,12 +93,13 @@ async fn receipts(
 
 async fn bootstrap_backlog(count: usize, per_tenant: usize) -> Result<()> {
     let dir = tempfile::tempdir()?;
-    let path = dir.path().join("legacy-intents.sqlite");
+    let path = dir.path().join("current-intents.sqlite");
     let (lease, proof, startup) = acquisition(&path)?;
     let db = open(&path, &lease).await?;
     let installation = crate::tenancy::store::load(&db, chrono::Utc::now())
         .await?
         .installation;
+    // Use the production intent writer so the backlog can exceed the startup admission limits.
     seed(
         &db,
         &installation,
@@ -65,19 +109,28 @@ async fn bootstrap_backlog(count: usize, per_tenant: usize) -> Result<()> {
     )
     .await?;
     ensure!(inventory(&db, &installation).await?.rows == count as u64);
+    ensure!(
+        crate::db::store_format::inspect(&db).await? == crate::db::store_format::State::Current
+    );
+    let first_intent = load(
+        &db,
+        &installation,
+        &"tenant-00000".try_into()?,
+        &"execution-00000".try_into()?,
+    )
+    .await?
+    .context("first pending intent missing")?;
     db.close().await?;
     drop((startup, proof, lease));
 
+    let mut config = crate::config::tenancy::TenancyConfig::default();
+    config.capacity.receipts.unknown_instance = 1;
+    config.capacity.receipts.unknown_tenant = 1;
     let mut previous = None;
     for _ in 0..2 {
         let owned =
             crate::db::connect_owned_tenancy(&format!("sqlite://{}?mode=rw", path.display()))
                 .await?;
-        // Run the normal upgrade entry point over the populated pre-fix schema.
-        crate::db::run_migrations(owned.database()).await?;
-        let mut config = crate::config::tenancy::TenancyConfig::default();
-        config.capacity.receipts.unknown_instance = 1;
-        config.capacity.receipts.unknown_tenant = 1;
         let service =
             crate::tenancy::Service::open_owned_profile(owned, &config, &Default::default())
                 .await?;
@@ -90,6 +143,14 @@ async fn bootstrap_backlog(count: usize, per_tenant: usize) -> Result<()> {
         ensure!(inventory(&service.db, &installation).await?.rows == 0);
         let saved = store::inventory(&service.db, &installation).await?;
         ensure!(saved.rows == count as u64 && saved.unknown_count == count as u64);
+        let tx = service.db.begin().await?;
+        let retry = insert(&tx, &first_intent).await;
+        tx.rollback().await?;
+        let error = retry.err().context("retired intent was accepted again")?;
+        ensure!(
+            error.to_string() == "intent cannot resurrect a terminal execution",
+            "unexpected intent rejection: {error:#}"
+        );
         let digests = receipts(&service.db, &installation, count, per_tenant).await?;
         if let Some(expected) = &previous {
             ensure!(expected == &digests, "restart rewrote recovered receipts");
@@ -101,14 +162,12 @@ async fn bootstrap_backlog(count: usize, per_tenant: usize) -> Result<()> {
 }
 
 #[tokio::test]
-async fn legacy_tenant_with_101_pending_intents_bootstraps_under_lower_admission_limit()
--> Result<()> {
+async fn tenant_with_101_pending_intents_bootstraps_under_lower_admission_limit() -> Result<()> {
     bootstrap_backlog(101, 101).await
 }
 
 #[tokio::test]
-async fn legacy_installation_with_1001_pending_intents_bootstraps_across_tenant_pages() -> Result<()>
-{
+async fn installation_with_1001_pending_intents_bootstraps_across_tenant_pages() -> Result<()> {
     bootstrap_backlog(1001, 100).await
 }
 
@@ -133,7 +192,7 @@ async fn interrupted_recovery_resumes_committed_pages_without_rewriting_receipts
     drop((startup, proof, lease));
 
     let (lease, proof, startup) = acquisition(&path)?;
-    let db = open(&path, &lease).await?;
+    let db = reopen(&path, &lease).await?;
     let control = Control::new(proof.clone());
     let gate = proof.hold(crate::tenancy::transaction::Phase::Committing);
     let (_, result) = tokio::time::timeout(std::time::Duration::from_secs(60), async {
@@ -161,7 +220,7 @@ async fn interrupted_recovery_resumes_committed_pages_without_rewriting_receipts
     drop((startup, proof, lease));
 
     let (lease, proof, startup) = acquisition(&path)?;
-    let db = open(&path, &lease).await?;
+    let db = reopen(&path, &lease).await?;
     recover(
         &db,
         &installation,
@@ -209,7 +268,7 @@ async fn damaged_intent_after_first_page_prevents_partial_recovery() -> Result<(
     db.close().await?;
     drop((startup, proof, lease));
     let (lease, proof, startup) = acquisition(&path)?;
-    let db = open(&path, &lease).await?;
+    let db = reopen(&path, &lease).await?;
     ensure!(
         recover(
             &db,
@@ -248,8 +307,7 @@ async fn pending_pages_seek_both_cursor_columns_and_preserve_tenant_identity() -
     for tenant in ["Tenant", "tenant"] {
         for index in 0..65 {
             let execution = format!("execution-{index:05}");
-            let mut identity = identity(&installation, &execution, 1)?;
-            identity.tenant = tenant.try_into()?;
+            let identity = tenant_identity(&installation, tenant, &execution, 1)?;
             insert(
                 &tx,
                 &Intent::new(&identity, startup.bootstrap_stamp(&proof)?)?,
@@ -312,7 +370,7 @@ async fn cancelled_preflight_rolls_back_before_any_intent_retires() -> Result<()
     db.close().await?;
     drop((startup, proof, lease));
     let (lease, proof, startup) = acquisition(&path)?;
-    let db = open(&path, &lease).await?;
+    let db = reopen(&path, &lease).await?;
     let control = Control::new(proof.clone());
     let gate = proof.hold(crate::tenancy::transaction::Phase::Active);
     let (_, result) = tokio::time::timeout(std::time::Duration::from_secs(60), async {

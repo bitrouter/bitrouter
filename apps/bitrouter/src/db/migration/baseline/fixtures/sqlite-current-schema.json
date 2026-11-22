@@ -354,6 +354,12 @@
     "sql": "CREATE INDEX \"idx_trajectory_requests_owner_full_input_digest\" ON \"trajectory_requests\" (\"owner_user_id\", \"full_input_digest\")"
   },
   {
+    "type": "index",
+    "name": "tenancy_resource_head_lookup",
+    "tbl_name": "tenancy_resource_lifecycle",
+    "sql": "CREATE INDEX \"tenancy_resource_head_lookup\" ON \"tenancy_resource_lifecycle\" (\"owner_kind\", \"owner_id\", \"resource_kind\", \"resource_id\", \"is_head\")"
+  },
+  {
     "type": "table",
     "name": "acp_assessment_revisions",
     "tbl_name": "acp_assessment_revisions",
@@ -538,6 +544,12 @@
     "name": "tenancy_active_configurations",
     "tbl_name": "tenancy_active_configurations",
     "sql": "CREATE TABLE \"tenancy_active_configurations\" ( \"tenant_id\" varchar(128) COLLATE BINARY NOT NULL PRIMARY KEY, \"revision_id\" varchar(128) COLLATE BINARY NOT NULL, \"authority_revision\" bigint NOT NULL, FOREIGN KEY (\"tenant_id\", \"revision_id\") REFERENCES \"tenancy_configurations\" (\"tenant_id\", \"revision_id\") )"
+  },
+  {
+    "type": "table",
+    "name": "tenancy_admission_index",
+    "tbl_name": "tenancy_admission_index",
+    "sql": "CREATE TABLE \"tenancy_admission_index\" ( \"index_kind\" varchar(32) COLLATE BINARY NOT NULL, \"owner_kind\" varchar(32) COLLATE BINARY NOT NULL, \"owner_id\" varchar(128) COLLATE BINARY NOT NULL, \"resource_kind\" varchar(32) COLLATE BINARY NOT NULL, \"resource_id\" varchar(128) COLLATE BINARY NOT NULL, \"reference_json\" text NOT NULL, PRIMARY KEY (\"index_kind\", \"owner_kind\", \"owner_id\", \"resource_kind\", \"resource_id\") )"
   },
   {
     "type": "table",

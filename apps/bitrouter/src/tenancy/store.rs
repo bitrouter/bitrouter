@@ -128,28 +128,30 @@ fn string(row: &QueryResult, name: &str) -> Result<String> {
 }
 
 async fn installation(db: &impl ConnectionTrait, state: &Snapshot) -> Result<()> {
-    upsert(
-        db,
-        "tenancy_installation",
-        &["singleton"],
-        vec![
-            ("singleton", 1_i32.into()),
-            ("installation_id", state.installation.as_str().into()),
-            ("schema_version", super::AUTHORITY_SCHEMA_VERSION.into()),
-            (
-                "authority_revision",
-                i64::try_from(state.revision.get())?.into(),
-            ),
-            ("operation_ids", i64::try_from(state.operation_ids)?.into()),
-            (
-                "safety_operation_ids",
-                i64::try_from(state.safety_operation_ids)?.into(),
-            ),
-            ("saturated", state.saturated.into()),
-            ("created_at", state.created_at.as_str().into()),
-        ],
-    )
-    .await
+    let fields: [(&str, Value); 8] = [
+        ("singleton", 1_i32.into()),
+        ("installation_id", state.installation.as_str().into()),
+        ("schema_version", super::AUTHORITY_SCHEMA_VERSION.into()),
+        (
+            "authority_revision",
+            i64::try_from(state.revision.get())?.into(),
+        ),
+        ("operation_ids", i64::try_from(state.operation_ids)?.into()),
+        (
+            "safety_operation_ids",
+            i64::try_from(state.safety_operation_ids)?.into(),
+        ),
+        ("saturated", state.saturated.into()),
+        ("created_at", state.created_at.as_str().into()),
+    ];
+    let mut statement = Query::insert();
+    statement
+        .into_table(Alias::new("tenancy_installation"))
+        .columns(fields.iter().map(|(name, _)| Alias::new(*name)))
+        .values(fields.into_iter().map(|(_, value)| value.into()))?;
+    db.execute(db.get_database_backend().build(&statement))
+        .await?;
+    Ok(())
 }
 
 async fn write_change(db: &impl ConnectionTrait, change: &Change) -> Result<()> {
@@ -315,42 +317,22 @@ pub(super) async fn write_in(
     changes: &[Change],
     operation: &Operation,
 ) -> Result<()> {
-    let format = startup::read_header_in(tx, 4096)
+    startup::read_header_in(tx, 4096)
         .await?
-        .context("authority installation disappeared")?
-        .format;
+        .context("authority installation disappeared")?;
     #[cfg(test)]
-    if let Some(probe) = super::actor::provider_technical::tests::after_authority_header(
+    let probe = super::actor::provider_technical::tests::after_authority_header(
         &state.installation,
         &operation.id,
     )
-    .await?
-    {
-        // Same real mutation, after the actual SELECT has established its
-        // snapshot. Observe typed SQLx error BEFORE the public error mapping.
-        let result = startup::write_in(
-            tx,
-            &startup::LoadedHeader {
-                header: state.header(),
-                format,
-            },
-            changes,
-            operation,
-        )
-        .await;
+    .await?;
+    let result = startup::write_in(tx, &state.header(), changes, operation).await;
+    #[cfg(test)]
+    if let Some(probe) = probe {
+        // Observe typed SQLx errors before the public error mapping.
         probe.record_result(&result);
-        return result;
     }
-    startup::write_in(
-        tx,
-        &startup::LoadedHeader {
-            header: state.header(),
-            format,
-        },
-        changes,
-        operation,
-    )
-    .await
+    result
 }
 
 async fn insert_operation_in(
@@ -498,6 +480,7 @@ async fn credential_view_in(
         .column(Alias::new("authority_revision"))
         .from(Alias::new("tenancy_installation"))
         .and_where(Expr::col(Alias::new("singleton")).eq(1_i32))
+        .and_where(Expr::col(Alias::new("schema_version")).eq(super::AUTHORITY_SCHEMA_VERSION))
         .to_owned();
     let row = txn
         .query_one(txn.get_database_backend().build(&query))
@@ -510,24 +493,37 @@ async fn credential_view_in(
     Ok((revision, credential))
 }
 
-async fn rows(db: &impl ConnectionTrait, table: &str, max: u64) -> Result<Vec<QueryResult>> {
-    let query = Query::select()
-        .column(Asterisk)
-        .from(Alias::new(table))
-        .limit(max + 1)
-        .to_owned();
-    let rows = db
-        .query_all(db.get_database_backend().build(&query))
-        .await?;
-    ensure!(
-        rows.len() as u64 <= max,
-        "authority table exceeds its capacity"
-    );
-    Ok(rows)
+async fn ensure_empty_authority(db: &impl ConnectionTrait) -> Result<()> {
+    for table in [
+        "tenancy_tenants",
+        "tenancy_principals",
+        "tenancy_bindings",
+        "tenancy_credentials",
+        "tenancy_operations",
+        "tenancy_resource_revisions",
+        "tenancy_resource_lifecycle",
+        "tenancy_admission_index",
+        "tenancy_configurations",
+        "tenancy_active_configurations",
+    ] {
+        // A scalar probe stays bounded even when a retained row is corrupt.
+        let query = Query::select()
+            .expr(Expr::val(1_i32))
+            .from(Alias::new(table))
+            .limit(1)
+            .to_owned();
+        ensure!(
+            db.query_one(db.get_database_backend().build(&query))
+                .await?
+                .is_none(),
+            "authority has no installation identity"
+        );
+    }
+    Ok(())
 }
 
 /// Read only the seed header before spawning the owning startup actor. Complete
-/// fixed-snapshot validation and any format migration happen under that actor.
+/// fixed-snapshot validation happens under that actor.
 /// The exclusive-owner preflight runs only when a new header will be inserted.
 pub(super) async fn initial_header_with(
     db: &DatabaseConnection,
@@ -542,23 +538,7 @@ pub(super) async fn initial_header_with(
             && !super::continuation::http::bootstrap::has_owned(db).await?,
         "authority has no installation identity"
     );
-    // This is a new empty installation, never recovery or an implicit reset.
-    for table in [
-        "tenancy_tenants",
-        "tenancy_principals",
-        "tenancy_bindings",
-        "tenancy_credentials",
-        "tenancy_operations",
-        "tenancy_resource_revisions",
-        "tenancy_resource_lifecycle",
-        "tenancy_configurations",
-        "tenancy_active_configurations",
-    ] {
-        ensure!(
-            rows(db, table, 0).await?.is_empty(),
-            "authority has no installation identity"
-        );
-    }
+    ensure_empty_authority(db).await?;
     let header = super::model::AuthorityHeader {
         installation: uuid::Uuid::new_v4().to_string().try_into()?,
         revision: 0_u64.try_into()?,

@@ -107,9 +107,8 @@ ordinary, safety and completion queues rotate service so each can make progress.
 Startup validates the entire directory and retained authority through bounded
 keyset pages, including all retained operation IDs. Page size and working bytes
 bound temporary memory; no successful prefix substitutes for the complete scan.
-Current authority validation does not apply former directory or lifetime
-operation count ceilings. Unsupported historical stores are refused rather than
-upgraded during startup. Runtime reads load only the caller and exact
+Current authority validation has no directory or lifetime operation count
+ceiling. Runtime reads load only the caller and exact
 dependency closure under read custody. The authority registry retains a small
 publication header and bounded leased views. Committed deltas update those views
 under a common publication gate; unrelated mutations do not invalidate a native caller solely
@@ -145,49 +144,35 @@ revision explicitly. The [operator guide](../../skills/bitrouter/references/remo
 describes setup and management operations; permission, CAS and replay behavior
 are defined in the canonical service API.
 
-Operational profile publication uses the same authority writer and immutable
-resource store. `tenancy_admission_index` retains one byte-exact witness per
-policy/profile or protected-route key, plus one per owner/health-group pair.
-Each witness points into the authenticated resource-revision store; no profile
-payload is copied into the index, and a witness is never replaced on rotation
-or revocation. Immutable rules are transitive, so one authenticated witness
-validates future rotations without loading historical members. All original
-revisions remain available. A head lookup has a dedicated lifecycle index.
+The current tenant baseline includes a format-6 authority header, the persistent
+admission index and a dedicated index for resource lifecycle head lookups.
+`tenancy_admission_index` uses byte-exact keys. It stores a reference to an
+authenticated immutable revision for each Policy or profile key, permanently
+protected route key and owner/health-group pair. Rotation and revocation
+preserve the witness and original revision. Immutable rules let one
+authenticated witness validate a rotation without loading every member of
+the group.
 
-The authority format-6 fence excludes predecessor writers before backfill.
-`tenancy_admission_backfill` stores the installation, authority revision, stable
-resource cursor, and completion marker. The startup actor commits bounded pages
-and their cursor atomically under exclusive startup custody. Incomplete progress
-never publishes readiness. Complete startup authentication independently verifies
-every retained admission definition against its witnesses, including existence,
-identity, immutable rules, and managed profile heads. These checks detect missing
-witnesses even after a completed or interrupted migration. The index shares the
-persisted heads/grants trust model; live SQL tampering is outside that model.
+Under exclusive startup custody, the service authenticates all retained
+resource revisions in bounded pages and verifies their admission witnesses,
+immutable rules and managed profile heads. These read-only checks refuse
+missing or mismatched witnesses before startup imports resources or publishes
+readiness. The index relies on the same database transaction integrity as
+persisted heads and grants.
 
-Fresh offline recovery recognizes this derived bootstrap metadata only after a
-read-only proof: one completed installation-bound checkpoint, a retained cursor
-when non-null, and matching witnesses for every approved ordinary Policy key.
-Every witness must point back to an existing ordinary Policy revision whose
-definition is authenticated by the approved static closure check. Missing or
-extra witnesses, health/protected-route history, and incomplete progress are
-rejected. Eval freshness accepts only the completed empty-resource checkpoint.
-This includes previously provisioned schema-five targets reopened for upgrade;
-their completed cursor need not be null and their provisioning revision is kept.
+Resource publication and import retain each new revision, its admission
+witnesses and its lifecycle metadata in the same transaction. Managed
+publication also commits the lifecycle CAS and operation replay result in that
+transaction. Commands and authority reads batch relevant index keys and load
+exact pins and current heads in one authority view. Both the pinned revision and
+the current head are checked for revocation. Publication updates affected live
+views before final-send checks. View memory follows selected references and
+reserves space for head updates per selected key.
 
-Commands and authority dependency reads batch relevant index keys and load only
-requested immutable pins and current heads in the existing read transaction.
-No normal publication or import scans unrelated history. Resource/index writes,
-lifecycle CAS, and the operation replay result commit in the same transaction.
-Authority publication updates affected live views before final-send checks;
-original pins remain distinct from the current head and both revocation checks
-remain effective. The global history map and its coupled authority byte
-reservation are gone. View memory follows selected references, with head-update
-space reserved per selected key. Profiled configuration plaintext retains
-envelope format four and its own authenticated compiler subtype; legacy compiler
-bytes retain their original binding.
-The format-four compiled document keeps each profiled projection in its original
-immutable artifact. Its visible execution route is reconstructed once from that
-artifact and the bound configuration defaults. The stored ordinary route sequence
+The profiled configuration envelope uses format 4 independently of the authority
+header. Each profiled projection stays in its original immutable artifact. The
+service reconstructs the visible execution route once from that artifact and
+the bound configuration defaults. The stored ordinary route sequence
 must match the corresponding original artifacts exactly. Reconstruction uses the
 existing cumulative byte bounds and charges the shared operation budget before
 copying. Immutable resource artifacts and hidden ordinary child projections keep
@@ -336,12 +321,13 @@ amplification and filesystem exhaustion still require measurement and fault
 qualification. Terminal archived history is accounted separately from live
 receipt bytes; neither operation IDs nor retained history has a lifetime quota.
 
-Stopped-owner recovery validates ordered dispatch intents in keyset pages before
-converting them to unknown receipts, regardless of the current admission budgets.
-Each conversion commits its receipt, usage evidence and intent retirement together.
-Interrupted recovery resumes from the remaining intents on the next startup;
-already committed receipts retain their original bytes and execution identities.
-Recovery does not reissue provider requests.
+Under exclusive startup custody, stopped-owner recovery validates retained
+ordered intents in bounded keyset pages before converting them to unknown
+receipts. Admission limits for new work do not cap the recovery backlog. Each
+conversion commits its receipt, usage evidence and intent retirement together.
+On restart, recovery continues with the remaining intents and preserves the
+committed receipt bytes and execution identities. The recovery path writes the
+local ledger with provider effects marked unknown.
 
 Unknown obligations default to admission budgets of 100 per tenant and 1,000
 per instance, configurable in the same group. The transactionally maintained
@@ -356,16 +342,13 @@ Indexed, resumable maintenance escalates unresolved work after 15 minutes
 without pruning or reclassifying it. The 30-second cleanup window is not
 permission to forget an uncertain transaction or an unjoined producer.
 
-The current dataset baseline and authority schema are validated before service
-startup or offline restore. Historical authority formats and capacity-latch
-upgrade operations are retired; startup never clears an old latch, rewrites its
-authority, or records an upgrade replay result. Provision a fresh installation
-through current APIs and preserve old data separately. Current authority,
-retained-history and cleanup validation remain mandatory. See the
-[offline evidence and restore commands](../../skills/bitrouter/references/cli.md#local-db-only-offline-evidence)
-for current-format backup procedures. Public strict-v1 request, attempt and
-evidence limits remain independent of host capacity, as do supported offline
-artifact limits and declared provisioning profiles.
+Startup and offline restore require the current dataset baseline and format-6
+tenant authority header. Recovery applies to the validated installation. Use
+current APIs to provision a fresh installation and keep incompatible data with
+its original deployment. See the
+[offline evidence and restore commands](../CLI.md#offline-db-evidence-unix-sqlite-only)
+for current-format backup procedures. Strict-dispatch request, attempt and
+evidence limits and offline bundle limits remain independent of host capacity.
 
 ## Receipt archive and physical storage
 
@@ -481,11 +464,9 @@ measured-length guards against intervening growth and receipt/evidence integrity
 checks. Stored byte-count metadata is not trusted to authorize allocation.
 
 The current SQLite schema and baseline ledger initialize atomically only in
-an empty location. Startup validates the entire current dataset before ready,
-including non-head history and affected encrypted source/envelopes. An old-store
-conversion, backfill, populated downgrade or marker-only adoption is refused.
-Restore validates current content rather than trusting a copied marker. Rollback
-uses the old binary with its own consistent database/configuration/key copy.
+an empty location. Startup and restore authenticate the entire current dataset,
+including non-head history and affected encrypted source and envelopes. Rollback
+uses the previous binary with its own consistent database, configuration and key.
 
 ## Routing and diagnostics
 
@@ -500,6 +481,5 @@ selection identity. Ingress validates and removes the object before protocol
 parsing; immutable route-cache entries never hold per-call defaults. Merge the
 nine fields into canonical parameters before retained fallback defaults and
 policy validation. Typed null and empty stop preserve default filling, while
-opaque source extras block canonical promotion. Exact historical records must
-continue through their original read codec; adding optional defaults does not
-make an older binding with a missing enforcement mode valid send authority.
+opaque source extras block canonical promotion. Dispatch requires a retained
+binding with a valid enforcement mode.

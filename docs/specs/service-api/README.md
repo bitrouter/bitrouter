@@ -555,6 +555,13 @@ key remains protected across all retained revisions. Missing or revoked
 dependencies fail authority checks. Rotation preserves definitions and
 readability of previously admitted evidence.
 
+The admission index preserves Policy and profile type separation, permanent
+route-key protection and shared health-group rules. Its witnesses reference
+authenticated retained revisions. Rotation and revocation preserve these
+witnesses. Admission resolves relevant index keys, exact pinned revisions and
+current profile heads under one authority revision. A retained pin and the
+current head each remain subject to current authority and revocation checks.
+
 #### Shared health profiles
 
 Group identity is scoped to the installation and operator-pool owner.
@@ -619,10 +626,11 @@ reference binding, and absent from operation records, diagnostics and errors.
 An unkeyed digest of secret-bearing commands MUST NOT be retained as their
 fingerprint.
 
-Resource bytes, head/revocation metadata and operation outcomes MUST commit
-atomically before acknowledgement and authority publication. Identical
-authorized replay under the same principal and operation ID returns the original
-result; changed content returns `operation_conflict`. CAS failures use
+Resource bytes, admission witnesses, head and revocation metadata, and operation
+outcomes MUST commit atomically before acknowledgement and authority publication.
+Imports MUST retain resource revisions and their admission witnesses atomically.
+Identical authorized replay under the same principal and operation ID returns
+the original result. Changed content returns `operation_conflict`. CAS failures use
 `revision_conflict`; unavailable provisioning uses `capability_mismatch`.
 Other failures use the existing tenancy error vocabulary and HTTP mappings.
 After a lost reply, query `/tenancy/operations/{operation_id}` using the original
@@ -761,9 +769,13 @@ manufactures zero quantities or complete evidence. Ordered dispatch has no auxil
 Before any effectful provider work, the owning writer commits a bounded dispatch
 intent containing the immutable identity, selection and budgets. An uncertain
 intent acknowledgement cannot authorize a send. Terminal receipt, original
-evidence and intent retirement commit atomically. Startup terminalizes surviving
-intents as unknown with unavailable observations before enabling dispatch; it
-never replays inference. A missing receipt is not proof that no work happened.
+evidence and intent retirement commit atomically. Under exclusive startup
+custody, the service validates retained intents in bounded keyset pages and
+terminalizes them as unknown with unavailable observations before enabling
+dispatch. Admission limits for new work do not cap recovery of existing
+intents. Interrupted recovery continues with the remaining intents and
+preserves committed receipt bytes and execution identities. Recovery never
+replays inference. A missing receipt is not proof that no work happened.
 The maximum receipt/evidence/disposition/intent obligation, including three row
 charges, is 3,212,288 bytes and fits the existing 4 MiB execution reservation.
 The receipt and evidence APIs serve both dispatch modes on the same paths.
@@ -1438,11 +1450,11 @@ datasets. Each store is selected independently of software release and
 Policy source versions. Archive incompatible datasets with their matching
 binary and configuration before provisioning a new installation.
 
-Store validation checks the expected runtime schema and its ownership
-metadata. The SQLite tenant authority header binds an installation independently
-of the database schema. Shared state requires the shared schema and
-authenticated head and publication. A marker never replaces retained-content
-validation.
+Store validation checks the expected runtime schema and its ownership metadata.
+The current SQLite tenant baseline requires a format-6 authority header, which
+binds the installation independently of the schema ledger. Shared state requires
+the shared schema and authenticated head and publication. Validation also
+authenticates retained content.
 
 Initialize current schema/baseline atomically in supported transactional SQLite
 and PostgreSQL stores, only in genuinely empty locations. For generic runtime
@@ -1454,8 +1466,11 @@ remains PostgreSQL. This does not add tenant/shared support to another backend.
 
 Bootstrap, join, restart, restore and offline/import entry points validate the
 current baseline and all retained affected source/envelopes, including inactive,
-revoked, hidden and terminal history. A Policy-free active head cannot bypass
-this check. Missing markers on nonempty stores, old/partial/foreign/future
+revoked, hidden and terminal history. SQLite tenant startup authenticates the
+retained definitions and verifies their admission witnesses and managed heads.
+These checks are read-only and precede import, recovery and readiness. Missing or
+mismatched witnesses fail startup. A Policy-free active head cannot bypass
+these checks. Missing markers on nonempty stores, old/partial/foreign/future
 layouts, forged current stamps and unsupported retained content are rejected
 before listeners, claims, recovery, authority registration/heartbeat or mutations.
 Physical locks/custody may be acquired for validation; this is not execution
@@ -1558,9 +1573,9 @@ not schema validation alone.
     capture stays unavailable.
 11. An absent evidence endpoint is unavailable functionality. Required
     evidence cannot silently fall back to normalized receipt usage.
-12. Current restart preserves receipt/evidence bytes and binding; old dataset
-    upgrades and destructive downgrade are refused. Rollback uses the old binary
-    with its own verified compatible data copy, without deleting bindings.
+12. Restart on the current baseline preserves receipt and evidence bytes and
+    their binding. Rollback uses the previous binary with its own verified
+    compatible data copy and original bindings.
 
 ### Tenancy API compatibility cases
 
