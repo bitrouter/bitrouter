@@ -1,5 +1,5 @@
 use super::*;
-use sea_orm::{DatabaseTransaction, Statement, TransactionTrait};
+use sea_orm::{DatabaseBackend, DatabaseTransaction, Statement, TransactionTrait};
 
 impl Resources {
     /// Seed current sealed history, including its lifecycle and permanent witnesses.
@@ -135,6 +135,47 @@ async fn admission_batch_deduplicates_group_keys_and_rejects_foreign_witnesses()
         ensure!(resources.authenticate_retained(&tx).await.is_err());
         tx.rollback().await?;
     }
+    // Put the foreign witness beyond the first page and check the real seek.
+    let members = (0..32)
+        .map(|n| shared::shared(&format!("member-{n:02}"), n))
+        .collect::<Result<Vec<_>>>()?;
+    import(&resources, &db, members).await?;
+    resources.authenticate_retained(&db).await?;
+    let cursor = index::Key::resource(&refs[0].key())?;
+    let mut plan = index::page_query(DatabaseBackend::Sqlite, Some(&cursor));
+    plan.sql = format!("EXPLAIN QUERY PLAN {}", plan.sql);
+    let details = db
+        .query_all(plan)
+        .await?
+        .iter()
+        .map(|row| row.try_get::<String>("", "detail"))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    ensure!(
+        details.iter().any(|detail| {
+            detail.contains("SEARCH tenancy_admission_index USING INDEX")
+                && detail.contains("index_kind,owner_kind,owner_id,resource_kind,resource_id")
+        }),
+        "unexpected admission index seek {details:?}"
+    );
+    ensure!(!details.iter().any(|detail| detail.contains("TEMP B-TREE")));
+    let mysql = index::page_query(DatabaseBackend::MySql, Some(&cursor));
+    ensure!(mysql.sql.matches(" > ?").count() == 5, "{}", mysql.sql);
+    ensure!(
+        mysql.sql.contains("`tenancy_admission_index`.`resource_kind` = ? AND `tenancy_admission_index`.`resource_id` > ?"),
+        "{}", mysql.sql
+    );
+
+    // The target is authentic, but its foreign PK must still prevent startup.
+    let tx = db.begin().await?;
+    tx.execute_unprepared(
+        "INSERT INTO tenancy_admission_index
+         (index_kind, owner_kind, owner_id, resource_kind, resource_id, reference_json)
+         SELECT index_kind, owner_kind, owner_id, resource_kind, 'zz-foreign', reference_json
+         FROM tenancy_admission_index WHERE resource_id='first'",
+    )
+    .await?;
+    ensure!(resources.authenticate_retained(&tx).await.is_err());
+    tx.rollback().await?;
     Ok(())
 }
 

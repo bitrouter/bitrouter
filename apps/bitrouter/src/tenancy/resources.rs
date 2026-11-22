@@ -423,6 +423,7 @@ impl Resources {
             }
             after = page.last().cloned();
         }
+        admission::index::verify_index(self, db).await?;
         self.inspect_all_configurations_in(db, 64 * 1024 * 1024, &|| Ok(()))
             .await?;
         Ok(())
