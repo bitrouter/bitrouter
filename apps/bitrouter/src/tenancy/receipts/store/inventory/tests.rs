@@ -82,12 +82,18 @@ async fn inventory_rejects_a_malformed_key_after_the_first_page() -> Result<()> 
         ensure!(commit(&db, &candidate("installation", "tenant", &id, "creator")?).await?);
     }
     let damaged = format!("execution-{PAGE_ROWS:04}");
-    let changed = db.execute(Statement::from_sql_and_values(
-        DatabaseBackend::Sqlite,
-        "UPDATE tenancy_execution_receipts SET execution_id=CAST(execution_id AS BLOB) WHERE installation_id=? AND tenant_id=? AND execution_id=?",
-        [installation.as_str().into(), "tenant".into(), damaged.into()],
-    )).await?;
-    ensure!(changed.rows_affected() == 1);
+    let tx = db.begin().await?;
+    // Keep the mandatory evidence linked so reverse-link preflight does not
+    // preempt the malformed receipt key on the second page.
+    for table in ["tenancy_execution_receipts", "tenancy_usage_evidence"] {
+        let changed = tx.execute(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            format!("UPDATE {table} SET execution_id=CAST(execution_id AS BLOB) WHERE installation_id=? AND tenant_id=? AND execution_id=?"),
+            [installation.as_str().into(), "tenant".into(), damaged.as_str().into()],
+        )).await?;
+        ensure!(changed.rows_affected() == 1);
+    }
+    tx.commit().await?;
     let mut visited = 0_u64;
     let result = scan(&db, &installation, |_| {
         visited += 1;

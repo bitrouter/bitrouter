@@ -297,7 +297,7 @@ async fn final_proof_rejects_sidecar_and_index_corruption_before_projection() ->
 }
 
 #[tokio::test]
-async fn final_proof_checks_absence_when_no_sidecar_was_intended() -> Result<()> {
+async fn final_proof_requires_usage_and_rejects_unintended_auxiliary() -> Result<()> {
     for auxiliary in [false, true] {
         let db = open().await?;
         let expected = tests::candidate("installation", "tenant", "execution", "creator")?;
@@ -305,15 +305,31 @@ async fn final_proof_checks_absence_when_no_sidecar_was_intended() -> Result<()>
         let result: Result<()> = async {
             let staged = stage_terminal(&tx, &expected).await?;
             ensure!(staged.inserted());
+            same_completion(&saved(&tx, &expected).await?, &expected)?;
             if auxiliary {
                 let row = pending(&expected, "refresh")?;
                 let extra = tests::candidate("installation", "tenant", "execution", "creator")?
                     .with_auxiliary(vec![fact(&row, auxiliary::Outcome::Unknown)?])?;
                 auxiliary_store::insert(&tx, &extra).await?;
             } else {
-                usage_evidence::storage::insert_fresh(&tx, &value()?).await?;
+                ensure!(
+                    tx.execute_unprepared("DELETE FROM tenancy_usage_evidence")
+                        .await?
+                        .rows_affected()
+                        == 1
+                );
             }
-            ensure!(staged.reconcile(FREE).await.is_err());
+            let error = staged
+                .reconcile(FREE)
+                .await
+                .err()
+                .context("final proof accepted invalid sidecar state")?;
+            let expected_error = if auxiliary {
+                "unexpected auxiliary receipt evidence"
+            } else {
+                "missing usage evidence"
+            };
+            ensure!(error.to_string() == expected_error, "{error:#}");
             ensure!(count(&tx, "tenancy_unknown_obligations").await? == 0);
             Ok(())
         }
@@ -423,13 +439,24 @@ async fn fresh_terminal_preserves_old_schedule_and_refuses_immutable_source_loss
     tx.commit().await?;
     let known = value()?;
     let tx = db.begin().await?;
-    tx.execute_unprepared("DELETE FROM tenancy_execution_receipts")
-        .await?;
+    for table in ["tenancy_usage_evidence", "tenancy_execution_receipts"] {
+        ensure!(
+            tx.execute_unprepared(&format!("DELETE FROM {table}"))
+                .await?
+                .rows_affected()
+                == 1
+        );
+    }
     let staged = stage_terminal(&tx, &known).await?;
     ensure!(staged.inserted());
-    let refused = staged.reconcile(FREE).await.is_err();
+    same_completion(&saved(&tx, &known).await?, &known)?;
+    let refused = staged.reconcile(FREE).await.err();
     tx.rollback().await?;
-    ensure!(refused, "fresh INSERT cleared an immutable old source");
+    let error = refused.context("fresh INSERT cleared an immutable old source")?;
+    ensure!(
+        error.to_string() == "immutable unknown source disappeared",
+        "{error:#}"
+    );
     ensure!(
         obligations::lookup(&db, &unknown.receipt.installation_id, &key(&unknown), FREE).await?
             == Some(after)
@@ -691,7 +718,15 @@ async fn charged_receipt_scalar_distinguishes_absence_invalid_storage_and_bounda
             let reader = Transfer::new(&tx, None);
             let loaded = charged(&reader, &value, FREE).await;
             let seen = reader.counts()?;
-            ensure!(seen[0].0 == body_queries && seen[1] == (0, 0));
+            let expected_usage = if mutation.is_none() {
+                (1, value.usage_evidence.json.len())
+            } else {
+                (0, 0)
+            };
+            ensure!(
+                seen[0].0 == body_queries && seen[1] == expected_usage,
+                "unexpected receipt or evidence transfer: {seen:?}"
+            );
             if mutation.is_none() {
                 same_completion(&loaded?.context("boundary candidate missing")?, &value)?;
                 ensure!(seen[0].1 == value.json.len());
