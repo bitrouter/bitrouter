@@ -307,12 +307,6 @@ impl Service {
 // control/intent/receipt override. Scoped to the same Service and used once.
 #[cfg(all(test, unix, feature = "core", feature = "harness"))]
 impl Service {
-    pub(crate) fn block_draw_seeds_for_test(&self, seeds: [u64; 2]) -> anyhow::Result<()> {
-        self.hosts
-            .block_test_seeds
-            .set((seeds, std::sync::atomic::AtomicUsize::new(0)))
-            .map_err(|_| anyhow::anyhow!("Block test draw source already installed"))
-    }
     pub(crate) fn next_block_seed_for_test(&self) -> Option<u64> {
         let (seeds, next) = self.hosts.block_test_seeds.get()?;
         let mut index = next.load(std::sync::atomic::Ordering::SeqCst);

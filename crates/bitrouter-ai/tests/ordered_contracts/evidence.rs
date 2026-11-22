@@ -203,16 +203,13 @@ fn evidence_binding_rejects_changed_selection_protocol_and_actual_attempts() -> 
 fn unavailable_capture_and_truncation_are_explicit_not_empty_success() -> TestResult {
     let receipt = receipt(1)?;
     let mut value = evidence(&receipt);
-    for capture in [Capture::Unavailable, Capture::NotCaptured] {
-        value.capture = capture;
-        assert!(value.validate().is_err());
-        value.attempts.clear();
-        value.validate_against(&receipt)?;
-        value.frames.push(frame(&receipt, 0, 0));
-        assert!(value.validate().is_err());
-        value.frames.clear();
-        value = evidence(&receipt);
-    }
+    value.capture = Capture::Unavailable;
+    assert!(value.validate().is_err());
+    value.attempts.clear();
+    value.validate_against(&receipt)?;
+    value.frames.push(frame(&receipt, 0, 0));
+    assert!(value.validate().is_err());
+    value = evidence(&receipt);
     value.truncated = true;
     assert!(value.validate().is_err());
     value.dropped_frames = 1;
@@ -381,16 +378,12 @@ fn strict_and_ordered_evidence_protocol_rules_remain_distinct() -> TestResult {
 }
 
 #[test]
-fn standalone_evidence_checks_tenant_route_ownership_even_without_capture() -> TestResult {
+fn standalone_evidence_checks_tenant_route_ownership_for_both_capture_states() -> TestResult {
     use bitrouter_ai::tenancy::authority::OwnerKind;
-    for capture in [
-        Capture::Captured,
-        Capture::Unavailable,
-        Capture::NotCaptured,
-    ] {
+    for capture in [Capture::Captured, Capture::Unavailable] {
         let mut value = evidence(&receipt(1)?);
         value.capture = capture;
-        if capture != Capture::Captured {
+        if capture == Capture::Unavailable {
             value.attempts.clear();
         }
         value.validate()?;

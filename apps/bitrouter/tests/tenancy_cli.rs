@@ -36,7 +36,7 @@ async fn invoke(home: &Path, args: &[&str]) -> Result<std::process::Output> {
 fn draft() -> Value {
     json!({"installation_id":"install-A", "operation_id":"draft-1", "expected_authority_revision":17,
         "document":{"routes":[], "policy":null, "generation_defaults":{"max_output_tokens":2048,"temperature":0.2},
-        "learning":{"mode":"off","max_evaluations":0}, "limits":{"active_executions":16,"queued_work":32,"learning_jobs":0}}})
+        "eval_publication": false, "limits":{"active_executions":16,"queued_work":32}}})
 }
 
 #[tokio::test]

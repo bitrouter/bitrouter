@@ -174,7 +174,7 @@ fn tagged_records_preserve_raw_integer_semantics_and_strict_fields() -> Result<(
     }
     // Nested configuration numbers use the same original wire decoder too.
     let configuration = format!(
-        "{{\"kind\":\"configuration\",\"revision\":{{\"tenant_id\":\"tenant\",\"revision_id\":\"r1\",\"schema_version\":1,\"compiler_version\":\"fixture\",\"content_digest\":\"{}\",\"document\":{{\"routes\":[],\"policy\":null,\"generation_defaults\":{{\"max_output_tokens\":128.0,\"temperature\":0.2}},\"learning\":{{\"mode\":\"off\",\"max_evaluations\":0}},\"limits\":{{\"active_executions\":1,\"queued_work\":1,\"learning_jobs\":0}}}}}}}}\n",
+        "{{\"kind\":\"configuration\",\"revision\":{{\"tenant_id\":\"tenant\",\"revision_id\":\"r1\",\"schema_version\":1,\"compiler_version\":\"fixture\",\"content_digest\":\"{}\",\"document\":{{\"routes\":[],\"policy\":null,\"generation_defaults\":{{\"max_output_tokens\":128.0,\"temperature\":0.2}},\"eval_publication\":false,\"limits\":{{\"active_executions\":1,\"queued_work\":1}}}}}}}}\n",
         "a".repeat(64)
     );
     assert!(matches!(

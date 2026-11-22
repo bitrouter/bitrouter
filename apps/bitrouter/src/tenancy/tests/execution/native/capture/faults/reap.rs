@@ -20,7 +20,7 @@ async fn exercise(with_descendant: bool) -> Result<()> {
     let root = tempfile::tempdir()?;
     let provider = Provider::start(false).await?;
     let (fixture, route) = file_fixture(&provider, root.path()).await?;
-    let (headers, _) = prepared(&fixture, &route, LearningMode::Observe).await?;
+    let (headers, _) = prepared(&fixture, &route, true).await?;
     let authority = fixture
         .service
         .host_authority(&headers)

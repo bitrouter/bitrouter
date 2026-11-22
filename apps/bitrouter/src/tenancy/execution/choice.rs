@@ -67,7 +67,7 @@ impl AdmittedChoice {
             submission,
             route,
             lease,
-            config.learning.clone(),
+            config.eval_publication,
             true,
         )?;
         crate::tenancy::receipts::journal::link_owned_child(parent, &execution)

@@ -25,7 +25,7 @@ async fn attack(mode: &str, expected: Limit) -> Result<()> {
     let mut rejected = None;
     let mut authority = None;
     let checked: Result<()> = async {
-        let (headers, _) = prepared(&fixture, &route, LearningMode::Observe).await?;
+        let (headers, _) = prepared(&fixture, &route, true).await?;
         authority = Some(fixture.service.host_authority(&headers).await.map_err(failure)?);
         let mut proposed = launch(&program, &marker, &listener.origin, None);
         let AcpTransport::Stdio { env, .. } = &mut proposed.agent.transport;

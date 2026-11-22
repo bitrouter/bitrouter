@@ -126,36 +126,36 @@ pub struct RouteClass {
     /// The intent of the request.
     pub task_family: TaskFamily,
     /// The role of the next inference step.
-    pub next_step_role: NextStep,
+    pub next_step: NextStep,
     /// The risk of model selection.
     pub risk: Risk,
 }
 
 impl RouteClass {
     /// Construct a classification from validated labels.
-    pub const fn new(task_family: TaskFamily, next_step_role: NextStep, risk: Risk) -> Self {
+    pub const fn new(task_family: TaskFamily, next_step: NextStep, risk: Risk) -> Self {
         Self {
             task_family,
-            next_step_role,
+            next_step,
             risk,
         }
     }
 
     /// Return the same step and risk with an unknown task family.
     pub const fn unknown_baseline(self) -> Self {
-        Self::new(TaskFamily::Unknown, self.next_step_role, self.risk)
+        Self::new(TaskFamily::Unknown, self.next_step, self.risk)
     }
 
     /// Decode a canonical classification.
     pub fn parse_key(value: &str) -> Option<Self> {
         let mut fields = value.split('|');
         let task_family = TaskFamily::parse_key(fields.next()?)?;
-        let next_step_role = NextStep::parse_key(fields.next()?)?;
+        let next_step = NextStep::parse_key(fields.next()?)?;
         let risk = Risk::parse_key(fields.next()?)?;
         fields
             .next()
             .is_none()
-            .then_some(Self::new(task_family, next_step_role, risk))
+            .then_some(Self::new(task_family, next_step, risk))
     }
 }
 
@@ -178,7 +178,7 @@ impl fmt::Display for RouteClass {
             f,
             "{}|{}|{}",
             self.task_family.key(),
-            self.next_step_role.key(),
+            self.next_step.key(),
             self.risk
         )
     }

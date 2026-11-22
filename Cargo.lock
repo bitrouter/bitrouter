@@ -802,6 +802,7 @@ dependencies = [
 name = "bitrouter-ai"
 version = "1.0.0-beta.1"
 dependencies = [
+ "jsonschema",
  "schemars 1.2.1",
  "serde",
  "serde_json",
@@ -1621,10 +1622,8 @@ dependencies = [
  "clap",
  "flate2",
  "hex",
- "jsonschema",
  "regex",
  "reqwest",
- "schemars 1.2.1",
  "semver",
  "serde",
  "serde-saphyr",

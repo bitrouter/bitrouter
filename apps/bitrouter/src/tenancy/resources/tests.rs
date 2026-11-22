@@ -73,8 +73,8 @@ fn document(routes: Vec<ResourceRef>, policy: Option<ResourceRef>) -> Result<Con
     Ok(serde_json::from_value(
         json!({"routes":routes, "policy":policy,
         "generation_defaults":{"max_output_tokens":128,"temperature":0.5},
-        "learning":{"mode":"off","max_evaluations":0},
-        "limits":{"active_executions":1,"queued_work":1,"learning_jobs":0}}),
+        "eval_publication": false,
+        "limits":{"active_executions":1,"queued_work":1}}),
     )?)
 }
 

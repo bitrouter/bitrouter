@@ -31,7 +31,7 @@ use crate::managed_contract::evidence::{ModelTokenLimits, NativeRouteConstraints
 use bitrouter_ai::{
     policy::{Document, Policy, Target},
     tenancy::{
-        configuration::{Configuration, GenerationDefaults, Learning, Limits, ResourceRef},
+        configuration::{Configuration, GenerationDefaults, Limits, ResourceRef},
         operation::ErrorCode,
     },
     types::ApiProtocol,
@@ -265,21 +265,16 @@ impl Weight {
             routes,
             policy,
             generation_defaults,
-            learning,
+            eval_publication: _,
             limits,
         } = value;
         let GenerationDefaults {
             max_output_tokens: _,
             temperature: _,
         } = generation_defaults;
-        let Learning {
-            mode: _,
-            max_evaluations: _,
-        } = learning;
         let Limits {
             active_executions: _,
             queued_work: _,
-            learning_jobs: _,
         } = limits;
         self.vector(routes)?;
         for reference in routes {

@@ -507,7 +507,6 @@ pub(super) async fn exercise(
                     &bitrouter_ai::tenancy::configuration::Limits {
                         active_executions: 1,
                         queued_work: 0,
-                        learning_jobs: 0
                     }
                 )
                 .await,

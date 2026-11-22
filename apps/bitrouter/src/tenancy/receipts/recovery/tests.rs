@@ -115,7 +115,7 @@ async fn recovered_loss_sidecar_is_atomic_survives_restart_and_cannot_disappear(
         })
         .await
         .is_err(),
-        "lost sidecar must not become historical not_captured"
+        "a missing usage evidence sidecar must fail the read"
     );
     db.close().await?;
     Ok(())

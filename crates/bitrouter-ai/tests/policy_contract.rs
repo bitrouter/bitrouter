@@ -234,9 +234,13 @@ fn route_keys_use_exact_labels_and_reject_duplicate_entries()
         serde_json::to_value(class.task_family)?,
         json!("code:review")
     );
-    assert_eq!(serde_json::to_value(class.next_step_role)?, json!("verify"));
+    assert_eq!(serde_json::to_value(class.next_step)?, json!("verify"));
     assert_eq!(serde_json::to_value(class.risk)?, json!("normal"));
     assert_eq!(serde_json::to_value(class)?, json!(key));
+    assert_eq!(
+        serde_json::to_value(class.unknown_baseline())?,
+        json!("unknown|verify|normal")
+    );
 
     let source = |routes: &str| {
         format!(

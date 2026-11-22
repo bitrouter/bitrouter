@@ -668,8 +668,8 @@ ConfigurationPut file**, for example:
     ],
     "policy": null,
     "generation_defaults": { "max_output_tokens": 2048, "temperature": 0.2 },
-    "learning": { "mode": "off", "max_evaluations": 0 },
-    "limits": { "active_executions": 16, "queued_work": 32, "learning_jobs": 0 }
+    "eval_publication": false,
+    "limits": { "active_executions": 16, "queued_work": 32 }
   }
 }
 ```
@@ -2679,7 +2679,7 @@ validation and current-store/authority checks remain separate gates for audit,
 recovery and restore.
 
 The snapshot, inventory and verify results have `scope: sqlite_database_only`, `complete: false` and
-`cutover_ready: false`. This is **not a full backup** or an M0 MigrationManifest.
+`cutover_ready: false`. The bundle covers the SQLite database and its evidence.
 External OAuth files, workspace/harness state and external-effect outcomes are
 unassessed, excluded and unfenced. Source build/commit are honestly null; the
 report separately identifies the inspecting binary. Missing installation or
@@ -2737,7 +2737,7 @@ The bundle remains `sqlite_database_only`, `complete=false`, `cutover_ready=fals
 
 #### Offline mapping review
 
-`bro tenancy offline map --bundle DIRECTORY --evidence-digest SHA256 --manifest FILE --report NEW_DIRECTORY` validates the frozen M0 MigrationManifest and binds its source snapshot to a verified DB-only bundle. Inputs must be private regular files; no named context, host config or network lookup is used. This local profile accepts at most 8 MiB, 4096 mappings, 4096 merge approvals and 16 examples per mapping. Each declared disposition total must fit an exact JSON integer.
+`bro tenancy offline map --bundle DIRECTORY --evidence-digest SHA256 --manifest FILE --report NEW_DIRECTORY` validates an offline mapping manifest and binds its source snapshot to a verified DB-only bundle. Inputs must be private regular files; no named context, host config or network lookup is used. This local profile accepts at most 8 MiB, 4096 mappings, 4096 merge approvals and 16 examples per mapping. Each declared disposition total must fit an exact JSON integer.
 
 The new secured report directory records the original manifest and nonsecret validation summary. Duplicate mapping keys, missing or extraneous merge approvals, unresolved owners with grants, foreign observed installations and wrong snapshot digests fail. Same text in different owner namespaces remains distinct. The RECORDED marker only seals this review packet; it is never bundle READY or an execution capability.
 

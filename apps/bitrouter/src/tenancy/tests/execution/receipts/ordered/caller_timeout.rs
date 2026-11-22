@@ -244,7 +244,6 @@ async fn caller_wait_timeout_retains_cancelled_cleanup_without_fencing() -> Resu
             &bitrouter_ai::tenancy::configuration::Limits {
                 active_executions: 1,
                 queued_work: 1,
-                learning_jobs: 1,
             },
             Instant::now() + Duration::from_millis(100),
         )

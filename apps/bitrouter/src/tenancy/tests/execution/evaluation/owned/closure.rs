@@ -99,7 +99,7 @@ fn private_history(continuation: bool) -> Prompt {
 #[tokio::test]
 async fn managed_history_rejection_after_real_entry_has_no_observation_obligation() -> Result<()> {
     tokio::time::timeout(BOUND, async {
-        for mode in [LearningMode::Observe, LearningMode::Explore] {
+        for mode in [true, true] {
             for continuation in [false, true] {
                 let upstream = wiremock::MockServer::start().await;
                 let (fixture, revision) =
@@ -303,8 +303,7 @@ impl ObserveHook for TerminalProbe {
 
 async fn missing_completion(selected: bool, terminal: Terminal) -> Result<()> {
     let upstream = wiremock::MockServer::start().await;
-    let (fixture, revision) =
-        policy_fixture(&format!("{}/v1", upstream.uri()), LearningMode::Observe).await?;
+    let (fixture, revision) = policy_fixture(&format!("{}/v1", upstream.uri()), true).await?;
     let key = fixture.issue("missing-observation").await?;
     fixture
         .service

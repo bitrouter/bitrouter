@@ -263,7 +263,6 @@ async fn cancelled_persistent_native_waiter_retains_host_and_provider_custody_th
         let limits = Limits {
             active_executions: 1,
             queued_work: 0,
-            learning_jobs: 0,
         };
         ensure!(matches!(
             fixture

@@ -71,11 +71,6 @@ pub(in crate::tenancy) struct Candidate {
 }
 
 impl Candidate {
-    #[cfg(all(test, unix, feature = "core", feature = "harness"))]
-    pub(in crate::tenancy) fn dispatch_state(&self) -> Result<DispatchState> {
-        let disposition: StoredDisposition = serde_json::from_str(&self.private_json)?;
-        Ok(disposition.dispatch)
-    }
     #[cfg(all(feature = "core", feature = "harness"))]
     pub(in crate::tenancy) fn learning_digest(&self) -> &str {
         &self.digest
@@ -172,8 +167,7 @@ impl Candidate {
     }
     #[cfg(all(feature = "core", feature = "harness"))]
     pub(super) fn with_unavailable_usage_evidence(self) -> Result<Self> {
-        let mut document = super::usage_evidence::historical(&self.receipt);
-        document.capture = bitrouter_ai::tenancy::usage_evidence::Capture::Unavailable;
+        let document = super::usage_evidence::unavailable_at_recovery(&self.receipt);
         self.with_usage_document(document)
     }
     fn with_usage_document(

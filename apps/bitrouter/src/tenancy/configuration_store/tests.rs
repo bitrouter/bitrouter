@@ -1,7 +1,7 @@
 use super::*;
 use bitrouter_ai::tenancy::{
     authority::{OwnerKind, ResourceKind},
-    configuration::{GenerationDefaults, Learning, LearningMode, Limits},
+    configuration::{GenerationDefaults, Limits},
 };
 use sea_orm::{DatabaseConnection, Statement, TransactionTrait};
 use serde_json::json;
@@ -59,14 +59,10 @@ fn draft(tenant: &str, revision: &str, created: u64) -> Result<StoredConfigurati
                     max_output_tokens: 1024,
                     temperature: 0.5,
                 },
-                learning: Learning {
-                    mode: LearningMode::Off,
-                    max_evaluations: 0,
-                },
+                eval_publication: false,
                 limits: Limits {
                     active_executions: 1,
                     queued_work: 0,
-                    learning_jobs: 0,
                 },
             },
         },

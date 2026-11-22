@@ -1,4 +1,4 @@
-//! Private, versioned DB evidence; deliberately not a MigrationManifest.
+//! Private, versioned SQLite snapshot evidence.
 use serde::{Deserialize, Serialize};
 
 pub(super) const FORMAT_V2: &str = "bitrouter.offline.sqlite-evidence.v2";

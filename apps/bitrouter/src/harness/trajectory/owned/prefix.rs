@@ -65,7 +65,7 @@ impl Association {
         without_tools: bool,
     ) -> Result<Option<Prefix>> {
         budget.check()?;
-        if self.descriptor().mode == bitrouter_ai::tenancy::configuration::LearningMode::Off {
+        if !self.descriptor().mode {
             return Ok(None);
         }
         let (connection, current) = self.connection_in(tx, budget).await?;

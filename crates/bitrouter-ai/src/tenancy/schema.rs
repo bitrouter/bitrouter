@@ -1,6 +1,5 @@
-//! Optional schemas preserve required-null and conditional wire constraints that
-//! a bare Rust derive cannot express. The distribution helper compares these
-//! packaged definitions with the independent frozen contract and its fixtures.
+//! The packaged wire schema supplies required-null and conditional constraints
+//! for the tenancy DTOs' `JsonSchema` implementations.
 
 use std::{borrow::Cow, sync::OnceLock};
 
@@ -18,8 +17,7 @@ fn contract(pointer: &str) -> Schema {
         inline(&mut value, document, 0)?;
         Schema::try_from(value).ok()
     });
-    // Invalid packaged schemas fail closed and are caught by fixture/schema CI;
-    // schema generation never panics or fetches external references.
+    // An invalid packaged definition produces a rejecting schema.
     schema.unwrap_or_else(|| Schema::from(false))
 }
 
@@ -84,7 +82,6 @@ contracts! {
     ConfigurationRevision => "/$defs/ConfigurationRevision", Activation => "/$defs/Activation",
     ActiveRevision => "/$defs/ActiveRevision",
     GenerationDefaults => "/$defs/Configuration/properties/generation_defaults",
-    Learning => "/$defs/Configuration/properties/learning", LearningMode => "/$defs/Configuration/properties/learning/properties/mode",
     Limits => "/$defs/Configuration/properties/limits",
     Mutation => "/$defs/Mutation", OperationResult => "/$defs/OperationResult",
     OperationStatus => "/$defs/OperationResult/properties/status", Error => "/$defs/Error",

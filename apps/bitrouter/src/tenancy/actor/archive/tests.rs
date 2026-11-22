@@ -102,7 +102,6 @@ async fn live_owner_blocks_relocation_until_actual_release() -> Result<()> {
             &Limits {
                 active_executions: 1,
                 queued_work: 0,
-                learning_jobs: 0,
             },
         )
         .await

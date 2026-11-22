@@ -72,8 +72,9 @@ agent. Preservation also applies to no-match and bypass paths. Normal inference
 protocol conversion and provider fallback remain gateway responsibilities.
 
 The optional `routes` map associates a typed `RouteClass` with a tier name.
-Each `RouteClass` combines a `TaskFamily`, a `NextStep` and a `Risk` and
-serializes as one case-sensitive key, `<task-family>|<next-step>|<risk>`.
+Each `RouteClass` has `task_family` (`TaskFamily`), `next_step` (`NextStep`)
+and `risk` (`Risk`). It serializes as one case-sensitive key,
+`<task-family>|<next-step>|<risk>`.
 For example, `code:debugging|verify|guarded` is one key.
 
 Families are `code:generation`,
@@ -119,7 +120,7 @@ and separate management metadata, then build a private model-selection view.
 Provider secrets are excluded.
 Qualification covers the complete reachable closure at import, configuration
 creation, activation, restart and execution reopening, including hidden and
-unselected dependencies. Experimental content fails with `capability_mismatch`.
+unselected dependencies.
 
 | Identity | Meaning |
 | --- | --- |
@@ -156,10 +157,9 @@ restart, revocation and immutable old configurations. Shared publication uses
 the same admission rules as tenant submission.
 
 Conformance cases include raw duplicate-key refusal, equivalent YAML/JSON
-source digests, source read/resubmission, literal selected-name failure, hidden
-experimental closures and Policy-free experimental routes in minimum and
-all-feature builds. Eval facts for same-name different-revision policies remain
-distinct; generic and cross-endpoint profiles cannot impersonate them. These
-cases are required for conformance. Current-format recovery remains required;
-old stores are refused without conversion or inference replay under the
+source digests, source read/resubmission and literal selected-name failure.
+Eval facts for same-name different-revision policies remain distinct. Generic
+and cross-endpoint profiles cannot impersonate them. These cases are required
+for conformance. Current-format recovery remains required. Old stores are
+refused without conversion or inference replay under the
 [store contract](../service-api/README.md#resource-and-evidence-migration-and-rollback).

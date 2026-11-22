@@ -147,8 +147,8 @@ async fn qualify_current_profiles(
         let document: Configuration = serde_json::from_value(json!({
             "routes": routes, "policy": null,
             "generation_defaults": GenerationDefaults { max_output_tokens: 128, temperature: 0.5 },
-            "learning": {"mode": "off", "max_evaluations": 0},
-            "limits": {"active_executions": 1, "queued_work": 1, "learning_jobs": 0}
+            "eval_publication": false,
+            "limits": {"active_executions": 1, "queued_work": 1}
         }))?;
         let tenant = "scope-tenant".try_into()?;
         let revision = format!("{name}-configuration").try_into()?;

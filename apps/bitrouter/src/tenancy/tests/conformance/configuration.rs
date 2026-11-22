@@ -234,7 +234,7 @@ async fn restricted_scope_cannot_activate_changed_tenant_limits() -> Result<()> 
                     .map_err(failure)?,
             )?;
             if learning {
-                document.learning.max_evaluations = 1;
+                document.eval_publication = true;
             } else {
                 document.limits.active_executions = 0;
             }

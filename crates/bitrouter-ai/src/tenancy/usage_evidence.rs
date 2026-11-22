@@ -114,8 +114,7 @@ wire_enum! { /// Numeric units are encoded in each closed dimension name.
 }
 wire_enum! { /// Evidence retention, independent of invocation outcome.
     Capture { /// Capture was installed for this execution.
-        Captured, /// Historical receipt with no evidence capture contract.
-        NotCaptured, /// Capture was installed, but original observations were lost at recovery.
+        Captured, /// Capture was installed, but original observations were lost at recovery.
         Unavailable }
 }
 wire_enum! { /// Whether estimator provenance was captured by this contract.
@@ -254,7 +253,7 @@ pub struct ExecutionUsageEvidence {
     pub tenant_id: TenantId,
     /// Bound execution.
     pub execution_id: ExecutionId,
-    /// Distinguishes historical absence, retained capture and observations lost at recovery.
+    /// Distinguishes retained capture from observations lost at recovery.
     pub capture: Capture,
     /// Qualified mapping discriminator: two for native ingress or observations, one otherwise.
     pub extractor_version: u8,
@@ -381,7 +380,7 @@ impl ExecutionUsageEvidence {
                     .is_none_or(|parent| !self.child_execution_ids.contains(parent)),
             "execution linkage",
         )?;
-        if self.capture != Capture::Captured {
+        if self.capture == Capture::Unavailable {
             require(
                 self.attempts.is_empty()
                     && self.frames.is_empty()
@@ -389,7 +388,7 @@ impl ExecutionUsageEvidence {
                     && self.estimation == Estimation::NotCaptured
                     && self.parent_execution_id.is_none()
                     && self.child_execution_ids.is_empty(),
-                "absent evidence cannot assert observations",
+                "unavailable evidence cannot assert observations",
             )?;
         }
         match &self.dispatch {

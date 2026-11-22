@@ -4,7 +4,7 @@ pub(super) async fn exercise(root: &Path, mode: &str) -> Result<Option<tokio::ne
     let program = executable()?;
     let provider = Provider::start(false).await?;
     let (fixture, route) = file_fixture(&provider, root).await?;
-    let (headers, _) = prepared(&fixture, &route, LearningMode::Observe).await?;
+    let (headers, _) = prepared(&fixture, &route, true).await?;
     let marker = root.join("child.json");
     let socket = root.join("initialize.sock");
     let initialized = tokio::net::UnixListener::bind(&socket)?;

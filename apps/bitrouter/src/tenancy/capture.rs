@@ -81,13 +81,7 @@ impl Service {
         .ok_or_else(|| Failure::from(ErrorCode::CapabilityMismatch))?;
         route.require_capabilities().map_err(Failure::from)?;
         let block = route.block_profile().map(|_| route.clone());
-        if route
-            .block_profile()
-            .is_some_and(|profile| profile.definition.source != source)
-            || (block.is_some()
-                && retained.document().learning.mode
-                    != bitrouter_ai::tenancy::configuration::LearningMode::Explore)
-        {
+        if block.is_some() || route.assessment_reference().is_some() {
             return Err(ErrorCode::CapabilityMismatch.into());
         }
         let dependencies = route.dependencies().to_vec();
@@ -98,33 +92,8 @@ impl Service {
         authority
             .with_authority(&dependencies, capture_permissions)
             .map_err(Failure::from)?;
-        let mode = retained.document().learning.mode;
-        let assessment = match (route.assessment_reference(), mode) {
-            (Some(reference), mode)
-                if mode != bitrouter_ai::tenancy::configuration::LearningMode::Off =>
-            {
-                let child = retained
-                    .select_native(
-                        reference.resource_id.as_str(),
-                        bitrouter_ai::types::ModelOperation::Generation,
-                    )
-                    .map_err(Failure::from)?;
-                if child.reference() != reference {
-                    return Err(ErrorCode::AuthorityUnavailable.into());
-                }
-                child.require_capabilities().map_err(Failure::from)?;
-                Some(super::learning::Profile {
-                    route: reference.clone(),
-                    dependencies: child.dependencies().to_vec(),
-                    maximum: retained.document().learning.max_evaluations,
-                    concurrent: u32::from(retained.document().limits.learning_jobs),
-                })
-            }
-            _ => None,
-        };
-        if let Some(profile) = &assessment {
-            authority.extend(&profile.dependencies).await?;
-        }
+        let mode = retained.document().eval_publication;
+        let assessment = None;
         // The listener is a trusted same-App embedding input, never a tenant URL.
         // Reject paths/credentials/query overrides and non-loopback destinations.
         let url =

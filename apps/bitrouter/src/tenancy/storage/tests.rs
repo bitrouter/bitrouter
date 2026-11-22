@@ -292,7 +292,6 @@ async fn queued_execution_wakes_when_writer_charge_is_released_without_new_arriv
     let limits = Limits {
         active_executions: 1,
         queued_work: 1,
-        learning_jobs: 0,
     };
 
     for commit in [false, true] {

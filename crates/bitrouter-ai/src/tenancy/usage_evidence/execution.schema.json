@@ -39,7 +39,6 @@
     "capture": {
       "enum": [
         "captured",
-        "not_captured",
         "unavailable"
       ]
     },
@@ -656,7 +655,6 @@
         "properties": {
           "capture": {
             "enum": [
-              "not_captured",
               "unavailable"
             ]
           }

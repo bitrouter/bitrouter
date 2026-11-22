@@ -26,7 +26,7 @@ const TOKEN: &str = "fixture-tenancy-token-0123456789abcdef";
 
 fn padded_evidence(size: usize, chunked: bool) -> TestResult<Response> {
     let mut bytes = serde_json::to_vec(
-        &json!({"dispatch":{"mode":"strict"},"installation_id":"installation","tenant_id":"tenant","execution_id":"execution","capture":"not_captured","extractor_version":1,"estimation":"not_captured","estimate":null,"parent_execution_id":null,"child_execution_ids":[],"attempts":[],"frames":[],"truncated":false,"dropped_frames":0}),
+        &json!({"dispatch":{"mode":"strict"},"installation_id":"installation","tenant_id":"tenant","execution_id":"execution","capture":"captured","extractor_version":1,"estimation":"not_captured","estimate":null,"parent_execution_id":null,"child_execution_ids":[],"attempts":[],"frames":[],"truncated":false,"dropped_frames":0}),
     )?;
     assert!(bytes.len() < size);
     bytes.resize(size, b' ');
@@ -68,7 +68,7 @@ async fn original_body_limit_includes_whitespace_for_sized_and_chunked_responses
             )?;
             assert_eq!(
                 client.usage_evidence(&receipt).await?.capture,
-                Capture::NotCaptured
+                Capture::Captured
             );
             let error = client.usage_evidence(&receipt).await;
             let Err(Error::Tenancy(failure)) = error else {
@@ -86,7 +86,7 @@ async fn original_body_limit_includes_whitespace_for_sized_and_chunked_responses
 async fn separate_routes_validate_all_bindings_and_reject_unknown_fields() -> TestResult {
     let installation: InstallationId = "installation".try_into()?;
     let receipt = receipt()?;
-    let evidence = json!({"dispatch":{"mode":"strict"},"installation_id":"installation","tenant_id":"tenant","execution_id":"execution","capture":"not_captured","extractor_version":1,"estimation":"not_captured","estimate":null,"parent_execution_id":null,"child_execution_ids":[],"attempts":[],"frames":[],"truncated":false,"dropped_frames":0});
+    let evidence = json!({"dispatch":{"mode":"strict"},"installation_id":"installation","tenant_id":"tenant","execution_id":"execution","capture":"unavailable","extractor_version":1,"estimation":"not_captured","estimate":null,"parent_execution_id":null,"child_execution_ids":[],"attempts":[],"frames":[],"truncated":false,"dropped_frames":0});
     let mut wrong = evidence.clone();
     wrong["tenant_id"] = json!("foreign");
     let mut extra = evidence.clone();
@@ -111,7 +111,7 @@ async fn separate_routes_validate_all_bindings_and_reject_unknown_fields() -> Te
     );
     assert_eq!(
         client.usage_evidence(&receipt).await?.capture,
-        Capture::NotCaptured
+        Capture::Unavailable
     );
     assert!(matches!(
         client.usage_evidence(&receipt).await,

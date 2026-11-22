@@ -152,7 +152,7 @@ async fn configured(fixture: Fixture, route: ResourceRef, label: &str) -> Result
     let mut input = fixture.configuration_input(&format!("{label}-config"))?;
     input.document.routes.push(route.clone());
     input.document.generation_defaults.max_output_tokens = 25;
-    input.document.learning.mode = LearningMode::Observe;
+    input.document.eval_publication = true;
     let revision = match fixture
         .service
         .execute(

@@ -240,10 +240,7 @@ pub(super) fn decode_with_operation(
     for parent in retained.values() {
         if parent.admission.is_some() {
             ensure!(
-                document.policy.is_none()
-                    && document.learning.mode
-                        == bitrouter_ai::tenancy::configuration::LearningMode::Off
-                    && document.learning.max_evaluations == 0,
+                document.policy.is_none() && !document.eval_publication,
                 "profiled route requires static ordered configuration"
             );
         }

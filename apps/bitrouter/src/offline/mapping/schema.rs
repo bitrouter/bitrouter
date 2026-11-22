@@ -1,4 +1,4 @@
-//! Application-private decoding of frozen M0 MigrationManifest, not authority.
+//! Application-private decoding for offline ownership mapping review.
 use anyhow::{Result, ensure};
 use bitrouter_ai::tenancy::identity::{Digest, InstallationId, PrincipalId, TenantId};
 use serde::{
@@ -15,9 +15,8 @@ pub(crate) const MAX_INPUT: u64 = 8 * 1024 * 1024;
 const MAX_KEYS: usize = 4096;
 const MAX_NUMBER: u64 = 9_007_199_254_740_991;
 
-// Deserialize incrementally: neither a hostile sequence size hint nor an
-// oversized array can allocate beyond the local profile. The M0 format allows
-// more keys; this command deliberately has a narrower documented work limit.
+// Deserialize incrementally to bound allocation from sequence size hints
+// and oversized input arrays.
 pub(crate) struct Limited<T, const N: usize>(pub(crate) Vec<T>);
 impl<'de, T: Deserialize<'de>, const N: usize> Deserialize<'de> for Limited<T, N> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
@@ -76,8 +75,7 @@ pub(crate) enum Disposition {
     Quarantined,
 }
 
-// M0 requires these fields even when their value is null. Serde's ordinary
-// Option would also accept absence, which is not the frozen contract.
+// Require an explicit field even when its value is null.
 fn present_option<'de, D, T>(deserializer: D) -> std::result::Result<Option<T>, D::Error>
 where
     D: Deserializer<'de>,

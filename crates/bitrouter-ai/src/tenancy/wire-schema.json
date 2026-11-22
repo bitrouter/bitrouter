@@ -393,28 +393,6 @@
           ],
           "additionalProperties": false
         },
-        "learning": {
-          "type": "object",
-          "properties": {
-            "mode": {
-              "enum": [
-                "off",
-                "observe",
-                "explore"
-              ]
-            },
-            "max_evaluations": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 100000
-            }
-          },
-          "required": [
-            "mode",
-            "max_evaluations"
-          ],
-          "additionalProperties": false
-        },
         "limits": {
           "type": "object",
           "properties": {
@@ -427,26 +405,23 @@
               "type": "integer",
               "minimum": 0,
               "maximum": 256
-            },
-            "learning_jobs": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 8
             }
           },
           "required": [
             "active_executions",
-            "queued_work",
-            "learning_jobs"
+            "queued_work"
           ],
           "additionalProperties": false
+        },
+        "eval_publication": {
+          "type": "boolean"
         }
       },
       "required": [
         "routes",
         "policy",
         "generation_defaults",
-        "learning",
+        "eval_publication",
         "limits"
       ],
       "additionalProperties": false,

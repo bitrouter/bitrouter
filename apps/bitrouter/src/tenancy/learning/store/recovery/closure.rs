@@ -7,7 +7,7 @@ use crate::{
         resources::execution::RetainedExecutionRevision,
     },
 };
-use bitrouter_ai::tenancy::{configuration::LearningMode, identity::InstallationId};
+use bitrouter_ai::tenancy::identity::InstallationId;
 use sea_orm::{DatabaseBackend, Statement, sea_query::Query};
 
 pub(super) struct Configuration {
@@ -66,16 +66,10 @@ pub(super) async fn configuration(
         execution.installation_id() == installation
             && execution.tenant_id() == tenant
             && execution.revision_id() == revision
-            && execution.document().learning.mode != LearningMode::Off,
+            && execution.document().eval_publication,
         "paid retained configuration binding changed"
     );
-    let maximum = execution.document().learning.max_evaluations;
-    ensure!(maximum > 0, "paid retained budget is zero");
-    Ok(Arc::new(Configuration {
-        execution,
-        maximum,
-        digest,
-    }))
+    anyhow::bail!("tenant configurations do not authorize automatic assessment")
 }
 
 pub(super) struct Closure {
@@ -125,7 +119,7 @@ pub(super) async fn job(
             && association.connection() == prefix.connection
             && prefix.session_key == value.session
             && d.revision == value.configuration.as_str()
-            && d.mode == profile.execution.document().learning.mode,
+            && d.mode == profile.execution.document().eval_publication,
         "paid checkpoint namespace differs from accepted record"
     );
     if value.status == Status::Accepted {

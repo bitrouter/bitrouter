@@ -57,7 +57,6 @@ async fn owner_with_deadline(
             &Limits {
                 active_executions: 16,
                 queued_work: 32,
-                learning_jobs: 1,
             },
             Instant::now() + Duration::from_secs(10),
         )

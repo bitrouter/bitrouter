@@ -162,13 +162,14 @@ impl Snapshot {
     }
 }
 
-pub(super) fn historical(receipt: &ExecutionReceipt) -> ExecutionUsageEvidence {
+#[cfg(all(feature = "core", feature = "harness"))]
+pub(super) fn unavailable_at_recovery(receipt: &ExecutionReceipt) -> ExecutionUsageEvidence {
     ExecutionUsageEvidence {
         dispatch: receipt.dispatch.clone(),
         installation_id: receipt.installation_id.clone(),
         tenant_id: receipt.tenant_id.clone(),
         execution_id: receipt.execution_id.clone(),
-        capture: Capture::NotCaptured,
+        capture: Capture::Unavailable,
         extractor_version: ExecutionUsageEvidence::extractor_version_for(&receipt.dispatch, &[]),
         estimation: Estimation::NotCaptured,
         estimate: None,

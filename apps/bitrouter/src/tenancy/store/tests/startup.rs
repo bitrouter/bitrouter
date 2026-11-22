@@ -269,8 +269,7 @@ async fn full_object_allowance_is_independent_of_key_page_width() -> Result<()> 
     use bitrouter_ai::tenancy::{
         authority::{OwnerKind, ResourceKind},
         configuration::{
-            Configuration, ConfigurationRevision, GenerationDefaults, Learning, LearningMode,
-            Limits, ResourceRef,
+            Configuration, ConfigurationRevision, GenerationDefaults, Limits, ResourceRef,
         },
     };
     let db = database().await?;
@@ -304,14 +303,10 @@ async fn full_object_allowance_is_independent_of_key_page_width() -> Result<()> 
                     max_output_tokens: 1024,
                     temperature: 0.5,
                 },
-                learning: Learning {
-                    mode: LearningMode::Off,
-                    max_evaluations: 0,
-                },
+                eval_publication: false,
                 limits: Limits {
                     active_executions: 1,
                     queued_work: 0,
-                    learning_jobs: 0,
                 },
             },
             compiler_version: "fixture/v1".into(),

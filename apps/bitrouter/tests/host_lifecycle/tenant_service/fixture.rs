@@ -271,7 +271,7 @@ impl Owned {
     ) -> Result<()> {
         let input: ConfigurationPut = serde_json::from_value(json!({
             "operation_id":operation,"installation_id":self.installation,"expected_authority_revision":authority,
-            "document":{"routes":self.routes,"policy":null,"generation_defaults":{"max_output_tokens":64,"temperature":0.0},"learning":{"mode":"off","max_evaluations":0},"limits":{"active_executions":2,"queued_work":0,"learning_jobs":0}}
+            "document":{"routes":self.routes,"policy":null,"generation_defaults":{"max_output_tokens":64,"temperature":0.0},"eval_publication": false,"limits":{"active_executions":2,"queued_work":0}}
         }))?;
         let revision = self.reader.put_configuration(&self.tenant, &input).await?;
         let result = self
@@ -534,7 +534,7 @@ pub(super) async fn provision(
     }
     let input: ConfigurationPut = serde_json::from_value(
         json!({"operation_id":"initial-config","installation_id":installation,"expected_authority_revision":authority,
-        "document":{"routes":routes,"policy":null,"generation_defaults":{"max_output_tokens":64,"temperature":0.0},"learning":{"mode":"off","max_evaluations":0},"limits":{"active_executions":2,"queued_work":0,"learning_jobs":0}}}),
+        "document":{"routes":routes,"policy":null,"generation_defaults":{"max_output_tokens":64,"temperature":0.0},"eval_publication": false,"limits":{"active_executions":2,"queued_work":0}}}),
     )?;
     let revision = reader.put_configuration(&tenant, &input).await?;
     let result = reader.operation(&installation, &input.operation_id).await?;

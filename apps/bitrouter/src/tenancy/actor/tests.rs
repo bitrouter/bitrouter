@@ -3,9 +3,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, ensure};
 use bitrouter_ai::tenancy::{
     authority::{AuditReaderCreate, CredentialIssued, PrincipalPut, TenantPut, TenantState},
-    configuration::{
-        Configuration, ConfigurationPut, GenerationDefaults, Learning, LearningMode, Limits,
-    },
+    configuration::{Configuration, ConfigurationPut, GenerationDefaults, Limits},
     identity::{InstallationId, OperationId, PrincipalId, TenantId},
     operation::{ErrorCode, Mutation, OperationStatus},
 };
@@ -182,14 +180,10 @@ async fn read_only_deadline_cancels_draft_and_preserves_revoke_and_suspend() -> 
                     max_output_tokens: 1024,
                     temperature: 0.0,
                 },
-                learning: Learning {
-                    mode: LearningMode::Off,
-                    max_evaluations: 0,
-                },
+                eval_publication: false,
                 limits: Limits {
                     active_executions: 1,
                     queued_work: 0,
-                    learning_jobs: 0,
                 },
             },
         },

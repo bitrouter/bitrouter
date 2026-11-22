@@ -151,14 +151,10 @@ fn configuration(fixture: &Fixture, operation: &str) -> Result<ConfigurationPut>
                 max_output_tokens: 1024,
                 temperature: 0.0,
             },
-            learning: Learning {
-                mode: LearningMode::Off,
-                max_evaluations: 0,
-            },
+            eval_publication: false,
             limits: Limits {
                 active_executions: 1,
                 queued_work: 0,
-                learning_jobs: 0,
             },
         },
     })

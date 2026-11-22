@@ -407,10 +407,7 @@ async fn mapping_cli_binds_real_snapshot_and_records_only_explicit_claims() -> R
     let anchor = snapshot["evidence_digest"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("missing anchor"))?;
-    let mut manifest: Value = serde_json::from_str(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../docs/contracts/resource-tenancy/migration-example.json"
-    )))?;
+    let mut manifest: Value = serde_json::from_str(include_str!("fixtures/offline-mapping.json"))?;
     manifest["source_snapshot_digest"] = snapshot["evidence"]["snapshot_digest"].clone();
     std::fs::write(
         home.path().join("mapping.json"),

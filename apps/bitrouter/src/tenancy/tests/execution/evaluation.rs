@@ -9,7 +9,6 @@ use axum::{
     response::{IntoResponse, Response},
     routing::post,
 };
-use bitrouter_ai::tenancy::configuration::LearningMode;
 use sea_orm::{ConnectionTrait, Statement};
 use std::{sync::atomic::AtomicUsize, time::Duration};
 use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
@@ -58,7 +57,7 @@ async fn provider(State(state): State<Provider>, Json(body): Json<serde_json::Va
     .into_response()
 }
 
-async fn policy_fixture(url: &str, mode: LearningMode) -> Result<(Fixture, RevisionId)> {
+async fn policy_fixture(url: &str, mode: bool) -> Result<(Fixture, RevisionId)> {
     let document = crate::model_policy::parse(
         &json!({"spec_version":"policy/1.0.0-beta.1", "policies":{"selected":{"tiers":{"economy":{"model":"mock:model-a"}},"default_tier":"economy"}}}),
     )?;
@@ -67,7 +66,7 @@ async fn policy_fixture(url: &str, mode: LearningMode) -> Result<(Fixture, Revis
 
 async fn policy_fixture_with_document(
     url: &str,
-    mode: LearningMode,
+    mode: bool,
     document: bitrouter_ai::policy::Document,
     bind_route: bool,
 ) -> Result<(Fixture, RevisionId)> {
@@ -76,7 +75,7 @@ async fn policy_fixture_with_document(
 
 async fn policy_fixture_with_trajectory(
     url: &str,
-    mode: LearningMode,
+    mode: bool,
     document: bitrouter_ai::policy::Document,
     bind_route: bool,
     trajectory: Option<serde_json::Value>,
@@ -86,7 +85,7 @@ async fn policy_fixture_with_trajectory(
 
 async fn policy_fixture_named(
     url: &str,
-    mode: LearningMode,
+    mode: bool,
     document: bitrouter_ai::policy::Document,
     bind_route: bool,
     trajectory: Option<serde_json::Value>,
@@ -107,7 +106,7 @@ async fn policy_fixture_named(
 async fn policy_fixture_with_existing(
     fixture: Fixture,
     url: &str,
-    mode: LearningMode,
+    mode: bool,
     policy: (&str, bitrouter_ai::policy::Document),
     bind_route: bool,
     trajectory: Option<serde_json::Value>,
@@ -159,7 +158,7 @@ async fn policy_fixture_with_existing(
     let mut input = fixture.configuration_input("observed-config")?;
     input.document.routes = vec![route];
     input.document.policy = Some(policy);
-    input.document.learning.mode = mode;
+    input.document.eval_publication = mode;
     let revision = match fixture
         .service
         .execute(
@@ -243,10 +242,10 @@ async fn only_receipt(
 async fn policy_settlement_uses_owned_store_for_success_error_and_stream_only_when_enabled()
 -> Result<()> {
     for (mode, fail, stream) in [
-        (LearningMode::Off, false, false),
-        (LearningMode::Observe, false, false),
-        (LearningMode::Observe, true, false),
-        (LearningMode::Observe, false, true),
+        (false, false, false),
+        (true, false, false),
+        (true, true, false),
+        (true, false, true),
     ] {
         let state = Provider {
             calls: Arc::new(AtomicUsize::new(0)),
@@ -291,7 +290,7 @@ async fn policy_settlement_uses_owned_store_for_success_error_and_stream_only_wh
             fixture.service.pipelines.close_and_drain().await?;
             ensure!(state.calls.load(Ordering::SeqCst) == 1);
             let subjects = store.list_subjects().await?;
-            ensure!(subjects.len() == usize::from(mode != LearningMode::Off));
+            ensure!(subjects.len() == usize::from(mode));
             ensure!(crate::eval::store::EvalStore::new(fixture.db.clone()).list_subjects().await?.is_empty());
             if let Some(subject) = subjects.first() {
                 ensure!(subject.spec_version == bitrouter_ai::eval::SpecVersion::Beta1);

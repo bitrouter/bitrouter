@@ -12,7 +12,7 @@ use sea_orm::{ConnectionTrait, DatabaseConnection, QueryOrder, TransactionTrait}
 use serde_json::json;
 
 const AT: &str = "2026-10-25T10:00:00.000+00:00";
-fn association(tenant: &str, mode: LearningMode) -> Result<Association> {
+fn association(tenant: &str, mode: bool) -> Result<Association> {
     let (scope, provenance) = Scope::for_test(
         "installation".try_into()?,
         tenant.try_into()?,
@@ -125,7 +125,7 @@ async fn append(
     tx.commit().await?;
     Ok(append)
 }
-async fn recorded(mode: LearningMode) -> Result<(DatabaseConnection, Association, Append)> {
+async fn recorded(mode: bool) -> Result<(DatabaseConnection, Association, Append)> {
     let db = crate::db::connect("sqlite::memory:").await?;
     crate::db::run_migrations(&db).await?;
     let association = association("tenant", mode)?;
@@ -161,7 +161,7 @@ async fn raw(
 
 #[tokio::test]
 async fn bounded_stopped_prefix_replay_is_exact_inside_active_transaction() -> Result<()> {
-    let (db, association, last) = recorded(LearningMode::Observe).await?;
+    let (db, association, last) = recorded(true).await?;
     let tx = db.begin().await?;
     let checkpoint = freeze_in(
         &tx,
@@ -204,7 +204,7 @@ async fn bounded_stopped_prefix_replay_is_exact_inside_active_transaction() -> R
 #[tokio::test]
 async fn missing_or_malformed_checkpoint_closure_refuses_before_any_repair() -> Result<()> {
     for damage in ["member", "cursor", "manifest"] {
-        let (db, association, _) = recorded(LearningMode::Explore).await?;
+        let (db, association, _) = recorded(true).await?;
         let tx = db.begin().await?;
         assert!(
             freeze_in(
@@ -245,7 +245,7 @@ async fn missing_or_malformed_checkpoint_closure_refuses_before_any_repair() -> 
 
 #[tokio::test]
 async fn checkpoint_member_failure_rolls_back_real_checkpoint_insert() -> Result<()> {
-    let (db, association, _) = recorded(LearningMode::Observe).await?;
+    let (db, association, _) = recorded(true).await?;
     db.execute_unprepared("CREATE TRIGGER reject_owned_member BEFORE INSERT ON acp_checkpoint_members BEGIN SELECT RAISE(ABORT, 'fixture member failure'); END").await?;
     let tx = db.begin().await?;
     assert!(
@@ -267,7 +267,7 @@ async fn checkpoint_member_failure_rolls_back_real_checkpoint_insert() -> Result
 
 #[tokio::test]
 async fn off_and_unmatched_prompt_never_schedule_paid_or_passive_work() -> Result<()> {
-    let (db, association, _) = recorded(LearningMode::Off).await?;
+    let (db, association, _) = recorded(false).await?;
     let tx = db.begin().await?;
     assert!(
         freeze_in(
@@ -281,7 +281,7 @@ async fn off_and_unmatched_prompt_never_schedule_paid_or_passive_work() -> Resul
     );
     assert_eq!(raw(&tx).await?, (vec![], vec![], vec![]));
     tx.rollback().await?;
-    let (db, association, _) = recorded(LearningMode::Observe).await?;
+    let (db, association, _) = recorded(true).await?;
     append(
         &db,
         &association,
@@ -313,8 +313,8 @@ async fn off_and_unmatched_prompt_never_schedule_paid_or_passive_work() -> Resul
 
 #[tokio::test]
 async fn owned_capture_and_legacy_real_consumers_cannot_cross_namespaces() -> Result<()> {
-    let (db, owned, _) = recorded(LearningMode::Observe).await?;
-    let foreign = association("other-tenant", LearningMode::Observe)?;
+    let (db, owned, _) = recorded(true).await?;
+    let foreign = association("other-tenant", true)?;
     create(&db, &foreign).await?;
     db.execute_unprepared(&format!(
         "UPDATE acp_capture_connections SET metadata_json = '{}' WHERE connection_id = '{}'",
@@ -358,7 +358,7 @@ async fn owned_capture_and_legacy_real_consumers_cannot_cross_namespaces() -> Re
 
 #[tokio::test]
 async fn lost_append_closure_and_foreign_native_ids_cannot_be_repaired_or_adopted() -> Result<()> {
-    let (db, association, last) = recorded(LearningMode::Observe).await?;
+    let (db, association, last) = recorded(true).await?;
     db.execute_unprepared("DELETE FROM acp_canonical_sessions")
         .await?;
     let tx = db.begin().await?;
@@ -399,7 +399,7 @@ async fn lost_append_closure_and_foreign_native_ids_cannot_be_repaired_or_adopte
 
 #[tokio::test]
 async fn live_capture_bound_leaves_real_response_and_disconnect_headroom() -> Result<()> {
-    let (db, association, _) = recorded(LearningMode::Observe).await?;
+    let (db, association, _) = recorded(true).await?;
     append(
         &db,
         &association,
@@ -499,7 +499,7 @@ async fn live_capture_bound_leaves_real_response_and_disconnect_headroom() -> Re
 
 #[tokio::test]
 async fn late_notification_is_not_a_new_stopped_prompt_boundary() -> Result<()> {
-    let (db, association, _) = recorded(LearningMode::Observe).await?;
+    let (db, association, _) = recorded(true).await?;
     append(&db, &association, 9, event(Kind::Notification, Direction::Agent, None, "session/update", json!({"sessionId":"native","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"late"}}}))).await?;
     let tx = db.begin().await?;
     assert!(

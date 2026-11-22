@@ -686,7 +686,6 @@ async fn invalid_native_ingress_never_reaches_control_provider_or_admission() ->
         let limits = Limits {
             active_executions: 4,
             queued_work: 4,
-            learning_jobs: 0,
         };
         let mut leases = Vec::new();
         for _ in 0..4 {
@@ -1007,7 +1006,6 @@ async fn cancelled_native_outcome_keeps_lease_until_the_running_callback_ack() -
         let limits = Limits {
             active_executions: 1,
             queued_work: 0,
-            learning_jobs: 0,
         };
         ensure!(
             matches!(

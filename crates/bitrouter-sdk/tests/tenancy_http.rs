@@ -32,7 +32,7 @@ fn applied_to(resource: &str) -> Value {
     result
 }
 fn configuration() -> Value {
-    json!({"routes":[],"policy":null,"generation_defaults":{"max_output_tokens":100,"temperature":1.0},"learning":{"mode":"off","max_evaluations":0},"limits":{"active_executions":16,"queued_work":32,"learning_jobs":2}})
+    json!({"routes":[],"policy":null,"generation_defaults":{"max_output_tokens":100,"temperature":1.0},"eval_publication": false,"limits":{"active_executions":16,"queued_work":32}})
 }
 fn revision() -> Value {
     json!({"tenant_id":"tenant","revision_id":"revision","schema_version":1,"compiler_version":"1","content_digest":"a".repeat(64),"document":configuration()})

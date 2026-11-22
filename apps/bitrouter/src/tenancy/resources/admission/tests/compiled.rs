@@ -65,8 +65,8 @@ async fn compiled_profile_fixture(
     }
     let document = serde_json::from_value(json!({"routes":roots,"policy":null,
         "generation_defaults":{"max_output_tokens":25,"temperature":0.0},
-        "learning":{"mode":"off","max_evaluations":0},
-        "limits":{"active_executions":32,"queued_work":32,"learning_jobs":0}}))?;
+        "eval_publication": false,
+        "limits":{"active_executions":32,"queued_work":32}}))?;
     let tenant = "tenant".try_into()?;
     let revision = "config-v1".try_into()?;
     let compiled = resources

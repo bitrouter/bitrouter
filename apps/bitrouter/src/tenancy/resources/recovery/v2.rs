@@ -263,11 +263,8 @@ impl Resources {
         bytes: usize,
     ) -> Result<()> {
         ensure!(
-            matches!(
-                stored.revision.document.learning.mode,
-                bitrouter_ai::tenancy::configuration::LearningMode::Off
-            ) && stored.revision.document.learning.max_evaluations == 0,
-            "fresh recovery excludes automatic learning"
+            !stored.revision.document.eval_publication,
+            "static recovery excludes evaluation publication"
         );
         let mut required =
             memory::json_required(&bounded_bytes(&stored.compiled, 2 * MAX_ARTIFACT_BYTES)?)?

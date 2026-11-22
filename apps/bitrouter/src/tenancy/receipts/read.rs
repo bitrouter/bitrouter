@@ -143,15 +143,14 @@ pub(in crate::tenancy) async fn body(
             if matches!(request, Request::One(_)) {
                 return Ok(terminal.json().as_bytes().to_vec());
             }
-            match terminal {
-                Terminal::V1(candidate) => match &candidate.usage_evidence {
-                    Some(evidence) => return Ok(evidence.json.as_bytes().to_vec()),
-                    None => {
-                        serde_json::to_vec(&super::usage_evidence::historical(&candidate.receipt))
-                    }
-                },
-                Terminal::V2(candidate) => return Ok(candidate.evidence.json.as_bytes().to_vec()),
-            }
+            return match terminal {
+                Terminal::V1(candidate) => candidate
+                    .usage_evidence
+                    .as_ref()
+                    .map(|evidence| evidence.json.as_bytes().to_vec())
+                    .ok_or_else(storage_failure),
+                Terminal::V2(candidate) => Ok(candidate.evidence.json.as_bytes().to_vec()),
+            };
         }
         Request::Page {
             correlation,

@@ -1,9 +1,12 @@
-use super::super::store::{self, Candidate, Disposition};
+use super::super::{
+    read,
+    store::{self, Candidate, Disposition},
+};
 use super::*;
 use anyhow::{Context, Result, ensure};
 use bitrouter_ai::tenancy::{
     execution::{ExecutionReceipt, Outcome, Provenance, ReceiptState, Usage},
-    operation::DispatchState,
+    operation::{DispatchState, ErrorCode},
     validation::Validate,
 };
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement, TransactionTrait};
@@ -261,11 +264,10 @@ async fn atomic_failure_replay_deletion_and_inventory_corruption() -> Result<()>
     Ok(())
 }
 #[tokio::test]
-async fn historical_absence_differs_from_empty_capture_and_corrupt_orphan_is_refused() -> Result<()>
-{
+async fn missing_evidence_read_and_corrupt_orphan_fail_closed() -> Result<()> {
     let db = open().await?;
     let r = receipt()?;
-    let old = Candidate::new(
+    let without_evidence = Candidate::new(
         r.clone(),
         Disposition {
             dispatch: DispatchState::NotStarted,
@@ -273,9 +275,14 @@ async fn historical_absence_differs_from_empty_capture_and_corrupt_orphan_is_ref
             auxiliary_digest: None,
         },
     )?;
-    write(&db, &old).await?;
+    write(&db, &without_evidence).await?;
     ensure!(load(&db).await?.usage_evidence.is_none());
-    ensure!(historical(&r).capture == Capture::NotCaptured);
+    let request = read::Request::UsageEvidence(r.execution_id.clone());
+    let result = read::body(&db, &r.installation_id, &r.tenant_id, &request, || {
+        ErrorCode::StorageUnavailable.into()
+    })
+    .await;
+    ensure!(matches!(result, Err(failure) if failure.0.code == ErrorCode::StorageUnavailable));
     sql(&db,"INSERT INTO tenancy_usage_evidence (installation_id,tenant_id,execution_id,schema_version,receipt_digest,evidence_digest,evidence_json,byte_count) VALUES('installation','tenant','orphan',1,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','{}',2)").await?;
     ensure!(storage::inventory(&db, &r.installation_id).await.is_err());
     db.close().await?;
@@ -295,7 +302,11 @@ async fn durable_evidence_survives_restart_and_digest_corruption_fails_closed() 
     db.close().await?;
     let db = crate::db::connect(&url).await?;
     ensure!(load(&db).await?.digest == original.digest);
-    sql(&db,"UPDATE tenancy_usage_evidence SET evidence_json=replace(evidence_json,'captured','not_captured'),byte_count=byte_count+4").await?;
+    sql(
+        &db,
+        r#"UPDATE tenancy_usage_evidence SET evidence_json=replace(evidence_json,'"capture":"captured"','"capture":"unavailable"'),byte_count=byte_count+3"#,
+    )
+    .await?;
     ensure!(
         load(&db).await.is_err()
             && storage::inventory(&db, &receipt()?.installation_id)

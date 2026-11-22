@@ -140,8 +140,8 @@ async fn mixed_profile_closure_uses_authenticated_format_five_and_rejects_downgr
     let document = serde_json::from_value(
         json!({"routes":[reference(ResourceKind::Route,"route","local")?,reference(ResourceKind::Route,"shared-route","shared")?,reference(ResourceKind::Route,"sibling-route","shared")?],"policy":null,
         "generation_defaults":{"max_output_tokens":128,"temperature":0.5},
-        "learning":{"mode":"off","max_evaluations":0},
-        "limits":{"active_executions":1,"queued_work":1,"learning_jobs":0}}),
+        "eval_publication": false,
+        "limits":{"active_executions":1,"queued_work":1}}),
     )?;
     let tenant = "tenant".try_into()?;
     let revision = "config-v1".try_into()?;

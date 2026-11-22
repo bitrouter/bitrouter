@@ -115,6 +115,7 @@ fn required_fields_zero_absence_and_exact_numbers() -> TestResult {
 fn rejects_forged_order_duplicate_dimensions_unknown_fields_and_unsupported_versions() {
     for (pointer, replacement) in [
         ("/dispatch/mode", json!("unknown")),
+        ("/capture", json!("unknown")),
         ("/extractor_version", json!(2)),
         ("/frames/0/sequence", json!(1)),
         ("/frames/0/attempt_id", json!("foreign")),
@@ -136,12 +137,6 @@ fn rejects_forged_order_duplicate_dimensions_unknown_fields_and_unsupported_vers
     duplicate["frames"][0]["quantities"] =
         json!([{"dimension":"output_tokens","value":0},{"dimension":"output_tokens","value":1}]);
     assert!(!valid(duplicate));
-    let mut historical = document();
-    historical["capture"] = json!("not_captured");
-    assert!(!valid(historical.clone()));
-    historical["frames"] = json!([]);
-    historical["attempts"] = json!([]);
-    assert!(valid(historical));
 }
 #[test]
 fn v1_receipt_rejects_evidence_fields_and_new_capabilities_are_separate() -> TestResult {
@@ -221,12 +216,14 @@ fn unavailable_capture_is_distinct_and_cannot_claim_observations() -> TestResult
         ("parent_execution_id", json!("parent")),
         ("child_execution_ids", json!(["child"])),
         ("estimation", json!("not_used")),
-        ("truncated", json!(true)),
     ] {
         let mut invalid = value.clone();
         invalid[field] = replacement;
         assert!(!valid(invalid), "{field}");
     }
+    value["truncated"] = json!(true);
+    value["dropped_frames"] = json!(1);
+    assert!(!valid(value));
     #[cfg(feature = "schema")]
     {
         let schema: Value = serde_json::from_str(include_str!(
@@ -234,11 +231,12 @@ fn unavailable_capture_is_distinct_and_cannot_claim_observations() -> TestResult
         ))?;
         assert_eq!(
             schema["properties"]["capture"]["enum"],
-            json!(["captured", "not_captured", "unavailable"])
+            json!(["captured", "unavailable"])
         );
-        assert_eq!(
-            schema["allOf"][0]["if"]["properties"]["capture"]["enum"],
-            json!(["not_captured", "unavailable"])
+        let condition = &schema["allOf"][0]["if"]["properties"]["capture"];
+        assert!(
+            condition["const"] == json!("unavailable")
+                || condition["enum"] == json!(["unavailable"])
         );
     }
     Ok(())

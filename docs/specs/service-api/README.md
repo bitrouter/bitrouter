@@ -194,11 +194,9 @@ backends or platforms MUST NOT be inferred from the DTOs alone.
 ### Operations
 
 All paths below are relative to `/control/v1`. Payload structures and field
-limits are defined by the [JSON Schema](../../contracts/resource-tenancy/schema.json)
+limits are defined by the [JSON Schema](../../../crates/bitrouter-ai/src/tenancy/wire-schema.json)
 and the [public DTOs](../../../crates/bitrouter-ai/src/tenancy). A schema-valid
-request may still fail semantic, authorization or capability checks. The
-[fixture set](../../contracts/resource-tenancy/fixtures.json) includes shape and
-semantic negative cases.
+request may still fail semantic, authorization or capability checks.
 
 | Method | Path | Result |
 | --- | --- | --- |
@@ -337,12 +335,17 @@ start work; already admitted work can still finalize under its existing
 ownership. A receipt-only audit reader may inspect retained receipts without
 gaining mutation or execution authority.
 
+Tenant configurations require an explicit `eval_publication` boolean. When
+true, eligible executions publish evaluation subjects using the admitted policy
+and the current authority checks. The switch authorizes publication only and
+requires the installed Eval publication capability.
+
 ### Strict tenant dispatch binding
 
 Tenant inference uses the inference listener with a tenant bearer credential,
 separately from management on the control listener. The
 [public `DispatchBinding` DTO and validator](../../../crates/bitrouter-ai/src/tenancy/operation.rs)
-and its definition in the [tenancy schema](../../contracts/resource-tenancy/schema.json)
+and its definition in the [tenancy schema](../../../crates/bitrouter-ai/src/tenancy/wire-schema.json)
 are the catalog for the seven required HTTP request headers. Each header MUST
 occur exactly once with a valid value; omitted, duplicate or malformed binding
 headers are rejected. Header names follow HTTP case-insensitivity. Version is
@@ -474,9 +477,8 @@ requires live `resource.read` authority, loads authenticated immutable content,
 then revalidates authority before disclosure. Its response is
 [`PolicySource`](../../../crates/bitrouter-ai/src/tenancy/resources.rs):
 `status`, `document` and selected `name`. It returns only representable model
-Policy source. Other resource kinds are invalid requests; experimental artifacts
-return `capability_mismatch`. Generic resource-status reads remain nonsecret
-status only.
+Policy source. Other resource kinds are invalid requests. Generic resource-status
+reads remain nonsecret status only.
 
 `GET /control/v1/tenancy/policy-capabilities` uses the same installation binding
 and live capability authority as resource discovery. `PolicyCapabilities`
@@ -485,12 +487,9 @@ returns `installation_id`, exact supported `spec_version`, installed
 resource nor promises that a later mutation will succeed.
 
 Policy compatibility is checked over the complete reachable dependency closure
-when a managed route is submitted, a configuration is created, an active
-configuration is restored, and an execution view is opened. Referencing an
-operator-imported experimental policy does not bypass Policy admission.
-Tenant/shared import, configuration and execution reject experimental routes
-(core_choice, assessment, block and hidden dependencies), even in all-feature
-builds and without Policy. Exact literal selected names have no variant fallback.
+when a route is submitted, a configuration is created, an active configuration
+is restored, and an execution view is opened. Tenant and shared imports validate
+the same model-only routing contract. Exact selected names identify one policy.
 
 Resource provisioning creates immutable upstream credential, route and policy
 revisions. These are service messages within this specification, not a separate
@@ -1186,26 +1185,22 @@ MUST match the addressed resource. Correlation IDs are neither execution
 identities nor inference idempotency keys. A client MUST NOT merge evidence by
 correlation ID or replay inference to recover a missing observation.
 
-#### Capture, absence and recovery
+#### Capture and recovery
 
 Evidence MUST be bound to its immutable terminal receipt and committed under
 the same durable publication gate. A required document that is missing, corrupt
-or bound to another receipt MUST fail closed. It MUST NOT be presented as a
-historical receipt without capture.
+or bound to another receipt MUST fail closed.
 
 | Capture state | Required interpretation |
 | --- | --- |
-| `captured` | Capture was installed; observations may still be empty, incomplete or truncated. It does not assert successful execution. |
-| `not_captured` | Historical receipt predating this capture contract; no original observations are asserted. This status grants no store authority. |
-| `unavailable` | A version-1 admission seed proves capture was installed, but recovery lost the observations; retain an unknown outcome and durable unavailable evidence. |
+| `captured` | Capture was installed. Observations may be empty, incomplete or truncated regardless of execution outcome. |
+| `unavailable` | A version-1 admission seed proves capture was installed. If recovery loses the observations, retain an unknown outcome and durable unavailable evidence. |
 
-Both absence states require empty attempts, frames and child IDs, null parent
-and estimate, `estimation: not_captured`, `truncated: false` and
-`dropped_frames: 0`. Current seeds retain their declared serialization and
-absence semantics; unsupported capture versions and missing required seeds fail
-validation. A current execution MUST NOT become `not_captured` after observation
-loss. HTTP errors or an unsupported evidence endpoint do not assert either capture
-state for a particular execution.
+`unavailable` requires empty attempts, frames and child IDs, null parent and
+estimate, `estimation: not_captured`, `truncated: false` and `dropped_frames: 0`.
+Admission seeds retain their declared serialization. Unsupported capture
+versions and missing required seeds fail validation. A failed or unsupported
+evidence endpoint provides no capture state for an execution.
 
 #### Native observations and ordering
 
@@ -1551,11 +1546,10 @@ not schema validation alone.
    inputs and coverage, and never overwrite provider observations.
 7. Receipt and evidence publication is atomic under storage faults, duplicate
    terminal delivery, shutdown and restart. Missing, orphaned, tampered,
-   oversized or mismatched evidence fails integrity checks. Historical absence
-   cannot mask deletion of a required document.
-8. Current capture recovery without observations persists `unavailable` with
-   unknown outcome. Missing required seeds cannot become historical no-capture
-   records; reject unsupported capture versions. Absence never asserts quantities.
+   oversized or mismatched evidence fails integrity checks.
+8. Recovery with a qualifying admission seed and lost observations persists
+   `unavailable` with unknown outcome and empty observations. Missing required
+   seeds and unsupported capture versions fail validation.
 9. HTTP/1.1 and HTTP/2 clients enforce the same bounds and exact
    installation/tenant/execution identities. Reads recheck receipt authority
    and return no-store responses; discovery alone grants no receipt access.

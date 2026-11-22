@@ -3,8 +3,7 @@ use crate::tenancy::resources::lifecycle;
 use bitrouter_ai::tenancy::{
     authority::{OwnerKind, ResourceKind},
     configuration::{
-        Activation, Configuration, ConfigurationRevision, GenerationDefaults, Learning,
-        LearningMode, Limits, ResourceRef,
+        Activation, Configuration, ConfigurationRevision, GenerationDefaults, Limits, ResourceRef,
     },
     resources::{Definition, ResourcePut, ResourceRevoke},
 };
@@ -198,14 +197,10 @@ async fn activation_reads_only_current_pointer_and_creation_metadata() -> Result
                     max_output_tokens: 1024,
                     temperature: 0.5,
                 },
-                learning: Learning {
-                    mode: LearningMode::Off,
-                    max_evaluations: 0,
-                },
+                eval_publication: false,
                 limits: Limits {
                     active_executions: 1,
                     queued_work: 0,
-                    learning_jobs: 0,
                 },
             },
         },

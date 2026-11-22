@@ -85,7 +85,11 @@ fn contract_crate_keeps_its_dependency_boundary() -> Result<(), Box<dyn std::err
             "serde" | "serde_json" | "thiserror" | "schemars" | "sha2"
         );
         let binding = matches!(name, "axum" | "futures-core" | "futures-util");
-        let fixture = development && matches!(name, "tokio" | "http-body-util" | "tower" | "toml");
+        let fixture = development
+            && matches!(
+                name,
+                "tokio" | "http-body-util" | "tower" | "toml" | "jsonschema"
+            );
         assert!(
             contract || binding || fixture,
             "unexpected dependency: {name}"

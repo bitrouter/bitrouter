@@ -125,11 +125,7 @@ impl PredictiveRouteProjection {
 
     pub fn parse_key(value: &str) -> Option<Self> {
         let class = RouteClass::parse_key(value)?;
-        Some(Self::new(
-            class.task_family,
-            class.next_step_role,
-            class.risk,
-        ))
+        Some(Self::new(class.task_family, class.next_step, class.risk))
     }
 }
 

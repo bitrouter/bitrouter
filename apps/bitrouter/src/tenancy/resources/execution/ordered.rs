@@ -8,7 +8,6 @@ use super::*;
 use bitrouter_ai::tenancy::{
     admission::AdmissionMode,
     authority::ResourceKind,
-    configuration::LearningMode,
     ordered::{AcceptedSelection, CandidateDescriptor, CandidateManifest, GenerationProtocol},
     validation::Validate,
 };
@@ -27,8 +26,7 @@ impl RetainedExecutionRevision {
         inbound: &ApiProtocol,
     ) -> std::result::Result<RetainedRoute, ErrorCode> {
         if self.document.policy.is_some()
-            || self.document.learning.mode != LearningMode::Off
-            || self.document.learning.max_evaluations != 0
+            || self.document.eval_publication
             || super::generation_protocol(inbound).is_err()
         {
             return Err(ErrorCode::CapabilityMismatch);

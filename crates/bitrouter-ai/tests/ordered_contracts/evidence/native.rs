@@ -38,17 +38,13 @@ fn native_mapping_versions_bind_ingress_and_actual_wire_independently() -> TestR
 }
 
 #[test]
-fn frameless_native_capture_keeps_new_discriminator_for_every_absence_state() -> TestResult {
+fn frameless_native_evidence_keeps_new_discriminator_for_both_capture_states() -> TestResult {
     let mut receipt = receipt(1)?;
     selection_mut(&mut receipt.dispatch)?.inbound_protocol = GenerationProtocol::GenerateContent;
-    for capture in [
-        Capture::Captured,
-        Capture::NotCaptured,
-        Capture::Unavailable,
-    ] {
+    for capture in [Capture::Captured, Capture::Unavailable] {
         let mut document = evidence(&receipt);
         document.capture = capture;
-        if capture != Capture::Captured {
+        if capture == Capture::Unavailable {
             document.attempts.clear();
         }
         assert!(document.validate().is_err());

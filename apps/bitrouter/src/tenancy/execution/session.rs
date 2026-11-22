@@ -71,9 +71,7 @@ impl Service {
         // The opener has no model input yet. This fixed-R1 profile therefore
         // approves its complete native route closure before any journal read.
         // No retained cache root or execution capacity lives with the session.
-        let mut recovery_profile = cfg!(unix)
-            && retained.document().learning.mode
-                == bitrouter_ai::tenancy::configuration::LearningMode::Off;
+        let mut recovery_profile = cfg!(unix) && !retained.document().eval_publication;
         let mut required = Vec::new();
         let mut choices = Vec::new();
         let experiments = Vec::new();

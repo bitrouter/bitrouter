@@ -218,7 +218,7 @@ pub(crate) async fn configure(
     let manifest = manifest(&provision.installation);
     let route = manifest["resources"][1]["reference"].clone();
     let document = serde_json::from_value(
-        json!({"routes":[route],"policy":null,"generation_defaults":{"max_output_tokens":128,"temperature":0.2},"learning":{"mode":"off","max_evaluations":0},"limits":{"active_executions":1,"queued_work":1,"learning_jobs":0}}),
+        json!({"routes":[route],"policy":null,"generation_defaults":{"max_output_tokens":128,"temperature":0.2},"eval_publication": false,"limits":{"active_executions":1,"queued_work":1}}),
     )?;
     let prepared = client
         .put_configuration(

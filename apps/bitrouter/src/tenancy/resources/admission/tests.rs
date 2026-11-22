@@ -207,8 +207,8 @@ async fn profile_configuration_authenticates_new_subtype_and_exact_dependencies(
     let root = reference(ResourceKind::Route, "route", "profiled")?;
     let document = serde_json::from_value(json!({"routes":[root],"policy":null,
         "generation_defaults":{"max_output_tokens":128,"temperature":0.5},
-        "learning":{"mode":"off","max_evaluations":0},
-        "limits":{"active_executions":1,"queued_work":1,"learning_jobs":0}}))?;
+        "eval_publication": false,
+        "limits":{"active_executions":1,"queued_work":1}}))?;
     let compiled = resources
         .compile(
             &db,

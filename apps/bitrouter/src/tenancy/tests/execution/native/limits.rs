@@ -243,7 +243,6 @@ async fn stalled_callback_deadlines_retain_work_until_the_same_callback_finishes
                 let limits = Limits {
                     active_executions: 1,
                     queued_work: 0,
-                    learning_jobs: 0,
                 };
                 ensure!(matches!(
                     fixture

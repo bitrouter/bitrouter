@@ -323,8 +323,8 @@ pub(super) async fn provision(
         "expected_authority_revision":credential.authority_revision,
         "document":{"routes":[route],"policy":null,
             "generation_defaults":{"max_output_tokens":25,"temperature":0.0},
-            "learning":{"mode":"off","max_evaluations":0},
-            "limits":{"active_executions":4,"queued_work":4,"learning_jobs":0}}
+            "eval_publication": false,
+            "limits":{"active_executions":4,"queued_work":4}}
     }))?;
     let revision = control.put_configuration(&tenant, &input).await?;
     Ok(Provisioned {

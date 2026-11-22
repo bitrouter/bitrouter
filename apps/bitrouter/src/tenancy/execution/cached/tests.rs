@@ -14,8 +14,8 @@ fn stored() -> Result<StoredConfiguration> {
             "compiler_version":"compiler", "content_digest":"a".repeat(64),
             "document": {"routes":[], "policy":null,
                 "generation_defaults":{"max_output_tokens":25,"temperature":0.5},
-                "learning":{"mode":"off","max_evaluations":0},
-                "limits":{"active_executions":1,"queued_work":0,"learning_jobs":0}}
+                "eval_publication": false,
+                "limits":{"active_executions":1,"queued_work":0}}
         }))?,
         compiled: json!({"kind":"sealed", "sealed":{
             "format":1, "key_id":"key", "nonce":"nonce", "ciphertext":"ciphertext"}}),

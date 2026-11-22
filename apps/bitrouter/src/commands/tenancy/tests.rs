@@ -24,8 +24,8 @@ fn draft() -> Value {
             "routes": [{"owner_kind":"tenant", "owner_id":"Tenant-A", "resource_kind":"route", "resource_id":"coding:Exact", "revision_id":"route-1"}],
             "policy": null,
             "generation_defaults": {"max_output_tokens":2048, "temperature":0.2},
-            "learning": {"mode":"off", "max_evaluations":0},
-            "limits": {"active_executions":16, "queued_work":32, "learning_jobs":0}
+            "eval_publication": false,
+            "limits": {"active_executions":16, "queued_work":32}
         }
     })
 }

@@ -154,7 +154,7 @@ pub(crate) struct TenantExecution {
     #[cfg(all(feature = "core", feature = "harness"))]
     block: std::sync::OnceLock<Arc<block::Witness>>,
     #[cfg(feature = "core")]
-    learning: bitrouter_ai::tenancy::configuration::Learning,
+    eval_publication: bool,
     journal: std::sync::OnceLock<Arc<super::receipts::journal::Journal>>,
     rejection: Mutex<Option<ErrorCode>>,
     hop: Mutex<Option<Arc<super::operational::Hop>>>,
@@ -499,7 +499,7 @@ impl Service {
             return Err(ErrorCode::Forbidden.into());
         }
         #[cfg(feature = "core")]
-        let learning = revision.document().learning.clone();
+        let eval_publication = revision.document().eval_publication;
         drop(revision);
         // Bound volumes are refreshed under accounting before count pins/grants.
         // Preserve the existing refusal/test behavior for an unbound volume.
@@ -525,7 +525,7 @@ impl Service {
             route,
             lease,
             #[cfg(feature = "core")]
-            learning,
+            eval_publication,
             #[cfg(all(feature = "core", feature = "harness"))]
             false,
         )?;
@@ -558,7 +558,7 @@ impl Service {
         mut submission: Submission,
         route: Arc<RetainedRoute>,
         lease: super::admission::Lease,
-        #[cfg(feature = "core")] learning: bitrouter_ai::tenancy::configuration::Learning,
+        #[cfg(feature = "core")] eval_publication: bool,
         #[cfg(all(feature = "core", feature = "harness"))] choice: bool,
     ) -> Result<Arc<TenantExecution>, Failure> {
         // Waiting for capacity never extends a token/binding lifetime. The
@@ -599,7 +599,7 @@ impl Service {
             #[cfg(all(feature = "core", feature = "harness"))]
             block: std::sync::OnceLock::new(),
             #[cfg(feature = "core")]
-            learning,
+            eval_publication,
             journal: std::sync::OnceLock::new(),
             rejection: Mutex::new(None),
             hop: Mutex::new(None),
