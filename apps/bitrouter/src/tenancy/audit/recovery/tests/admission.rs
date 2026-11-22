@@ -11,7 +11,7 @@ async fn admission_fresh_metadata_requires_bidirectional_policy_witnesses() -> R
         "selected":{"tiers":{"economy":{"model":"fixture:model"}},"default_tier":"economy"}
     }});
     let manifest = serde_json::to_vec(
-        &json!({"format":1,"installation_id":installation,"resources":[{
+        &json!({"format":4,"installation_id":installation,"resources":[{
             "reference":{"owner_kind":"tenant","owner_id":"tenant","resource_kind":"policy","resource_id":"selected","revision_id":"v1"},
             "definition":{"kind":"policy","name":"selected","document":policy,"dependencies":[]}
         }]}),
