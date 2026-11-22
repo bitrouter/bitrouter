@@ -17,7 +17,7 @@ use crate::gateway::pipeline::context::PipelineContext;
 use crate::gateway::pipeline::hooks::RouteHook;
 use crate::gateway::pipeline::routing::ModelSelector;
 use crate::gateway::pipeline::types::RoutingTarget;
-use crate::gateway::routing::workflow::decision::PolicyDecisionJsonlRecorder;
+use crate::gateway::routing::decision_log::PolicyDecisionJsonlRecorder;
 #[cfg(feature = "multi-instance")]
 use crate::model_policy::CompiledPolicy;
 use crate::policy_table_router::{PolicyTable, PolicyTableRouter};

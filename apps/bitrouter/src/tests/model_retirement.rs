@@ -11,7 +11,7 @@ use serde_json::json;
 type TestResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
 
 #[test]
-fn historical_protocol_and_credentials_remain_readable_but_uncallable() -> TestResult {
+fn retired_model_settings_remain_readable_while_dispatch_is_refused() -> TestResult {
     let (_directory, path, bytes) = {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("credentials.json");

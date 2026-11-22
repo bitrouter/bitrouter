@@ -15,27 +15,27 @@ const TRANSACTION_TIMEOUT_MS: u64 = 3000;
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL CREATEDB privilege and BITROUTER_TEST_GATEWAY_BINARY"]
-async fn official_concurrent_static_http1_single_instance() -> Result<()> {
+async fn db_server_postgres_official_concurrent_static_http1_single_instance() -> Result<()> {
     run(1, reqwest::Version::HTTP_11).await
 }
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL CREATEDB privilege and BITROUTER_TEST_GATEWAY_BINARY"]
-async fn official_concurrent_static_http1_two_instances() -> Result<()> {
+async fn db_server_postgres_official_concurrent_static_http1_two_instances() -> Result<()> {
     run(2, reqwest::Version::HTTP_11).await
 }
 
 #[cfg(feature = "http2")]
 #[tokio::test]
 #[ignore = "requires PostgreSQL CREATEDB privilege and an HTTP/2 BITROUTER_TEST_GATEWAY_BINARY"]
-async fn official_concurrent_static_http2_single_instance() -> Result<()> {
+async fn db_server_postgres_official_concurrent_static_http2_single_instance() -> Result<()> {
     run(1, reqwest::Version::HTTP_2).await
 }
 
 #[cfg(feature = "http2")]
 #[tokio::test]
 #[ignore = "requires PostgreSQL CREATEDB privilege and an HTTP/2 BITROUTER_TEST_GATEWAY_BINARY"]
-async fn official_concurrent_static_http2_two_instances() -> Result<()> {
+async fn db_server_postgres_official_concurrent_static_http2_two_instances() -> Result<()> {
     run(2, reqwest::Version::HTTP_2).await
 }
 

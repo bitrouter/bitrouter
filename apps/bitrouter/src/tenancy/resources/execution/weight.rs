@@ -28,7 +28,7 @@ use std::{
 
 use crate::config::model::ModelTokenLimits;
 use crate::config::model::ReasoningEffortConfig;
-use crate::managed_contract::evidence::NativeRouteConstraints;
+use crate::inference_contract::evidence::NativeRouteConstraints;
 use bitrouter_ai::{
     policy::{Document, Policy, Target},
     tenancy::{

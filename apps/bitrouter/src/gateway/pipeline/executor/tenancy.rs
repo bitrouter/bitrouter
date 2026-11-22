@@ -413,7 +413,7 @@ impl SendAdmission {
     ) -> Result<reqwest::Response> {
         let cancellation = cancellation(ctx)?;
         if let Some(adapter) = &self.adapter {
-            use crate::managed_contract::private_adapter::{ATTEMPT_HEADER, OUTCOME_HEADER};
+            use crate::inference_contract::private_adapter::{ATTEMPT_HEADER, OUTCOME_HEADER};
 
             capture_adapter_envelope(scrubber, request.headers().get(ATTEMPT_HEADER));
             let response = adapter.send(request, &cancellation).await?;

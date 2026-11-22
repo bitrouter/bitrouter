@@ -10,10 +10,10 @@ pub(super) async fn candidate(
     fresh_inline: bool,
 ) -> Result<Option<Candidate>> {
     match terminal(db, installation, tenant, id, charge, fresh_inline).await? {
-        Some(format::Terminal::V1(candidate)) => Ok(Some(
+        Some(format::Terminal::Strict(candidate)) => Ok(Some(
             std::sync::Arc::into_inner(candidate).context("receipt shared during decode")?,
         )),
-        Some(format::Terminal::V2(_)) => anyhow::bail!("receipt format mismatch"),
+        Some(format::Terminal::Ordered(_)) => anyhow::bail!("receipt format mismatch"),
         None => Ok(None),
     }
 }
@@ -42,7 +42,7 @@ pub(super) async fn terminal(
         !fresh_inline || !archived,
         "fresh terminal receipt must remain inline"
     );
-    if format::Format::decode(row.try_get("", "receipt_format")?)? == format::Format::V2 {
+    if format::Format::decode(row.try_get("", "receipt_format")?)? == format::Format::Ordered {
         ensure!(!archived, "ordered receipt storage kind");
         archive::ensure_inline(db, installation, tenant, id).await?;
         account(2, 1024)?;
@@ -53,14 +53,16 @@ pub(super) async fn terminal(
     }
     let (json, usage) = if archived {
         ensure!(inline.is_empty(), "duplicate inline receipt payload");
-        archive::load(db, installation, tenant, id, account).await?
+        let (json, usage) = archive::load(db, installation, tenant, id, account).await?;
+        (json, Some(usage))
     } else {
         archive::ensure_inline(db, installation, tenant, id).await?;
         (inline, None)
     };
-    let mut candidate = decode(&row, json, installation, tenant, id)?;
-    let disposition: StoredDisposition = serde_json::from_str(&candidate.private_json)?;
-    if disposition.auxiliary_digest.is_none() {
+    let private_json: String = row.try_get("", "disposition_json")?;
+    let (receipt, disposition, digest) =
+        decode(&row, &json, &private_json, installation, tenant, id)?;
+    let auxiliary = if disposition.auxiliary_digest.is_none() {
         account(1, 1024)?;
         let absent = Query::select()
             .expr(Expr::val(1))
@@ -76,37 +78,50 @@ pub(super) async fn terminal(
                 .is_none(),
             "unexpected auxiliary receipt evidence"
         );
+        None
     } else {
         account(1, super::super::auxiliary::MAX_BYTES * 3 + 4096)?;
         super::super::auxiliary_store::validate(
             db,
-            &mut candidate,
+            &receipt,
+            &digest,
             disposition.auxiliary_digest.as_deref(),
         )
-        .await?;
-    }
+        .await?
+    };
+    let expected = disposition.usage_evidence_digest.as_str();
+    let usage_evidence = if let Some(usage) = usage {
+        let evidence = super::super::usage_evidence::storage::Evidence::new(
+            serde_json::from_str(&usage)?,
+            &receipt,
+        )?;
+        let bytes = archive::usage_metadata(db, &receipt, &digest, expected, true, account).await?;
+        ensure!(
+            evidence.json == usage && evidence.json.len() == bytes && evidence.digest == expected,
+            "archived usage evidence integrity"
+        );
+        evidence
+    } else {
+        super::super::usage_evidence::storage::validate_inline(
+            db, &receipt, &digest, expected, charge,
+        )
+        .await?
+    };
+    let candidate = Candidate {
+        receipt,
+        json,
+        private_json,
+        digest,
+        auxiliary,
+        usage_evidence,
+    };
     if archived {
-        if let Some(json) = usage {
-            let evidence = super::super::usage_evidence::storage::Evidence::new(
-                serde_json::from_str(&json)?,
-                &candidate.receipt,
-            )?;
-            ensure!(evidence.json == json, "archived usage canonical bytes");
-            candidate.usage_evidence = Some(evidence);
-        }
-        let _ = archive::usage_metadata(db, &candidate, true, account).await?;
         // Unknown history is never a valid archived representation, even if
         // all projected digests were rewritten consistently.
         archive::known(&candidate)?;
-    } else {
-        super::super::usage_evidence::storage::validate_inline(
-            db,
-            &mut candidate,
-            disposition.usage_evidence_digest.as_deref(),
-            charge,
-        )
-        .await?;
     }
     account(0, 0)?;
-    Ok(Some(format::Terminal::V1(std::sync::Arc::new(candidate))))
+    Ok(Some(format::Terminal::Strict(std::sync::Arc::new(
+        candidate,
+    ))))
 }

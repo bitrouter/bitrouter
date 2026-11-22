@@ -243,7 +243,7 @@ impl ContinuationKeySource {
     fn load(&self) -> Result<ContinuationKey> {
         match self.0.as_ref() {
             ContinuationKeySourceInner::Unavailable => {
-                anyhow::bail!("tenant registry has no Legacy key source")
+                anyhow::bail!("operator continuation key unavailable in the tenant registry")
             }
             #[cfg(any(test, feature = "multi-instance"))]
             ContinuationKeySourceInner::Fixed(key) => Ok(key.clone()),
@@ -914,7 +914,7 @@ impl ContinuationRegistry {
             *offset
         };
         let stale = match continuation_entity::Entity::find()
-            .filter(legacy_continuation_scope())
+            .filter(operator_continuation_scope())
             .filter(
                 continuation_entity::Column::PublicationState
                     .is_in([PUBLICATION_PROVISIONAL, PUBLICATION_DELIVERING]),
@@ -986,7 +986,7 @@ impl ContinuationRegistry {
         ]);
         let (ciphertext, nonce) = encrypt(&key, &plaintext, &aad)?;
         let claimed = continuation_entity::Entity::update_many()
-            .filter(legacy_continuation_scope())
+            .filter(operator_continuation_scope())
             .col_expr(
                 continuation_entity::Column::PublicationInstanceId,
                 sea_orm::sea_query::Expr::value(self.inner.instance_id.clone()),
@@ -1241,7 +1241,7 @@ impl ContinuationRegistry {
             return Ok(publication.clone());
         }
         let row = continuation_entity::Entity::find_by_id(&publication.continuation_identity)
-            .filter(legacy_continuation_scope())
+            .filter(operator_continuation_scope())
             .one(&self.inner.db)
             .await
             .map_err(OwnershipFailure::unknown)?
@@ -1274,7 +1274,7 @@ impl ContinuationRegistry {
         let (ciphertext, nonce) =
             encrypt(&key, &plaintext, &aad).map_err(OwnershipFailure::owned)?;
         let renewed = continuation_entity::Entity::update_many()
-            .filter(legacy_continuation_scope())
+            .filter(operator_continuation_scope())
             .col_expr(
                 continuation_entity::Column::PublicationLeaseUntil,
                 sea_orm::sea_query::Expr::value(lease_until.clone()),
@@ -1309,7 +1309,7 @@ impl ContinuationRegistry {
         publication: &PendingPublication,
     ) -> std::result::Result<CompensationOutcome, OwnershipFailure> {
         let row = continuation_entity::Entity::find_by_id(&publication.continuation_identity)
-            .filter(legacy_continuation_scope())
+            .filter(operator_continuation_scope())
             .one(&self.inner.db)
             .await
             .map_err(OwnershipFailure::unknown)?;
@@ -1342,7 +1342,7 @@ impl ContinuationRegistry {
             }
         }
         let deleted = match continuation_entity::Entity::delete_many()
-            .filter(legacy_continuation_scope())
+            .filter(operator_continuation_scope())
             .filter(continuation_snapshot_condition(&row))
             .exec(&self.inner.db)
             .await
@@ -1370,7 +1370,7 @@ impl ContinuationRegistry {
         error: anyhow::Error,
     ) -> std::result::Result<CompensationOutcome, OwnershipFailure> {
         match continuation_entity::Entity::find_by_id(&publication.continuation_identity)
-            .filter(legacy_continuation_scope())
+            .filter(operator_continuation_scope())
             .one(&self.inner.db)
             .await
         {
@@ -1418,7 +1418,7 @@ impl ContinuationRegistry {
                 .map_err(OwnershipFailure::into_error)?;
             let key = self.inner.keys.load()?;
             let row = continuation_entity::Entity::find_by_id(&publication.continuation_identity)
-                .filter(legacy_continuation_scope())
+                .filter(operator_continuation_scope())
                 .one(&self.inner.db)
                 .await?
                 .ok_or_else(|| {
@@ -1461,7 +1461,7 @@ impl ContinuationRegistry {
                         let row = continuation_entity::Entity::find_by_id(
                             &publication.continuation_identity,
                         )
-                        .filter(legacy_continuation_scope())
+                        .filter(operator_continuation_scope())
                         .one(&self.inner.db)
                         .await?
                         .ok_or_else(|| {
@@ -1561,7 +1561,7 @@ impl ContinuationRegistry {
         ]);
         let (ciphertext, nonce) = encrypt(key, &plaintext, &aad)?;
         let updated = continuation_entity::Entity::update_many()
-            .filter(legacy_continuation_scope())
+            .filter(operator_continuation_scope())
             .col_expr(
                 continuation_entity::Column::PublicationState,
                 sea_orm::sea_query::Expr::value(next_state),
@@ -1600,7 +1600,7 @@ impl ContinuationRegistry {
     ) -> Result<()> {
         anyhow::ensure!(
             self.inner.tenant.is_none(),
-            "Legacy continuation operation unavailable in tenant profile"
+            "operator continuation operation unavailable in the tenant profile"
         );
         let effective_model = format!("{}:{}", target.provider_name, target.service_id);
         #[cfg(feature = "multi-instance")]
@@ -1883,7 +1883,7 @@ impl ContinuationRegistry {
         match insert_result {
             Ok(_) => Ok(BindOutcome::Inserted),
             Err(insert_error) => {
-                let existing = continuation_entity::Entity::find_by_id(&continuation_identity).filter(legacy_continuation_scope())
+                let existing = continuation_entity::Entity::find_by_id(&continuation_identity).filter(operator_continuation_scope())
                     .one(&self.inner.db)
                     .await
                     .map_err(|reread_error| {
@@ -1946,7 +1946,7 @@ impl ContinuationRegistry {
     ) -> Result<ContinuationResolution> {
         anyhow::ensure!(
             self.inner.tenant.is_none(),
-            "Legacy continuation operation unavailable in tenant profile"
+            "operator continuation operation unavailable in the tenant profile"
         );
         #[cfg(feature = "multi-instance")]
         if self.inner.shared.is_some() {
@@ -1961,7 +1961,7 @@ impl ContinuationRegistry {
         let _identity_guard = identity_lock.lock().await;
         loop {
             let Some(row) = continuation_entity::Entity::find_by_id(&continuation_identity)
-                .filter(legacy_continuation_scope())
+                .filter(operator_continuation_scope())
                 .one(&self.inner.db)
                 .await?
             else {
@@ -2014,7 +2014,7 @@ impl ContinuationRegistry {
     pub async fn prune(&self, now: DateTime<Utc>) -> Result<u64> {
         anyhow::ensure!(
             self.inner.tenant.is_none(),
-            "Legacy continuation operation unavailable in tenant profile"
+            "operator continuation operation unavailable in the tenant profile"
         );
         #[cfg(feature = "multi-instance")]
         if self.inner.shared.is_some() {
@@ -2022,7 +2022,7 @@ impl ContinuationRegistry {
         }
         let now = timestamp(now);
         let expired = continuation_entity::Entity::find()
-            .filter(legacy_continuation_scope())
+            .filter(operator_continuation_scope())
             .filter(continuation_entity::Column::ExpiresAt.lte(now.clone()))
             .filter(continuation_entity::Column::Ciphertext.is_not_null())
             .order_by_asc(continuation_entity::Column::ExpiresAt)
@@ -2034,7 +2034,7 @@ impl ContinuationRegistry {
         }
 
         let purge_rows = continuation_entity::Entity::find()
-            .filter(legacy_continuation_scope())
+            .filter(operator_continuation_scope())
             .filter(continuation_entity::Column::PurgeAfter.lte(now))
             .order_by_asc(continuation_entity::Column::PurgeAfter)
             .limit(self.inner.prune_batch_size)
@@ -2046,7 +2046,7 @@ impl ContinuationRegistry {
         let mut rows_affected = 0;
         for row in purge_rows {
             let result = continuation_entity::Entity::delete_many()
-                .filter(legacy_continuation_scope())
+                .filter(operator_continuation_scope())
                 .filter(continuation_snapshot_condition(&row))
                 .exec(&self.inner.db)
                 .await?;
@@ -2060,7 +2060,7 @@ impl ContinuationRegistry {
         self.wait_at_maintenance_snapshot(MaintenanceFaultKind::Scrub)
             .await;
         let result = continuation_entity::Entity::update_many()
-            .filter(legacy_continuation_scope())
+            .filter(operator_continuation_scope())
             .col_expr(
                 continuation_entity::Column::Ciphertext,
                 sea_orm::sea_query::Expr::value(Option::<String>::None),
@@ -2105,7 +2105,8 @@ impl ContinuationRegistry {
     }
 }
 
-fn legacy_continuation_scope() -> sea_orm::Condition {
+fn operator_continuation_scope() -> sea_orm::Condition {
+    // Local operator routes use the registry key and carry no tenant ownership fields.
     sea_orm::Condition::all()
         .add(continuation_entity::Column::InstallationId.is_null())
         .add(continuation_entity::Column::TenantId.is_null())
@@ -2114,7 +2115,7 @@ fn legacy_continuation_scope() -> sea_orm::Condition {
 }
 
 fn continuation_snapshot_condition(row: &continuation_entity::Model) -> sea_orm::Condition {
-    let condition = legacy_continuation_scope()
+    let condition = operator_continuation_scope()
         .add(
             continuation_entity::Column::ContinuationIdentity.eq(row.continuation_identity.clone()),
         )

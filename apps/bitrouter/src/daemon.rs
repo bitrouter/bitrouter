@@ -136,13 +136,9 @@ pub enum DaemonCommand {
     /// snapshot of API-key-style env vars from its own process so a
     /// `export OPENAI_API_KEY=…; bitrouter reload` propagates the new
     /// value into the running daemon without requiring a restart.
-    /// `env` is `#[serde(default)]` for wire-compat with the
-    /// historical unit variant — older clients sending `{"cmd":"reload"}`
-    /// still deserialise as an empty override list.
     Reload {
         /// `(name, value)` pairs to apply to the daemon's env-override
         /// map before reload. Empty list = no override changes.
-        #[serde(default)]
         env: Vec<(String, String)>,
     },
     /// Read the reload coordinator's boot-local state without mutating it.
@@ -2025,20 +2021,12 @@ mod tests {
     }
 
     #[test]
-    fn legacy_unit_reload_command_still_deserialises() {
-        // Pre-env wire format: `{"cmd":"reload"}` with no env field.
-        // The `#[serde(default)]` on `env` keeps this working so an
-        // older client (or a script speaking the v1 wire format) can
-        // still issue a no-env reload.
-        let back: DaemonCommand = serde_json::from_str(r#"{"cmd":"reload"}"#).unwrap();
-        match back {
-            DaemonCommand::Reload { env } => assert!(env.is_empty()),
-            other => panic!("expected Reload, got {other:?}"),
-        }
-    }
-
-    #[test]
     fn reload_command_carries_env_overrides() {
+        assert!(serde_json::from_str::<DaemonCommand>(r#"{"cmd":"reload"}"#).is_err());
+        assert!(matches!(
+            serde_json::from_str::<DaemonCommand>(r#"{"cmd":"reload","env":[]}"#),
+            Ok(DaemonCommand::Reload { env }) if env.is_empty()
+        ));
         let cmd = DaemonCommand::Reload {
             env: vec![("OPENAI_API_KEY".to_string(), "sk-test".to_string())],
         };

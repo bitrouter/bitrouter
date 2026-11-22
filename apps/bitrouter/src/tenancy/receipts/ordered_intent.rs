@@ -165,7 +165,7 @@ impl Intent {
             truncated: false,
             dropped_frames: 0,
         };
-        Ok(Terminal::V2(Arc::new(CandidateV2::new(
+        Ok(Terminal::Ordered(Arc::new(CandidateV2::new(
             receipt,
             Disposition {
                 dispatch: DispatchState::Unknown,

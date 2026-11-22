@@ -249,7 +249,7 @@ fn eval_baseline_and_append_records_keep_opaque_identity_and_actual_proposals() 
         assert_eq!(
             record.ingress_request_id_sha256,
             Some(
-                crate::gateway::routing::workflow::decision::ingress_request_id_sha256(
+                crate::gateway::routing::decision_log::ingress_request_id_sha256(
                     "private-ingress-id"
                 )
             )

@@ -115,8 +115,8 @@ async fn read_stored(db: &impl ConnectionTrait, terminal: &Terminal) -> Result<O
     );
     let payload: ProviderTechnicalFacts = serde_json::from_str(&json)?;
     match terminal {
-        Terminal::V1(r) => payload.validate_against(&r.receipt)?,
-        Terminal::V2(r) => payload.validate_against(&r.receipt)?,
+        Terminal::Strict(r) => payload.validate_against(&r.receipt)?,
+        Terminal::Ordered(r) => payload.validate_against(&r.receipt)?,
     }
     Ok(Some(Stored {
         prepared: Prepared {

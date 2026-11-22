@@ -32,9 +32,8 @@ JSON decoding preserves finite pricing values and object insertion order
 independently of application feature unification. Nested tool schemas can form
 part of a retained manifest digest; a decode/encode must preserve those members.
 
-Harness contracts, including tool permissions, effect outcomes, turn events,
-snapshots and skill records, live in `bitrouter::managed_contract::harness`;
-MCP skill wire values live in `bitrouter::skills::wire`.
+Local harness types, including tool permissions, effect outcomes, turn events,
+snapshots and skill records, live in [BRO](../../apps/bro/src).
 Request-check callbacks and registration, lifecycle events, observation schema,
 bounded response encoding and Axum adapters belong to `bitrouter::gateway`.
 The [application example](../../apps/bitrouter/examples/axum_gateway.rs) composes

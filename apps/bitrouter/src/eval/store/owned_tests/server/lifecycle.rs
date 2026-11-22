@@ -85,7 +85,8 @@ async fn seed(fixture: &mut Fixture, store: &EvalStore) -> Result<String> {
 
 #[tokio::test]
 #[ignore = "requires BITROUTER_TEST_DATABASE_URL with PG/MySQL CREATE/DROP DATABASE privileges"]
-async fn server_owned_eval_committed_replay_preserves_provenance_and_snapshot() -> Result<()> {
+async fn db_server_both_owned_eval_committed_replay_preserves_provenance_and_snapshot() -> Result<()>
+{
     run(|fixture| Box::pin(committed(fixture))).await
 }
 
@@ -310,7 +311,8 @@ async fn committed(fixture: &mut Fixture) -> Result<()> {
 
 #[tokio::test]
 #[ignore = "requires BITROUTER_TEST_DATABASE_URL with PG/MySQL CREATE/DROP DATABASE privileges"]
-async fn server_owned_eval_external_rr_winner_is_rejected_without_replay_or_events() -> Result<()> {
+async fn db_server_both_owned_eval_external_rr_winner_is_rejected_without_replay_or_events()
+-> Result<()> {
     run(|fixture| Box::pin(external_writer(fixture))).await
 }
 
@@ -413,7 +415,8 @@ async fn external_writer(fixture: &mut Fixture) -> Result<()> {
 
 #[tokio::test]
 #[ignore = "requires BITROUTER_TEST_DATABASE_URL with PG/MySQL CREATE/DROP DATABASE and trigger privileges"]
-async fn server_owned_eval_terminal_fault_rolls_back_result_and_prior_dispute() -> Result<()> {
+async fn db_server_both_owned_eval_terminal_fault_rolls_back_result_and_prior_dispute() -> Result<()>
+{
     run(|fixture| Box::pin(partial_failure(fixture))).await
 }
 
@@ -486,7 +489,7 @@ async fn partial_failure(fixture: &mut Fixture) -> Result<()> {
 
 #[tokio::test]
 #[ignore = "requires BITROUTER_TEST_DATABASE_URL with PG/MySQL CREATE/DROP DATABASE privileges"]
-async fn server_owned_eval_freeze_keeps_rr_membership_across_external_admission_commit()
+async fn db_server_both_owned_eval_freeze_keeps_rr_membership_across_external_admission_commit()
 -> Result<()> {
     run(|fixture| Box::pin(stable_freeze(fixture))).await
 }

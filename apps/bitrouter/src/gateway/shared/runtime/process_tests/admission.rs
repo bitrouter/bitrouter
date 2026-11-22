@@ -85,7 +85,8 @@ async fn official_tenant_and_aliased_account_concurrency_cross_replicas() -> Res
 #[cfg(feature = "http2")]
 #[tokio::test]
 #[ignore = "requires PostgreSQL CREATEDB privilege and an HTTP/2 BITROUTER_TEST_GATEWAY_BINARY"]
-async fn official_http2_tenant_and_account_concurrency_cross_replicas() -> Result<()> {
+async fn db_server_postgres_official_http2_tenant_and_account_concurrency_cross_replicas()
+-> Result<()> {
     run(Campaign::Http2Concurrency).await
 }
 

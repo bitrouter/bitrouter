@@ -131,7 +131,7 @@ async fn complete_mixed_history_scan_preserves_unknowns_and_detects_late_digest_
         },
     )?;
     commit(&db, &unknown).await?;
-    expected_bytes += unknown.bytes();
+    expected_bytes += unknown.bytes() + unknown.auxiliary_bytes();
     let mut visited = 0usize;
     scan(&db, &unknown.receipt.installation_id, |_| {
         visited += 1;
@@ -156,19 +156,11 @@ async fn archive_usage_reader_replay_and_offline_body_preserve_bytes_without_res
         .with_usage_evidence(Snapshot::default())?;
     commit(&db, &value).await?;
     archive(&db, &value).await?;
-    let original = value.usage_evidence.as_ref().context("original usage")?;
+    let original = &value.usage_evidence;
     let expected = original.digest.clone();
     let bytes = original.json.as_bytes().to_vec();
-    storage::validate(&db, &mut value, Some(&expected)).await?;
-    ensure!(
-        value
-            .usage_evidence
-            .as_ref()
-            .context("archived usage")?
-            .json
-            .as_bytes()
-            == bytes
-    );
+    storage::validate(&db, &mut value, &expected).await?;
+    ensure!(value.usage_evidence.json.as_bytes() == bytes);
     let tx = db.begin().await?;
     storage::insert(&tx, &value, false).await?;
     tx.commit().await?;

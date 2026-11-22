@@ -196,8 +196,8 @@ impl Capture {
             return None;
         }
         let receipt = match terminal {
-            super::store::format::Terminal::V1(value) => &value.receipt,
-            super::store::format::Terminal::V2(value) => &value.receipt,
+            super::store::format::Terminal::Strict(value) => &value.receipt,
+            super::store::format::Terminal::Ordered(value) => &value.receipt,
         };
         let result = ProviderTechnicalFacts {
             schema_version: 3,
@@ -281,8 +281,8 @@ impl Pending {
             return None;
         }
         let receipt = match terminal {
-            super::store::format::Terminal::V1(value) => &value.receipt,
-            super::store::format::Terminal::V2(value) => &value.receipt,
+            super::store::format::Terminal::Strict(value) => &value.receipt,
+            super::store::format::Terminal::Ordered(value) => &value.receipt,
         };
         let result = bitrouter_ai::tenancy::provider_technical_facts::ProviderTechnicalFacts {
             schema_version: 3,

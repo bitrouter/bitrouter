@@ -50,9 +50,10 @@ async fn build_info_reports_the_executable_without_opening_configuration() -> Re
 }
 
 #[tokio::test]
-async fn unavailable_agent_execution_rejects_without_reading_inputs_or_creating_state() -> Result<()>
-{
+async fn unknown_commands_reject_without_reading_inputs_or_creating_state() -> Result<()> {
     let cases: &[&[&str]] = &[
+        &["no-such-command", "--config", "missing.yaml"],
+        &["policy", "no-such-subcommand", "--config", "missing.yaml"],
         &["run", "codex", "--prompt-file", "missing-prompt.txt"],
         &[
             "run",
@@ -96,7 +97,7 @@ async fn unavailable_agent_execution_rejects_without_reading_inputs_or_creating_
         );
         ensure!(
             !output.status.success(),
-            "{arguments:?}: accepted unavailable execution"
+            "{arguments:?}: accepted an unknown command"
         );
         ensure!(
             output.status.code() == Some(2) && diagnostic.contains("unrecognized subcommand"),

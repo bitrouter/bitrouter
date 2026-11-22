@@ -23,7 +23,7 @@ const MAX_RESUME: usize = 16 * 1024 * 1024;
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL CREATEDB privilege and BITROUTER_TEST_GATEWAY_BINARY"]
-async fn official_stalled_response_reader_releases_local_capacity_without_provider_success()
+async fn db_server_postgres_official_stalled_response_reader_releases_local_capacity_without_provider_success()
 -> Result<()> {
     check_wire_decoder()?;
     let mut database = EmptyDatabase::create().await?;

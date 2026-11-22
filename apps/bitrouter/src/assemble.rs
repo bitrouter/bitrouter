@@ -428,12 +428,7 @@ fn validate_host_configuration_inner(config: &Config, resolve_telemetry: bool) -
     }
     anyhow::ensure!(
         !config.plugins.contains_key("bitrouter-guardrails"),
-        "plugins.bitrouter-guardrails is unsupported. Compile the regex extension into a custom host, \
-         register it through bitrouter::gateway::extensions::registry::ExtensionApi, and bind it through \
-         routers.<id>.checks.request. The request-check capability checks input \
-         only and does not replace global or output block/redact protection. Review \
-         every protected entry point and output requirement before explicitly removing \
-         the old key, including empty/null configuration; see docs/GUARDRAILS_EXTENSION.md."
+        "unknown field `bitrouter-guardrails` in `plugins`"
     );
     Ok(())
 }
@@ -682,8 +677,8 @@ async fn assemble_app(
         crate::request_checks::RequestCheckRuntime::activate_with_registrations(config, native)?,
     );
     // Validate and construct ingress aliases before opening the database or
-    // performing any other startup work. A custom transform must not run ahead
-    // of Stage 0 and shadow `@preset` or reserved `bitrouter/` addresses.
+    // performing any other startup work. Named routers and reserved
+    // `bitrouter/` addresses resolve before custom transforms.
     #[cfg(feature = "server-tools")]
     let fusion_alias = build_fusion_alias(config)?;
 
@@ -1130,13 +1125,13 @@ async fn assemble_app(
     let policy_decision_recorder = if is_shared {
         None
     } else {
-        crate::gateway::routing::workflow::decision::PolicyDecisionJsonlRecorder::from_env()
+        crate::gateway::routing::decision_log::PolicyDecisionJsonlRecorder::from_env()
             .map_err(anyhow::Error::from)?
             .map(Arc::new)
     };
     if policy_decision_recorder.is_some() {
         tracing::info!(
-            env = crate::gateway::routing::workflow::decision::POLICY_DECISION_JSONL_ENV,
+            env = crate::gateway::routing::decision_log::POLICY_DECISION_JSONL_ENV,
             "policy decision JSONL recording enabled"
         );
     }
@@ -2144,7 +2139,7 @@ fn build_otel_config(
     config: &Config,
     install_id: impl FnOnce() -> Option<String>,
 ) -> Result<Option<(OtelConfig, BearerPlan)>> {
-    // Named for the crate that reads it, like `plugins.bitrouter-guardrails`.
+    // Named for the extension that reads it.
     // It was `bitrouter-observe` until the OTLP renderer moved out of the SDK;
     // the rename is safe to have made because `ignored_config_warnings` reports an
     // unread `plugins.<id>` block on every daemon start, so a stale key is

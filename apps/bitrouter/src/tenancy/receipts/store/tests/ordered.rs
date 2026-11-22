@@ -11,8 +11,7 @@ async fn current_baseline_preserves_receipt_usage_and_identity_across_two_restar
     );
     let db = crate::db::connect(&address).await?;
     crate::db::run_migrations(&db).await?;
-    let original = candidate("installation", "tenant", "execution", "principal")?
-        .with_usage_evidence(crate::tenancy::receipts::usage_evidence::Snapshot::default())?;
+    let original = candidate("installation", "tenant", "execution", "principal")?;
     ensure!(commit(&db, &original).await?);
     let ledger = crate::db::migration::Migrator::get_migration_models(&db).await?;
     db.close().await?;
@@ -32,14 +31,8 @@ async fn current_baseline_preserves_receipt_usage_and_identity_across_two_restar
                 && saved.private_json == original.private_json
                 && saved.digest == original.digest
         );
-        let actual = saved
-            .usage_evidence
-            .as_ref()
-            .context("current usage missing")?;
-        let expected = original
-            .usage_evidence
-            .as_ref()
-            .context("original usage missing")?;
+        let actual = &saved.usage_evidence;
+        let expected = &original.usage_evidence;
         ensure!(actual.json == expected.json && actual.digest == expected.digest);
         ensure!(crate::db::migration::Migrator::get_migration_models(&db).await? == ledger);
         ensure!(

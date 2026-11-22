@@ -193,8 +193,8 @@ async fn caller_wait_timeout_retains_cancelled_cleanup_without_fencing() -> Resu
         }
     })
     .await??;
-    let Terminal::V2(saved) = terminal else {
-        anyhow::bail!("not v2");
+    let Terminal::Ordered(saved) = terminal else {
+        anyhow::bail!("expected ordered receipt");
     };
     ensure!(saved.receipt.outcome == Outcome::Cancelled && saved.receipt.attempts.is_empty());
     let row = service

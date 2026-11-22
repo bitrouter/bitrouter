@@ -69,7 +69,7 @@ pub(super) async fn next(
         )
         .await?
         .context("archive candidate disappeared")?;
-        let Terminal::V1(candidate) = candidate else {
+        let Terminal::Strict(candidate) = candidate else {
             continue;
         };
         let candidate = std::sync::Arc::into_inner(candidate)

@@ -53,8 +53,8 @@ pub(in crate::tenancy::receipts) async fn scan(
     mut visit: impl FnMut(&Candidate) -> Result<()>,
 ) -> Result<()> {
     scan_locations(db, installation, |candidate, _| match candidate {
-        format::Terminal::V1(candidate) => visit(candidate),
-        format::Terminal::V2(_) => Ok(()),
+        format::Terminal::Strict(candidate) => visit(candidate),
+        format::Terminal::Ordered(_) => Ok(()),
     })
     .await
 }
@@ -176,7 +176,7 @@ pub(super) async fn load(
             .checked_add(canonical)
             .context("receipt inventory byte overflow")?;
         if let Some(stored) = archived {
-            let format::Terminal::V1(candidate) = candidate else {
+            let format::Terminal::Strict(candidate) = candidate else {
                 anyhow::bail!("ordered receipt storage kind");
             };
             archive::known(candidate)?;

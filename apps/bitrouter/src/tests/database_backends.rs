@@ -9,7 +9,7 @@
 //! intact, so repeated runs do not depend on an empty database.
 //!
 //! Run this target with --no-default-features, adding db-postgres or db-mysql for
-//! the matching server URL. Select server_database_behaviors with --ignored to
+//! the matching server URL. Select db_server_both_database_behaviors with --ignored to
 //! opt in. Each backend exercise has a two-minute deadline and a fixed fixture
 //! count; no core, harness, TUI, external process, or network model is required.
 
@@ -57,7 +57,7 @@ async fn sqlite_database_behaviors() -> Result<()> {
 
 #[tokio::test]
 #[ignore = "requires BITROUTER_TEST_DATABASE_URL for a dedicated PostgreSQL or MySQL test database"]
-async fn server_database_behaviors() -> Result<()> {
+async fn db_server_both_database_behaviors() -> Result<()> {
     let database_url = std::env::var("BITROUTER_TEST_DATABASE_URL").context(
         "set BITROUTER_TEST_DATABASE_URL to a dedicated test database; no fallback is used",
     )?;

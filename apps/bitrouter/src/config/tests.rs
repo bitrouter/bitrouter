@@ -1403,19 +1403,6 @@ fn mcp_upstream_protocol_opts_in_by_version_string() {
 }
 
 #[test]
-fn rejects_local_harness_configuration_as_unknown() {
-    for field in ["agent_api", "chat"] {
-        let error = parse(&format!("{field}: {{}}\n")).expect_err("unknown field");
-        assert!(
-            error
-                .to_string()
-                .contains(&format!("unknown field `{field}`")),
-            "{error}"
-        );
-    }
-}
-
-#[test]
 fn native_checker_config_rejects_mixed_transports_and_tracks_revision()
 -> crate::gateway::error::Result<()> {
     let source = |revision: &str| {

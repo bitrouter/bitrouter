@@ -13,8 +13,7 @@ pub(super) struct Backend {
 }
 impl ContinuationRegistry {
     pub(crate) fn for_tenant(port: Arc<Port>) -> Result<Self> {
-        // The public historical database() diagnostic keeps its return type.
-        // This variant holds no live SQL connection or ambient Legacy key.
+        // The service port owns tenant SQL access and continuation keys.
         Ok(Self {
             inner: Arc::new(ContinuationRegistryInner {
                 db: DatabaseConnection::Disconnected,

@@ -26,20 +26,21 @@ async fn run(
 
 #[tokio::test]
 #[ignore = "requires BITROUTER_TEST_DATABASE_URL with PG/MySQL CREATE/DROP DATABASE privileges"]
-async fn server_owned_trajectory_empty_source_compatibility_refuses_retained_rows() -> Result<()> {
+async fn db_server_both_owned_trajectory_empty_source_compatibility_refuses_retained_rows()
+-> Result<()> {
     run(|database| Box::pin(empty_sources::check(database))).await
 }
 
 #[tokio::test]
 #[ignore = "requires BITROUTER_TEST_DATABASE_URL with PG/MySQL CREATE/DROP DATABASE privileges"]
-async fn server_owned_trajectory_directory_projection_preserves_integer_decoders_and_bounds()
+async fn db_server_both_owned_trajectory_directory_projection_preserves_integer_decoders_and_bounds()
 -> Result<()> {
     run(|database| Box::pin(projection::check(database))).await
 }
 
 #[tokio::test]
 #[ignore = "requires BITROUTER_TEST_DATABASE_URL with PG/MySQL CREATE/DROP DATABASE privileges"]
-async fn server_owned_trajectory_known_receipts_drain_restart_and_scan_with_one_reservation()
+async fn db_server_both_owned_trajectory_known_receipts_drain_restart_and_scan_with_one_reservation()
 -> Result<()> {
     run(|database| Box::pin(known_receipts::check(database))).await
 }

@@ -1172,7 +1172,6 @@ fn restart_field_category(path: &str) -> &'static str {
 struct ConfigurationLoadError {
     saved: SavedConfigState,
     error: anyhow::Error,
-    guardrails_migration_required: bool,
 }
 
 /// Read the daemon's primary source with the same environment resolver reload
@@ -1253,7 +1252,6 @@ async fn load_configuration_baseline_at(
                             "inspecting configuration {}: {error}",
                             candidate.display()
                         ),
-                        guardrails_migration_required: false,
                     });
                 }
             }
@@ -1273,7 +1271,6 @@ async fn load_configuration_baseline_at(
                 ConfigurationLoadError {
                     saved,
                     error: anyhow::anyhow!("reading configuration {}: {error}", path.display()),
-                    guardrails_migration_required: false,
                 }
             })?;
             let mut config =
@@ -1281,37 +1278,31 @@ async fn load_configuration_baseline_at(
                     ConfigurationLoadError {
                         saved: SavedConfigState::Invalid,
                         error: anyhow::Error::new(error),
-                        guardrails_migration_required: false,
                     }
                 })?;
             crate::policy_source::apply_defaults(&mut config, Some(path));
-            let guardrails_migration_required = config.plugins.contains_key("bitrouter-guardrails");
             crate::assemble::validate_host_configuration(&config).map_err(|error| {
                 ConfigurationLoadError {
                     saved: SavedConfigState::Invalid,
                     error,
-                    guardrails_migration_required,
                 }
             })?;
             let substituted =
                 crate::config::substitute_env(&raw).map_err(|error| ConfigurationLoadError {
                     saved: SavedConfigState::Invalid,
                     error: anyhow::Error::new(error),
-                    guardrails_migration_required: false,
                 })?;
             let document =
                 serde_saphyr::from_str::<serde_json::Value>(&substituted).map_err(|error| {
                     ConfigurationLoadError {
                         saved: SavedConfigState::Invalid,
                         error: anyhow::Error::new(error),
-                        guardrails_migration_required: false,
                     }
                 })?;
             if !document.is_object() {
                 return Err(ConfigurationLoadError {
                     saved: SavedConfigState::Invalid,
                     error: anyhow::anyhow!("configuration must be a mapping"),
-                    guardrails_migration_required: false,
                 });
             }
             let (unclassified_fields, unclassified_values) = unclassified_config(&document);
@@ -1330,7 +1321,6 @@ async fn load_configuration_baseline_at(
                 ConfigurationLoadError {
                     saved: SavedConfigState::Invalid,
                     error,
-                    guardrails_migration_required: false,
                 }
             })?;
             crate::cloud::enable_in_zero_config(&mut config);
@@ -2063,13 +2053,6 @@ impl AppReloader {
             .await
             .map_err(|failure| {
                 tracing::warn!(error = %failure.error, "reload could not prepare configuration candidate");
-                if failure.guardrails_migration_required {
-                    return PreparationError::failed(
-                        ReloadParticipant::RoutingTable,
-                        "guardrails_migration_required",
-                        "saved configuration contains plugins.bitrouter-guardrails; migration is required before reload because router-bound request checkers cover input only and do not replace global or output protection",
-                    );
-                }
                 let message = match failure.saved {
                     SavedConfigState::Missing | SavedConfigState::Unavailable => {
                         "reload could not read the server configuration"

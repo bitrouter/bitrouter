@@ -5,8 +5,8 @@ use crate::tenancy::{Service, resources::Resources, transaction::Disposition};
 use std::{io::Write, path::Path, process::Stdio};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 
-const DATABASE: &str = "BITROUTER_TEST_HTTP034_CUSTODY_DATABASE";
-const RETAINED: &str = "http034-commit-owner-retained";
+const DATABASE: &str = "BITROUTER_TEST_HTTP_CONTINUATION_CUSTODY_DATABASE";
+const RETAINED: &str = "http-continuation-commit-owner-retained";
 
 async fn exercise(path: &Path) -> Result<()> {
     let mut server = Server::start().await?;
@@ -47,9 +47,9 @@ async fn exercise(path: &Path) -> Result<()> {
     )?;
     for sql in [
         "PRAGMA foreign_keys=ON",
-        "CREATE TABLE http034_parent (id INTEGER PRIMARY KEY)",
-        "CREATE TABLE http034_child (parent INTEGER REFERENCES http034_parent(id) DEFERRABLE INITIALLY DEFERRED)",
-        "CREATE TRIGGER http034_commit_fault AFTER INSERT ON provider_continuations BEGIN INSERT INTO http034_child(parent) VALUES (77); END",
+        "CREATE TABLE http_continuation_parent (id INTEGER PRIMARY KEY)",
+        "CREATE TABLE http_continuation_child (parent INTEGER REFERENCES http_continuation_parent(id) DEFERRABLE INITIALLY DEFERRED)",
+        "CREATE TRIGGER http_continuation_commit_fault AFTER INSERT ON provider_continuations BEGIN INSERT INTO http_continuation_child(parent) VALUES (77); END",
     ] {
         db.execute_unprepared(sql).await?;
     }
@@ -113,7 +113,7 @@ async fn http_commit_failure_child() -> Result<()> {
 #[tokio::test]
 async fn actual_http_commit_failure_keeps_owner_until_process_exit() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let database = directory.path().join("http034-quarantine.sqlite");
+    let database = directory.path().join("http-continuation-quarantine.sqlite");
     let mut child = tokio::process::Command::new(std::env::current_exe()?)
         .args([
             "--exact",

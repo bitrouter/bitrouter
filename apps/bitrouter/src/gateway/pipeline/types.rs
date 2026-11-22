@@ -300,8 +300,8 @@ fn is_reserved_provider_header(name: &http::HeaderName) -> bool {
             | "traceparent"
             | "tracestate"
             | "x-bitrouter-request-id"
-            | crate::managed_contract::private_adapter::ATTEMPT_HEADER
-            | crate::managed_contract::private_adapter::OUTCOME_HEADER
+            | crate::inference_contract::private_adapter::ATTEMPT_HEADER
+            | crate::inference_contract::private_adapter::OUTCOME_HEADER
     )
 }
 
@@ -338,7 +338,7 @@ pub struct RoutingTarget {
     /// `None` means unknown, not unsupported.
     pub reasoning_effort: Option<ReasoningEffortConfig>,
     /// Authoritative limits for managed model execution.
-    pub model_constraints: crate::managed_contract::evidence::NativeRouteConstraints,
+    pub model_constraints: crate::inference_contract::evidence::NativeRouteConstraints,
     /// Which account of a multi-account provider this target came from
     /// — `None` for a single-credential provider. Surfaced in the
     /// request log so an operator can see which subscription served a

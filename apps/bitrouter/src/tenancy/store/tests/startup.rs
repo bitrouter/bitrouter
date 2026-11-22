@@ -92,7 +92,7 @@ async fn header_loader_validates_all_pages_and_returns_no_directory() -> Result<
 }
 
 #[tokio::test]
-async fn unsupported_authority_formats_refuse_without_changing_stop_or_counters() -> Result<()> {
+async fn unknown_authority_formats_refuse_without_changing_stop_or_counters() -> Result<()> {
     let db = database().await?;
     seed(&db).await?;
     let mut current = loader::read_header_in(&db, ROW_BYTES)

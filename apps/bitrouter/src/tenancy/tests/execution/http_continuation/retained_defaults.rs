@@ -105,12 +105,12 @@ async fn read_and_reject_candidates_http(ready: &Ready) -> Result<()> {
         &crate::config::ControlConfig {
             credentials: vec![crate::config::ControlCredentialConfig {
                 id: "test-operator".into(),
-                token_env: "HTTP034_TEST_OPERATOR".into(),
+                token_env: "HTTP_CONTINUATION_TEST_OPERATOR".into(),
                 scopes: vec![bitrouter_ai::control::ControlScope::Tenancy],
             }],
             ..Default::default()
         },
-        |_| Some("http034-operator-token-at-least-32-bytes".into()),
+        |_| Some("http-continuation-operator-token-at-least-32-bytes".into()),
     )?;
     let mut request = Request::get(format!(
         "/control/v1/tenants/{}/configurations/{}",
@@ -141,7 +141,7 @@ async fn read_and_reject_candidates_http(ready: &Ready) -> Result<()> {
     ))
     .header(
         "authorization",
-        "Bearer http034-operator-token-at-least-32-bytes",
+        "Bearer http-continuation-operator-token-at-least-32-bytes",
     )
     .header(
         "Bitrouter-Installation-Id",

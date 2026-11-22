@@ -6,7 +6,8 @@ use sea_orm::{IsolationLevel, TransactionTrait};
 
 #[tokio::test]
 #[ignore = "requires BITROUTER_TEST_DATABASE_URL for a dedicated PostgreSQL or MySQL test database"]
-async fn server_owned_eval_composites_share_rr_transaction_and_scoped_winner_reads() -> Result<()> {
+async fn db_server_both_owned_eval_composites_share_rr_transaction_and_scoped_winner_reads()
+-> Result<()> {
     let url = std::env::var("BITROUTER_TEST_DATABASE_URL")
         .context("dedicated server database required")?;
     let parsed = url::Url::parse(&url)?;

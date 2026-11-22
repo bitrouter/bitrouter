@@ -54,7 +54,7 @@ async fn current_baseline_preserves_ordered_receipt_evidence_and_digest_bytes() 
                 && before.private_json() == after.private_json()
                 && before.digest() == after.digest()
         );
-        let (Terminal::V2(before), Terminal::V2(after)) = (before, after) else {
+        let (Terminal::Ordered(before), Terminal::Ordered(after)) = (before, after) else {
             anyhow::bail!("ordered format lost");
         };
         ensure!(

@@ -1,4 +1,4 @@
-//! Format selection never converts an ordered receipt through a version-one DTO.
+//! Storage discriminators identify strict or ordered dispatch.
 use super::Candidate;
 use crate::tenancy::receipts::ordered::CandidateV2;
 use anyhow::{Result, bail};
@@ -10,20 +10,20 @@ use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::tenancy) enum Format {
-    V1,
-    V2,
+    Strict,
+    Ordered,
 }
 impl Format {
     pub fn number(self) -> i32 {
         match self {
-            Self::V1 => 1,
-            Self::V2 => 2,
+            Self::Strict => 1,
+            Self::Ordered => 2,
         }
     }
     pub fn decode(value: i32) -> Result<Self> {
         match value {
-            1 => Ok(Self::V1),
-            2 => Ok(Self::V2),
+            1 => Ok(Self::Strict),
+            2 => Ok(Self::Ordered),
             _ => bail!("unsupported receipt format"),
         }
     }
@@ -39,21 +39,21 @@ pub(in crate::tenancy) struct Facts<'a> {
     pub state: ReceiptState,
 }
 
-/// Immutable terminal obligation. Legacy consumers explicitly request V1.
+/// Immutable terminal receipt and evidence for the selected dispatch mode.
 pub(in crate::tenancy) enum Terminal {
-    V1(Arc<Candidate>),
-    V2(Arc<CandidateV2>),
+    Strict(Arc<Candidate>),
+    Ordered(Arc<CandidateV2>),
 }
 impl Terminal {
     pub fn format(&self) -> Format {
         match self {
-            Self::V1(_) => Format::V1,
-            Self::V2(_) => Format::V2,
+            Self::Strict(_) => Format::Strict,
+            Self::Ordered(_) => Format::Ordered,
         }
     }
     pub fn facts(&self) -> Facts<'_> {
         match self {
-            Self::V1(c) => {
+            Self::Strict(c) => {
                 let r = &c.receipt;
                 Facts {
                     installation: &r.installation_id,
@@ -65,7 +65,7 @@ impl Terminal {
                     state: r.state,
                 }
             }
-            Self::V2(c) => {
+            Self::Ordered(c) => {
                 let r = &c.receipt;
                 Facts {
                     installation: &r.installation_id,
@@ -80,28 +80,28 @@ impl Terminal {
         }
     }
     #[cfg(test)]
-    pub fn v1(&self) -> Result<&Arc<Candidate>> {
+    pub fn strict(&self) -> Result<&Arc<Candidate>> {
         match self {
-            Self::V1(c) => Ok(c),
-            Self::V2(_) => bail!("receipt format mismatch"),
+            Self::Strict(c) => Ok(c),
+            Self::Ordered(_) => bail!("receipt format mismatch"),
         }
     }
     pub fn json(&self) -> &str {
         match self {
-            Self::V1(c) => &c.json,
-            Self::V2(c) => &c.json,
+            Self::Strict(c) => &c.json,
+            Self::Ordered(c) => &c.json,
         }
     }
     pub fn private_json(&self) -> &str {
         match self {
-            Self::V1(c) => &c.private_json,
-            Self::V2(c) => &c.private_json,
+            Self::Strict(c) => &c.private_json,
+            Self::Ordered(c) => &c.private_json,
         }
     }
     pub fn digest(&self) -> &str {
         match self {
-            Self::V1(c) => &c.digest,
-            Self::V2(c) => &c.digest,
+            Self::Strict(c) => &c.digest,
+            Self::Ordered(c) => &c.digest,
         }
     }
     pub fn bytes(&self) -> u64 {
@@ -109,28 +109,28 @@ impl Terminal {
     }
     pub fn auxiliary_bytes(&self) -> u64 {
         match self {
-            Self::V1(c) => c.auxiliary_bytes(),
-            Self::V2(c) => c.evidence.json.len() as u64 + 16 * 1024,
+            Self::Strict(c) => c.auxiliary_bytes(),
+            Self::Ordered(c) => c.evidence.json.len() as u64 + 16 * 1024,
         }
     }
     pub fn unknown(&self) -> bool {
         self.facts().state == ReceiptState::Unknown
     }
     pub fn auxiliary_unclean(&self) -> bool {
-        matches!(self, Self::V1(c) if c.auxiliary_unclean())
+        matches!(self, Self::Strict(c) if c.auxiliary_unclean())
     }
     pub fn has_unknown_outcome(&self) -> bool {
         use bitrouter_ai::tenancy::execution::Outcome;
         self.unknown()
             || match self {
-                Self::V1(c) => {
+                Self::Strict(c) => {
                     c.receipt.outcome == Outcome::Unknown
                         || c.receipt
                             .attempts
                             .iter()
                             .any(|attempt| attempt.outcome == Outcome::Unknown)
                 }
-                Self::V2(c) => {
+                Self::Ordered(c) => {
                     c.receipt.outcome == Outcome::Unknown
                         || c.receipt
                             .attempts
@@ -140,6 +140,6 @@ impl Terminal {
             }
     }
     pub fn auxiliary_unknown(&self) -> bool {
-        matches!(self, Self::V1(c) if c.auxiliary_unknown())
+        matches!(self, Self::Strict(c) if c.auxiliary_unknown())
     }
 }

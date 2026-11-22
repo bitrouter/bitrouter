@@ -256,7 +256,9 @@ async fn rollback_is_not_a_receipt_and_restart_preserves_exact_committed_bytes()
     .context("reopened receipt")?;
     ensure!(serde_json::to_string(&saved)? == value.json);
     let inventory = inventory(&db, &value.receipt.installation_id).await?;
-    ensure!(inventory.bytes == value.bytes() && inventory.unknown_count == 0);
+    ensure!(
+        inventory.bytes == value.bytes() + value.auxiliary_bytes() && inventory.unknown_count == 0
+    );
     db.close().await?;
     Ok(())
 }

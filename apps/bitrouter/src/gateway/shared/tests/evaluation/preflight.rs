@@ -23,7 +23,7 @@ const CREATED_AT: &str = "2026-11-18T00:00:00Z";
 
 #[tokio::test]
 #[ignore = "requires BITROUTER_TEST_DATABASE_URL with PostgreSQL CREATEDB privilege"]
-async fn postgres_shared_eval_subject_prejoin() -> Result<()> {
+async fn db_server_postgres_shared_eval_subject_prejoin() -> Result<()> {
     let mut database = EmptyDatabase::create().await?;
     let result = tokio::time::timeout(Duration::from_secs(60), exercise(&mut database))
         .await

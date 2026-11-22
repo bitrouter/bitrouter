@@ -41,7 +41,10 @@ impl Fixture {
             !target.path().trim_matches('/').is_empty(),
             "explicit admin database required"
         );
-        let name = format!("bitrouter_eval_http034_{}", uuid::Uuid::new_v4().simple());
+        let name = format!(
+            "bitrouter_eval_continuation_{}",
+            uuid::Uuid::new_v4().simple()
+        );
         let parameters = target
             .query_pairs()
             .filter(|(key, _)| key != "dbname" && key != "database")

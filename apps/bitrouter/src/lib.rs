@@ -35,7 +35,7 @@ pub(crate) mod error_report;
 pub(crate) mod eval;
 pub mod gateway;
 pub mod host;
-pub(crate) mod managed_contract;
+pub(crate) mod inference_contract;
 pub(crate) mod mcp_config;
 pub(crate) mod mcp_registry;
 pub(crate) mod metering;

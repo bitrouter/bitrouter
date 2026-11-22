@@ -100,15 +100,8 @@ confirmed complete. Readiness still requires the loaded authority revision to
 be current.
 
 Shared assembly rejects MCP servers, active server tools, decision-model
-execution, request checkers and the agent API. These execution capabilities
-remain local until they have explicit shared worker ownership.
-
-Shared guarded policies retain the episode's original correlation key across
-rotation. Native continuation pins must match the committed guard's selected
-tier, model and reasoning effort; a conflicting pin is rejected before provider
-dispatch. Local capture/evolution controller headers and local reserved judge
-requests are unsupported. Access policies cannot use local spend or rate counters;
-configure shared admission limits instead.
+execution and request checkers. Use shared admission limits for spend and rate
+enforcement.
 
 Run the same shared-gateway build on every replica in a namespace. Rolling
 replacement is supported within that build; mixed versions of private durable

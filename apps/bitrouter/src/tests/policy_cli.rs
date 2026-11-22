@@ -2,14 +2,19 @@
 
 use std::path::Path;
 use std::process::{Command, Output};
+use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 use bitrouter_ai::policy::Document;
 
+fn command(home: &Path) -> Result<Command> {
+    let mut command = Command::new(crate::tests::binary()?);
+    command.current_dir(home).env("BITROUTER_HOME", home);
+    Ok(command)
+}
+
 fn invoke(home: &Path, args: &[&str]) -> Result<Output> {
-    Command::new(crate::tests::binary()?)
-        .current_dir(home)
-        .env("BITROUTER_HOME", home)
+    command(home)?
         .args(args)
         .output()
         .with_context(|| format!("running bro {}", args.join(" ")))
@@ -96,6 +101,35 @@ fn candidate(home: &Path, document: &Document) -> Result<Document> {
         .default_tier = "economy".into();
     std::fs::write(home.join("candidate.yaml"), serde_saphyr::to_string(&next)?)?;
     Ok(next)
+}
+
+#[tokio::test]
+async fn policy_publish_requires_cas_before_input_or_storage_access() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let home = directory.path();
+    let output = tokio::time::timeout(
+        Duration::from_secs(20),
+        tokio::process::Command::from(command(home)?)
+            .kill_on_drop(true)
+            .args([
+                "policy",
+                "publish",
+                "missing.yaml",
+                "--config",
+                "missing.yaml",
+            ])
+            .output(),
+    )
+    .await
+    .context("invalid Policy publication did not return")??;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    ensure!(output.status.code() == Some(2), "{stderr}");
+    ensure!(
+        output.stdout.is_empty() && stderr.contains("--expected-digest"),
+        "{stderr}"
+    );
+    ensure!(std::fs::read_dir(home)?.count() == 0);
+    Ok(())
 }
 
 #[test]

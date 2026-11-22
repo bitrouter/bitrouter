@@ -9,9 +9,9 @@ use crate::tenancy::{
 use std::{io::Write, path::Path, process::Stdio};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 
-const DATABASE: &str = "BITROUTER_TEST_HTTP034_UNKNOWN_DATABASE";
-const FAULT: &str = "BITROUTER_TEST_HTTP034_UNKNOWN_FAULT";
-const RETAINED: &str = "http034-unknown-owner-retained";
+const DATABASE: &str = "BITROUTER_TEST_HTTP_CONTINUATION_UNKNOWN_DATABASE";
+const FAULT: &str = "BITROUTER_TEST_HTTP_CONTINUATION_UNKNOWN_FAULT";
+const RETAINED: &str = "http-continuation-unknown-owner-retained";
 
 #[derive(Clone, Copy)]
 enum Fault {
@@ -98,7 +98,7 @@ async fn exercise(path: &Path, fault: Fault) -> Result<()> {
     if matches!(fault, Fault::Rollback) {
         // SQLite itself rolls back the transaction. SeaORM still consumes its
         // open transaction in Control::rollback, whose real SQL ROLLBACK fails.
-        db.execute_unprepared("CREATE TRIGGER http034_consuming_rollback BEFORE INSERT ON provider_continuations BEGIN SELECT RAISE(ROLLBACK, 'http034 rollback fault'); END").await?;
+        db.execute_unprepared("CREATE TRIGGER http_continuation_consuming_rollback BEFORE INSERT ON provider_continuations BEGIN SELECT RAISE(ROLLBACK, 'HTTP continuation rollback fault'); END").await?;
     }
     let release = Arc::new(tokio::sync::Notify::new());
     *provider
@@ -212,7 +212,7 @@ async fn actual_http_unknown_owner_child() -> Result<()> {
 
 async fn retained_owner(fault: Fault) -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let database = directory.path().join("http034-unknown.sqlite");
+    let database = directory.path().join("http-continuation-unknown.sqlite");
     let mut child = tokio::process::Command::new(std::env::current_exe()?)
         .args(["--exact", "tenancy::tests::execution::http_continuation::unknown::actual_http_unknown_owner_child",
             "--ignored", "--nocapture", "--test-threads=1"])

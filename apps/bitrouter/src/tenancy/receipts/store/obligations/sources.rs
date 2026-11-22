@@ -75,8 +75,8 @@ pub(super) async fn read_expected(
     if let Some(expected) = expected {
         super::super::same_completion(
             match candidate.as_ref() {
-                Some(format::Terminal::V1(c)) => c,
-                _ => anyhow::bail!("legacy terminal receipt disappeared"),
+                Some(format::Terminal::Strict(c)) => c,
+                _ => anyhow::bail!("strict terminal receipt disappeared"),
             },
             expected,
         )?;
@@ -120,11 +120,11 @@ pub(super) async fn read_expected(
                 oauth::State::Ready => anyhow::bail!("Ready OAuth pending source"),
             };
             charge(0, crate::tenancy::receipts::auxiliary::MAX_BYTES * 2)?;
-            let legacy = match &candidate {
-                Some(format::Terminal::V1(c)) => Some(c.as_ref()),
+            let strict = match &candidate {
+                Some(format::Terminal::Strict(c)) => Some(c.as_ref()),
                 _ => None,
             };
-            if !witnessed(legacy, &metadata, work)? {
+            if !witnessed(strict, &metadata, work)? {
                 sources.add(
                     PENDING,
                     DateTime::parse_from_rfc3339(work.started_at.as_str())?.with_timezone(&Utc),

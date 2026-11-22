@@ -356,20 +356,88 @@ async fn mcp_cli_save_requires_restart_and_never_reloads_the_running_target() ->
 
 #[tokio::test]
 async fn unknown_field_diagnostics_do_not_disclose_dynamic_keys_or_values() -> Result<()> {
+    use bitrouter_ai::control::reload::{ReloadParticipant, ReloadParticipantOutcome};
+
     let fixture = RunningFixture::start().await?;
-    let candidate = format!(
-        "{}\nprivate-unrecognized-key: private-unrecognized-value\n",
-        yaml("127.0.0.1:14356", "old-private-api-key")
-    );
-    tokio::fs::write(&fixture.source, candidate).await?;
-    ensure!(fixture.reloader.reload().await.is_err());
-    let report = fixture.status(&fixture.source).await?;
-    let state = configuration(&report)?;
-    ensure!(state["saved"] == "invalid", "{state}");
-    ensure!(state["running"] == "unknown", "{state}");
-    let serialized = serde_json::to_string(&report)?;
-    ensure!(!serialized.contains("private-unrecognized"));
-    ensure!(!serialized.contains("old-private-api-key"));
+    for unknown in [
+        "private-unrecognized-key: private-unrecognized-value\n",
+        "plugins:\n  bitrouter-guardrails: {private-unrecognized-key: private-unrecognized-value}\n",
+    ] {
+        let candidate = yaml("127.0.0.1:14356", "old-private-api-key") + unknown;
+        tokio::fs::write(&fixture.source, candidate).await?;
+        ensure!(fixture.reloader.reload().await.is_err());
+        let report = fixture.status(&fixture.source).await?;
+        let state = configuration(&report)?;
+        ensure!(report.running);
+        ensure!(state["saved"] == "invalid", "{state}");
+        ensure!(state["running"] == "unknown", "{state}");
+        let outcome = fixture
+            .reloader
+            .reload_state()
+            .and_then(|state| state.last_outcome)
+            .context("missing reload outcome")?;
+        let routing = outcome
+            .participants
+            .iter()
+            .find(|entry| entry.participant == ReloadParticipant::RoutingTable)
+            .context("missing routing-table outcome")?;
+        ensure!(routing.outcome == ReloadParticipantOutcome::Failed);
+        let failure = routing
+            .error
+            .as_ref()
+            .context("missing configuration error")?;
+        ensure!(failure.code == "config_prepare_failed", "{failure:?}");
+        for serialized in [
+            serde_json::to_string(&report)?,
+            serde_json::to_string(&outcome)?,
+        ] {
+            ensure!(!serialized.contains("private-unrecognized"));
+            ensure!(!serialized.contains("old-private-api-key"));
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn unknown_configuration_is_rejected_before_cli_activation() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let home = directory.path();
+    let path = home.join("bitrouter.yaml");
+    for (unknown, field) in [
+        ("unknown_startup_option: true\n", "unknown_startup_option"),
+        (
+            "plugins:\n  bitrouter-guardrails: {}\n",
+            "bitrouter-guardrails",
+        ),
+        (
+            "plugins:\n  bitrouter-guardrails: null\n",
+            "bitrouter-guardrails",
+        ),
+    ] {
+        let raw = format!(
+            "inherit_defaults: false\nserver:\n  listen: '127.0.0.1:0'\ndatabase:\n  url: 'sqlite://must-not-create.db?mode=rwc'\n{unknown}"
+        );
+        tokio::fs::write(&path, &raw).await?;
+        for args in [&["config", "validate"][..], &["serve"][..]] {
+            let output = tokio::time::timeout(
+                Duration::from_secs(20),
+                isolated_cli(home)?.args(args).output(),
+            )
+            .await??;
+            let message = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            ensure!(!output.status.success(), "{args:?} accepted {field}");
+            ensure!(
+                message.contains(&format!("unknown field `{field}`")),
+                "{args:?}: {message}"
+            );
+            ensure!(tokio::fs::read_to_string(&path).await? == raw);
+            ensure!(!home.join("must-not-create.db").exists());
+        }
+    }
     Ok(())
 }
 

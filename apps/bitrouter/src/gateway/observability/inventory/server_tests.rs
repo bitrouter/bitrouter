@@ -70,7 +70,8 @@ async fn parallel_admission(scheme: &str) -> Result<()> {
 #[cfg(feature = "db-postgres")]
 #[tokio::test]
 #[ignore = "requires a dedicated PostgreSQL BITROUTER_TEST_DATABASE_URL"]
-async fn postgres_competing_gateway_controllers_share_one_durable_reservation() -> Result<()> {
+async fn db_server_postgres_competing_gateway_controllers_share_one_durable_reservation()
+-> Result<()> {
     parallel_admission("postgres").await
 }
 
@@ -81,14 +82,15 @@ mod mysql_tests {
 
     #[tokio::test]
     #[ignore = "requires a dedicated MySQL BITROUTER_TEST_DATABASE_URL"]
-    async fn competing_gateway_controllers_share_one_durable_reservation() -> Result<()> {
+    async fn db_server_mysql_competing_gateway_controllers_share_one_durable_reservation()
+    -> Result<()> {
         parallel_admission("mysql").await
     }
 
     #[tokio::test]
     #[ignore = "requires a dedicated MySQL BITROUTER_TEST_DATABASE_URL"]
-    async fn locked_gateway_inventory_sees_new_and_changed_rows_after_older_snapshots() -> Result<()>
-    {
+    async fn db_server_mysql_locked_gateway_inventory_sees_new_and_changed_rows_after_older_snapshots()
+    -> Result<()> {
         let db = database("mysql").await?;
         let inventory = GatewayInventory::new(db.clone());
         let id = uuid::Uuid::new_v4().to_string();

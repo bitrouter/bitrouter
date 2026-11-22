@@ -11,12 +11,11 @@ mod example_binary;
 #[path = "../../tests/support/prebuilt_example.rs"]
 mod prebuilt_example;
 
-mod agent_trace_generalization;
+mod semantic_routing;
 mod artifact_build_metadata;
 mod artifact_profiles;
 mod cloud_api;
 mod configuration_state;
-mod core_disabled;
 mod daemon;
 mod database_backends;
 mod e2e;
@@ -29,7 +28,6 @@ mod gateway_decision_model;
 mod gateway_decisions;
 mod gateway_model_boundary;
 mod gateway_routing_assessment;
-mod guardrails_migration;
 #[cfg(feature = "mcp")]
 mod harness_mcp_check;
 mod host_lifecycle;

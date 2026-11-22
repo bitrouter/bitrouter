@@ -2,8 +2,8 @@
 //!
 //! Implements the full model-name resolution pipeline:
 //!
-//! - **Stage 0** — resolve a named router or legacy `@preset` / `:variant`
-//!   address and derive `RoutingPrefs`.
+//! - **Stage 0** — resolve a named router to its effective model and
+//!   derive `RoutingPrefs`.
 //! - **Strategy 1** — `provider:model_id` → direct route (chain length 1).
 //! - **Strategy 2** — an explicit `models:` virtual model → its endpoint chain.
 //! - **Strategy 3** — *auto-cascade* (the v1 built-in default): scan every
@@ -226,7 +226,7 @@ fn build_targets(
     let model_constraints = provider
         .model_config(model_id)
         .map(
-            |model| crate::managed_contract::evidence::NativeRouteConstraints {
+            |model| crate::inference_contract::evidence::NativeRouteConstraints {
                 capabilities: model.capabilities.clone(),
                 token_limits: model.token_limits.clone(),
                 input_token_counting: model.input_token_counting,
@@ -519,7 +519,7 @@ pub(crate) fn resolve_route_chain(
         config.validate_router_config()?;
         return resolve_clean_route_chain(config, model, caller_prefs);
     }
-    // ---- Stage 0: resolve named definition / legacy variant, derive prefs ----
+    // Resolve the named router and derive its routing preferences.
     let resolution = config.resolve_router(model)?;
     let clean = resolution.clean_model;
     // Caller-supplied prefs are additive on top of definition-derived ones.
@@ -956,8 +956,7 @@ pub(crate) fn merge_prefs(base: &mut RoutingPrefs, extra: &RoutingPrefs) {
             base.require_capabilities.push(*capability);
         }
     }
-    // The inbound protocol is a per-request fact set by the pipeline (not a
-    // preset knob); carry it so target construction can route natively.
+    // Carry the request's inbound protocol so target construction can route natively.
     if extra.inbound_protocol.is_some() {
         base.inbound_protocol = extra.inbound_protocol.clone();
     }
@@ -1946,9 +1945,7 @@ models:
 
     #[tokio::test]
     async fn inbound_protocol_survives_named_router_resolution() {
-        // The inbound protocol (a caller pref) must survive the merge over the
-        // preset-derived prefs base, so native routing still applies when a
-        // request goes through an `@preset`.
+        // Merging the named router's preferences preserves the request's inbound protocol.
         let yaml = r#"
 providers:
   minimax:

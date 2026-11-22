@@ -12,11 +12,12 @@ mod database;
 
 #[tokio::test]
 #[ignore = "requires BITROUTER_TEST_DATABASE_URL with PG/MySQL CREATE/DROP DATABASE privileges"]
-async fn server_http034_consumer_exact_cas_absence_race_and_restart() -> Result<()> {
+async fn db_server_both_http_continuation_consumer_exact_cas_absence_race_and_restart() -> Result<()>
+{
     let mut database = database::Fixture::create().await?;
     let result = tokio::time::timeout(Duration::from_secs(120), campaign(&mut database))
         .await
-        .context("HTTP034 backend campaign timed out")
+        .context("HTTP continuation backend test timed out")
         .and_then(|result| result);
     database.finish(result).await
 }

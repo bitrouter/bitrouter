@@ -39,9 +39,9 @@ impl Worker {
         let candidate = prepared.map_err(|_| Failure::from(ErrorCode::StorageUnavailable))?;
         #[cfg(test)]
         let observation = candidate
-            .v1()
+            .strict()
             .ok()
-            .and_then(|legacy| self.proof.receipt_started_for_test(legacy));
+            .and_then(|strict| self.proof.receipt_started_for_test(strict));
         #[cfg(test)]
         use crate::tenancy::transaction::receipt_observation::Step;
         let checked = control.check_read();
@@ -107,8 +107,8 @@ impl Worker {
             }
             let staged = insertion?;
             let inserted = staged.inserted();
-            if let store::format::Terminal::V1(legacy) = candidate.as_ref() {
-                crate::tenancy::receipts::auxiliary_store::insert(&transaction, legacy).await?;
+            if let store::format::Terminal::Strict(strict) = candidate.as_ref() {
+                crate::tenancy::receipts::auxiliary_store::insert(&transaction, strict).await?;
             }
             let change = staged
                 .reconcile(&|rows, bytes| budget.charge(rows, bytes).map_err(Into::into))

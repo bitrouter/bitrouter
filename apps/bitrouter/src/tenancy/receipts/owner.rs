@@ -638,7 +638,7 @@ impl Owner {
                     .try_into()?,
             };
             let document = frozen.usage_evidence.document(&receipt);
-            Terminal::V2(Arc::new(super::ordered::CandidateV2::new(
+            Terminal::Ordered(Arc::new(super::ordered::CandidateV2::new(
                 receipt,
                 Disposition {
                     dispatch: frozen.dispatch,
@@ -664,16 +664,16 @@ impl Owner {
                     .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
                     .try_into()?,
             };
-            Terminal::V1(Arc::new(
-                Candidate::new(
+            Terminal::Strict(Arc::new(
+                Candidate::captured(
                     receipt,
                     Disposition {
                         dispatch: frozen.dispatch,
                         statuses: frozen.http_statuses,
                         auxiliary_digest: None,
                     },
+                    frozen.usage_evidence,
                 )?
-                .with_usage_evidence(frozen.usage_evidence)?
                 .with_auxiliary(auxiliary)?,
             ))
         };
@@ -746,8 +746,8 @@ impl Owner {
         }
         *phase = Phase::Durable(candidate.clone());
         let publication = match candidate.as_ref() {
-            Terminal::V1(c) => Some(self.observation.publication(&c.receipt)),
-            Terminal::V2(_) => None,
+            Terminal::Strict(c) => Some(self.observation.publication(&c.receipt)),
+            Terminal::Ordered(_) => None,
         };
         drop(phase);
         if let Some(publication) = publication {

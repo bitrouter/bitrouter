@@ -44,13 +44,13 @@ pub(super) async fn after_resource() -> Result<()> {
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL CREATEDB privilege"]
-async fn postgres_dispatch_shares_resource_fence_single_owner() -> Result<()> {
+async fn db_server_postgres_dispatch_shares_resource_fence_single_owner() -> Result<()> {
     exercise(1).await
 }
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL CREATEDB privilege"]
-async fn postgres_dispatch_shares_resource_fence_two_owners() -> Result<()> {
+async fn db_server_postgres_dispatch_shares_resource_fence_two_owners() -> Result<()> {
     exercise(2).await
 }
 

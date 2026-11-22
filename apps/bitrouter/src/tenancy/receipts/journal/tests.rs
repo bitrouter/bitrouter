@@ -848,10 +848,10 @@ fn technical_operation_uses_actual_arm_ids_without_merging_same_named_targets() 
     second.selected();
     let frozen = journal.freeze()?;
     let statuses = frozen.http_statuses.clone();
-    let legacy = receipt(frozen, Outcome::Failed)?;
-    let terminal = crate::tenancy::receipts::store::format::Terminal::V1(std::sync::Arc::new(
+    let strict = receipt(frozen, Outcome::Failed)?;
+    let terminal = crate::tenancy::receipts::store::format::Terminal::Strict(std::sync::Arc::new(
         crate::tenancy::receipts::store::Candidate::new(
-            legacy,
+            strict,
             crate::tenancy::receipts::store::Disposition {
                 dispatch: DispatchState::Started,
                 statuses,

@@ -166,7 +166,8 @@ impl Fixture {
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL CREATEDB privilege"]
-async fn postgres_invalid_source_publication_rejection_preserves_authority() -> Result<()> {
+async fn db_server_postgres_invalid_source_publication_rejection_preserves_authority() -> Result<()>
+{
     let mut database = EmptyDatabase::create().await?;
     let result = tokio::time::timeout(Duration::from_secs(30), async {
         let f = Fixture::new(&mut database).await?;
@@ -212,8 +213,8 @@ async fn postgres_invalid_source_publication_rejection_preserves_authority() -> 
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL CREATEDB privilege"]
-async fn postgres_join_checks_old_retained_publication_and_terminal_beyond_first_page() -> Result<()>
-{
+async fn db_server_postgres_join_checks_old_retained_publication_and_terminal_beyond_first_page()
+-> Result<()> {
     let mut database = EmptyDatabase::create().await?;
     let result = tokio::time::timeout(Duration::from_secs(90), async {
         let f = Fixture::new(&mut database).await?;
@@ -322,7 +323,8 @@ async fn refused_join_preserves_namespace(f: &Fixture, reason: &str) -> Result<(
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL CREATEDB privilege"]
-async fn postgres_capture_identity_rejects_before_attempt_or_terminal_writes() -> Result<()> {
+async fn db_server_postgres_capture_identity_rejects_before_attempt_or_terminal_writes()
+-> Result<()> {
     let mut database = EmptyDatabase::create().await?;
     let result = tokio::time::timeout(Duration::from_secs(30), async {
         let f = Fixture::new(&mut database).await?;
@@ -452,8 +454,8 @@ async fn postgres_capture_identity_rejects_before_attempt_or_terminal_writes() -
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL CREATEDB privilege"]
-async fn postgres_read_committed_terminal_invalidates_serializable_execution_snapshot() -> Result<()>
-{
+async fn db_server_postgres_read_committed_terminal_invalidates_serializable_execution_snapshot()
+-> Result<()> {
     let mut database = EmptyDatabase::create().await?;
     let result = tokio::time::timeout(Duration::from_secs(30), async {
         let f = Fixture::new(&mut database).await?;

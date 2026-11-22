@@ -168,8 +168,12 @@ impl EvalIdentity {
         .map_err(|_| Failure::from(ErrorCode::StorageUnavailable))?
         .ok_or(ErrorCode::InvalidRequest)?;
         let receipt = match &receipt {
-            super::super::receipts::store::format::Terminal::V1(candidate) => &candidate.receipt,
-            super::super::receipts::store::format::Terminal::V2(candidate) => &candidate.receipt,
+            super::super::receipts::store::format::Terminal::Strict(candidate) => {
+                &candidate.receipt
+            }
+            super::super::receipts::store::format::Terminal::Ordered(candidate) => {
+                &candidate.receipt
+            }
         };
         let revision = &receipt.execution_revision;
         let route = match &receipt.dispatch {

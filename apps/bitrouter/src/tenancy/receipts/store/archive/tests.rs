@@ -50,25 +50,25 @@ async fn relocate(db: &DatabaseConnection, candidate: &Candidate) -> Result<Prep
 
 #[test]
 fn codec_roundtrips_raw_and_compressed_exact_components() -> Result<()> {
-    let raw = codec::Encoded::encode("x", None, NO_CHARGE)?;
-    ensure!(raw.codec == 0 && raw.decode(NO_CHARGE)? == ("x".to_owned(), None));
+    let raw = codec::Encoded::encode("x", "y", NO_CHARGE)?;
+    ensure!(raw.codec == 0 && raw.decode(NO_CHARGE)? == ("x".to_owned(), "y".to_owned()));
     let receipt = "r".repeat(32 * 1024);
     let usage = "u".repeat(8 * 1024);
-    let compressed = codec::Encoded::encode(&receipt, Some(&usage), NO_CHARGE)?;
+    let compressed = codec::Encoded::encode(&receipt, &usage, NO_CHARGE)?;
     ensure!(compressed.codec == 1);
-    ensure!(compressed.decode(NO_CHARGE)? == (receipt, Some(usage)));
+    ensure!(compressed.decode(NO_CHARGE)? == (receipt, usage));
     Ok(())
 }
 
 #[test]
 fn codec_rejects_unknown_versions_codecs_lengths_frames_and_tails() -> Result<()> {
     for corruption in 0..10 {
-        let mut encoded = codec::Encoded::encode(&"x".repeat(4096), None, NO_CHARGE)?;
+        let mut encoded = codec::Encoded::encode(&"x".repeat(4096), "y", NO_CHARGE)?;
         match corruption {
             0 => encoded.version = 2,
             1 => encoded.codec = 2,
             2 => encoded.receipt_bytes = super::super::MAX_RECEIPT + 1,
-            3 => encoded.usage_bytes = Some(0),
+            3 => encoded.usage_bytes = 0,
             4 => encoded.receipt_bytes -= 1,
             5 => encoded.payload.push(0),
             6 => {
@@ -87,9 +87,9 @@ fn codec_rejects_unknown_versions_codecs_lengths_frames_and_tails() -> Result<()
             "accepted codec corruption {corruption}"
         );
     }
-    let mut dictionary = codec::Encoded::encode("x", None, NO_CHARGE)?;
+    let mut dictionary = codec::Encoded::encode("x", "y", NO_CHARGE)?;
     dictionary.codec = 1;
-    dictionary.payload = zstd::bulk::compress(b"x", 1)?;
+    dictionary.payload = zstd::bulk::compress(b"xy", 1)?;
     ensure!(dictionary.payload.len() > 5 && dictionary.payload[4] & 3 == 0);
     // Add a one-byte nonzero Dictionary_ID to an otherwise ordinary frame.
     dictionary.payload[4] |= 1;
@@ -103,7 +103,7 @@ async fn incomplete_usage_roundtrip_page_replay_and_rollback_preserve_exact_evid
 {
     let db = open().await?;
     for original in [
-        candidate("installation", "tenant", "old", "creator")?,
+        candidate("installation", "tenant", "empty-capture", "creator")?,
         captured("captured")?,
     ] {
         ensure!(commit(&db, &original).await?);
@@ -161,17 +161,12 @@ async fn incomplete_usage_roundtrip_page_replay_and_rollback_preserve_exact_evid
             row.try_get::<String>("", "receipt_json")?.is_empty()
                 && row.try_get::<i64>("", "storage_kind")? == 1
         );
-        let mut conflict = candidate(
+        let conflict = candidate(
             "installation",
             "tenant",
             r.execution_id.as_str(),
             "other-creator",
         )?;
-        if original.usage_evidence.is_some() {
-            conflict = conflict.with_usage_evidence(
-                crate::tenancy::receipts::usage_evidence::Snapshot::default(),
-            )?;
-        }
         ensure!(commit(&db, &conflict).await.is_err());
     }
     db.close().await?;
@@ -191,6 +186,7 @@ async fn archive_rejects_corrupt_markers_sidecars_digests_and_payloads() -> Resu
         "UPDATE tenancy_receipt_archive SET payload=CAST(payload AS TEXT)",
         "UPDATE tenancy_receipt_archive SET receipt_bytes=1048577",
         "UPDATE tenancy_receipt_archive SET usage_bytes=262145",
+        "UPDATE tenancy_receipt_archive SET usage_bytes=0",
         "UPDATE tenancy_receipt_archive SET codec=2",
         "UPDATE tenancy_receipt_archive SET format_version=2",
         "DELETE FROM tenancy_usage_evidence",

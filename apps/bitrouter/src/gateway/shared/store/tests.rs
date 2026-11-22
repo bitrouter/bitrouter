@@ -7,7 +7,7 @@ use crate::gateway::shared::test_database::EmptyDatabase;
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL CREATEDB privilege"]
-async fn postgres_retry_uses_deadline_and_never_retries_uncertain_errors() -> Result<()> {
+async fn db_server_postgres_retry_uses_deadline_and_never_retries_uncertain_errors() -> Result<()> {
     let mut database = EmptyDatabase::create().await?;
     let result = tokio::time::timeout(Duration::from_secs(20), async {
         let db = database.connect(2, Duration::from_secs(2)).await?;
@@ -170,7 +170,8 @@ async fn delayed_poll_cannot_start_an_attempt_after_the_total_deadline() -> Resu
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL CREATEDB privilege"]
-async fn postgres_get_retries_serialization_abort_with_a_fresh_transaction() -> Result<()> {
+async fn db_server_postgres_get_retries_serialization_abort_with_a_fresh_transaction() -> Result<()>
+{
     let mut database = EmptyDatabase::create().await?;
     let result = tokio::time::timeout(Duration::from_secs(20), async {
         // A single registered connection also requires the aborted transaction
@@ -258,7 +259,8 @@ async fn postgres_get_retries_serialization_abort_with_a_fresh_transaction() -> 
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL CREATEDB privilege"]
-async fn postgres_due_states_retries_serialization_abort_with_filtered_fresh_scan() -> Result<()> {
+async fn db_server_postgres_due_states_retries_serialization_abort_with_filtered_fresh_scan()
+-> Result<()> {
     use serde_json::{Value, json};
 
     let mut database = EmptyDatabase::create().await?;

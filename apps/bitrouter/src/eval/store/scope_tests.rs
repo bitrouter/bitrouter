@@ -523,7 +523,7 @@ async fn conflict_transaction(db: DatabaseConnection) -> Result<()> {
 #[cfg(any(feature = "db-postgres", feature = "db-mysql"))]
 #[tokio::test]
 #[ignore = "requires BITROUTER_TEST_DATABASE_URL pointing at a dedicated PostgreSQL or MySQL database"]
-async fn server_immutable_conflicts_preserve_transaction_and_first_creator() -> Result<()> {
+async fn db_server_both_immutable_conflicts_preserve_transaction_and_first_creator() -> Result<()> {
     let url = std::env::var("BITROUTER_TEST_DATABASE_URL")?;
     let parsed = url::Url::parse(&url)?;
     ensure!(

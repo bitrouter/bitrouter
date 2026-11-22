@@ -19,8 +19,8 @@ pub struct PolicyDecisionRecord {
     #[serde(default)]
     pub request_id: Option<String>,
     /// Domain-separated commitment to the ingress HTTP request identity.
-    /// Guarded policies keep `request_id` owner-opaque; this commitment lets
-    /// external evidence perform an exact join without persisting the raw ID.
+    /// External evidence joins the ingress request through this commitment
+    /// without persisting the raw request identity.
     #[serde(default)]
     pub ingress_request_id_sha256: Option<String>,
     pub input_model: String,

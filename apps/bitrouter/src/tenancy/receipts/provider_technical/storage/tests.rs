@@ -9,7 +9,7 @@ fn original() -> Result<Terminal> {
     let receipt = serde_json::from_value(
         json!({"dispatch":{"mode":"strict"},"installation_id":"store","tenant_id":"tenant","principal_id":"principal","execution_id":"execution","correlation_id":"correlation","execution_revision":"revision","state":"incomplete","outcome":"failed","attempts":[{"attempt_id":"attempt","candidate_index":null,"observed_http_status":503,"target":null,"outcome":"failed","usage":usage,"native_usage":[]}],"usage":usage,"recorded_at":"2026-01-01T00:00:00Z"}),
     )?;
-    Ok(Terminal::V1(std::sync::Arc::new(Candidate::new(
+    Ok(Terminal::Strict(std::sync::Arc::new(Candidate::new(
         receipt,
         Disposition {
             dispatch: bitrouter_ai::tenancy::operation::DispatchState::Started,

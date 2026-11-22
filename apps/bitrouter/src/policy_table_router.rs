@@ -7,7 +7,7 @@ use crate::gateway::observability::decision::{
 };
 use crate::gateway::routing::{
     assessment::{self, Assessment},
-    workflow::decision::{PolicyDecisionJsonlRecorder, PolicyDecisionRecord},
+    decision_log::{PolicyDecisionJsonlRecorder, PolicyDecisionRecord},
 };
 use bitrouter_ai::{
     eval::{RouteActionCandidate, RouteDecisionMeasurement},
@@ -705,7 +705,7 @@ impl PolicyTableRouter {
                 captured_at: None,
                 request_id: request_id.map(ToString::to_string),
                 ingress_request_id_sha256: ingress_request_id
-                    .map(crate::gateway::routing::workflow::decision::ingress_request_id_sha256),
+                    .map(crate::gateway::routing::decision_log::ingress_request_id_sha256),
                 input_model,
                 input_effort,
                 route_projection: Some(decision.route_projection.clone()),
