@@ -351,6 +351,12 @@ mod tests {
         let config = crate::config::parse(
             r#"
 inherit_defaults: false
+control:
+  enabled: true
+  credentials:
+    - id: owned-fixture-operator
+      token_env: OWNED_FIXTURE_OPERATOR_TOKEN
+      scopes: [control:tenancy]
 providers:
   fixture:
     api_base: https://platform.example/v1
@@ -359,11 +365,13 @@ providers:
     headers: {x-fixed: retained}
     models: [{id: base}]
 tenancy:
+  enabled: true
+  wrapping_key_env: OWNED_FIXTURE_WRAPPING_KEY
   catalog:
     pool_id: platform
     routes: {route: 'fixture:base'}
     profiles:
-      fixture/default/fixture:base:
+      fixture/default/base:
         schema_version: 2
         rate: null
         health: null
