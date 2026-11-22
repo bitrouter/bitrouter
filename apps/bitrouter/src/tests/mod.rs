@@ -11,7 +11,6 @@ mod example_binary;
 #[path = "../../tests/support/prebuilt_example.rs"]
 mod prebuilt_example;
 
-mod semantic_routing;
 mod artifact_build_metadata;
 mod artifact_profiles;
 mod cloud_api;
@@ -61,6 +60,7 @@ mod provider_check;
 mod registry_lifecycle;
 mod request_checks;
 mod router_continuation;
+mod semantic_routing;
 mod subscription;
 mod telemetry_disabled;
 #[cfg(feature = "otel-grpc")]

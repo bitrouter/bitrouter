@@ -135,7 +135,7 @@ pub(crate) struct TenantExecution {
     id: ExecutionId,
     route: Arc<RetainedRoute>,
     #[cfg(feature = "eval-publication")]
-    learning: bitrouter_ai::tenancy::configuration::Learning,
+    eval_publication: bool,
     journal: std::sync::OnceLock<Arc<super::receipts::journal::Journal>>,
     rejection: Mutex<Option<ErrorCode>>,
     hop: Mutex<Option<Arc<super::operational::Hop>>>,
@@ -413,7 +413,7 @@ impl Service {
         }
         route.require_capabilities().map_err(Failure::from)?;
         #[cfg(feature = "eval-publication")]
-        let learning = revision.document().learning.clone();
+        let eval_publication = revision.document().eval_publication;
         drop(revision);
         // Bound volumes are refreshed under accounting before count pins/grants.
         // Preserve the existing refusal/test behavior for an unbound volume.
@@ -439,7 +439,7 @@ impl Service {
             route,
             lease,
             #[cfg(feature = "eval-publication")]
-            learning,
+            eval_publication,
         )?;
         self.prepare_ordered_intent(&execution, intent_slot).await?;
         execution.revalidate().map_err(Failure::from)?;
@@ -470,8 +470,7 @@ impl Service {
         mut submission: Submission,
         route: Arc<RetainedRoute>,
         lease: super::admission::Lease,
-        #[cfg(feature = "eval-publication")]
-        learning: bitrouter_ai::tenancy::configuration::Learning,
+        #[cfg(feature = "eval-publication")] eval_publication: bool,
     ) -> Result<Arc<TenantExecution>, Failure> {
         // Waiting for capacity never extends a token/binding lifetime. The
         // exact submitted revision remains pinned even after activation changes.
@@ -494,7 +493,7 @@ impl Service {
             id,
             route,
             #[cfg(feature = "eval-publication")]
-            learning,
+            eval_publication,
             journal: std::sync::OnceLock::new(),
             rejection: Mutex::new(None),
             hop: Mutex::new(None),

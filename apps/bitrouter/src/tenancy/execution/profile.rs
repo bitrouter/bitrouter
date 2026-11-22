@@ -185,19 +185,18 @@ impl TenantExecution {
             let pending =
                 crate::gateway::observability::decision::PendingEvalDecisionStore::default();
             #[cfg(feature = "eval-publication")]
-            let observation =
-                if self.learning.mode != bitrouter_ai::tenancy::configuration::LearningMode::Off {
-                    let observation = crate::tenancy::eval::observation::RequiredObservation::new(
-                        self.service.eval.clone(),
-                        Arc::downgrade(self),
-                    );
-                    self.observation.set(observation.clone()).map_err(|_| {
-                        self.reject(bitrouter_ai::tenancy::operation::ErrorCode::Forbidden)
-                    })?;
-                    Some(observation)
-                } else {
-                    None
-                };
+            let observation = if self.eval_publication {
+                let observation = crate::tenancy::eval::observation::RequiredObservation::new(
+                    self.service.eval.clone(),
+                    Arc::downgrade(self),
+                );
+                self.observation.set(observation.clone()).map_err(|_| {
+                    self.reject(bitrouter_ai::tenancy::operation::ErrorCode::Forbidden)
+                })?;
+                Some(observation)
+            } else {
+                None
+            };
             let runtime = crate::policy_source::PolicyRuntime::from_retained_document(
                 &config,
                 policy.document().clone(),
@@ -212,13 +211,11 @@ impl TenantExecution {
                 .route_hook(crate::policy_source::PredictiveSingleTargetRouteHook);
             #[cfg(feature = "eval-publication")]
             if let Some(observation) = observation {
-                if self.learning.mode != bitrouter_ai::tenancy::configuration::LearningMode::Off {
-                    builder.observe_hook(
-                        crate::gateway::observability::prediction::PredictiveResponseObserver::new(
-                            pending.clone(),
-                        ),
-                    );
-                }
+                builder.observe_hook(
+                    crate::gateway::observability::prediction::PredictiveResponseObserver::new(
+                        pending.clone(),
+                    ),
+                );
                 builder.settlement_recorder_for(
                     crate::eval::settlement::EvalSettlementRecorder::for_execution(
                         self,

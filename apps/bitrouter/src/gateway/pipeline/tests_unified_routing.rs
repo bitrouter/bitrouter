@@ -72,7 +72,7 @@ impl ModelSelector for SemanticPolicy {
             .as_ref()
             .and_then(|receipt| receipt.assessment.as_ref())
             .ok_or_else(|| BitrouterError::internal("missing semantic assessment"))?;
-        assert_eq!(assessment.route_class.next_step_role, NextStep::Verify);
+        assert_eq!(assessment.route_class.next_step, NextStep::Verify);
         self.0.lock().await.push(assessment.clone());
         ctx.set_model("verification-model");
         Ok(())

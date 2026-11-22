@@ -220,8 +220,7 @@ async fn count_pair_commits_atomically_with_scope_and_known_usage_kept_separate(
     Ok(())
 }
 #[test]
-fn strict_refresh_evidence_preserves_its_digest_and_checks_count_version()
--> Result<()> {
+fn strict_refresh_evidence_preserves_its_digest_and_checks_count_version() -> Result<()> {
     use crate::tenancy::receipts::auxiliary::{Fact as RefreshFact, Outcome as RefreshOutcome};
     let plain = candidate("installation", "tenant", "refresh", "creator")?;
     let reference = reference("tenant")?;

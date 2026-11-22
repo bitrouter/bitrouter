@@ -266,13 +266,10 @@ fn eval_baseline_and_append_records_keep_opaque_identity_and_actual_proposals() 
     Ok(())
 }
 
-fn semantic_fixture(task_family: TaskFamily, next_step_role: NextStep) -> Assessment {
+fn semantic_fixture(task_family: TaskFamily, next_step: NextStep) -> Assessment {
     let labels = [
         (crate::gateway::routing::assessment::TASK, task_family.key()),
-        (
-            crate::gateway::routing::assessment::ROLE,
-            next_step_role.key(),
-        ),
+        (crate::gateway::routing::assessment::ROLE, next_step.key()),
         (crate::gateway::routing::assessment::PROGRESS, "progressing"),
     ];
     Assessment {
@@ -284,7 +281,7 @@ fn semantic_fixture(task_family: TaskFamily, next_step_role: NextStep) -> Assess
         contract_digest: crate::gateway::routing::assessment::contract_digest(),
         history_complete: false,
         history_truncated: false,
-        route_class: RouteClass::new(task_family, next_step_role, Risk::Normal),
+        route_class: RouteClass::new(task_family, next_step, Risk::Normal),
         judgments: labels
             .into_iter()
             .map(|(id, label)| {

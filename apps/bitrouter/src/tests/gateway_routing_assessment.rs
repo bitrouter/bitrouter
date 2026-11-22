@@ -100,14 +100,14 @@ fn low_confidence_abstains_without_losing_distribution_or_classifier_identity()
         );
     }
     let strict = assessment::decode(&request, &response, 0.85)?;
-    assert_eq!(strict.route_class.next_step_role, NextStep::Unknown);
+    assert_eq!(strict.route_class.next_step, NextStep::Unknown);
     assert_eq!(
         strict.judgments[assessment::ROLE].probabilities["verify"],
         1.0
     );
     assert!(!strict.judgments[assessment::ROLE].accepted);
     let relaxed = assessment::decode(&request, &response, 0.75)?;
-    assert_eq!(relaxed.route_class.next_step_role, NextStep::Verify);
+    assert_eq!(relaxed.route_class.next_step, NextStep::Verify);
     assert_eq!(strict.contract_digest, relaxed.contract_digest);
     assert_ne!(strict.classifier_digest, relaxed.classifier_digest);
     response.model = "decision-revision-2".into();

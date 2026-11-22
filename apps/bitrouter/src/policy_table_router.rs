@@ -399,7 +399,7 @@ impl PolicyTableRouter {
             continuation_proposed_model: None,
             continuation_proposed_effort: None,
             continuation_adjustment: None,
-            predicted_role: Some(class.next_step_role.key().to_owned()),
+            predicted_role: Some(class.next_step.key().to_owned()),
             predicted_task_family: Some(class.task_family.key().to_owned()),
             prediction_confidence_ppm: confidence(assessment::ROLE),
             task_family_confidence_ppm: confidence(assessment::TASK),

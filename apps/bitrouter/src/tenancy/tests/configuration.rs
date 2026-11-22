@@ -1,8 +1,7 @@
 use super::*;
 mod trajectory_features;
 use bitrouter_ai::tenancy::configuration::{
-    Activation, Configuration, ConfigurationPut, ConfigurationRevision, GenerationDefaults,
-    Learning, LearningMode, Limits,
+    Activation, Configuration, ConfigurationPut, ConfigurationRevision, GenerationDefaults, Limits,
 };
 
 fn empty_document() -> Configuration {
@@ -13,38 +12,56 @@ fn empty_document() -> Configuration {
             max_output_tokens: 1024,
             temperature: 0.0,
         },
-        learning: Learning {
-            mode: LearningMode::Off,
-            max_evaluations: 0,
-        },
+        eval_publication: false,
         limits: Limits {
             active_executions: 1,
             queued_work: 0,
-            learning_jobs: 0,
         },
     }
 }
 
 #[test]
-fn gateway_profile_separates_eval_observation_from_scheduled_learning() {
+fn gateway_profile_requires_eval_publication_capability_for_opt_in() {
     use crate::tenancy::configuration::validate_profile;
 
     let mut document = empty_document();
-    assert!(validate_profile(&document).is_ok());
-    document.learning.mode = LearningMode::Observe;
+    assert_eq!(validate_profile(&document), Ok(()));
+    document.eval_publication = true;
     assert_eq!(
-        validate_profile(&document).is_ok(),
-        cfg!(feature = "eval-publication")
+        validate_profile(&document),
+        if cfg!(feature = "eval-publication") {
+            Ok(())
+        } else {
+            Err(ErrorCode::InvalidRequest)
+        }
     );
+}
 
-    document.learning.max_evaluations = 1;
-    assert_eq!(validate_profile(&document), Err(ErrorCode::InvalidRequest));
-    document.learning.max_evaluations = 0;
-    document.limits.learning_jobs = 1;
-    assert_eq!(validate_profile(&document), Err(ErrorCode::InvalidRequest));
-    document.limits.learning_jobs = 0;
-    document.learning.mode = LearningMode::Explore;
-    assert_eq!(validate_profile(&document), Err(ErrorCode::InvalidRequest));
+#[test]
+fn configuration_put_requires_explicit_eval_publication_boolean() -> Result<()> {
+    use serde_json::{Value, json};
+
+    let mut input = json!({
+        "operation_id": "prepare",
+        "expected_authority_revision": 1,
+        "installation_id": "installation",
+        "document": empty_document(),
+    });
+    for enabled in [false, true] {
+        input["document"]["eval_publication"] = json!(enabled);
+        let decoded = serde_json::from_value::<ConfigurationPut>(input.clone())?;
+        assert_eq!(decoded.document.eval_publication, enabled);
+    }
+    input["document"]
+        .as_object_mut()
+        .context("configuration document must be an object")?
+        .remove("eval_publication");
+    assert!(serde_json::from_value::<ConfigurationPut>(input.clone()).is_err());
+    for invalid in [Value::Null, json!("true")] {
+        input["document"]["eval_publication"] = invalid;
+        assert!(serde_json::from_value::<ConfigurationPut>(input.clone()).is_err());
+    }
+    Ok(())
 }
 
 fn retained(value: StoredResponse) -> Result<ConfigurationRevision> {
@@ -122,8 +139,9 @@ async fn configuration_get_authenticates_public_metadata_before_returning_it() -
     Ok(())
 }
 
+#[cfg(not(feature = "eval-publication"))]
 #[tokio::test]
-async fn gateway_rejects_activation_and_restore_of_unavailable_learning() -> Result<()> {
+async fn gateway_rejects_activation_and_restore_without_eval_publication() -> Result<()> {
     use sha2::{Digest, Sha256};
     for was_active in [false, true] {
         let fixture = Fixture::new().await?;
@@ -141,7 +159,7 @@ async fn gateway_rejects_activation_and_restore_of_unavailable_learning() -> Res
                 .map_err(failure)?,
         )?;
         let activation = Activation {
-            operation_id: "activate-learning".try_into()?,
+            operation_id: "activate-eval-publication".try_into()?,
             expected_active_revision: None,
             revision_id: revision.revision_id.clone(),
             expected_authority_revision: fixture.service.current().map_err(failure)?.revision,
@@ -161,11 +179,7 @@ async fn gateway_rejects_activation_and_restore_of_unavailable_learning() -> Res
         // Preserve a valid compiler binding for a retained document whose
         // requested profile is unavailable to this gateway.
         let mut document = revision.document;
-        document.learning.mode = if cfg!(feature = "eval-publication") {
-            LearningMode::Explore
-        } else {
-            LearningMode::Observe
-        };
+        document.eval_publication = true;
         let compiled = fixture
             .service
             .resources
