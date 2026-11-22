@@ -93,7 +93,7 @@ impl ControlledSession {
     pub async fn prompt(&self, native: &str, text: &str) -> Result<()> {
         self.handle.prompt(native, text).await
     }
-    /// Freeze a stopped prefix in Observe/passive Explore. Off returns None.
+    /// Freeze a stopped prefix when observation is enabled; otherwise return None.
     pub async fn checkpoint(&self, native: &str) -> Result<Option<CheckpointSummary>> {
         self.handle.checkpoint(native).await
     }

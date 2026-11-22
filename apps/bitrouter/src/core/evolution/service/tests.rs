@@ -663,7 +663,7 @@ fn legacy_allocation_waits_for_same_evidence_revalidation_exactly_once() -> Resu
             .closed = true;
         assert!(
             !state.apply_plan("a", different_draw, true)?,
-            "same evidence cannot replace Explore with Promote through different draws"
+            "same evidence cannot replace CollectEvidence with Promote through different draws"
         );
         state.blocks.get_mut("a").context("block missing")?.status = BlockStatus::RolledBack;
         assert!(state.reserve_trial("a", "after-rollback", 21)?.is_none());
@@ -756,7 +756,7 @@ fn resolved_unknown_feedback_keeps_admission_held_until_correction() -> Result<(
         observation.revision = "corrected".into();
     }
     let resumed = plan(&config, &data, "fixture-contract", None, 41)?;
-    assert_eq!(resumed.recommendation, Recommendation::Explore);
+    assert_eq!(resumed.recommendation, Recommendation::CollectEvidence);
     assert!(state.apply_plan("a", resumed, true)?);
     assert!(state.reserve_trial("a", "after-correction", 23)?.is_some());
     Ok(())

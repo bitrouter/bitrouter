@@ -467,7 +467,10 @@ pub fn plan(
         exposure = 0;
         (Recommendation::Hold, "trial_exposure_or_pending_limit")
     } else {
-        (Recommendation::Explore, "collect_comparable_outcomes")
+        (
+            Recommendation::CollectEvidence,
+            "collect_comparable_outcomes",
+        )
     };
     let evidence_digest = digest(data)?;
     let config_digest = config.digest()?;
@@ -724,7 +727,7 @@ mod tests {
             Some(held.challenger_propensity_ppm),
             31,
         )?;
-        assert_eq!(resumed.recommendation, Recommendation::Explore);
+        assert_eq!(resumed.recommendation, Recommendation::CollectEvidence);
         assert_eq!(
             resumed.challenger_propensity_ppm,
             config.initial_exposure_ppm
@@ -801,7 +804,7 @@ mod tests {
         baseline.latency_ms = Some(98);
         data.replace(baseline)?;
         let result = plan(&config, &data, "contract", None, 31)?;
-        assert_eq!(result.recommendation, Recommendation::Explore);
+        assert_eq!(result.recommendation, Recommendation::CollectEvidence);
         assert_eq!(result.challenger.assigned_sessions, 0);
         assert_eq!(
             result.challenger_propensity_ppm,
@@ -835,7 +838,7 @@ mod tests {
                 data.replace(item)?;
             }
             let result = plan(&config, &data, "contract", Some(50_000), 31)?;
-            assert_eq!(result.recommendation, Recommendation::Explore);
+            assert_eq!(result.recommendation, Recommendation::CollectEvidence);
             assert_eq!(result.challenger_propensity_ppm, 50_000);
         }
         Ok(())
@@ -851,7 +854,7 @@ mod tests {
             None,
             4,
         )?;
-        assert_eq!(result.recommendation, Recommendation::Explore);
+        assert_eq!(result.recommendation, Recommendation::CollectEvidence);
         assert!(result.challenger_propensity_ppm > 0);
         assert!(result.challenger_propensity_ppm <= config.initial_exposure_ppm);
         let mut chosen = 0;
