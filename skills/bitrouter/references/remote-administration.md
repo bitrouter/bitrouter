@@ -109,9 +109,9 @@ archive compression does not prove space was returned to the filesystem.
 Monitor real disk/WAL growth and maintain headroom: other filesystem users and
 SQLite write amplification can still cause ENOSPC after an admission probe.
 
-Startup validates the current dataset before serving. An insufficient
-validation budget blocks readiness. Keep a consistent stopped-writer backup
-of the database and its external credentials.
+Startup validates all retained pages of the current dataset before serving. An
+insufficient validation budget blocks readiness. Keep a consistent stopped-writer
+backup of the database and its external credentials.
 
 Submission bounds upload and admission, not the lifetime of an admitted stream.
 `ordered_attempt_limit` bounds explicit ordered submissions to 1–64 candidates
@@ -135,6 +135,13 @@ explicit `health_group_id` on eligible members. Group rules and membership are
 immutable. Read the capabilities endpoint before provisioning and consult the
 [resource contract](../../../docs/specs/service-api/README.md#resource-provisioning)
 for exact fields and semantics.
+
+The current SQLite tenant baseline uses a format-6 authority header and a
+persistent admission index. Publication and import record the index witnesses
+with the resource revisions. Startup authenticates all retained definitions
+and checks their witnesses through read-only validation before readiness. A
+missing or inconsistent witness prevents startup.
+
 Use `observe_rate_group_id` only for an explicit same-owner read-only association.
 It can expose a measured shared count while `rate:null` remains uncharged;
 absence is unavailable, never an assumed zero. Read through the existing operator
@@ -153,6 +160,11 @@ Repeated cancellation does not renew either budget. Late confirmed joins can
 release capacity, but genuine cleanup failure keeps admission fenced. Unknown
 effects remain unknown and inference is never replayed. Successful delivery
 still waits for durable receipt acknowledgement.
+
+With exclusive startup custody, the gateway settles retained ordered intents as
+unknown before dispatch becomes available. An interrupted startup leaves
+uncommitted intents for the next startup. Committed receipts keep their
+execution identities.
 
 `resource_origins` defaults to empty, which keeps tenant-managed route
 provisioning disabled. Installation operators remain trusted. An enabled host

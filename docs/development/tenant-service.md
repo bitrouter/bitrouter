@@ -69,9 +69,8 @@ ordinary, safety and completion queues rotate service so each can make progress.
 Startup validates the entire directory and retained authority through bounded
 keyset pages, including all retained operation IDs. Page size and working bytes
 bound temporary memory; no successful prefix substitutes for the complete scan.
-Current authority validation does not apply former directory or lifetime
-operation count ceilings. Incompatible stores are refused rather than
-upgraded during startup. Runtime reads load only the caller and exact
+Current authority validation has no directory or lifetime operation count
+ceiling. Runtime reads load only the caller and exact
 dependency closure under read custody. The authority registry retains a small
 publication header and bounded leased views. Committed deltas update those views
 under a common publication gate; unrelated mutations do not invalidate a native caller solely
@@ -107,16 +106,35 @@ revision explicitly. The [operator guide](../../skills/bitrouter/references/remo
 describes setup and management operations; permission, CAS and replay behavior
 are defined in the canonical service API.
 
-Operational profile publication uses the same authority writer and immutable
-resource store. The protection index is derived from every authenticated
-profiled-route revision, including revoked and non-head history; there is no
-second mutable protection table. The snapshot publishes protection with the
-resource transaction, and startup reconstructs it before readiness. Existing
-catalog limits bound this index. Retention must never evict those definitions to
-recover capacity. Profiled configuration uses its authenticated compiler subtype.
-The compiled document keeps each profiled projection in its original
-immutable artifact. Its visible execution route is reconstructed once from that
-artifact and the bound configuration defaults. The stored ordinary route sequence
+The current tenant baseline includes a format-6 authority header, the persistent
+admission index and a dedicated index for resource lifecycle head lookups.
+`tenancy_admission_index` uses byte-exact keys. It stores a reference to an
+authenticated immutable revision for each Policy or profile key, permanently
+protected route key and owner/health-group pair. Rotation and revocation
+preserve the witness and original revision. Immutable rules let one
+authenticated witness validate a rotation without loading every member of
+the group.
+
+Under exclusive startup custody, the service authenticates all retained
+resource revisions in bounded pages and verifies their admission witnesses,
+immutable rules and managed profile heads. These read-only checks refuse
+missing or mismatched witnesses before startup imports resources or publishes
+readiness. The index relies on the same database transaction integrity as
+persisted heads and grants.
+
+Resource publication and import retain each new revision, its admission
+witnesses and its lifecycle metadata in the same transaction. Managed
+publication also commits the lifecycle CAS and operation replay result in that
+transaction. Commands and authority reads batch relevant index keys and load
+exact pins and current heads in one authority view. Both the pinned revision and
+the current head are checked for revocation. Publication updates affected live
+views before final-send checks. View memory follows selected references and
+reserves space for head updates per selected key.
+
+The profiled configuration envelope uses format 4 independently of the authority
+header. Each profiled projection stays in its original immutable artifact. The
+gateway reconstructs the visible execution route once from that artifact and
+the bound configuration defaults. The stored ordinary route sequence
 must match the corresponding original artifacts exactly. Reconstruction uses the
 existing cumulative byte bounds and charges the shared operation budget before
 copying. Immutable resource artifacts and hidden ordinary child projections keep
@@ -135,9 +153,9 @@ and before constructing or authenticating the provider request. A successful
 entry charges its shared window once and supplies a private single-use arm
 token. Cancellation, construction failure or a later authority refusal does not
 refund that timestamp; arming rechecks authority without charging again. Exact
-60-second timestamps remain counted. Windows have a 16 MiB timestamp-allocation
-budget, independent of the profile's RPM ceiling; pressure refuses locally and
-never evicts live history. Retained-resource limits also bound group/health keys.
+60-second timestamps remain counted. Rate windows have a 16 MiB allocation
+budget independent of the profile's RPM ceiling. When that budget is full, the
+gateway refuses new charges and preserves the live window.
 
 Manifest observation takes one synchronous read snapshot for all candidates.
 Its optional read-only group association shares the same counter namespace but
@@ -262,6 +280,14 @@ amplification and filesystem exhaustion still require measurement and fault
 qualification. Terminal archived history is accounted separately from live
 receipt bytes; neither operation IDs nor retained history has a lifetime quota.
 
+Under exclusive startup custody, stopped-owner recovery validates retained
+ordered intents in bounded keyset pages before converting them to unknown
+receipts. Admission limits for new work do not cap the recovery backlog. Each
+conversion commits its receipt, usage evidence and intent retirement together.
+On restart, recovery continues with the remaining intents and preserves the
+committed receipt bytes and execution identities. The recovery path writes the
+local ledger with provider effects marked unknown.
+
 Unknown obligations default to admission budgets of 100 per tenant and 1,000
 per instance, configurable in the same group. The transactionally maintained
 indexed projection covers both receipts and pending OAuth work, deduplicated by
@@ -275,12 +301,12 @@ Indexed, resumable maintenance escalates unresolved work after 15 minutes
 without pruning or reclassifying it. The 30-second cleanup window is not
 permission to forget an uncertain transaction or an unjoined producer.
 
-The current dataset baseline and authority schema are validated before service
-startup or offline restore. Validation preserves authority, receipt history and
+Startup and offline restore require the current dataset baseline and format-6
+tenant authority header. Validation preserves authority, receipt history and
 existing cleanup obligations. See the
-[offline evidence and restore commands](../../skills/bitrouter/references/cli.md#local-db-only-offline-evidence)
-for current-format backup procedures. Public request, attempt and evidence limits remain independent of host capacity, as do supported offline
-artifact limits and declared provisioning profiles.
+[offline evidence and restore commands](../CLI.md#offline-db-evidence-unix-sqlite-only)
+for current-format backup procedures. Public request, attempt and evidence
+limits and offline bundle limits remain independent of host capacity.
 
 ## Receipt archive and physical storage
 
