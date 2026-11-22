@@ -352,7 +352,7 @@ mod tests {
     async fn database() -> Result<DatabaseConnection> {
         let db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&db).await?;
-        sql(&db, "INSERT INTO tenancy_installation (singleton,installation_id,schema_version,authority_revision,operation_ids,safety_operation_ids,saturated,created_at) VALUES (1,'installation',5,3,0,0,0,'2026-01-01T00:00:00Z')").await?;
+        sql(&db, &format!("INSERT INTO tenancy_installation (singleton,installation_id,schema_version,authority_revision,operation_ids,safety_operation_ids,saturated,created_at) VALUES (1,'installation',{},3,0,0,0,'2026-01-01T00:00:00Z')", crate::tenancy::AUTHORITY_SCHEMA_VERSION)).await?;
         Ok(db)
     }
 

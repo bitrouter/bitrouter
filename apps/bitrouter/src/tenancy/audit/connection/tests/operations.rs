@@ -68,8 +68,8 @@ async fn seed(url: &str, count: usize, wide: bool) -> Result<()> {
         created_at: "2026-01-01T00:00:00Z".into(),
     });
     db.execute(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
-        "INSERT INTO tenancy_installation(singleton,installation_id,schema_version,authority_revision,operation_ids,safety_operation_ids,saturated,created_at) VALUES(1,?,5,10,0,0,0,'2026-01-01T00:00:00Z')",
-        [state.installation.as_str().into()],
+        "INSERT INTO tenancy_installation(singleton,installation_id,schema_version,authority_revision,operation_ids,safety_operation_ids,saturated,created_at) VALUES(1,?,?,10,0,0,0,'2026-01-01T00:00:00Z')",
+        [state.installation.as_str().into(), crate::tenancy::AUTHORITY_SCHEMA_VERSION.into()],
     )).await?;
     let principal = PrincipalId::for_control_credential(&if wide {
         "p".repeat(119)
