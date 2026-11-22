@@ -188,7 +188,7 @@ async fn pinned_revision_survives_new_revision_and_resource_source_loss() -> Res
         "DELETE FROM tenancy_resource_revisions".to_owned(),
     ))
     .await?;
-    let reopened = Resources::with_key(resources.installation.clone(), [7; 32])?;
+    let reopened = Resources::with_key(resources.installation.clone(), *WRAPPING_KEY)?;
     let restored1 = checked(reopened.open_execution(&row1))?;
     let restored1 = selected(&restored1, "visible", ApiProtocol::ChatCompletions)?;
     for route in [&*route1, &*restored1] {
@@ -429,7 +429,7 @@ async fn credentials_are_exact_owned_static_slots_with_no_fallback() -> Result<(
             .await,
         Err(ErrorCode::InvalidRequest)
     ));
-    let wrong_key = Resources::with_key(resources.installation.clone(), [8; 32])?;
+    let wrong_key = Resources::with_key(resources.installation.clone(), wrong_wrapping_key())?;
     assert!(matches!(
         wrong_key.credential(&db, &original).await,
         Err(ErrorCode::AuthorityUnavailable)

@@ -16,6 +16,15 @@ mod native_generate_content;
 mod routing;
 pub(in crate::tenancy::resources) mod validation;
 
+// Independent readers in restart tests must reuse the generated wrapping key.
+static WRAPPING_KEY: std::sync::LazyLock<[u8; 32]> = std::sync::LazyLock::new(rand::random);
+
+fn wrong_wrapping_key() -> [u8; 32] {
+    let mut key = *WRAPPING_KEY;
+    key[0] ^= 1;
+    key
+}
+
 fn reference(owner: &str, kind: ResourceKind, name: &str) -> Result<ResourceRef> {
     Ok(ResourceRef {
         owner_kind: OwnerKind::Tenant,
@@ -29,7 +38,7 @@ fn reference(owner: &str, kind: ResourceKind, name: &str) -> Result<ResourceRef>
 async fn fixture() -> Result<(DatabaseConnection, Resources)> {
     let db = crate::db::connect("sqlite::memory:").await?;
     crate::db::run_migrations(&db).await?;
-    let resources = Resources::with_key("installation".to_owned().try_into()?, [7; 32])?;
+    let resources = Resources::with_key("installation".to_owned().try_into()?, *WRAPPING_KEY)?;
     crate::tenancy::store::initial_header(&db, chrono::Utc::now()).await?;
     db.execute(Statement::from_sql_and_values(
         DatabaseBackend::Sqlite,
@@ -147,7 +156,7 @@ async fn retained_source_is_encrypted_immutable_and_survives_restart_without_man
         .await
         .is_err()
     );
-    let reopened = Resources::with_key(resources.installation.clone(), [7; 32])?;
+    let reopened = Resources::with_key(resources.installation.clone(), *WRAPPING_KEY)?;
     let document = document(vec![reference], None)?;
     let compiled = compile(&reopened, &db, &document).await?;
     assert_eq!(compiled.dependencies.len(), 2);
@@ -322,7 +331,7 @@ async fn authenticated_metadata_and_storage_failures_have_distinct_error_classes
     )?;
     let tenant: TenantId = "tenant".to_owned().try_into()?;
     let revision: RevisionId = "r".to_owned().try_into()?;
-    let wrong = Resources::with_key(resources.installation.clone(), [8; 32])?;
+    let wrong = Resources::with_key(resources.installation.clone(), wrong_wrapping_key())?;
     assert!(matches!(
         wrong.compile(&db, &tenant, &revision, &doc).await,
         Err(ErrorCode::AuthorityUnavailable)
@@ -564,7 +573,7 @@ async fn wrong_startup_key_cannot_import_rows_before_rejecting_the_old_catalog()
         }))?,
     )
     .await?;
-    let wrong = Resources::with_key(resources.installation.clone(), [8; 32])?;
+    let wrong = Resources::with_key(resources.installation.clone(), wrong_wrapping_key())?;
     assert!(wrong.initialize_catalog(&db, Some(&path)).await.is_err());
     assert_eq!(storage::references(&db).await?.len(), 1);
     resources.initialize_catalog(&db, None).await?;

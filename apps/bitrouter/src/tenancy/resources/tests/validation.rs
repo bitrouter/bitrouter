@@ -105,12 +105,12 @@ async fn retained_validation_authenticates_all_binding_fields_and_ciphertext() -
         ));
     }
     let other_installation =
-        Resources::with_key("other-installation".to_owned().try_into()?, [7; 32])?;
+        Resources::with_key("other-installation".to_owned().try_into()?, *WRAPPING_KEY)?;
     assert!(matches!(
         other_installation.validate_compiled(&original),
         Err(ErrorCode::AuthorityUnavailable)
     ));
-    let wrong_key = Resources::with_key(resources.installation.clone(), [8; 32])?;
+    let wrong_key = Resources::with_key(resources.installation.clone(), wrong_wrapping_key())?;
     assert!(matches!(
         wrong_key.validate_compiled(&original),
         Err(ErrorCode::AuthorityUnavailable)
