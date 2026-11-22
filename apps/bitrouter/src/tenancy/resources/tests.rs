@@ -28,6 +28,13 @@ async fn fixture() -> Result<(DatabaseConnection, Resources)> {
     let db = crate::db::connect("sqlite::memory:").await?;
     crate::db::run_migrations(&db).await?;
     let resources = Resources::with_key("installation".to_owned().try_into()?, [7; 32])?;
+    crate::tenancy::store::initial_header(&db, chrono::Utc::now()).await?;
+    db.execute(Statement::from_sql_and_values(
+        DatabaseBackend::Sqlite,
+        "UPDATE tenancy_installation SET installation_id=? WHERE singleton=1",
+        [resources.installation.as_str().into()],
+    ))
+    .await?;
     Ok((db, resources))
 }
 

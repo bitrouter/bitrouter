@@ -2,6 +2,17 @@ use super::*;
 use crate::tenancy::actor::provider_technical::tests::Point;
 use bitrouter_ai::tenancy::execution::Outcome;
 
+async fn required_migration_ledger(db: &sea_orm::DatabaseConnection) -> Result<Vec<(String, i64)>> {
+    db.query_all(sea_orm::Statement::from_string(
+        sea_orm::DatabaseBackend::Sqlite,
+        "SELECT version,applied_at FROM seaql_migrations ORDER BY version",
+    ))
+    .await?
+    .iter()
+    .map(|row| Ok((row.try_get("", "version")?, row.try_get("", "applied_at")?)))
+    .collect()
+}
+
 #[tokio::test]
 async fn pending_optional_sql_never_owns_second_authority_credential_receipt_or_stop() -> Result<()>
 {
@@ -182,6 +193,7 @@ async fn healthy_required_48_service_survives_optional_name_conflict_and_real_dd
         let db = crate::db::connect_tenancy(&format!("sqlite://{}", lease.path.display()), &lease)
             .await?;
         crate::db::run_migrations(&db).await?;
+        let required_ledger = required_migration_ledger(&db).await?;
         if conflict {
             db.execute_unprepared("CREATE TABLE tenancy_provider_technical_facts(retain TEXT NOT NULL,technical_json TEXT NOT NULL); INSERT INTO tenancy_provider_technical_facts VALUES('original-unknown-object',printf('%.*c',1024,'x'))").await?;
         }
@@ -264,16 +276,10 @@ async fn healthy_required_48_service_survives_optional_name_conflict_and_real_dd
                 ensure!(response.json::<Option<bitrouter_ai::tenancy::provider_technical_facts::ProviderTechnicalFactsV1>>().await?.is_none());
                 ensure!(!crate::db::migration::provider_technical::available(&harness.fixture.db).await?);
             }
-            let version = harness
-                .fixture
-                .db
-                .query_one(sea_orm::Statement::from_string(
-                    sea_orm::DatabaseBackend::Sqlite,
-                    "SELECT count(*) AS count FROM seaql_migrations WHERE version LIKE '%000049%'",
-                ))
-                .await?
-                .context("required ledger")?;
-            ensure!(version.try_get::<i64>("", "count")? == 0);
+            ensure!(
+                required_migration_ledger(&harness.fixture.db).await? == required_ledger,
+                "optional schema failure changed the required migration ledger"
+            );
             if conflict {
                 let row = harness
                     .fixture
