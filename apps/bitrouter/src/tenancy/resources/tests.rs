@@ -12,6 +12,7 @@ mod execution;
 mod format;
 mod native_generate_content;
 mod routing;
+mod startup_import;
 pub(in crate::tenancy::resources) mod validation;
 
 fn reference(owner: &str, kind: ResourceKind, name: &str) -> Result<ResourceRef> {
@@ -58,7 +59,7 @@ fn route(owner: &str, name: &str, model: &str) -> Result<Value> {
 
 async fn import(resources: &Resources, db: &DatabaseConnection, rows: Vec<Value>) -> Result<()> {
     resources
-        .provision_bytes(
+        .seed_history_bytes(
             db,
             &serde_json::to_vec(&json!({
                 "format":1, "installation_id":resources.installation, "resources":rows

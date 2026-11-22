@@ -27,7 +27,7 @@ async fn provision(pool: bool) -> Result<(Fixture, ResourceRef, ResourceRef)> {
     };
     let route = reference(ResourceKind::Route, "literal-route")?;
     let slot = reference(ResourceKind::Credential, "static-slot")?;
-    resources.provision_bytes(&fixture.db, &serde_json::to_vec(&json!({
+    resources.seed_history_bytes(&fixture.db, &serde_json::to_vec(&json!({
         "format":1,"installation_id":fixture.installation,"resources":[
             {"reference":slot,"definition":{"kind":"credential","credential":{"type":"api_key","data":{"value":"conformance-only-secret"}}}},
             {"reference":route,"definition":{"kind":"route","selector":"mock:model","policy":null,

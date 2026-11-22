@@ -182,23 +182,16 @@ async fn shared_probe_stream_drop_releases_group_without_certifying_late_termina
 }
 
 #[tokio::test]
-async fn actual_resource_put_version_dispatch_refuses_raw_ambiguity_and_normalizes_exact_numbers()
+async fn removed_profile_writer_refuses_raw_and_normalized_versions_without_side_effects()
 -> Result<()> {
     let harness = harness(&[grouped(100)?], false, false).await?;
-    let command = ResourcePutV2 {
-        format: 2,
-        operation_id: "raw-shared-member".try_into()?,
-        installation_id: harness.fixture.installation.clone(),
-        key: ResourceRef {
-            resource_id: "new-member".try_into()?,
-            ..reference(0)?
-        }
-        .key(),
-        expected_revision: None,
-        definition: DefinitionV2::AdmissionProfileV2 {
-            profile: grouped(7)?,
-        },
-    };
+    let key = ResourceRef {
+        resource_id: "new-member".try_into()?,
+        ..reference(0)?
+    }
+    .key();
+    let command = json!({"format":2,"operation_id":"raw-shared-member","installation_id":harness.fixture.installation,
+        "key":key,"expected_revision":null,"definition":{"kind":"admission_profile_v2","profile":grouped(7)?}});
     let raw = serde_json::to_string(&command)?;
     let client = reqwest::Client::new();
     let send = |body: String| {
@@ -251,7 +244,7 @@ async fn actual_resource_put_version_dispatch_refuses_raw_ambiguity_and_normaliz
         ensure!(
             after.revision == revision
                 && after.resource_lifecycle.len() == count
-                && after.resource_lifecycle.head(&command.key).is_none()
+                && after.resource_lifecycle.head(&key).is_none()
         );
     }
     let normalized = raw
@@ -259,15 +252,12 @@ async fn actual_resource_put_version_dispatch_refuses_raw_ambiguity_and_normaliz
         .replace("\"schema_version\":2", "\"schema_version\":2.0")
         .replace("\"member_rpm\":7", "\"member_rpm\":7e0");
     let response = send(normalized).await?;
-    ensure!(response.status().is_success());
-    let original: bitrouter_ai::tenancy::operation::OperationResult = response.json().await?;
-    let replay = harness
-        .control(true, HttpVersion::Http1Only)?
-        .put_resource_v2(&harness.fixture.tenant, &command)
-        .await?;
+    ensure!(response.status() == StatusCode::BAD_REQUEST);
+    let after = harness.fixture.service.current().map_err(failure)?;
     ensure!(
-        original.resource_revision.is_some()
-            && original.resource_revision == replay.resource_revision
+        after.revision == revision
+            && after.resource_lifecycle.len() == count
+            && after.resource_lifecycle.head(&key).is_none()
     );
     ensure!(harness.observed()?.is_empty());
     harness.fixture.service.shutdown().await?;

@@ -198,7 +198,7 @@ pub trait RoutingTable: Send + Sync {
 /// and `params` entries are inserted into
 /// [`GenerationParams::supplemental_extra`](bitrouter_ai::types::GenerationParams::supplemental_extra)
 /// for keys not already present.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PromptOverrides {
     /// System prompt to set, if the preset defines one.
     pub system_prompt: Option<String>,

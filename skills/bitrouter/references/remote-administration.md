@@ -134,14 +134,15 @@ authenticates and consumes each attempt before sending it upstream. See the
 
 Ordered selections require an explicit `admission_mode` (`legacy` or
 `profiled_v1`), matching the retained root; missing mode is not a default.
-Installation authority alone can provision admission profiles or profiled
-routes through the existing resource API. Profiles use explicit rate/health
-rules; zero RPM is valid local refusal. A profiled route permanently protects
-its key, including old revisions and configurations. Do not downgrade a denied
-profiled request to legacy or v1. V1 profiles keep local health. For explicit
-shared health across distinct members, verify enabled V2 resource discovery and
-use format-two profile puts with `health_group_id`; never downgrade unsupported
-V2 writes. Group rules and membership remain immutable, including revoked history.
+Platform credentials, routes and profiles come from ordinary operator files;
+management APIs accept only tenant-owned credentials, routes and policies.
+Installation authority does not enable platform resource puts or revocation.
+See [file-configured tenant catalog](#file-configured-tenant-catalog) below.
+Profiles use explicit rate/health rules; zero RPM is valid local refusal.
+Retained profiled routes permanently protect their keys, including old revisions
+and configurations. Do not downgrade a denied profiled request to legacy or v1.
+Historical V1 profiles keep local health; V2 profiles name their shared
+`health_group_id`. Retained group rules remain immutable, including revoked history.
 New authority stores use format six. Supported upgrades preserve the historical
 writer fences through formats three, four, and five before enabling the permanent
 admission index at six. Startup backfills older retained resources in resumable
@@ -177,13 +178,15 @@ may list up to 256 distinct HTTP(S) origins (for example,
 queries, fragments and duplicate normalized origins are rejected. This is a
 host-controlled allowlist, not a field in a tenant draft.
 
-`tenancy.resource_import` optionally imports an operator JSON resource manifest
-at startup; relative paths use the server process working directory. Set
+`tenancy.resource_import` optionally imports a JSON manifest of Tenant-owned,
+unprofiled resources at startup; relative paths use the server process working
+directory. OperatorPool resources and new admission/profiled/native-profiled
+definitions are refused, whether or not `tenancy.catalog` is enabled. Set
 `tenancy.wrapping_key_env` to an environment variable holding a stable base64
 32-byte key. Import requires that key, and retained resources require the same
 key on later restarts even after removing the import path. These settings are
 restart-only. Never treat a replacement key as automatic rotation. The importer
-accepts explicit route/policy definitions, static API-key credential slots, and
+accepts explicit tenant route/policy definitions, static BYOK credential slots, and
 explicit Claude Code OAuth seeds pinned to the known Anthropic registration
 under the [owned OAuth profile](../../../docs/development/tenancy-auxiliary.md).
 Ambient credential backends and native request checks remain unsupported. Definitions
@@ -191,6 +194,9 @@ are retained as authenticated ciphertext, and a changed definition requires a
 new qualified resource revision. Importing resources does not grant tenant access
 or activate a configuration. Never put resource-import definitions or secret key
 values into a tenant draft; drafts contain resource references only.
+Removing the import file does not remove retained platform artifacts: they keep
+their private historical authentication and authorized read paths. Resubmitting
+those artifacts does not reenable the old platform writer.
 
 Use the HTTP `TenancyClient` for tenant management or the `bro tenancy`
 configuration adapter below. The tenant-operation namespace
@@ -220,6 +226,101 @@ cannot bypass the dispatch capability fence. Historical evaluation rows remain
 legacy records after schema upgrades; enabling tenancy does not assign them to a
 tenant. Signed experiments also require qualified tenant exploration admission;
 an Observe configuration does not authorize an active experiment.
+
+## File-configured tenant catalog
+
+Configure endpoints, protocols and credentials in the usual `providers`,
+`models` and `routers` sections; see [providers and routing](providers.md).
+`tenancy.catalog` exposes selected ordinary selectors under explicit public
+route IDs. For example, in an otherwise configured authenticated tenancy host:
+
+```yaml
+providers:
+  upstream:
+    api_base: https://api.example.com/v1
+    api_key: ${UPSTREAM_API_KEY}
+    api_protocol: [{"*": chat_completions}]
+    models: [{id: native-model}]
+models:
+  acme/example:
+    endpoints: [{provider: upstream, service_id: native-model}]
+tenancy:
+  enabled: true
+  wrapping_key_env: TENANCY_WRAPPING_KEY
+  ordered_attempt_limit: 64
+  catalog:
+    pool_id: platform
+    routes:
+      model.acme.example: acme/example
+    profiles:
+      upstream/default/acme/example:
+        schema_version: 2
+        rate: {rate_group_id: upstream, member_rpm: 100}
+        health:
+          rules: availability_v1
+          failure_threshold: 3
+          transient_cooldown_seconds: 30
+          persistent_cooldown_seconds: 300
+          probe_lease_seconds: 10
+        health_group_id: upstream.acme.example
+        fallback: ordered_terminal_rejections_v1
+```
+
+Use the deployment's existing secret delivery for environment values; keep the
+stable base64 32-byte wrapping key across restarts and old receipt reads.
+The example omits the required database, authenticated server and control
+settings already described above. Catalog configuration is loaded at startup;
+deliver files and restart through the operator's normal deployment procedure.
+It does not require `resource_import`, a manifest generator or HTTP bootstrap.
+
+Each profile map key is `provider/account/canonical_model`: only the first two
+slashes separate fields, so a canonical selector such as `acme/example` retains
+its slash. Use `default` in the lookup key for an unlabeled configured account;
+readback still reports the actual account as null. Every exposed resolved target
+needs an exact membership entry. Route IDs are explicit configuration, not a
+Core-generated replacement or positional mapping. There is no catalog-directory
+count ceiling; individual IDs, per-root descriptors, request candidate bounds
+and configured runtime budgets still apply.
+
+Choose `rate_group_id` for the intended shared provider window, with the actual
+model/member RPM. Choose `health_group_id` per provider/canonical model and rules:
+different accounts for that model may share health while different models remain
+independent. All members of one health group must have identical complete health
+rules. Health and its group are both null when disabled. A provider without a
+platform key may still supply configured BYOK templates; the platform manifest
+omits unsendable entries instead of selecting another provider implicitly.
+
+Authorized clients read
+`GET /control/v1/tenants/{tenant}/catalog/routes/{route}/candidates` with an explicit
+`inbound_protocol`, then use the returned template/source identities. Never infer
+provider, account, model or funding from opaque IDs. Templates expose separate
+`platform_profile` and neutral `byok_profile` references. Prepare a final mixed
+chain with `POST /control/v1/tenants/{tenant}/catalog/selections`: null credential
+selects a platform slot; an existing exact tenant-owned credential selects BYOK.
+An optional BYOK-only `route_ref` preserves an existing tenant route's approved
+custom base, subject to current grants, the same exact credential and otherwise
+matching configured target. It cannot retarget a platform credential.
+The API accepts neither endpoint URLs nor inline secrets. Preparation writes no
+tenant catalog copy or management operation, and grants no send permission.
+
+Send the unchanged prepared instructions in the reserved top-level JSON member
+`bitrouter_catalog_selection` through ordered v2. SDK callers use
+`TenancyClient::prepare_catalog_selection` and
+`OrderedTenantGateway::with_catalog_selection`. The selection is limited to
+64 KiB and 1–64 candidates, further bounded by the host attempt setting. Core
+strips it before provider decoding. Platform and BYOK candidates share one
+execution, fallback order, receipt and usage-evidence chain; actual sends still
+check current tenant grants, credential use and mandatory platform membership.
+Historical receipts stay readable, but there is no persisted historical catalog
+graph that grants fresh sends after a file change. See the
+[catalog service contract](../../../docs/specs/service-api/README.md#file-configured-catalog-and-request-local-composition).
+
+File generation defaults fill omitted typed values on configured Chat,
+Messages and Responses requests; explicit caller values take precedence.
+A root with nonempty file defaults is not exposed for configured Generate
+Content. Other roots and application startup remain available. Explicit native
+request-envelope defaults remain supported on eligible roots; the ordinary OSS
+gateway keeps its existing behavior.
 
 ## Tenant configuration commands
 

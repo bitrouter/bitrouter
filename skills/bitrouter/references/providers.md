@@ -168,6 +168,27 @@ providers:
 
 `api_protocol` accepts an ordered glob-prefix pattern map: `[{ "claude-*": messages }, { "gpt-5.5-codex": responses }, { "*": chat_completions }]` is valid and matches most-specific-first.
 
+## Messages credential presentation
+
+Messages-compatible providers can declare `auth_scheme: bearer` when their
+endpoint requires `Authorization: Bearer`. Without an explicit or inherited
+scheme, Messages uses the native `x-api-key` header;
+`auth_scheme: x-api-key` selects it explicitly. BitRouter
+sends exactly one credential header, including for configured account slots.
+
+```yaml
+providers:
+  messages-upstream:
+    api_base: https://api.example.com/anthropic
+    api_key: "${MESSAGES_API_KEY}"
+    api_protocol: [{"*": messages}]
+    auth_scheme: bearer
+```
+
+This setting controls the Messages transport. Chat Completions and Responses
+retain their existing transport authentication. Unsupported scheme names are
+configuration errors.
+
 ## Multi-account (failover or balance)
 
 When you hold two subscriptions to the same upstream, expand the provider into accounts:
@@ -266,7 +287,11 @@ providers:
     api_key: "${OPENAI_DEV_KEY}"     # only the credential differs
 ```
 
-`derives` flows `api_protocol`, `rate_limits`, `models`, `tags`, and `auto_discover` from the named provider into empty fields of this one.
+`derives` flows `api_protocol`, `rate_limits`, `models`, `tags`, and `auto_discover`
+from the named provider into empty fields of this one. It also inherits an
+explicit `auth_scheme` when the child omits it; an explicit child value overrides
+the parent, including `x-api-key` overriding an inherited `bearer`. Configure
+the child's own `api_base` and credential: these fields are not inherited.
 
 ## Virtual models
 

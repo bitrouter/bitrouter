@@ -100,6 +100,12 @@ impl Caches {
 
 #[derive(PartialEq, Eq)]
 enum ExecutionKey {
+    Catalog {
+        authority_revision: u64,
+        tenant: Box<str>,
+        revision: Box<str>,
+        route: Box<str>,
+    },
     Dispatch {
         authority_revision: u64,
         tenant: Box<str>,
@@ -119,6 +125,12 @@ impl ExecutionKey {
         // Validated identities have finite wire bounds; Box<str> has no spare
         // capacity. Inline key storage is charged by the cache's entry vector.
         match self {
+            Self::Catalog {
+                tenant,
+                revision,
+                route,
+                ..
+            } => tenant.len() + revision.len() + route.len(),
             Self::Dispatch {
                 tenant, revision, ..
             } => tenant.len() + revision.len(),
@@ -275,10 +287,59 @@ impl Service {
         let authority_revision = self
             .with_dispatch_authority(submission, |state| Ok(u64::from(state.revision)))
             .map_err(Failure::from)?;
-        let key = ExecutionKey::Dispatch {
-            authority_revision,
-            tenant: submission.tenant.as_str().into(),
-            revision: submission.binding.execution_revision.as_str().into(),
+        let instructions = submission.binding.catalog_selection.as_ref();
+        let catalog = self.resources.configured().filter(|catalog| {
+            instructions.map_or(
+                catalog.revision == submission.binding.execution_revision,
+                |input| input.catalog_revision == catalog.revision,
+            )
+        });
+        let configured_route = if let Some(input) = instructions {
+            let catalog = catalog.ok_or(ErrorCode::CapabilityMismatch)?;
+            let selection = submission
+                .binding
+                .selection
+                .as_ref()
+                .ok_or(ErrorCode::InvalidRequest)?;
+            let revision = catalog
+                .selection_revision(&self.resources, input)
+                .map_err(|_| self.unavailable())?;
+            if revision != submission.binding.execution_revision
+                || selection.route.resource_id != input.route_id
+                || selection.route.revision_id != revision
+                || selection.candidate_indices.len() != input.candidates.len()
+                || selection
+                    .candidate_indices
+                    .iter()
+                    .enumerate()
+                    .any(|(i, ordinal)| usize::from(*ordinal) != i)
+            {
+                return Err(ErrorCode::CapabilityMismatch.into());
+            }
+            Some(input.route_id.as_str())
+        } else {
+            catalog.and_then(|catalog| {
+                submission
+                    .binding
+                    .selection
+                    .as_ref()
+                    .filter(|selection| catalog.contains(&selection.route))
+                    .map(|selection| selection.route.resource_id.as_str())
+            })
+        };
+        let key = if let Some(route) = configured_route {
+            ExecutionKey::Catalog {
+                authority_revision,
+                tenant: submission.tenant.as_str().into(),
+                revision: submission.binding.execution_revision.as_str().into(),
+                route: route.into(),
+            }
+        } else {
+            ExecutionKey::Dispatch {
+                authority_revision,
+                tenant: submission.tenant.as_str().into(),
+                revision: submission.binding.execution_revision.as_str().into(),
+            }
         };
         if let Some(revision) = self
             .caches
@@ -301,22 +362,50 @@ impl Service {
             self.check_cached_revision(submission, &revision)?;
             return Ok(revision);
         }
-        let retained = tokio::time::timeout_at(
-            self.read_deadline(submission),
-            configuration_store::configuration(
-                &self.db,
-                &submission.tenant,
-                &submission.binding.execution_revision,
-            ),
-        )
-        .await
-        .map_err(|_| self.read_timeout(submission))?
-        .map_err(|_| self.unavailable())?
-        .ok_or_else(|| Failure::from(ErrorCode::NotFound))?;
-        let revision = self
-            .resources
-            .open_execution(&retained)
-            .map_err(|_| self.unavailable())?;
+        let revision = if let (Some(catalog), Some(route)) = (catalog, configured_route) {
+            let authority_revision = authority_revision
+                .try_into()
+                .map_err(|_| self.unavailable())?;
+            if let Some(input) = instructions {
+                let owned = tokio::time::timeout_at(
+                    self.read_deadline(submission),
+                    catalog.owned_targets(&self.resources, &self.db, &submission.tenant, input),
+                )
+                .await
+                .map_err(|_| Failure::from(ErrorCode::CapacityExceeded))?
+                .map_err(|_| Failure::from(ErrorCode::InvalidRequest))?;
+                catalog
+                    .prepare_with_targets(
+                        &self.resources,
+                        &submission.tenant,
+                        input,
+                        authority_revision,
+                        &owned,
+                    )
+                    .map_err(|_| self.unavailable())?
+                    .0
+            } else {
+                catalog
+                    .execution(&submission.tenant, route, authority_revision)
+                    .map_err(|_| self.unavailable())?
+            }
+        } else {
+            let retained = tokio::time::timeout_at(
+                self.read_deadline(submission),
+                configuration_store::configuration(
+                    &self.db,
+                    &submission.tenant,
+                    &submission.binding.execution_revision,
+                ),
+            )
+            .await
+            .map_err(|_| self.read_timeout(submission))?
+            .map_err(|_| self.unavailable())?
+            .ok_or_else(|| Failure::from(ErrorCode::NotFound))?;
+            self.resources
+                .open_execution(&retained)
+                .map_err(|_| self.unavailable())?
+        };
         self.check_cached_revision(submission, &revision)?;
         let heap = revision.retained_heap_bytes().map_err(Failure::from)?;
         let key_heap = key.heap_bytes();
@@ -374,7 +463,10 @@ impl Service {
                     )
                     .await
                     .map_err(|_| self.read_timeout(submission))?
-                    .map_err(|_| self.unavailable())?;
+                    .map_err(|code| match code {
+                        ErrorCode::NotFound | ErrorCode::InvalidRequest => Failure::from(code),
+                        _ => self.unavailable(),
+                    })?;
                     let Credential::ApiKey { value } = value else {
                         return Err(self.unavailable());
                     };

@@ -25,7 +25,8 @@ const MAX_ROUTE_DEPENDENCIES: usize = 16_384;
 
 struct Source {
     native_route: bool,
-    admission: Option<Vec<bitrouter_ai::tenancy::resources_v3::NativeAdmissionAttachmentV1>>,
+    admission:
+        Option<Vec<crate::tenancy::resources::manifest::native::NativeAdmissionAttachmentV1>>,
     routing: Arc<serde_json::Value>,
     credentials: Vec<CredentialBinding>,
     choice: Option<super::super::core_choice::Profile>,
@@ -107,7 +108,7 @@ pub(super) fn decode_with_operation(
                         routing: Arc::new(routing),
                         credentials,
                         envelope,
-                        admission: Some(attachments.into_iter().map(|item|bitrouter_ai::tenancy::resources_v3::NativeAdmissionAttachmentV1 {inbound_protocol:item.inbound_protocol,candidate_index:item.candidate_index,credential:item.credential,profile:item.profile}).collect()),
+                        admission: Some(attachments.into_iter().map(|item|crate::tenancy::resources::manifest::native::NativeAdmissionAttachmentV1 {inbound_protocol:item.inbound_protocol,candidate_index:item.candidate_index,credential:item.credential,profile:item.profile}).collect()),
                         choice: None,
                         assessment: None,
                         block: None,
@@ -495,6 +496,7 @@ fn route_data(
     };
     native_budget.check_operation()?;
     Ok(RouteData {
+        authority_root: None,
         admission: source.admission,
         reference: route.reference,
         assessment: source.assessment,

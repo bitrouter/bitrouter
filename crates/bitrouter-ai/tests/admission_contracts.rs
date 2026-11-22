@@ -10,6 +10,32 @@ use serde_json::{Value, json};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
+#[test]
+fn public_resource_commands_reject_native_platform_definitions() -> TestResult {
+    for format in [1, 2, 3] {
+        let command = json!({"format":format,"operation_id":"removed-native-writer","installation_id":"installation",
+            "key":{"owner_kind":"tenant","owner_id":"tenant","resource_kind":"route","resource_id":"native-route"},
+            "expected_revision":null,"definition":{"kind":"native_profiled_route_v1","routing":{"providers":{}},
+            "selector":"provider/model","policy":null,"credentials":[],"attachments":[]}});
+        assert!(serde_json::from_value::<ResourcePut>(command).is_err());
+    }
+    Ok(())
+}
+
+#[cfg(feature = "schema")]
+#[test]
+fn public_user_resource_schema_does_not_advertise_platform_native_writers() -> TestResult {
+    let schema = serde_json::to_string(&schemars::schema_for!(ResourcePut))?;
+    for removed in [
+        "native_profiled_route_v1",
+        "profiled_route",
+        "admission_profile",
+    ] {
+        assert!(!schema.contains(removed), "{removed}");
+    }
+    Ok(())
+}
+
 fn profile() -> Value {
     json!({"schema_version":1,"rate":{"rate_group_id":"shared","member_rpm":0},
         "health":{"rules":"availability_v1","failure_threshold":3,"transient_cooldown_seconds":0,
@@ -311,40 +337,25 @@ fn observations_cannot_relabel_foreign_ordinals_or_missing_authority_as_zero() -
 }
 
 #[test]
-fn resource_envelope_keeps_explicit_variants_and_operator_profile_ownership() -> TestResult {
-    let mut key = reference("policy", false);
-    key.as_object_mut().ok_or("key")?.remove("revision_id");
-    let mut command = json!({"format":1,"operation_id":"operation","installation_id":"installation",
-        "key":key,"expected_revision":null,"definition":{"kind":"admission_profile","profile":profile()}});
-    serde_json::from_value::<ResourcePut>(command.clone())?.validate()?;
-    let raw = serde_json::to_string(&command)?;
-    serde_json::from_str::<ResourcePut>(&raw)?.validate()?;
-    for bad in ["0.00000000000000000000001", "4294967296", "-1"] {
+fn user_resource_envelope_rejects_platform_profile_variants() -> TestResult {
+    for kind in [
+        "admission_profile",
+        "admission_profile_v2",
+        "profiled_route",
+        "native_profiled_route_v1",
+    ] {
+        let removed = json!({"format":1,"operation_id":"removed-platform","installation_id":"installation",
+            "key":{"owner_kind":"operator_pool","owner_id":"pool","resource_kind":"policy","resource_id":"profile"},
+            "expected_revision":null,"definition":{"kind":kind,"profile":profile()}});
         assert!(
-            serde_json::from_str::<ResourcePut>(
-                &raw.replace("\"member_rpm\":0", &format!("\"member_rpm\":{bad}"))
-            )
-            .is_err()
+            serde_json::from_value::<ResourcePut>(removed).is_err(),
+            "{kind}"
         );
     }
-    let duplicated = raw.replace(
-        "\"schema_version\":1",
-        "\"schema_version\":1,\"schema_version\":1",
-    );
-    assert!(serde_json::from_str::<ResourcePut>(&duplicated).is_err());
-    command["key"]["owner_kind"] = json!("tenant");
-    assert!(
-        serde_json::from_value::<ResourcePut>(command)?
-            .validate()
-            .is_err()
-    );
-    let old: Definition = serde_json::from_value(
-        json!({"kind":"policy","document":{},"name":"old","dependencies":[]}),
-    )?;
-    assert_eq!(
-        serde_json::to_value(old)?,
-        json!({"kind":"policy","document":{},"name":"old","dependencies":[]})
-    );
+    let policy = json!({"kind":"policy","document":{},"name":"user-policy","dependencies":[]});
+    let decoded: Definition = serde_json::from_value(policy.clone())?;
+    decoded.validate()?;
+    assert_eq!(serde_json::to_value(decoded)?, policy);
     Ok(())
 }
 
@@ -365,7 +376,7 @@ fn historical_ordered_binding_is_not_implicitly_upgraded_to_send_authority() -> 
 }
 
 #[test]
-fn actual_profile_and_full_command_serializers_preserve_aggregate_byte_limits() -> TestResult {
+fn runtime_profile_and_user_route_keep_their_serialized_byte_bounds() -> TestResult {
     let maximum: AdmissionProfileV1 = serde_json::from_value(json!({"schema_version":1,
         "rate":{"rate_group_id":"g".repeat(128),"member_rpm":u32::MAX},
         "health":{"rules":"availability_v1","failure_threshold":u32::MAX,
@@ -373,38 +384,24 @@ fn actual_profile_and_full_command_serializers_preserve_aggregate_byte_limits() 
             "probe_lease_seconds":u64::MAX},"fallback":"ordered_terminal_rejections_v1"}))?;
     maximum.validate()?;
     assert_eq!(serde_json::to_vec(&maximum)?.len(), 456);
-    let attachments: Vec<_> = (0..768).map(|index| json!({
-        "inbound_protocol":match index / 256 {0 => "chat_completions",1 => "messages",_ => "responses"},
-        "candidate_index":index % 256,"credential":reference("credential",true),"profile":reference("policy",true),
-    })).collect();
-    let credentials: Vec<_> = (0..256)
-        .map(|index| {
-            json!({"provider":format!("p{index:03}{}","p".repeat(124)),
-        "account":"a".repeat(128),"credential":reference("credential",true)})
-        })
-        .collect();
-    let mut key = reference("route", true);
-    key.as_object_mut().ok_or("key")?.remove("revision_id");
-    // Cardinality ceilings do not promise every maximum-width routing source
-    // will fit. This is a DTO byte-bound case, not an executable route fixture.
     let mut command: ResourcePut = serde_json::from_value(json!({"format":1,
-        "operation_id":"o".repeat(128),"installation_id":"i".repeat(128),"key":key,
-        "expected_revision":"v".repeat(128),"definition":{"kind":"profiled_route",
-            "routing":{},"selector":"s".repeat(512),"policy":reference("policy",true),
-            "credentials":credentials,"attachments":attachments}}))?;
-    command.validate()?;
-    assert_eq!(serde_json::to_vec(&command)?.len(), 1017903);
-    let Definition::ProfiledRoute { routing, .. } = &mut command.definition else {
-        return Err("profiled command".into());
+        "operation_id":"user-route","installation_id":"installation",
+        "key":{"owner_kind":"tenant","owner_id":"tenant","resource_kind":"route","resource_id":"route"},
+        "expected_revision":null,"definition":{"kind":"route","routing":{"padding":""},
+        "selector":"provider/model","policy":null,"credentials":[{"provider":"provider","account":"default","credential":reference("credential",true)}]}}))?;
+    let padding = (1024 * 1024_usize)
+        .checked_sub(serde_json::to_vec(&command)?.len())
+        .ok_or("command overhead")?;
+    let Definition::Route { routing, .. } = &mut command.definition else {
+        return Err("user route".into());
     };
-    *routing = json!({"padding":"x".repeat(30661)});
+    *routing = json!({"padding":"x".repeat(padding)});
     assert_eq!(serde_json::to_vec(&command)?.len(), 1024 * 1024);
     command.validate()?;
-    let Definition::ProfiledRoute { routing, .. } = &mut command.definition else {
-        return Err("profiled command".into());
+    let Definition::Route { routing, .. } = &mut command.definition else {
+        return Err("user route".into());
     };
-    *routing = json!({"padding":"x".repeat(30662)});
-    assert_eq!(serde_json::to_vec(&command)?.len(), 1024 * 1024 + 1);
+    *routing = json!({"padding":"x".repeat(padding+1)});
     assert!(command.validate().is_err());
     Ok(())
 }

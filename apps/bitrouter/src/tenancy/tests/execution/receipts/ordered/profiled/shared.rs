@@ -3,7 +3,6 @@ use super::*;
 use bitrouter_ai::tenancy::{
     admission_v2::AdmissionProfileV2,
     authority::{TenantPut, TenantState},
-    resources_v2::{DefinitionV2, ResourcePutV2},
 };
 
 mod boundaries;
@@ -507,28 +506,16 @@ async fn shared_health_distributed_failures_block_other_member_but_bypass_cannot
             ensure!(member.rate.as_ref().context("rate")?.shared_count == 3);
         }
     }
-    // An authenticated RPM-only rotation cannot split or reset the shared circuit.
-    let control = harness.control(true, HttpVersion::Http1Only)?;
-    let caps = control
-        .resource_capabilities_v2(&harness.fixture.installation)
-        .await?;
-    ensure!(caps.provisioning_enabled && caps.admission_profile_versions == [1, 2]);
-    let rotated = control
-        .put_resource_v2(
-            &harness.fixture.tenant,
-            &ResourcePutV2 {
-                format: 2,
-                operation_id: "shared-rpm-rotation".try_into()?,
-                installation_id: harness.fixture.installation.clone(),
-                key: reference(1)?.key(),
-                expected_revision: Some("r1".try_into()?),
-                definition: DefinitionV2::AdmissionProfileV2 {
-                    profile: grouped(100)?,
-                },
-            },
-        )
-        .await?;
-    ensure!(rotated.resource_revision.is_some());
+    // Restore a later retained member without splitting the process-local circuit.
+    let rotated = crate::tenancy::tests::resources::history::seed(
+        &harness.fixture.service,
+        &harness.fixture.db,
+        reference(1)?.key(),
+        Some("r1".try_into()?),
+        json!({"kind":"admission_profile_v2","profile":grouped(100)?}),
+    )
+    .await?;
+    ensure!(rotated.revision_id != reference(1)?.revision_id);
     let observation = manifest(&harness)
         .await?
         .runtime_observation

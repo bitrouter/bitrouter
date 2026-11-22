@@ -1,6 +1,7 @@
 //! Explicit opt-in to local framework resource authority.
 
 pub mod capacity;
+pub mod catalog;
 
 use anyhow::{Result, ensure};
 use bitrouter_ai::control::ControlScope;
@@ -80,6 +81,8 @@ fn valid_env_name(name: &str) -> bool {
 pub struct TenancyConfig {
     /// Opt in to the tenant control service. Existing local startup stays unchanged.
     pub enabled: bool,
+    /// File-owned shared routes compiled from the ordinary process configuration.
+    pub catalog: Option<catalog::CatalogConfig>,
     /// Startup-only runtime budgets, independent of the stored directory size.
     pub capacity: capacity::CapacityConfig,
     /// Maximum candidates in an explicit ordered v2 submission, from 1 through
@@ -92,8 +95,9 @@ pub struct TenancyConfig {
     pub ordered_native_controls: bool,
     /// Optional private adapter reached through an ordered, profiled route.
     pub private_adapter: Option<PrivateAdapterConfig>,
-    /// Privileged JSON manifest imported before listeners open. Relative paths
-    /// are relative to the server process's working directory, never a tenant.
+    /// Tenant-owned, unprofiled JSON resources imported before listeners open.
+    /// Platform publication is refused; retained historical data still decodes.
+    /// Relative paths use the server process's working directory.
     pub resource_import: Option<PathBuf>,
     /// Optional local learning registration manifest, authenticated after H bootstrap.
     /// Omission preserves startup behavior and does not erase durable schedules.
@@ -126,6 +130,7 @@ impl Default for TenancyConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            catalog: None,
             capacity: capacity::CapacityConfig::default(),
             ordered_attempt_limit: 8,
             ordered_native_controls: false,
@@ -150,6 +155,14 @@ impl TenancyConfig {
     pub fn validate(&self, config: &super::Config) -> Result<()> {
         self.capacity.validate()?;
         self.validate_lifetime()?;
+        if let Some(catalog) = &self.catalog {
+            ensure!(self.enabled, "configured catalog requires tenancy.enabled");
+            ensure!(
+                self.wrapping_key_env.is_some(),
+                "configured catalog requires wrapping_key_env"
+            );
+            catalog.validate()?;
+        }
         if let Some(adapter) = &self.private_adapter {
             ensure!(
                 self.enabled,

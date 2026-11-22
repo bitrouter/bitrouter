@@ -1,9 +1,6 @@
 //! Real reached-hop boundaries and advisory read-only group snapshots.
 use super::*;
-use bitrouter_ai::tenancy::{
-    operation::OperationStatus,
-    resources::{Definition, ResourcePut, ResourceRevoke},
-};
+use bitrouter_ai::tenancy::{operation::OperationStatus, resources::ResourceRevoke};
 
 #[tokio::test]
 async fn profiled_equal_private_targets_use_original_ordinals_and_distinct_profiles() -> Result<()>
@@ -104,6 +101,14 @@ async fn profiled_equal_private_targets_use_original_ordinals_and_distinct_profi
 }
 
 async fn revoke(harness: &OrderedHarness, reference: ResourceRef) -> Result<()> {
+    if reference.owner_kind == OwnerKind::OperatorPool {
+        return crate::tenancy::tests::resources::history::revoke(
+            &harness.fixture.service,
+            &harness.fixture.db,
+            &reference,
+        )
+        .await;
+    }
     let revision = harness.fixture.service.current().map_err(failure)?.revision;
     let result = harness
         .control(true, HttpVersion::Http1Only)?
@@ -127,24 +132,15 @@ async fn rotate(
     rpm: u32,
     expected: Option<bitrouter_ai::tenancy::identity::RevisionId>,
 ) -> Result<bitrouter_ai::tenancy::identity::RevisionId> {
-    let result = harness
-        .control(true, HttpVersion::Http1Only)?
-        .put_resource(
-            &harness.fixture.tenant,
-            &ResourcePut {
-                format: 1,
-                operation_id: format!("rotate-rpm-{rpm}").try_into()?,
-                installation_id: harness.fixture.installation.clone(),
-                key: reference(0)?.key(),
-                expected_revision: expected,
-                definition: Definition::AdmissionProfile {
-                    profile: rules(rpm, false)?,
-                },
-            },
-        )
-        .await?;
-    ensure!(result.status == OperationStatus::Applied);
-    result.resource_revision.context("new profile revision")
+    Ok(crate::tenancy::tests::resources::history::seed(
+        &harness.fixture.service,
+        &harness.fixture.db,
+        reference(0)?.key(),
+        expected,
+        json!({"kind":"admission_profile","profile":rules(rpm,false)?}),
+    )
+    .await?
+    .revision_id)
 }
 
 fn count(
@@ -428,24 +424,14 @@ async fn revocation_after_charge(shared_health: bool) -> Result<()> {
         };
         let mut current = reference(0)?;
         if matches!(change, "pinned" | "current") {
-            let result = harness
-                .control(true, HttpVersion::Http1Only)?
-                .put_resource_v2(
-                    &harness.fixture.tenant,
-                    &bitrouter_ai::tenancy::resources_v2::ResourcePutV2 {
-                        format: 2,
-                        operation_id: "rotate-before-revocation".try_into()?,
-                        installation_id: harness.fixture.installation.clone(),
-                        key: current.key(),
-                        expected_revision: Some(current.revision_id.clone()),
-                        definition:
-                            bitrouter_ai::tenancy::resources_v2::DefinitionV2::AdmissionProfileV2 {
-                                profile: super::shared::grouped(501)?,
-                            },
-                    },
-                )
-                .await?;
-            current.revision_id = result.resource_revision.context("rotated profile")?;
+            current = crate::tenancy::tests::resources::history::seed(
+                &harness.fixture.service,
+                &harness.fixture.db,
+                current.key(),
+                Some(current.revision_id.clone()),
+                json!({"kind":"admission_profile_v2","profile":super::shared::grouped(501)?}),
+            )
+            .await?;
             ensure!(current.revision_id != reference(0)?.revision_id);
         }
         let binding = harness

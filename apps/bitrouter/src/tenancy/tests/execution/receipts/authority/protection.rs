@@ -1,90 +1,22 @@
-//! Publication races exercise the real authority owner and loopback provider.
+//! Retained protection changes exercise live authority and the loopback provider.
 use super::*;
-use bitrouter_ai::tenancy::{
-    admission::AdmissionAttachmentV1,
-    authority::{OwnerKind, ResourceKey, ResourceKind},
-    configuration::ResourceRef,
-    ordered::GenerationProtocol,
-    resources::{Definition, ResourcePut},
-};
-
-async fn publish(harness: &Harness, input: ResourcePut) -> Result<ResourceRef> {
-    let key = input.key.clone();
-    let response = harness
-        .fixture
-        .service
-        .execute(
-            harness.fixture.operator.clone(),
-            Command::Resource(harness.fixture.tenant.clone(), input),
-        )
-        .await
-        .map_err(failure)?;
-    let StoredResponse::Operation(result) = response else {
-        anyhow::bail!("resource publication did not apply");
-    };
-    Ok(ResourceRef {
-        owner_kind: key.owner_kind,
-        owner_id: key.owner_id,
-        resource_kind: key.resource_kind,
-        resource_id: key.resource_id,
-        revision_id: result.resource_revision.context("published revision")?,
-    })
-}
+use bitrouter_ai::tenancy::authority::{OwnerKind, ResourceKey, ResourceKind};
 
 async fn protect(harness: &Harness) -> Result<()> {
-    let profile = publish(
-        harness,
-        ResourcePut {
-            format: 1,
-            operation_id: "protect-profile".try_into()?,
-            installation_id: harness.fixture.installation.clone(),
-            key: ResourceKey {
-                owner_kind: OwnerKind::OperatorPool,
-                owner_id: "pool".try_into()?,
-                resource_kind: ResourceKind::Policy,
-                resource_id: "profile".try_into()?,
-            },
-            expected_revision: None,
-            definition: Definition::AdmissionProfile {
-                profile: serde_json::from_value(
-                    json!({"schema_version":1,"rate":null,"health":null,"fallback":"stop"}),
-                )?,
-            },
-        },
-    )
-    .await?;
-    // The old immutable imported route has no managed head. A successful new
-    // revision protects the whole key, including that already-cached revision.
-    publish(harness, ResourcePut {
-        format: 1,
-        operation_id: "protect-route".try_into()?,
-        installation_id: harness.fixture.installation.clone(),
-        key: harness.route.key(),
-        expected_revision: None,
-        definition: Definition::ProfiledRoute {
-            routing: json!({"providers":{"mock":{"api_base":"http://127.0.0.1:1/v1",
-                "api_protocol":[{"*":["chat_completions","messages","responses"]}],"models":[{"id":"model-a"}]}}}),
-            selector: "mock:model-a".into(),
-            policy: None,
-            credentials: vec![bitrouter_ai::tenancy::resources::CredentialBinding {
-                provider: "mock".into(), account: "default".into(), credential: harness.slot.clone(),
-            }],
-            attachments: [GenerationProtocol::ChatCompletions,GenerationProtocol::Messages,GenerationProtocol::Responses]
-                .into_iter().map(|inbound_protocol| AdmissionAttachmentV1 {
-                    inbound_protocol,candidate_index:0,credential:harness.slot.clone(),profile:profile.clone(),
-                }).collect(),
-        },
-    }).await?;
-    ensure!(
-        harness
-            .fixture
-            .service
-            .admission_snapshot_for_test()
-            .await
-            .map_err(failure)?
-            .resource_admission
-            .protected(&harness.route)
-    );
+    let profile = crate::tenancy::tests::resources::history::seed(
+        &harness.fixture.service,&harness.fixture.db,
+        ResourceKey { owner_kind:OwnerKind::OperatorPool,owner_id:"pool".try_into()?,resource_kind:ResourceKind::Policy,resource_id:"profile".try_into()? },
+        None,json!({"kind":"admission_profile","profile":{"schema_version":1,"rate":null,"health":null,"fallback":"stop"}}),
+    ).await?;
+    let attachments=["chat_completions","messages","responses"].map(|inbound_protocol|json!({
+        "inbound_protocol":inbound_protocol,"candidate_index":0,"credential":harness.slot,"profile":profile,
+    }));
+    crate::tenancy::tests::resources::history::seed(
+        &harness.fixture.service,&harness.fixture.db,harness.route.key(),None,
+        json!({"kind":"profiled_route","routing":{"providers":{"mock":{"api_base":"http://127.0.0.1:1/v1",
+            "api_protocol":[{"*":["chat_completions","messages","responses"]}],"models":[{"id":"model-a"}]}}},
+            "selector":"mock:model-a","policy":null,"credentials":[{"provider":"mock","account":"default","credential":harness.slot}],"attachments":attachments}),
+    ).await?;
     Ok(())
 }
 

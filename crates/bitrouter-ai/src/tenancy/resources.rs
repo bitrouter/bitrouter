@@ -12,8 +12,7 @@ mod decoding;
 pub(super) mod schema;
 
 use super::{
-    admission::{AdmissionAttachmentV1, AdmissionProfileV1},
-    authority::{OwnerKind, ResourceKey, ResourceKind},
+    authority::{ResourceKey, ResourceKind},
     configuration::ResourceRef,
     identity::{AuthorityRevision, InstallationId, OperationId, RevisionId},
     validation::{Validate, ValidationError, bytes, nullable, require, text, unique},
@@ -39,36 +38,6 @@ pub struct CredentialBinding {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Definition {
-    /// Installation-managed operational profile, independent of PolicyLock.
-    AdmissionProfile {
-        /// Closed, bounded operational rules.
-        profile: AdmissionProfileV1,
-    },
-    /// Static ordered route with an explicit profile for every protocol-root entry.
-    ProfiledRoute {
-        /// Explicit service routing document.
-        #[cfg_attr(
-            feature = "schema",
-            schemars(with = "std::collections::BTreeMap<String, Value>")
-        )]
-        routing: Value,
-        /// Selector resolved exclusively inside this document.
-        #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 512)))]
-        selector: String,
-        /// Required-nullable policy reference; only qualified static roots execute.
-        #[serde(deserialize_with = "nullable")]
-        #[cfg_attr(
-            feature = "schema",
-            schemars(with = "schema::RequiredNullable<ResourceRef>")
-        )]
-        policy: Option<ResourceRef>,
-        /// Separately owned immutable credential slots.
-        #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 256)))]
-        credentials: Vec<CredentialBinding>,
-        /// Total unique map over the three actual compiled protocol roots.
-        #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 768)))]
-        attachments: Vec<AdmissionAttachmentV1>,
-    },
     /// Static upstream credential; ingress credentials use the separate issuance API.
     Credential {
         /// Nonempty secret, at most 65,536 UTF-8 bytes; never returned by a read.
@@ -120,8 +89,8 @@ impl Definition {
     pub fn resource_kind(&self) -> ResourceKind {
         match self {
             Self::Credential { .. } => ResourceKind::Credential,
-            Self::Route { .. } | Self::ProfiledRoute { .. } => ResourceKind::Route,
-            Self::Policy { .. } | Self::AdmissionProfile { .. } => ResourceKind::Policy,
+            Self::Route { .. } => ResourceKind::Route,
+            Self::Policy { .. } => ResourceKind::Policy,
         }
     }
 }
@@ -222,22 +191,7 @@ pub struct ResourceCapabilities {
 impl Validate for Definition {
     fn validate(&self) -> Result<(), ValidationError> {
         bytes(self, 1024 * 1024)?;
-        if let Self::ProfiledRoute { attachments, .. } = self {
-            require(
-                !attachments.is_empty() && attachments.len() <= 768,
-                "admission attachment count",
-            )?;
-            let mut ordinals = std::collections::HashSet::new();
-            for attachment in attachments {
-                attachment.validate()?;
-                require(
-                    ordinals.insert((attachment.inbound_protocol, attachment.candidate_index)),
-                    "duplicate admission attachment",
-                )?;
-            }
-        }
         match self {
-            Self::AdmissionProfile { profile } => profile.validate(),
             Self::Credential { secret } => require(
                 !secret.is_empty() && secret.len() <= 65_536,
                 "upstream credential length",
@@ -247,13 +201,6 @@ impl Validate for Definition {
                 selector,
                 policy,
                 credentials,
-            }
-            | Self::ProfiledRoute {
-                routing,
-                selector,
-                policy,
-                credentials,
-                ..
             } => {
                 require(routing.is_object(), "routing document")?;
                 text(selector, 512)?;
@@ -306,11 +253,6 @@ impl Validate for Definition {
 impl Validate for ResourcePut {
     fn validate(&self) -> Result<(), ValidationError> {
         require(self.format == 1, "resource format")?;
-        require(
-            !matches!(self.definition, Definition::AdmissionProfile { .. })
-                || self.key.owner_kind == OwnerKind::OperatorPool,
-            "admission profile owner",
-        )?;
         require(
             self.key.resource_kind == self.definition.resource_kind(),
             "resource kind",

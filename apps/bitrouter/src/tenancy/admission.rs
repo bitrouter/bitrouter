@@ -474,9 +474,39 @@ impl Admission {
         limits: &Limits,
         request_deadline: Instant,
     ) -> Result<Lease, ErrorCode> {
-        let deadline = request_deadline.min(Instant::now() + self.queue_wait);
         let active_limit = usize::from(limits.active_executions).min(self.profile.tenant_active);
         let queue_limit = usize::from(limits.queued_work).min(self.profile.tenant_queue);
+        self.acquire_with_limits(tenant, active_limit, queue_limit, request_deadline)
+            .await
+    }
+
+    pub(in crate::tenancy) async fn acquire_configured_until(
+        self: &Arc<Self>,
+        tenant: &TenantId,
+        fail_fast: bool,
+        request_deadline: Instant,
+    ) -> Result<Lease, ErrorCode> {
+        self.acquire_with_limits(
+            tenant,
+            self.profile.tenant_active,
+            if fail_fast {
+                0
+            } else {
+                self.profile.tenant_queue
+            },
+            request_deadline,
+        )
+        .await
+    }
+
+    async fn acquire_with_limits(
+        self: &Arc<Self>,
+        tenant: &TenantId,
+        active_limit: usize,
+        queue_limit: usize,
+        request_deadline: Instant,
+    ) -> Result<Lease, ErrorCode> {
+        let deadline = request_deadline.min(Instant::now() + self.queue_wait);
         let registration = self
             .update(|state| {
                 if state.closed {

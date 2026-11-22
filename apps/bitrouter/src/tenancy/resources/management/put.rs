@@ -1,37 +1,21 @@
-//! Borrowed management inputs share one prepare/apply transaction path.
+//! Tenant-owned management input; platform configuration has no writer command.
 
-use super::super::{
-    admission::State,
-    manifest::{CredentialBinding, Definition},
-};
-use crate::tenancy::{
-    command::Command,
-    model::{Caller, Snapshot},
-};
+use super::super::manifest::{CredentialBinding, Definition};
+use crate::tenancy::{command::Command, model::Snapshot};
 use bitrouter_ai::tenancy::{
-    authority::ResourceKey,
-    configuration::ResourceRef,
+    authority::{OwnerKind, ResourceKey},
     identity::{RevisionId, TenantId},
     operation::ErrorCode,
     resources::Definition as PublicDefinition,
-    resources_v2::DefinitionV2,
-    resources_v3::DefinitionV3,
 };
 
 type Result<T> = std::result::Result<T, ErrorCode>;
 
 #[derive(Clone, Copy)]
-enum Content<'a> {
-    V1(&'a PublicDefinition),
-    V2(&'a DefinitionV2),
-    V3(&'a DefinitionV3),
-}
-
-#[derive(Clone, Copy)]
 pub(super) struct Put<'a> {
     pub key: &'a ResourceKey,
     pub expected_revision: &'a Option<RevisionId>,
-    content: Content<'a>,
+    definition: &'a PublicDefinition,
 }
 
 pub(super) fn input(command: &Command) -> Option<(&TenantId, Put<'_>)> {
@@ -41,23 +25,7 @@ pub(super) fn input(command: &Command) -> Option<(&TenantId, Put<'_>)> {
             Put {
                 key: &input.key,
                 expected_revision: &input.expected_revision,
-                content: Content::V1(&input.definition),
-            },
-        )),
-        Command::ResourceV3(tenant, input) => Some((
-            tenant,
-            Put {
-                key: &input.key,
-                expected_revision: &input.expected_revision,
-                content: Content::V3(&input.definition),
-            },
-        )),
-        Command::ResourceV2(tenant, input) => Some((
-            tenant,
-            Put {
-                key: &input.key,
-                expected_revision: &input.expected_revision,
-                content: Content::V2(&input.definition),
+                definition: &input.definition,
             },
         )),
         _ => None,
@@ -65,103 +33,17 @@ pub(super) fn input(command: &Command) -> Option<(&TenantId, Put<'_>)> {
 }
 
 impl Put<'_> {
-    pub(super) fn authorize(self, state: &Snapshot, caller: &Caller) -> Result<()> {
-        let operator_only = match self.content {
-            Content::V1(definition) => matches!(
-                definition,
-                PublicDefinition::AdmissionProfile { .. } | PublicDefinition::ProfiledRoute { .. }
-            ),
-            Content::V2(_) | Content::V3(_) => true,
-        };
-        if operator_only && !matches!(caller, Caller::Installation(_)) {
+    pub(super) fn authorize(self, state: &Snapshot) -> Result<()> {
+        if self.key.owner_kind != OwnerKind::Tenant {
             return Err(ErrorCode::Forbidden);
         }
-        match self.content {
-            Content::V1(definition) => state.resource_admission.validate_put(self.key, definition),
-            // Like legacy profiled routes, authority is operator-only above;
-            // the existing prepare transaction validates the exact graph/CAS.
-            Content::V3(_) => Ok(()),
-            Content::V2(DefinitionV2::AdmissionProfileV2 { profile }) => state
-                .resource_admission
-                .validate_shared_put(self.key, profile),
-        }
-    }
-
-    pub(super) fn affects_admission(self) -> bool {
-        match self.content {
-            Content::V1(definition) => matches!(
-                definition,
-                PublicDefinition::AdmissionProfile { .. } | PublicDefinition::ProfiledRoute { .. }
-            ),
-            Content::V2(_) | Content::V3(_) => true,
-        }
-    }
-
-    pub(super) fn apply(self, state: &mut State, reference: &ResourceRef) {
-        match self.content {
-            Content::V1(definition) => state.apply_put(reference, definition),
-            Content::V3(_) => state.record_profiled_route(reference),
-            Content::V2(DefinitionV2::AdmissionProfileV2 { profile }) => {
-                state.apply_shared_put(reference, profile)
-            }
-        }
+        state
+            .resource_admission
+            .validate_put(self.key, self.definition)
     }
 
     pub(super) fn definition(self) -> Result<Definition> {
-        let definition = match self.content {
-            Content::V3(DefinitionV3::NativeProfiledRouteV1 {
-                routing,
-                selector,
-                policy,
-                credentials,
-                attachments,
-            }) => {
-                return Ok(Definition::NativeProfiledRouteV1 {
-                    routing: routing.clone(),
-                    selector: selector.clone(),
-                    policy: policy.clone(),
-                    credentials: credentials
-                        .iter()
-                        .map(|binding| CredentialBinding {
-                            provider: binding.provider.clone(),
-                            account: binding.account.clone(),
-                            credential: binding.credential.clone(),
-                        })
-                        .collect(),
-                    attachments: attachments.clone(),
-                });
-            }
-            Content::V1(definition) => definition,
-            Content::V2(DefinitionV2::AdmissionProfileV2 { profile }) => {
-                return Ok(Definition::AdmissionProfileV2 {
-                    profile: profile.clone(),
-                });
-            }
-        };
-        Ok(match definition {
-            PublicDefinition::AdmissionProfile { profile } => Definition::AdmissionProfile {
-                profile: profile.clone(),
-            },
-            PublicDefinition::ProfiledRoute {
-                routing,
-                selector,
-                policy,
-                credentials,
-                attachments,
-            } => Definition::ProfiledRoute {
-                routing: routing.clone(),
-                selector: selector.clone(),
-                policy: policy.clone(),
-                credentials: credentials
-                    .iter()
-                    .map(|binding| CredentialBinding {
-                        provider: binding.provider.clone(),
-                        account: binding.account.clone(),
-                        credential: binding.credential.clone(),
-                    })
-                    .collect(),
-                attachments: attachments.clone(),
-            },
+        Ok(match self.definition {
             PublicDefinition::Credential { secret } => Definition::Credential {
                 credential: crate::gateway::providers::auth::credentials::Credential::ApiKey {
                     value: secret.clone(),

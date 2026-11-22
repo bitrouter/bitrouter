@@ -190,6 +190,7 @@ async fn empty_retained_marker_requires_exact_binding_without_a_key() -> Result<
         installation: keyed.installation,
         key: None,
         approved_origins: Vec::new(),
+        configured: std::sync::OnceLock::new(),
     };
     let doc = document(Vec::new(), None)?;
     let original = stored(doc.clone(), compile(&resources, &db, &doc).await?)?;

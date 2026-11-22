@@ -253,7 +253,7 @@ async fn explicit_pool_shares_one_refresh_generation_but_equal_tenant_seed_and_u
     }
     harness
         .resources
-        .provision_bytes(
+        .seed_history_bytes(
             &harness.fixture.db,
             &serde_json::to_vec(&json!({
                 "format":1,"installation_id":harness.fixture.installation,"resources":imports,

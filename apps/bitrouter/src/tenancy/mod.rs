@@ -7,6 +7,7 @@ mod authority;
 mod cache;
 #[cfg(all(feature = "core", feature = "harness"))]
 pub(crate) mod capture;
+mod catalog;
 mod command;
 mod configuration;
 mod configuration_store;
@@ -164,6 +165,10 @@ pub(crate) struct Service {
 }
 
 impl Service {
+    pub(crate) fn configure_catalog(&self, config: &crate::config::Config) -> anyhow::Result<()> {
+        self.resources.configure(config)
+    }
+
     pub(crate) fn storage_budget(&self) -> storage::Budget {
         storage::Budget::new(self.admission.clone(), self.cleanup.clone())
     }

@@ -15,6 +15,7 @@ use serde_json::Value;
 use std::{collections::HashSet, io::Write};
 
 mod decoding;
+pub(super) mod native;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -45,7 +46,7 @@ pub(super) enum Definition {
         selector: String,
         policy: Option<ResourceRef>,
         credentials: Vec<CredentialBinding>,
-        attachments: Vec<bitrouter_ai::tenancy::resources_v3::NativeAdmissionAttachmentV1>,
+        attachments: Vec<crate::tenancy::resources::manifest::native::NativeAdmissionAttachmentV1>,
     },
     ProfiledRoute {
         routing: Value,
@@ -149,7 +150,7 @@ impl Import {
                 credentials,
                 attachments,
             } => {
-                bitrouter_ai::tenancy::resources_v3::DefinitionV3::NativeProfiledRouteV1 {
+                crate::tenancy::resources::manifest::native::NativeDefinition::NativeProfiledRouteV1 {
                     routing: routing.clone(),
                     selector: selector.clone(),
                     policy: policy.clone(),
@@ -175,7 +176,7 @@ impl Import {
                 credentials,
                 attachments,
             } => {
-                bitrouter_ai::tenancy::resources::Definition::ProfiledRoute {
+                bitrouter_ai::tenancy::resources::Definition::Route {
                     routing: routing.clone(),
                     selector: selector.clone(),
                     policy: policy.clone(),
@@ -189,9 +190,20 @@ impl Import {
                             },
                         )
                         .collect(),
-                    attachments: attachments.clone(),
                 }
                 .validate()?;
+                ensure!(
+                    !attachments.is_empty() && attachments.len() <= 768,
+                    "retained admission attachment count"
+                );
+                let mut ordinals = HashSet::new();
+                for attachment in attachments {
+                    attachment.validate()?;
+                    ensure!(
+                        ordinals.insert((attachment.inbound_protocol, attachment.candidate_index)),
+                        "duplicate retained admission attachment"
+                    );
+                }
                 ResourceKind::Route
             }
             Definition::Route {
@@ -344,7 +356,7 @@ impl Definition {
         &self,
     ) -> Option<(
         &Option<ResourceRef>,
-        Vec<bitrouter_ai::tenancy::resources_v3::NativeAdmissionAttachmentV1>,
+        Vec<crate::tenancy::resources::manifest::native::NativeAdmissionAttachmentV1>,
     )> {
         match self {
             Self::NativeProfiledRouteV1 {
@@ -360,14 +372,14 @@ impl Definition {
                 policy,
                 attachments
                     .iter()
-                    .map(
-                        |item| bitrouter_ai::tenancy::resources_v3::NativeAdmissionAttachmentV1 {
+                    .map(|item| {
+                        crate::tenancy::resources::manifest::native::NativeAdmissionAttachmentV1 {
                             inbound_protocol: item.inbound_protocol,
                             candidate_index: item.candidate_index,
                             credential: item.credential.clone(),
                             profile: item.profile.clone(),
-                        },
-                    )
+                        }
+                    })
                     .collect(),
             )),
             _ => None,

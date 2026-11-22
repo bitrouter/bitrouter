@@ -1010,7 +1010,7 @@ async fn identical_credential_names_remain_isolated_across_tenants_and_operator_
     first
         .service
         .resources
-        .provision_bytes(
+        .seed_history_bytes(
             &first.db,
             &serde_json::to_vec(&json!({
                 "format":1, "installation_id":first.installation,

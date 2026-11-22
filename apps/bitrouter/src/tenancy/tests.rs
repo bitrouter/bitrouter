@@ -17,6 +17,7 @@ mod capacity_directory;
 #[cfg(unix)]
 mod capacity_history;
 mod configuration;
+mod configured_catalog;
 mod conformance;
 mod directory;
 #[cfg(feature = "core")]

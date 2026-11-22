@@ -1170,6 +1170,9 @@ pub struct ProviderConfig {
     pub api_base: String,
     /// Upstream API key (often a `${VAR}` reference).
     pub api_key: String,
+    /// Credential presentation for Messages-compatible providers. Omission uses
+    /// the native x-api-key scheme; derived providers inherit an explicit value.
+    pub auth_scheme: Option<crate::gateway::model::target::AuthScheme>,
     /// Additional headers applied to every inference request for this
     /// provider. A string is shorthand for a static default. The expanded
     /// form can opt into forwarding the same inbound header, which overrides
@@ -1336,6 +1339,7 @@ impl std::fmt::Debug for ProviderConfig {
                 },
             )
             .field("headers", &self.headers.keys().collect::<Vec<_>>())
+            .field("auth_scheme", &self.auth_scheme)
             .field("api_protocol", &self.api_protocol)
             .field("protocol_endpoints", &self.protocol_endpoints)
             .field("rate_limits", &self.rate_limits)
@@ -1359,6 +1363,7 @@ impl Default for ProviderConfig {
             registry: None,
             api_base: String::new(),
             api_key: String::new(),
+            auth_scheme: None,
             headers: BTreeMap::new(),
             api_protocol: PatternMap::new(),
             protocol_endpoints: HashMap::new(),
@@ -2072,6 +2077,9 @@ fn resolve_one_derivation(
     }
     if child.headers.is_empty() {
         child.headers = parent.headers.clone();
+    }
+    if child.auth_scheme.is_none() {
+        child.auth_scheme = parent.auth_scheme;
     }
     if child.protocol_endpoints.is_empty() {
         child.protocol_endpoints = parent.protocol_endpoints.clone();

@@ -35,6 +35,25 @@ impl TenantExecution {
         rank: usize,
         target: &RoutingTarget,
     ) -> Result<(), BitrouterError> {
+        if let Some(catalog) = self.service.resources.configured() {
+            let credential = self
+                .route
+                .match_candidate(target)
+                .map_err(|code| self.reject(code))?;
+            let pinned = if self.profiled() {
+                Some(
+                    self.route
+                        .reached_profile(rank, target)
+                        .map_err(|code| self.reject(code))?
+                        .1,
+                )
+            } else {
+                None
+            };
+            catalog
+                .require_membership(&credential, target, pinned)
+                .map_err(|code| self.reject_reached(rank, target, code))?;
+        }
         if !self.profiled() {
             let ordinal = self
                 .route

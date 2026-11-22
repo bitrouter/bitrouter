@@ -9,6 +9,8 @@ use bitrouter_ai::{
 use bitrouter_sdk::gateway::tenancy::{Body, Error, ErrorSource, EventStream, Problem};
 use futures_util::StreamExt;
 
+#[path = "gateway/catalog.rs"]
+mod catalog;
 #[path = "gateway/defaults.rs"]
 mod defaults;
 #[path = "gateway/envelope.rs"]

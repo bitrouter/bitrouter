@@ -342,20 +342,8 @@ pub(super) async fn load_command_in(
             .routes
             .len()
             .checked_add(usize::from(input.document.policy.is_some())),
-        Command::ResourceV3(_, input) => {
-            let bitrouter_ai::tenancy::resources_v3::DefinitionV3::NativeProfiledRouteV1 {
-                policy,
-                credentials,
-                attachments,
-                ..
-            } = &input.definition;
-            credentials
-                .len()
-                .checked_add(attachments.len())
-                .and_then(|n| n.checked_add(usize::from(policy.is_some()) + 1))
-        }
         Command::Resource(_, input) => match &input.definition {
-            Definition::Credential { .. } | Definition::AdmissionProfile { .. } => Some(1),
+            Definition::Credential { .. } => Some(1),
             Definition::Route {
                 policy,
                 credentials,
@@ -364,18 +352,9 @@ pub(super) async fn load_command_in(
                 .len()
                 .checked_add(usize::from(policy.is_some()))
                 .and_then(|n| n.checked_add(1)),
-            Definition::ProfiledRoute {
-                policy,
-                credentials,
-                attachments,
-                ..
-            } => credentials
-                .len()
-                .checked_add(attachments.len())
-                .and_then(|n| n.checked_add(usize::from(policy.is_some()) + 1)),
             Definition::Policy { dependencies, .. } => dependencies.len().checked_add(1),
         },
-        Command::RevokeResource(..) | Command::ResourceV2(..) => Some(1),
+        Command::RevokeResource(..) => Some(1),
         _ => Some(0),
     }
     .ok_or(CapacityExceeded)?;
@@ -462,7 +441,7 @@ pub(super) async fn load_command_in(
                 facts.snapshot.resource_lifecycle.insert(record);
             }
             match &input.definition {
-                Definition::Credential { .. } | Definition::AdmissionProfile { .. } => {}
+                Definition::Credential { .. } => {}
                 Definition::Route {
                     policy,
                     credentials,
@@ -475,72 +454,11 @@ pub(super) async fn load_command_in(
                         resource_in(db, &mut facts, &binding.credential).await?;
                     }
                 }
-                Definition::ProfiledRoute {
-                    policy,
-                    credentials,
-                    attachments,
-                    ..
-                } => {
-                    if let Some(policy) = policy {
-                        resource_in(db, &mut facts, policy).await?;
-                    }
-                    for binding in credentials {
-                        resource_in(db, &mut facts, &binding.credential).await?;
-                    }
-                    for attachment in attachments {
-                        resource_in(db, &mut facts, &attachment.profile).await?;
-                    }
-                }
                 Definition::Policy { dependencies, .. } => {
                     for reference in dependencies {
                         resource_in(db, &mut facts, reference).await?;
                     }
                 }
-            }
-        }
-        Command::ResourceV2(tenant, input) => {
-            facts.tenant(db, tenant, &mut budget).await?;
-            let record = lifecycle::head(db, &header.installation, &input.key).await?;
-            if let Some(record) = &record {
-                ensure!(
-                    record.authority_revision <= header.revision,
-                    "resource head is outside published authority"
-                );
-            }
-            facts.mark(Lookup::Head(input.key.clone()), record.is_some());
-            if let Some(record) = record {
-                facts.mark(Lookup::Resource(record.reference.clone()), true);
-                facts.snapshot.resource_lifecycle.insert(record);
-            }
-        }
-        Command::ResourceV3(tenant, input) => {
-            facts.tenant(db, tenant, &mut budget).await?;
-            let record = lifecycle::head(db, &header.installation, &input.key).await?;
-            if let Some(record) = &record {
-                ensure!(
-                    record.authority_revision <= header.revision,
-                    "resource head is outside published authority"
-                );
-            }
-            facts.mark(Lookup::Head(input.key.clone()), record.is_some());
-            if let Some(record) = record {
-                facts.mark(Lookup::Resource(record.reference.clone()), true);
-                facts.snapshot.resource_lifecycle.insert(record);
-            }
-            let bitrouter_ai::tenancy::resources_v3::DefinitionV3::NativeProfiledRouteV1 {
-                policy,
-                credentials,
-                attachments,
-                ..
-            } = &input.definition;
-            if let Some(policy) = policy {
-                resource_in(db, &mut facts, policy).await?;
-            }
-            for binding in credentials {
-                resource_in(db, &mut facts, &binding.credential).await?;
-            }
-            for attachment in attachments {
-                resource_in(db, &mut facts, &attachment.profile).await?;
             }
         }
         Command::RevokeResource(tenant, input) => {

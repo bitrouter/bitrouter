@@ -78,7 +78,7 @@ impl ModelTarget {
 ///
 /// Exactly one scheme is ever sent — never both: the Anthropic API rejects a
 /// request that carries `x-api-key` and `Authorization` together.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum AuthScheme {
     /// `x-api-key: <key>` — Anthropic's native scheme; the default.
     #[default]

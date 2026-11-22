@@ -35,7 +35,7 @@ impl Worker {
         caller: &Caller,
         command: &Command,
         control: &Control,
-        native_adapter_configured: bool,
+        _native_adapter_configured: bool,
     ) -> Result<StoredResponse, Failure> {
         if !self.live.0.load(Ordering::Acquire) {
             return Err(ErrorCode::AuthorityUnavailable.into());
@@ -53,7 +53,6 @@ impl Worker {
                 command,
                 &crate::tenancy::transaction::ReadConnection::new(&tx, control),
                 control,
-                native_adapter_configured,
             )
             .await;
         control
@@ -128,7 +127,6 @@ impl Worker {
         command: &Command,
         tx: &impl sea_orm::ConnectionTrait,
         control: &Control,
-        native_adapter_configured: bool,
     ) -> Result<Prepared, Failure> {
         control
             .check_read()
@@ -159,27 +157,11 @@ impl Worker {
             .collect();
         let keys = match command {
             Command::Resource(_, input) => vec![input.key.clone()],
-            Command::ResourceV2(_, input) => vec![input.key.clone()],
-            Command::ResourceV3(_, input) => vec![input.key.clone()],
-            _ => Vec::new(),
-        };
-        let groups = match command {
-            Command::ResourceV2(_, input) => {
-                let bitrouter_ai::tenancy::resources_v2::DefinitionV2::AdmissionProfileV2 {
-                    profile,
-                } = &input.definition;
-                profile
-                    .health_group_id
-                    .as_ref()
-                    .map(|group| (input.key.owner_id.clone(), group.clone()))
-                    .into_iter()
-                    .collect::<Vec<_>>()
-            }
             _ => Vec::new(),
         };
         old.resource_admission = std::sync::Arc::new(
             self.resources
-                .admission_in(tx, header.revision, &references, &keys, &groups)
+                .admission_in(tx, header.revision, &references, &keys, &[])
                 .await
                 .map_err(|error| self.directory_failure(error))?,
         );
@@ -284,12 +266,6 @@ impl Worker {
                     code.into()
                 }
             })?;
-        // Original operations replay above after current authorization, expiry
-        // and digest checks. Transport availability only gates new V3 writes,
-        // after their ordinary prepare authorization and before any mutation.
-        if matches!(command, Command::ResourceV3(..)) && !native_adapter_configured {
-            return Err(ErrorCode::CapabilityMismatch.into());
-        }
         if let Some(configuration) = &prepared.configuration {
             store::directory::extend_dependencies_in(
                 tx,
@@ -307,13 +283,7 @@ impl Worker {
             })?;
             candidate.resource_admission = std::sync::Arc::new(
                 self.resources
-                    .admission_in(
-                        tx,
-                        header.revision,
-                        &configuration.dependencies,
-                        &keys,
-                        &groups,
-                    )
+                    .admission_in(tx, header.revision, &configuration.dependencies, &keys, &[])
                     .await
                     .map_err(|error| self.directory_failure(error))?,
             );

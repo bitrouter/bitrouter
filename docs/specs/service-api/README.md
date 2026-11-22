@@ -1,6 +1,6 @@
 # BitRouter service API
 
-Status: **beta, specification revision 1.0.0-beta.3**. This is the single
+Status: **beta, specification revision 1.0.0-beta.4**. This is the single
 compatibility contract for BitRouter-owned service messages and API formats.
 The revision is distinct from each existing URL namespace, ACP version, schema
 version and beta-negotiation value. Beta changes can be incompatible, but must
@@ -37,6 +37,11 @@ Revision beta.3 adds operator directory readback and explicitly negotiated
 ordered dispatch v2. Strict v1 discovery, receipts and usage-evidence wire
 formats retain their existing meanings and eight-attempt bound. The new store
 format prevents an older binary from opening upgraded authority data.
+
+Revision beta.4 replaces platform resource publication with file-configured
+catalog readback and request-local ordered composition. Tenant-owned resource
+writes and historical resource/receipt readers remain available. Removed
+platform writers are an incompatible beta change, not an alternate write mode.
 
 ### Offline recovery evidence v2
 
@@ -612,62 +617,31 @@ Resource identity includes owner kind, owner ID, resource kind and resource ID;
 an exact reference additionally includes revision ID. Authority revision and
 content revision are distinct and MUST NOT be substituted for each other.
 
-The same format-one command has two additional closed definition variants:
-`admission_profile` contains an `AdmissionProfileV1`, and `profiled_route`
-contains the existing concrete routing fields plus a total attachment map.
-An admission profile is an operator-pool Policy resource, distinct from a
-PolicyLock definition. Both variants require installation authority, including
-a profiled route with a tenant owner. A profile key cannot change between the
-two Policy definition types. Only its member RPM ceiling may rotate; rate-group
-membership, health rules and fallback remain immutable for that key. Zero RPM
-is valid and means local refusal, while explicit null disables a gate.
-
-Attachments identify exact ingress protocol, original candidate ordinal,
-credential revision and profile revision. Compilation verifies total, unique
-coverage of the three retained generation roots. Policy, continuation, counting,
-dynamic credential and other unsupported roots cannot acquire a profiled
-definition. All existing command, import, artifact and configuration byte bounds
-apply to the final serialized objects; cardinality ceilings do not promise that
-every combination of maximum-width values fits.
-
-Accepting a profiled route permanently protects its resource key across retained
-revisions. Legacy activation or execution cannot bypass that protection by using
-an old configuration, default route, native entrypoint or auxiliary operation.
-Revocation and rotation retain the old immutable definitions and protection.
-Read authority and existing terminal obligations remain independent of current
-operational eligibility. The private format-one import accepts the same new
-variants. It initializes one unambiguous head for a new profile key atomically;
-identical reimport never rewinds the head. Later rotations use authenticated CAS.
-Missing retained profile heads are errors, not disabled admission rules.
+The public resource writer accepts tenant-owned credentials, routes and policies.
+Operator-pool resources are file-owned and cannot be created, rotated or revoked
+through management APIs, including by installation callers. Operational profiles
+and profiled platform routes are not public resource-write definitions. Retained
+profile/route artifact decoding remains available for historical execution and
+recovery; reading those bytes does not grant new platform-send authority.
 
 #### Shared health profiles
 
-`AdmissionProfileV2` makes circuit membership explicit while keeping each member
-independently addressable. The additive format-two
-[`ResourcePutV2`](../resource-provisioning-v2/put.schema.json) accepts only
-`admission_profile_v2` definitions, on operator-pool Policy keys and with
-installation authority. Other definitions continue through format-one puts.
-The existing POST resource endpoint selects the closed decoder by the raw
-`format` token; missing, duplicate and unsupported versions fail before writing.
-V1 profile codecs, schemas, fingerprints and profile-local health remain exact.
+`AdmissionProfileV2` makes configured circuit membership explicit while keeping
+member rate ceilings independent. It is a runtime/configuration and observation
+shape, not a platform publication command. There is no format-two resource put
+or version-two provisioning capability endpoint.
 
 V2 adds required nullable `health_group_id` to the existing profile fields and
 requires `schema_version: 2`. Health and group MUST both be non-null or both be
 null. Missing group data never falls back to local health. Exact integral
 decimals and exponents retain the bounded integer semantics; fractional or
-out-of-range values, unknown fields and duplicates fail closed. Existing 4 KiB
-profile and 1 MiB command bounds remain unchanged.
+out-of-range values, unknown fields and duplicates fail closed. The existing 4 KiB
+profile representation bound remains unchanged.
 
-Before publishing V2 members, discover
-`GET /control/v1/tenancy/resource-capabilities/v2` using
-`TenancyClient::resource_capabilities_v2`. Its closed
-[`ResourceCapabilitiesV2`](../resource-provisioning-v2/capabilities.schema.json)
-has `format: 2` and `admission_profile_versions: [1, 2]`. Require the expected
-installation and enabled provisioning. A 404, V1 response or malformed
-capability is unsupported; do not retry a grouped write as V1 or remove its
-group. `put_resource_v2` retains ordinary CAS, operation recovery and result
-identity checks, with a distinct `resource.put.v2` fingerprint domain. V1
-discovery, status, revocation, grants and configuration contracts are unchanged.
+SDK resource management exposes only tenant-owned resource CRUD. Removed
+platform provisioning must not be retried as another resource format or by
+removing health-group membership. User resource status, grants, operation
+idempotency and historical readback remain independent capabilities.
 
 Health identity is the installation plus a tagged choice of either the full V1
 profile key or the V2 operator-pool owner and health-group ID. Equal spellings
@@ -684,9 +658,10 @@ and group, read-only rate association and fallback are immutable across every
 revision. A PolicyLock key, V1 member and V2 member cannot change families.
 Revoked, superseded, unreferenced and all-revoked members still constrain group
 rules after restart. Changing a group's rules requires a new group and member
-keys followed by explicit route/configuration publication. Concurrent first puts
-and imports validate against the same serialized authority writer; failed
-validation publishes no new resource, managed head or group.
+keys and updated file-owned route membership. Historical imports validate
+against the serialized authority writer; failed validation publishes no new
+resource, managed head or group. Retained import constraints do not make the
+importer a declarative catalog synchronization API.
 
 Admission, observation, capacity and captured completion tickets use the same
 tagged identity. One half-open probe owns the group across all members; stale
@@ -696,8 +671,16 @@ state and cannot open or close a shared circuit. Its explicit read-only rate
 association can still expose shared count without charging. Observations never
 allocate state or claim a probe and are not dispatch permission.
 
-Private format-two imports permit V2 profiles alongside existing definitions;
-format-one imports reject V2. Exact attachment references, total root coverage
+The private historical format-two codec permits V2 profiles alongside existing
+definitions; format one rejects V2. New startup `resource_import` writes accept
+only Tenant-owned unprofiled definitions, including ordinary routes, policies,
+credentials and qualified framework data. OperatorPool resources and new
+profile/profiled/native-profiled publication are refused with or without a file
+catalog. This restriction is applied before writes at the startup admission
+boundary, not in the shared historical artifact validator. Existing encrypted
+platform artifacts remain authenticatable and readable when the import file is
+removed; replaying their manifest cannot create new platform authority.
+Exact attachment references, total root coverage
 and current/pinned revocation checks apply to both profile families. Admission
 mode remains `profiled_v1`; ordered selection, receipts and evidence do not add
 a caller-supplied group or change their codecs. The encrypted profile definition
@@ -765,6 +748,89 @@ operation ID or inference replay. Clients MUST bound response decoding, bind
 requests to the installation and check returned operation/resource identities
 before accepting success. Capability and status installation IDs MUST match the
 requested installation; an `OperationResult` does not add an installation field.
+
+### File-configured catalog and request-local composition
+
+The operator declares upstreams in ordinary `providers`, `models` and `routers`
+configuration and exposes selected roots with `tenancy.catalog`. This is one
+process-wide compiled catalog, not a per-tenant configuration copy. Public
+management APIs cannot create or revise its credentials, profiles or routes.
+File delivery and process startup own changes; neither endpoint below publishes
+configuration or advances a management operation journal.
+
+| Method | Path under `/control/v1` | Contract |
+| --- | --- | --- |
+| GET | `/tenants/{tenant_id}/catalog/routes/{route_id}/candidates?inbound_protocol={protocol}` | `CatalogCandidatesV1` |
+| POST | `/tenants/{tenant_id}/catalog/selections` | `CatalogSelectionRequestV1` → `CatalogSelectionV1` |
+
+Both use normal authenticated tenancy transport, installation binding and
+no-store responses. Reads require current tenant/resource read authority;
+preparation also checks the selected dependency closure. Descriptors and
+successful preparation grant no execution or credential-use authority. Actual
+dispatch rechecks current grants, revocation and the configured platform
+credential/target/profile membership at each send.
+
+The closed [catalog DTOs](../../../crates/bitrouter-ai/src/tenancy/catalog.rs)
+define required fields and nullable values. A descriptor wraps the unchanged
+`CandidateManifestV1` with `schema_version: 1`, explicit ordinal `sources`, and
+configured `templates`. Every source records `candidate_index`, `source_id`,
+configured `provider`, required-nullable `account`, actual upstream `model`,
+and actual `outbound_protocol`. Clients MUST use these associations rather than
+infer commercial identity from opaque manifest IDs, ordinals, or a null account.
+Templates include an opaque `template_id`, the same source identity,
+required-nullable platform `credential_ref`, and exact `platform_profile` and
+`byok_profile` references. A no-key provider remains a BYOK template; it is
+omitted from the platform manifest and cannot be selected as platform-funded.
+
+Preparation accepts exactly `schema_version: 1`, `catalog_revision` (the
+readback manifest's `execution_revision`), `route_id`, `inbound_protocol`, and
+`candidates`. Each candidate contains `template_id`, required-nullable
+`credential_ref`, and optional `route_ref`: null credential selects that
+template's available platform slot; an exact tenant-owned credential reference
+selects BYOK. A BYOK-only `route_ref` can select an existing immutable tenant
+route's approved custom base, with current route/dependency grants and the same
+exact credential and otherwise matching configured target. Endpoints and secret
+values are never accepted in these instructions. Unsupported or out-of-root
+templates, wrong-tenant dependencies, duplicate template/credential/route triples
+and stale catalog identity fail. The same template may appear with distinct funding
+credentials, preserving one final order across platform and BYOK fallback.
+
+The response echoes `selection` and returns `candidates`, the final manifest
+and source mapping. Its derived route/execution revision binds the exact closed
+instructions. Dispatch MUST bind that prepared manifest in ordinary ordered v2
+mode and send those same instructions as the top-level reserved JSON member
+`bitrouter_catalog_selection`. The selection has 1–64 entries, additionally
+bounded by the host's `ordered_attempt_limit`, and at most 65,536 serialized
+UTF-8 bytes. Its original body representation must also fit that byte bound.
+The existing small `Bitrouter-Candidate-Selection` header remains required;
+it selects all prepared ordinals in order, with `admission_mode: "profiled_v1"`.
+It does not carry the catalog instructions.
+
+The reserved member is supported only in ordered v2 protocol bodies, including
+the outer private Generate Content envelope. Duplicate, malformed, unknown-field,
+oversized or mismatched instructions fail before provider work. Core removes
+the member before protocol/provider decoding. SDK clients use
+`TenancyClient::catalog_candidates`, `prepare_catalog_selection`, and
+`OrderedTenantGateway::with_catalog_selection`; the attachment never changes
+shared client defaults. Requests without catalog instructions retain their
+existing strict behavior.
+
+Composition makes an immutable request-owned execution view with one fallback
+owner, execution receipt and usage-evidence chain. Platform entries use their
+mandatory file profile; BYOK entries use the template's neutral `byok_profile`,
+which may observe the provider rate window without charging it or enforcing
+platform health. No active tenant configuration or platform resource revision
+is written. There is no persisted historical catalog graph for reconstruction:
+historical receipts/evidence remain readable as recorded, while a changed file
+snapshot does not authorize a fresh send through an old catalog binding.
+
+Configured roots with nonempty file generation defaults expose only the three
+canonical protocols: Chat Completions, Messages and Responses. Their typed
+defaults fill omitted values; explicit caller values win. Such roots have no
+configured Generate Content descriptor, rather than silently losing defaults
+or refusing unrelated application startup. Explicit request-envelope defaults
+on otherwise eligible native roots remain supported. This restriction applies
+to tenancy catalog exposure and does not change the ordinary OSS gateway.
 
 ### Ordered static dispatch v2
 
@@ -1327,18 +1393,14 @@ native feature. Actual accepted headers, outcomes, usage observations, deadlines
 receipt custody and original selected ranks retain the existing ordered rules.
 Unsigned/unknown bridge outcomes and interrupted streams never authorize fallback.
 
-Native routes require explicit resource format three, independently observed at
-`GET /control/v1/tenancy/resource-capabilities/v3`. The existing resource POST
-accepts `ResourcePutV3` with a closed `native_profiled_route_v1` definition;
-[`native-resource-put-v3.schema.json`](native-resource-put-v3.schema.json) and
-[`native-resource-capabilities-v3.schema.json`](native-resource-capabilities-v3.schema.json)
-define its wire fields. Every compiled protocol root has an exact ordinal,
-credential and admission-profile association. Only the native root can target
-the operator-paired `ordered_generate_content` bridge. A Chat grant cannot
-create native membership. Arbitrary custom protocols remain unsupported.
+Configured native roots retain exact ordinal, credential and admission-profile
+associations. Only the explicit native root may target the operator-paired
+`ordered_generate_content` bridge; a Chat grant does not create native
+membership. Arbitrary request endpoints or custom protocols are unsupported.
+The former format-three resource put/capability endpoints and SDK provisioning
+methods are removed; native inference and its retained artifact codec remain.
 
-Format-one resource definitions and their three-protocol attachment codec remain
-unchanged; format two still provisions shared-health profiles only. Native
+Historical native
 artifacts and configurations use `tenancy-native-generate-content-v1`, retained
 envelope format six and authority writer/schema five. The data-only migration
 keeps historical receipt/evidence bytes and refuses malformed/future markers;

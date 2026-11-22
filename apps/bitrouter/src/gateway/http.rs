@@ -1369,6 +1369,14 @@ async fn handle(
 /// prompt transforms and route/default expansion run only after that boundary.
 pub(crate) fn parse_input(inbound: &ApiProtocol, body: serde_json::Value) -> Result<PipelineInput> {
     if body
+        .get(bitrouter_ai::tenancy::catalog::BODY_MEMBER)
+        .is_some()
+    {
+        return Err(BitrouterError::bad_request(
+            "configured selection requires ordered dispatch",
+        ));
+    }
+    if body
         .get(bitrouter_ai::tenancy::generation_defaults::ENVELOPE_BODY_MEMBER)
         .is_some()
     {

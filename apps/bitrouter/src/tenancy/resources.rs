@@ -68,6 +68,7 @@ pub(super) struct Resources {
     installation: InstallationId,
     key: Option<DeploymentKey>,
     approved_origins: Vec<String>,
+    configured: std::sync::OnceLock<execution::catalog::Catalog>,
 }
 
 /// Safe for configuration_store.compiled_json; definitions are ciphertext only.
@@ -281,6 +282,17 @@ impl Resources {
         if reference.resource_kind != ResourceKind::Credential {
             return Err(ErrorCode::InvalidRequest);
         }
+        if let Some(secret) = self
+            .configured
+            .get()
+            .and_then(|catalog| catalog.credential(reference))
+        {
+            return Ok(
+                crate::gateway::providers::auth::credentials::Credential::ApiKey {
+                    value: secret.to_owned(),
+                },
+            );
+        }
         let artifact = self.load(db, reference).await?;
         if artifact.reference != *reference || artifact.envelope.is_some() {
             return Err(ErrorCode::AuthorityUnavailable);
@@ -323,6 +335,7 @@ impl Resources {
         Ok(Self {
             installation: installation.clone(),
             key,
+            configured: std::sync::OnceLock::new(),
             approved_origins: config
                 .resource_origins
                 .iter()
@@ -358,6 +371,7 @@ impl Resources {
     ) -> Result<()> {
         self.authenticate_retained(db).await?;
         if let Some(bytes) = import {
+            Self::validate_startup_import(bytes)?;
             self.import_in(db, bytes).await?;
         }
         Ok(())
@@ -400,7 +414,24 @@ impl Resources {
             installation,
             key: Some(DeploymentKey::from_bytes(secret)?),
             approved_origins: Vec::new(),
+            configured: std::sync::OnceLock::new(),
         })
+    }
+
+    pub(in crate::tenancy) fn configured(&self) -> Option<&execution::catalog::Catalog> {
+        self.configured.get()
+    }
+
+    pub(in crate::tenancy) fn configure(&self, config: &crate::config::Config) -> Result<()> {
+        if config.tenancy.catalog.is_none() {
+            return Ok(());
+        }
+        let catalog = execution::catalog::Catalog::compile(config, self)?;
+        ensure!(
+            self.configured.set(catalog).is_ok(),
+            "configured catalog already loaded"
+        );
+        Ok(())
     }
 
     pub(super) async fn read_import(path: Option<&Path>) -> Result<Option<Vec<u8>>> {
@@ -427,7 +458,27 @@ impl Resources {
             bytes.len() <= MAX_MANIFEST_BYTES,
             "tenancy resource manifest exceeds file bounds"
         );
+        Self::validate_startup_import(&bytes)?;
         Ok(Some(bytes))
+    }
+
+    // This is an admission rule for new startup writes, never a restriction on
+    // decoding/authenticating historical artifacts or tenant learned resources.
+    fn validate_startup_import(bytes: &[u8]) -> Result<()> {
+        ensure!(
+            bytes.len() <= MAX_MANIFEST_BYTES,
+            "resource manifest capacity exceeded"
+        );
+        let manifest: Manifest = serde_json::from_slice(bytes)
+            .map_err(|_| anyhow::anyhow!("invalid resource manifest"))?;
+        ensure!(
+            manifest.resources.iter().all(|resource| {
+                resource.reference.owner_kind == OwnerKind::Tenant
+                    && !resource.definition.is_profiled()
+            }),
+            "startup resource imports require tenant-owned unprofiled definitions; platform resources are file-configured"
+        );
+        Ok(())
     }
 
     #[cfg(test)]
@@ -442,7 +493,96 @@ impl Resources {
     #[cfg(test)]
     async fn import_bytes(&self, db: &DatabaseConnection, bytes: &[u8]) -> Result<()> {
         let transaction = db.begin().await?;
-        match self.import_in(&transaction, bytes).await {
+        match self.bootstrap(&transaction, Some(bytes)).await {
+            Ok(()) => {
+                transaction.commit().await?;
+                Ok(())
+            }
+            Err(error) => {
+                transaction.rollback().await?;
+                Err(error)
+            }
+        }
+    }
+
+    /// Seed actual retained artifacts from an earlier binary in compatibility
+    /// tests. This has no production caller or runtime admission override.
+    #[cfg(test)]
+    pub(in crate::tenancy) async fn seed_history_in(
+        &self,
+        db: &impl ConnectionTrait,
+        bytes: &[u8],
+    ) -> Result<()> {
+        self.import_in(db, bytes).await
+    }
+
+    /// A historical fixture revision with a checked head, not a manifest replay.
+    /// Permanent family/group/rule validation remains in storage::retain.
+    #[cfg(test)]
+    pub(in crate::tenancy) async fn seed_history_revision_in(
+        &self,
+        db: &impl ConnectionTrait,
+        bytes: &[u8],
+        expected: Option<&RevisionId>,
+    ) -> Result<()> {
+        ensure!(
+            bytes.len() <= MAX_MANIFEST_BYTES,
+            "historical fixture byte bound"
+        );
+        let manifest: Manifest = serde_json::from_slice(bytes)?;
+        ensure!(
+            manifest.installation_id == self.installation
+                && matches!(manifest.format, 1..=3)
+                && manifest.resources.len() == 1,
+            "historical fixture requires one qualified revision"
+        );
+        let import = manifest
+            .resources
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("historical fixture revision missing"))?;
+        let previous = lifecycle::head(db, &self.installation, &import.reference.key()).await?;
+        ensure!(
+            previous
+                .as_ref()
+                .map(|record| &record.reference.revision_id)
+                == expected,
+            "historical fixture head changed"
+        );
+        if !import.definition.is_admission_profile() {
+            return self.import_in(db, bytes).await;
+        }
+        import.validate()?;
+        if expected.is_none() {
+            ensure!(
+                !storage::resource_key_exists(db, &import.reference.key()).await?,
+                "historical fixture profile already exists"
+            );
+        }
+        ensure!(
+            previous.as_ref().is_none_or(|record| !record.revoked),
+            "historical fixture profile head revoked"
+        );
+        storage::retain(
+            self,
+            db,
+            &Artifact {
+                reference: import.reference,
+                definition: import.definition,
+                envelope: None,
+            },
+        )
+        .await
+    }
+
+    #[cfg(test)]
+    pub(in crate::tenancy) async fn seed_history_bytes(
+        &self,
+        db: &DatabaseConnection,
+        bytes: &[u8],
+    ) -> Result<()> {
+        let transaction = db.begin().await?;
+        match self.seed_history_in(&transaction, bytes).await {
             Ok(()) => {
                 transaction.commit().await?;
                 Ok(())

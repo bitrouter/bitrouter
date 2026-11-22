@@ -170,6 +170,7 @@ enum Defaults {
 /// One trusted submission, borrowing the gateway pool without mutating defaults.
 pub struct TenantGateway<'a> {
     generation_defaults: Option<Defaults>,
+    catalog_selection: Option<bitrouter_ai::tenancy::catalog::CatalogSelectionRequestV1>,
     client: &'a GatewayClient,
     headers: HeaderMap,
 }
@@ -224,6 +225,7 @@ impl GatewayClient {
         }
         Ok(TenantGateway {
             generation_defaults: None,
+            catalog_selection: None,
             client: self,
             headers,
         })
@@ -433,9 +435,18 @@ impl TenantGateway<'_> {
         } else {
             builder.json(request)
         };
-        let request = builder
+        let mut request = builder
             .build()
             .map_err(|_| Error::Request("invalid request encoding"))?;
+        if let Some(selection) = &self.catalog_selection {
+            let bytes = request
+                .body()
+                .and_then(reqwest::Body::as_bytes)
+                .ok_or(Error::Request("configured dispatch requires a JSON body"))?;
+            let bytes = ordered::catalog_body(bytes, selection)?;
+            *request.body_mut() = Some(bytes.into());
+            request.headers_mut().remove(header::CONTENT_LENGTH);
+        }
         let response = self
             .client
             .http

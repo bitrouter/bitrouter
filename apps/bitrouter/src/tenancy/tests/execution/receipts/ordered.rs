@@ -401,8 +401,8 @@ impl OrderedHarness {
                 .context("route definition")?["definition"]["policy"]
                 .clone(),
         )?;
-        // Import prerequisites before the route without exceeding one import's
-        // 256-resource limit. The tested route itself still retains all ordinals.
+        // Seed historical prerequisites before the retained route without
+        // exceeding one batch's bound. Keep all tested immutable ordinals.
         definitions.sort_by_key(|entry| entry["reference"]["resource_kind"] == "route");
         let import_format = if definitions
             .iter()
@@ -414,7 +414,7 @@ impl OrderedHarness {
         };
         for batch in definitions.chunks(128) {
             resources
-                .provision_bytes(
+                .seed_history_bytes(
                     &fixture.db,
                     &serde_json::to_vec(&json!({
                         "format":import_format, "installation_id":fixture.installation, "resources":batch

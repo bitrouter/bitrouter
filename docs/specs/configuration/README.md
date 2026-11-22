@@ -44,6 +44,17 @@ the local profile precedes parsing and semantic validation. Operator instruction
 for source selection, substitutions and validation are in the
 [CLI reference](../../CLI.md#config-resolution).
 
+`providers.<id>.auth_scheme` selects Messages credential presentation using
+exactly `x-api-key` or `bearer`. Omission or null declares no override: a derived
+provider inherits its parent's explicit scheme; otherwise Messages defaults to
+`x-api-key`. An explicit child value takes precedence. This provider setting
+also applies to its configured account slots, and selects one credential header:
+`x-api-key` or `Authorization: Bearer`. Other transport authentication keeps its
+existing behavior. Unsupported scheme names MUST be rejected. Older readers
+that silently ignored this field do not satisfy an explicit Bearer requirement.
+Endpoint and key values remain the child's own configuration, not inherited
+through `derives`.
+
 Named routers are selected by `bitrouter/<id>`. Router selection, defaults and
 ordered request checks are separate fields. Legacy preset/variant forms have
 explicit compatibility resolution; readers MUST NOT reinterpret them as an

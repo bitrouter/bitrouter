@@ -16,7 +16,8 @@ async fn count(fixture: &Fixture, table: &str) -> Result<i64> {
 }
 
 #[tokio::test]
-async fn admission_history_4095_4096_4097_upgrade_publish_replay_and_failed_commit() -> Result<()> {
+async fn admission_history_4095_4096_4097_upgrade_user_write_replay_and_failed_commit() -> Result<()>
+{
     let observed = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
     let recording = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let mut db = crate::db::connect("sqlite::memory:").await?;
@@ -74,44 +75,16 @@ async fn admission_history_4095_4096_4097_upgrade_publish_replay_and_failed_comm
         })
         .await
         .map_err(failure)?;
-    let mut slot = pinned.clone();
-    slot.resource_kind = ResourceKind::Credential;
-    slot.resource_id = "credential".try_into()?;
-    let mut route = route_input(&fixture, &slot)?;
-    route.operation_id = "fact-4096".try_into()?;
-    route.key = historical_route.key();
-    let Definition::Route {
-        routing,
-        selector,
-        policy,
-        credentials,
-    } = route.definition
-    else {
-        anyhow::bail!("route fixture");
+    let original = credential(&fixture, "fact-4096")?;
+    let created = put(&fixture, fixture.operator.clone(), original.clone()).await?;
+    let created_ref = reference(&original, &created)?;
+    ensure!(count(&fixture, "tenancy_resource_revisions").await? == 4097);
+    let mut next = original;
+    next.operation_id = "fact-4097".try_into()?;
+    next.expected_revision = Some(created_ref.revision_id.clone());
+    next.definition = Definition::Credential {
+        secret: uuid::Uuid::new_v4().to_string(),
     };
-    route.definition = Definition::ProfiledRoute {
-        routing,
-        selector,
-        policy,
-        credentials,
-        attachments: [
-            GenerationProtocol::ChatCompletions,
-            GenerationProtocol::Messages,
-            GenerationProtocol::Responses,
-        ]
-        .into_iter()
-        .map(|inbound_protocol| AdmissionAttachmentV1 {
-            inbound_protocol,
-            candidate_index: 0,
-            credential: slot.clone(),
-            profile: pinned.clone(),
-        })
-        .collect(),
-    };
-    put(&fixture, fixture.operator.clone(), route).await?;
-    ensure!(count(&fixture, "tenancy_resource_revisions").await? == 4097); // 3647 + 449 + credential
-
-    let next = profile(&fixture, "fact-4097", Some(head.revision_id.clone()), 7)?;
     let revisions = count(&fixture, "tenancy_resource_revisions").await?;
     fixture.db.execute_unprepared("CREATE TRIGGER refuse_admission_operation BEFORE INSERT ON tenancy_operations WHEN NEW.operation_id='fact-4097' BEGIN SELECT RAISE(ABORT,'injected commit rollback'); END").await?;
     ensure!(
@@ -121,11 +94,11 @@ async fn admission_history_4095_4096_4097_upgrade_publish_replay_and_failed_comm
     );
     ensure!(count(&fixture, "tenancy_resource_revisions").await? == revisions);
     ensure!(
-        lifecycle::head(&fixture.db, &fixture.installation, &head.key())
+        lifecycle::head(&fixture.db, &fixture.installation, &created_ref.key())
             .await?
             .context("head")?
             .reference
-            == head
+            == created_ref
     );
     fixture
         .db
@@ -163,7 +136,7 @@ async fn admission_history_4095_4096_4097_upgrade_publish_replay_and_failed_comm
                     .resource_admission
                     .current_profile(&pinned)
                     .map(|(r, _)| r.revision_id)
-                    != applied.resource_revision
+                    != Some(head.revision_id.clone())
             {
                 return Err(ErrorCode::AuthorityUnavailable);
             }

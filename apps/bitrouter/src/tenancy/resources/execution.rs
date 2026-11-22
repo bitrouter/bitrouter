@@ -2,6 +2,7 @@
 
 #[cfg(all(feature = "core", feature = "harness"))]
 mod block_cost;
+pub(in crate::tenancy) mod catalog;
 mod compact;
 mod native_v1;
 mod ordered;
@@ -41,7 +42,7 @@ use crate::{
 use super::{Envelope, compiler};
 use native_v1::NativeChains;
 
-pub(super) fn generation_protocol(
+pub(in crate::tenancy) fn generation_protocol(
     inbound: &ApiProtocol,
 ) -> Result<bitrouter_ai::tenancy::ordered::GenerationProtocol> {
     use bitrouter_ai::tenancy::ordered::GenerationProtocol;
@@ -144,6 +145,24 @@ impl RetainedExecutionRevision {
     }
     pub(crate) fn document(&self) -> &Configuration {
         &self.document
+    }
+
+    pub(crate) fn is_configured(&self) -> bool {
+        !self.routes.is_empty()
+            && self
+                .routes
+                .values()
+                .all(|route| route.authority_root.is_some())
+    }
+
+    pub(in crate::tenancy) fn catalog_dependencies(
+        &self,
+        route: &str,
+    ) -> Result<Vec<ResourceRef>, ErrorCode> {
+        self.routes
+            .get(route)
+            .map(|route| route.dependencies.clone())
+            .ok_or(ErrorCode::NotFound)
     }
 
     /// Capture has one subject route; an explicitly selected judge is the only
@@ -380,7 +399,9 @@ pub(crate) struct RetainedRoute {
 
 struct RouteData {
     reference: ResourceRef,
-    admission: Option<Vec<bitrouter_ai::tenancy::resources_v3::NativeAdmissionAttachmentV1>>,
+    authority_root: Option<ResourceRef>,
+    admission:
+        Option<Vec<crate::tenancy::resources::manifest::native::NativeAdmissionAttachmentV1>>,
     assessment: Option<ResourceRef>,
     block: Option<Box<super::block::Profile>>,
     block_pricing: Vec<Option<crate::gateway::pipeline::stream::UsagePricing>>,
@@ -811,6 +832,39 @@ impl RetainedRoute {
         &self,
         input: &mut crate::gateway::pipeline::types::PipelineInput,
     ) {
+        if self.data.authority_root.is_some() {
+            if let crate::gateway::pipeline::types::PipelineInput::Generation(prompt) = input {
+                if prompt.system.is_none() {
+                    prompt.system.clone_from(&self.data.overrides.system_prompt);
+                }
+                if let Ok(defaults) = catalog::canonical_defaults(&self.data.overrides) {
+                    crate::tenancy::execution::generation_defaults::apply(
+                        &defaults,
+                        &mut prompt.params,
+                    );
+                }
+                crate::gateway::pipeline::context::apply_parameter_defaults(
+                    &mut prompt.params,
+                    self.data.overrides.params.iter().filter(|(name, _)| {
+                        !matches!(
+                            name.as_str(),
+                            "temperature"
+                                | "top_p"
+                                | "max_tokens"
+                                | "max_completion_tokens"
+                                | "max_output_tokens"
+                                | "reasoning_effort"
+                                | "top_k"
+                                | "seed"
+                                | "stop"
+                                | "presence_penalty"
+                                | "frequency_penalty"
+                        )
+                    }),
+                );
+            }
+            return;
+        }
         if let Some(prompt) = input.generation_prompt_mut() {
             prompt
                 .params
@@ -996,7 +1050,9 @@ impl RetainedRoute {
     }
 
     fn overrides(&self) -> PromptOverrides {
-        if self.selection.operation() == ModelOperation::Decisions {
+        if self.data.authority_root.is_some()
+            || self.selection.operation() == ModelOperation::Decisions
+        {
             PromptOverrides::default()
         } else {
             let mut overrides = self.data.overrides.clone();

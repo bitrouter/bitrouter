@@ -163,11 +163,26 @@ async fn native_generate_content_mounted_discovery_without_peer_is_disabled_and_
     let control = ordered.control(true, HttpVersion::Http1Only)?;
     let capabilities = control.ordered_generate_content_capabilities().await?;
     ensure!(!capabilities.enabled && !capabilities.cached_content_enabled);
+    let removed = reqwest::Client::new()
+        .get(format!(
+            "{}/control/v1/tenancy/resource-capabilities/v3",
+            ordered.endpoint
+        ))
+        .bearer_auth(OPERATOR)
+        .header(
+            "Bitrouter-Installation-Id",
+            ordered.fixture.installation.as_str(),
+        )
+        .send()
+        .await?;
+    // The removed route reaches the mounted dispatch fallback, which refuses
+    // GET before dispatch. The isolated control router separately proves 404.
+    ensure!(removed.status() == StatusCode::FORBIDDEN);
+    let removed: bitrouter_ai::tenancy::operation::Error = removed.json().await?;
     ensure!(
-        !control
-            .resource_capabilities_v3(&ordered.fixture.installation)
-            .await?
-            .provisioning_enabled
+        removed.code == bitrouter_ai::tenancy::operation::ErrorCode::Forbidden
+            && removed.dispatch_state
+                == bitrouter_ai::tenancy::operation::DispatchState::NotStarted
     );
     let binding = ordered
         .binding(vec![0], GenerationProtocol::ChatCompletions)

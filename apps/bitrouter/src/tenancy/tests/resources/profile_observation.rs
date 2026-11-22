@@ -1,4 +1,4 @@
-//! Standalone retained profiles use the real writer, authority and sampler.
+//! Standalone retained profiles use explicit history fixtures, authority and sampler.
 use super::*;
 use axum::{
     body::Body,
@@ -14,7 +14,6 @@ use bitrouter_ai::{
             AdmissionProfileObservationRequestV1 as Request,
             AdmissionProfileObservationSnapshotV1 as Snapshot,
         },
-        resources_v2::{DefinitionV2, ResourcePutV2},
     },
 };
 use serde_json::{Value, json};
@@ -52,59 +51,28 @@ async fn provision_in_pool(
     fixture: &Fixture,
     pool: &str,
     name: &str,
-    operation: &str,
+    _operation: &str,
     expected: Option<RevisionId>,
     rules: Value,
 ) -> Result<ResourceRef> {
-    let key = ResourceKey {
-        owner_kind: OwnerKind::OperatorPool,
-        owner_id: pool.try_into()?,
-        resource_kind: ResourceKind::Policy,
-        resource_id: name.try_into()?,
-    };
-    let command = if rules["schema_version"] == 2 {
-        Command::ResourceV2(
-            fixture.tenant.clone(),
-            ResourcePutV2 {
-                format: 2,
-                operation_id: operation.try_into()?,
-                installation_id: fixture.installation.clone(),
-                key: key.clone(),
-                expected_revision: expected,
-                definition: DefinitionV2::AdmissionProfileV2 {
-                    profile: serde_json::from_value(rules)?,
-                },
-            },
-        )
+    let kind = if rules["schema_version"] == 2 {
+        "admission_profile_v2"
     } else {
-        Command::Resource(
-            fixture.tenant.clone(),
-            ResourcePut {
-                format: 1,
-                operation_id: operation.try_into()?,
-                installation_id: fixture.installation.clone(),
-                key: key.clone(),
-                expected_revision: expected,
-                definition: Definition::AdmissionProfile {
-                    profile: serde_json::from_value(rules)?,
-                },
-            },
-        )
+        "admission_profile"
     };
-    let result = result(
-        fixture
-            .service
-            .execute(fixture.operator.clone(), command)
-            .await
-            .map_err(failure)?,
-    )?;
-    Ok(ResourceRef {
-        owner_kind: key.owner_kind,
-        owner_id: key.owner_id,
-        resource_kind: key.resource_kind,
-        resource_id: key.resource_id,
-        revision_id: result.resource_revision.context("revision")?,
-    })
+    super::history::seed(
+        &fixture.service,
+        &fixture.db,
+        ResourceKey {
+            owner_kind: OwnerKind::OperatorPool,
+            owner_id: pool.try_into()?,
+            resource_kind: ResourceKind::Policy,
+            resource_id: name.try_into()?,
+        },
+        expected,
+        json!({"kind":kind,"profile":rules}),
+    )
+    .await
 }
 fn request(fixture: &Fixture, profiles: Vec<ResourceRef>) -> Result<Request> {
     Ok(Request {
@@ -204,33 +172,9 @@ fn http_request(fixture: &Fixture, input: &Request) -> Result<HttpRequest<Body>>
         .header("content-type", "application/json")
         .body(Body::from(serde_json::to_vec(input)?))?)
 }
-async fn revoke(fixture: &Fixture, reference: ResourceRef, name: &str) -> Result<()> {
-    result(
-        fixture
-            .service
-            .execute(
-                fixture.operator.clone(),
-                Command::RevokeResource(
-                    fixture.tenant.clone(),
-                    ResourceRevoke {
-                        format: 1,
-                        operation_id: name.try_into()?,
-                        installation_id: fixture.installation.clone(),
-                        reference,
-                        expected_authority_revision: fixture
-                            .service
-                            .current()
-                            .map_err(failure)?
-                            .revision,
-                    },
-                ),
-            )
-            .await
-            .map_err(failure)?,
-    )?;
-    Ok(())
+async fn revoke(fixture: &Fixture, reference: ResourceRef, _name: &str) -> Result<()> {
+    super::history::revoke(&fixture.service, &fixture.db, &reference).await
 }
-
 #[tokio::test]
 async fn standalone_versions_observe_without_routes_configurations_or_credentials() -> Result<()> {
     let fixture = keyed_fixture().await?;
@@ -387,8 +331,15 @@ async fn missing_nonprofile_and_full_ref_transplants_never_substitute_authority(
         name: "selected".into(),
         dependencies: Vec::new(),
     };
-    let result = put(&fixture, fixture.operator.clone(), policy.clone()).await?;
-    cases.push(reference(&policy, &result)?);
+    let nonprofile = super::history::seed(
+        &fixture.service,
+        &fixture.db,
+        policy.key,
+        None,
+        serde_json::to_value(policy.definition)?,
+    )
+    .await?;
+    cases.push(nonprofile);
     let input = request(&fixture, cases)?;
     let observed = read(&fixture, &input).await?;
     ensure!(observed.profiles[0].availability == AvailabilityObservation::Eligible);

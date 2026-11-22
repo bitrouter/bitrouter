@@ -33,6 +33,7 @@ pub struct OrderedTenantGateway<'a> {
     route_id: String,
     generation_defaults_digest: Option<Digest>,
     generate_content: Option<bool>,
+    catalog_count: Option<usize>,
 }
 
 impl std::fmt::Debug for OrderedTenantGateway<'_> {
@@ -92,9 +93,21 @@ impl GatewayClient {
         }
         Ok(OrderedTenantGateway {
             generate_content: None,
+            catalog_count: (binding.selection.admission_mode
+                == bitrouter_ai::tenancy::admission::AdmissionMode::ProfiledV1
+                && binding.selection.route.owner_kind
+                    == bitrouter_ai::tenancy::authority::OwnerKind::OperatorPool
+                && binding
+                    .selection
+                    .candidate_indices
+                    .iter()
+                    .enumerate()
+                    .all(|(index, ordinal)| usize::from(*ordinal) == index))
+            .then_some(binding.selection.candidate_indices.len()),
             generation_defaults_digest: binding.selection.generation_defaults_digest.clone(),
             inner: TenantGateway {
                 generation_defaults: None,
+                catalog_selection: None,
                 client: self,
                 headers,
             },
@@ -104,6 +117,45 @@ impl GatewayClient {
 }
 
 impl OrderedTenantGateway<'_> {
+    /// Attach the exact configured instructions used to prepare this binding.
+    /// They are carried in the request body and never forwarded to a provider.
+    ///
+    /// # Errors
+    /// Rejects malformed, competing or differently rooted instructions before I/O.
+    pub fn with_catalog_selection(
+        mut self,
+        selection: &bitrouter_ai::tenancy::catalog::CatalogSelectionRequestV1,
+    ) -> Result<Self, Error> {
+        selection
+            .validate()
+            .map_err(|_| Error::Request("invalid configured selection"))?;
+        if selection.route_id.as_str() != self.route_id
+            || self.inner.catalog_selection.is_some()
+            || self.catalog_count != Some(selection.candidates.len())
+        {
+            return Err(Error::Request("configured selection differs from binding"));
+        }
+        self.inner.catalog_selection = Some(selection.clone());
+        Ok(self)
+    }
+
+    fn check_catalog_protocol(
+        &self,
+        protocol: bitrouter_ai::tenancy::ordered::GenerationProtocol,
+    ) -> Result<(), Error> {
+        if self
+            .inner
+            .catalog_selection
+            .as_ref()
+            .is_some_and(|selection| selection.inbound_protocol != protocol)
+        {
+            return Err(Error::Request(
+                "configured selection protocol differs from request",
+            ));
+        }
+        Ok(())
+    }
+
     /// Opt in to opaque native controls using an explicit matching observation.
     ///
     /// Responses prior-response/conversation and Messages context values remain
@@ -264,6 +316,7 @@ impl OrderedTenantGateway<'_> {
     ) -> Result<(), Error> {
         reject_stream_shadow(extra)?;
         if extra.contains_key(BODY_MEMBER)
+            || extra.contains_key(bitrouter_ai::tenancy::catalog::BODY_MEMBER)
             || self.generation_defaults_digest.is_some() != self.inner.generation_defaults.is_some()
         {
             return Err(Error::Request("missing or competing canonical defaults"));
@@ -282,6 +335,9 @@ impl OrderedTenantGateway<'_> {
         self,
         request: &ChatRequest,
     ) -> Result<Reply<Body<ChatResponse, ChatChunk>>, Error> {
+        self.check_catalog_protocol(
+            bitrouter_ai::tenancy::ordered::GenerationProtocol::ChatCompletions,
+        )?;
         self.validate_request(&request.model, &request.extra)?;
         self.inner.chat_reply(request).await
     }
@@ -294,6 +350,7 @@ impl OrderedTenantGateway<'_> {
         self,
         request: &MessagesRequest,
     ) -> Result<Reply<Body<MessagesResponse, MessagesEvent>>, Error> {
+        self.check_catalog_protocol(bitrouter_ai::tenancy::ordered::GenerationProtocol::Messages)?;
         self.validate_request(&request.model, &request.extra)?;
         self.inner.messages_reply(request).await
     }
@@ -306,6 +363,7 @@ impl OrderedTenantGateway<'_> {
         self,
         request: &ResponsesRequest,
     ) -> Result<Reply<Body<ResponsesResponse, ResponsesEvent>>, Error> {
+        self.check_catalog_protocol(bitrouter_ai::tenancy::ordered::GenerationProtocol::Responses)?;
         self.validate_request(&request.model, &request.extra)?;
         self.inner.responses_reply(request).await
     }
@@ -316,6 +374,67 @@ pub(super) fn envelope_body(
     defaults: &GenerationDefaultsEnvelopeV1,
 ) -> Result<Vec<u8>, Error> {
     bounded_envelope_body(request, defaults)
+}
+
+/// Preserve the original native JSON tokens while adding transport metadata.
+pub(super) fn catalog_body(
+    request: &[u8],
+    selection: &bitrouter_ai::tenancy::catalog::CatalogSelectionRequestV1,
+) -> Result<Vec<u8>, Error> {
+    use serde::{
+        Deserialize,
+        de::{MapAccess, Visitor},
+    };
+    struct Object;
+    impl<'de> Visitor<'de> for Object {
+        type Value = bool;
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("a configured request object")
+        }
+        fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<bool, M::Error> {
+            let mut empty = true;
+            while let Some(key) = map.next_key::<String>()? {
+                if key == bitrouter_ai::tenancy::catalog::BODY_MEMBER {
+                    return Err(serde::de::Error::custom("competing configured selection"));
+                }
+                map.next_value::<serde::de::IgnoredAny>()?;
+                empty = false;
+            }
+            Ok(empty)
+        }
+    }
+    struct RequestObject(bool);
+    impl<'de> Deserialize<'de> for RequestObject {
+        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            d.deserialize_map(Object).map(Self)
+        }
+    }
+    let RequestObject(empty) = serde_json::from_slice(request)
+        .map_err(|_| Error::Request("invalid or competing configured request"))?;
+    let end = request
+        .iter()
+        .rposition(|byte| !byte.is_ascii_whitespace())
+        .filter(|index| request[*index] == b'}')
+        .ok_or(Error::Request("configured request must be an object"))?;
+    let metadata = serde_json::to_vec(selection)
+        .map_err(|_| Error::Request("invalid configured selection encoding"))?;
+    let member = bitrouter_ai::tenancy::catalog::BODY_MEMBER;
+    let size = end
+        .checked_add(metadata.len())
+        .and_then(|size| size.checked_add(member.len() + 6))
+        .filter(|size| *size <= 16 * 1024 * 1024)
+        .ok_or(Error::Request("generation request exceeds body limit"))?;
+    let mut body = Vec::with_capacity(size);
+    body.extend_from_slice(&request[..end]);
+    if !empty {
+        body.push(b',');
+    }
+    body.push(b'"');
+    body.extend_from_slice(member.as_bytes());
+    body.extend_from_slice(b"\":");
+    body.extend_from_slice(&metadata);
+    body.push(b'}');
+    Ok(body)
 }
 
 pub(super) fn envelope_v2_body(

@@ -19,7 +19,7 @@ pub(super) async fn import_v2(
     rows: Vec<Value>,
 ) -> Result<()> {
     resources
-        .import_bytes(
+        .seed_history_bytes(
             db,
             &serde_json::to_vec(
                 &json!({"format":2,"installation_id":resources.installation,"resources":rows}),

@@ -75,7 +75,7 @@ fn manifest(installation: &InstallationId, rows: Vec<Value>) -> Result<Vec<u8>> 
 
 async fn import(resources: &Resources, db: &DatabaseConnection, rows: Vec<Value>) -> Result<()> {
     resources
-        .import_bytes(db, &manifest(&resources.installation, rows)?)
+        .seed_history_bytes(db, &manifest(&resources.installation, rows)?)
         .await
 }
 

@@ -1,8 +1,7 @@
 use bitrouter_ai::tenancy::{
     admission::AdmissionProfileV1,
     admission_v2::AdmissionProfileV2,
-    resources::ResourcePut,
-    resources_v2::{ResourceCapabilitiesV2, ResourcePutRequest, ResourcePutV2},
+    resources::{ResourceCapabilities, ResourcePut},
     validation::Validate,
 };
 use serde_json::{Value, json};
@@ -11,30 +10,7 @@ type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 #[cfg(feature = "schema")]
 #[test]
-fn shared_health_schemas_are_separate_closed_versioned_contracts() -> TestResult {
-    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/specs/resource-provisioning-v2");
-    for (name, schema) in [
-        ("put.schema.json", schemars::schema_for!(ResourcePutV2)),
-        (
-            "capabilities.schema.json",
-            schemars::schema_for!(ResourceCapabilitiesV2),
-        ),
-    ] {
-        let value = serde_json::to_value(&schema)?;
-        assert_eq!(value["additionalProperties"], false);
-        let rendered = format!("{}\n", serde_json::to_string_pretty(&schema)?);
-        let path = directory.join(name);
-        // Bootstrap only new schema artifacts. Existing compatibility fixtures
-        // cannot be overwritten by this switch.
-        if std::env::var("BITROUTER_WRITE_SHARED_HEALTH_SCHEMAS").as_deref() == Ok("1")
-            && !path.exists()
-        {
-            std::fs::create_dir_all(&directory)?;
-            std::fs::write(&path, &rendered)?;
-        }
-        assert_eq!(std::fs::read_to_string(path)?, rendered);
-    }
+fn shared_health_rules_keep_their_closed_runtime_schema() -> TestResult {
     let schema = serde_json::to_value(schemars::schema_for!(AdmissionProfileV2))?;
     let required = schema["required"].as_array().ok_or("required fields")?;
     for field in [
@@ -64,30 +40,17 @@ fn command() -> Value {
 }
 
 #[test]
-fn shared_profile_and_put_round_trip_without_extending_v1() -> TestResult {
+fn runtime_profile_round_trip_does_not_restore_platform_publication() -> TestResult {
     let value = profile();
     let decoded: AdmissionProfileV2 = serde_json::from_value(value.clone())?;
     decoded.validate()?;
     assert_eq!(serde_json::to_value(decoded)?, value);
     assert!(serde_json::from_value::<AdmissionProfileV1>(value).is_err());
-    let value = command();
-    let decoded: ResourcePutV2 = serde_json::from_value(value.clone())?;
-    decoded.validate()?;
-    assert_eq!(serde_json::to_value(decoded)?, value);
-    assert!(serde_json::from_value::<ResourcePut>(value.clone()).is_err());
-    assert!(matches!(
-        serde_json::from_value::<ResourcePutRequest>(value)?,
-        ResourcePutRequest::V2(_)
-    ));
-    let original = json!({"format":1,"operation_id":"old","installation_id":"installation",
-        "key":{"owner_kind":"operator_pool","owner_id":"pool","resource_kind":"policy","resource_id":"local"},
-        "expected_revision":null,"definition":{"kind":"admission_profile","profile":{
-        "schema_version":1,"rate":null,"health":null,"fallback":"stop"}}});
-    let ResourcePutRequest::V1(decoded) = serde_json::from_value(original.clone())? else {
-        return Err("wrong original decoder".into());
-    };
-    decoded.validate()?;
-    assert_eq!(serde_json::to_value(decoded)?, original);
+    for format in [1, 2, 3] {
+        let mut removed = command();
+        removed["format"] = json!(format);
+        assert!(serde_json::from_value::<ResourcePut>(removed).is_err());
+    }
     Ok(())
 }
 
@@ -181,34 +144,11 @@ fn shared_numbers_preserve_exact_integral_decimal_and_full_width_rules() -> Test
 }
 
 #[test]
-fn format_dispatch_rejects_ambiguous_and_foreign_commands_before_validation() -> TestResult {
-    let raw = serde_json::to_string(&command())?;
-    for changed in [
-        raw.replace("\"format\":2", "\"format\":2,\"format\":1"),
-        raw.replace("\"format\":2", "\"format\":3"),
-        raw.replace("\"format\":2", "\"format\":2.1"),
-        raw.replace(
-            "\"kind\":\"admission_profile_v2\"",
-            "\"kind\":\"admission_profile\"",
-        ),
-        raw.replace(
-            "\"health_group_id\":\"circuit\"",
-            "\"health_group_id\":\"circuit\",\"health_group_id\":null",
-        ),
-        raw.replacen('{', "{\"unknown\":null,", 1),
-    ] {
-        assert!(serde_json::from_str::<ResourcePutRequest>(&changed).is_err());
-    }
-    serde_json::from_str::<ResourcePutRequest>(&raw.replace("\"format\":2", "\"format\":2e0"))?
-        .validate()?;
-    for (field, invalid) in [("owner_kind", "tenant"), ("resource_kind", "route")] {
-        let mut value = command();
-        value["key"][field] = json!(invalid);
-        assert!(
-            serde_json::from_value::<ResourcePutV2>(value)?
-                .validate()
-                .is_err()
-        );
+fn removed_platform_commands_are_not_reinterpreted_as_user_resources() -> TestResult {
+    let mut value = command();
+    for format in [json!(1), json!(2), json!(2.0), json!(3)] {
+        value["format"] = format;
+        assert!(serde_json::from_value::<ResourcePut>(value.clone()).is_err());
     }
     Ok(())
 }
@@ -245,30 +185,8 @@ fn rotation_changes_only_member_rpm_including_zero() -> TestResult {
 }
 
 #[test]
-fn discovery_is_closed_versioned_and_never_infers_shared_support() -> TestResult {
-    let raw = r#"{"format":2.0,"installation_id":"installation","provisioning_enabled":true,"max_command_bytes":1048576,"tenant_routes_require_approved_origins":true,"admission_profile_versions":[1.0,2e0]}"#;
-    serde_json::from_str::<ResourceCapabilitiesV2>(raw)?.validate()?;
-    for (needle, replacement) in [
-        ("[1.0,2e0]", "[1,1]"),
-        ("\"format\":2.0", "\"format\":1"),
-        ("1048576", "0"),
-        ("1048576", "1048577"),
-        (
-            "\"tenant_routes_require_approved_origins\":true",
-            "\"tenant_routes_require_approved_origins\":false",
-        ),
-    ] {
-        assert!(
-            serde_json::from_str::<ResourceCapabilitiesV2>(&raw.replace(needle, replacement))?
-                .validate()
-                .is_err()
-        );
-    }
-    for versions in ["[1]", "[1,2,3]", "[1.1,2]", "[1,256]"] {
-        assert!(
-            serde_json::from_str::<ResourceCapabilitiesV2>(&raw.replace("[1.0,2e0]", versions))
-                .is_err()
-        );
-    }
+fn removed_profile_discovery_does_not_fall_back_to_user_capabilities() -> TestResult {
+    let raw = r#"{"format":2,"installation_id":"installation","provisioning_enabled":true,"max_command_bytes":1048576,"tenant_routes_require_approved_origins":true,"admission_profile_versions":[1,2]}"#;
+    assert!(serde_json::from_str::<ResourceCapabilities>(raw).is_err());
     Ok(())
 }

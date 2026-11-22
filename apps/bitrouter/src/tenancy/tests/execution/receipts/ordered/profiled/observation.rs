@@ -141,19 +141,12 @@ async fn profiled_observer_only_root_reads_real_shared_count_without_rate_or_hea
             == 1
     );
     // A missing current authority is not an observed empty group.
-    let authority = harness.fixture.service.current().map_err(failure)?.revision;
-    control
-        .revoke_resource(
-            &harness.fixture.tenant,
-            &bitrouter_ai::tenancy::resources::ResourceRevoke {
-                format: 1,
-                operation_id: "revoke-observer".try_into()?,
-                installation_id: harness.fixture.installation.clone(),
-                reference: reference(0)?,
-                expected_authority_revision: authority,
-            },
-        )
-        .await?;
+    crate::tenancy::tests::resources::history::revoke(
+        &harness.fixture.service,
+        &harness.fixture.db,
+        &reference(0)?,
+    )
+    .await?;
     let denied = read()
         .await?
         .runtime_observation

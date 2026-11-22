@@ -9,6 +9,43 @@ struct Tag {
     kind: String,
 }
 
+pub(super) fn required_nullable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RetainedProfileV1 {
+    #[serde(rename = "kind")]
+    _kind: String,
+    profile: AdmissionProfileV1,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RetainedProfileV2 {
+    #[serde(rename = "kind")]
+    _kind: String,
+    profile: AdmissionProfileV2,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RetainedProfiledRoute {
+    #[serde(rename = "kind")]
+    _kind: String,
+    routing: Value,
+    selector: String,
+    #[serde(deserialize_with = "required_nullable")]
+    policy: Option<ResourceRef>,
+    credentials: Vec<bitrouter_ai::tenancy::resources::CredentialBinding>,
+    attachments: Vec<AdmissionAttachmentV1>,
+}
+
 #[derive(Deserialize)]
 #[serde(
     remote = "Definition",
@@ -54,7 +91,7 @@ impl<'de> Deserialize<'de> for Definition {
         let raw = Box::<RawValue>::deserialize(deserializer)?;
         let tag: Tag = serde_json::from_str(raw.get()).map_err(D::Error::custom)?;
         if tag.kind == "native_profiled_route_v1" {
-            let bitrouter_ai::tenancy::resources_v3::DefinitionV3::NativeProfiledRouteV1 {
+            let crate::tenancy::resources::manifest::native::NativeDefinition::NativeProfiledRouteV1 {
                 routing,
                 selector,
                 policy,
@@ -77,42 +114,40 @@ impl<'de> Deserialize<'de> for Definition {
             });
         }
         if tag.kind == "admission_profile_v2" {
-            let bitrouter_ai::tenancy::resources_v2::DefinitionV2::AdmissionProfileV2 { profile } =
+            let RetainedProfileV2 { profile, .. } =
                 serde_json::from_str(raw.get()).map_err(D::Error::custom)?;
             return Ok(Self::AdmissionProfileV2 { profile });
         }
-        if matches!(tag.kind.as_str(), "admission_profile" | "profiled_route") {
-            let public: bitrouter_ai::tenancy::resources::Definition =
+        if tag.kind == "admission_profile" {
+            let RetainedProfileV1 { profile, .. } =
                 serde_json::from_str(raw.get()).map_err(D::Error::custom)?;
-            match public {
-                bitrouter_ai::tenancy::resources::Definition::AdmissionProfile { profile } => {
-                    Ok(Self::AdmissionProfile { profile })
-                }
-                bitrouter_ai::tenancy::resources::Definition::ProfiledRoute {
-                    routing,
-                    selector,
-                    policy,
-                    credentials,
-                    attachments,
-                } => Ok(Self::ProfiledRoute {
-                    routing,
-                    selector,
-                    policy,
-                    attachments,
-                    credentials: credentials
-                        .into_iter()
-                        .map(|binding| CredentialBinding {
-                            provider: binding.provider,
-                            account: binding.account,
-                            credential: binding.credential,
-                        })
-                        .collect(),
-                }),
-                _ => Err(D::Error::custom("invalid profiled resource definition")),
-            }
-        } else {
-            LegacyDefinition::deserialize(&mut serde_json::Deserializer::from_str(raw.get()))
-                .map_err(D::Error::custom)
+            return Ok(Self::AdmissionProfile { profile });
         }
+        if tag.kind == "profiled_route" {
+            let RetainedProfiledRoute {
+                routing,
+                selector,
+                policy,
+                credentials,
+                attachments,
+                ..
+            } = serde_json::from_str(raw.get()).map_err(D::Error::custom)?;
+            return Ok(Self::ProfiledRoute {
+                routing,
+                selector,
+                policy,
+                attachments,
+                credentials: credentials
+                    .into_iter()
+                    .map(|binding| CredentialBinding {
+                        provider: binding.provider,
+                        account: binding.account,
+                        credential: binding.credential,
+                    })
+                    .collect(),
+            });
+        }
+        LegacyDefinition::deserialize(&mut serde_json::Deserializer::from_str(raw.get()))
+            .map_err(D::Error::custom)
     }
 }

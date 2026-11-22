@@ -171,9 +171,6 @@ impl State {
         definition: &PublicDefinition,
     ) -> std::result::Result<(), ErrorCode> {
         match definition {
-            PublicDefinition::AdmissionProfile { profile } => {
-                self.validate_profile(key, View::Local(profile))?;
-            }
             PublicDefinition::Policy { .. }
                 if self
                     .profiles
@@ -185,14 +182,6 @@ impl State {
             _ => {}
         }
         Ok(())
-    }
-
-    pub(in crate::tenancy) fn validate_shared_put(
-        &self,
-        key: &ResourceKey,
-        profile: &AdmissionProfileV2,
-    ) -> std::result::Result<(), ErrorCode> {
-        self.validate_profile(key, View::Shared(profile))
     }
 
     fn validate_profile(
@@ -251,26 +240,6 @@ impl State {
     pub(in crate::tenancy) fn record_profiled_route(&mut self, reference: &ResourceRef) {
         self.protected_keys.insert(reference.key());
         self.profiled_routes.insert(reference.clone());
-    }
-
-    pub(in crate::tenancy) fn apply_put(
-        &mut self,
-        reference: &ResourceRef,
-        definition: &PublicDefinition,
-    ) {
-        match definition {
-            PublicDefinition::AdmissionProfile { profile } => {
-                self.record_profile(reference, View::Local(profile));
-            }
-            PublicDefinition::ProfiledRoute { .. } => {
-                self.protected_keys.insert(reference.key());
-                self.profiled_routes.insert(reference.clone());
-            }
-            PublicDefinition::Policy { .. } => {
-                self.policy_keys.insert(reference.key());
-            }
-            _ => {}
-        }
     }
 
     fn insert(&mut self, artifact: &Artifact) -> Result<()> {

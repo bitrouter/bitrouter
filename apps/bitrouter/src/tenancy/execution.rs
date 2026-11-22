@@ -47,7 +47,7 @@ mod count;
 pub(crate) mod deadline;
 #[cfg(all(feature = "core", feature = "harness"))]
 mod experiment;
-mod generation_defaults;
+pub(super) mod generation_defaults;
 #[cfg(all(feature = "core", feature = "harness"))]
 pub(crate) mod host;
 pub(crate) mod http_continuation;
@@ -95,6 +95,7 @@ struct DispatchIdentity {
     execution_revision: RevisionId,
     correlation_id: CorrelationId,
     selection: Option<OrderedCandidateSelectionV1>,
+    catalog_selection: Option<bitrouter_ai::tenancy::catalog::CatalogSelectionRequestV1>,
     native_controls: bool,
 }
 
@@ -488,6 +489,7 @@ impl Service {
             self.require_static_ordered_credentials(view, &route)
         })
         .map_err(Failure::from)?;
+        let configured = revision.is_configured();
         let mut limits = revision.document().limits.clone();
         if fail_fast {
             limits.queued_work = 0;
@@ -515,11 +517,16 @@ impl Service {
         let _count = self
             .pin_unknown_count(&submission.tenant, submission.deadline())
             .await?;
-        let lease = self
-            .admission
-            .acquire_until(&submission.tenant, &limits, submission.deadline())
-            .await
-            .map_err(Failure::from)?;
+        let lease = if configured {
+            self.admission
+                .acquire_configured_until(&submission.tenant, fail_fast, submission.deadline())
+                .await
+        } else {
+            self.admission
+                .acquire_until(&submission.tenant, &limits, submission.deadline())
+                .await
+        }
+        .map_err(Failure::from)?;
         let intent_slot = route
             .is_ordered()
             .then(|| self.reserve_ordered_intent())
@@ -1199,6 +1206,7 @@ fn dispatch_binding(headers: &HeaderMap) -> Result<DispatchIdentity, Failure> {
                 execution_revision: binding.execution_revision,
                 correlation_id: binding.correlation_id,
                 selection: None,
+                catalog_selection: None,
                 native_controls: false,
             })
         }
@@ -1241,6 +1249,7 @@ fn dispatch_binding(headers: &HeaderMap) -> Result<DispatchIdentity, Failure> {
                 execution_revision: binding.execution_revision,
                 correlation_id: binding.correlation_id,
                 selection: Some(binding.selection),
+                catalog_selection: None,
                 native_controls,
             })
         }

@@ -404,6 +404,7 @@ impl Weight {
     fn route(&mut self, value: &RouteData) -> Result<()> {
         let RouteData {
             reference,
+            authority_root,
             admission,
             assessment,
             block,
@@ -417,6 +418,9 @@ impl Weight {
             candidates,
             choice,
         } = value;
+        if let Some(authority_root) = authority_root {
+            self.reference(authority_root)?;
+        }
         if let Some(attachments) = admission {
             self.vector(attachments)?;
             for attachment in attachments {

@@ -19,6 +19,8 @@ use bitrouter_sdk::{
 };
 use serde_json::{Value, json};
 
+#[path = "ordered_tenancy/catalog_control.rs"]
+mod catalog_control;
 #[path = "ordered_tenancy/control.rs"]
 mod control;
 #[path = "ordered_tenancy/evidence.rs"]

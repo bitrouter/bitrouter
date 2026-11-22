@@ -542,7 +542,7 @@ fn qualified_protocol(protocol: &ApiProtocol, native_route: bool) -> bool {
     }
 }
 
-fn target_value_scoped(target: &RoutingTarget, native_route: bool) -> Result<Value> {
+pub(super) fn target_value_scoped(target: &RoutingTarget, native_route: bool) -> Result<Value> {
     ensure!(
         target.registry.is_none(),
         "registry targets are not qualified by the owned manifest"

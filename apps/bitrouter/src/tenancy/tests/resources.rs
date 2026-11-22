@@ -8,9 +8,9 @@ use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 use std::sync::Arc;
 
 mod admission;
-mod native_generate_content;
+pub(in crate::tenancy::tests) mod history;
 mod profile_observation;
-mod shared_admission;
+mod publication_removed;
 
 async fn keyed_fixture() -> Result<Fixture> {
     let mut fixture = Fixture::new().await?;

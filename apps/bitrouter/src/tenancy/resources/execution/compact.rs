@@ -76,6 +76,7 @@ pub(super) fn identifiers(value: &mut RetainedExecutionRevision) -> Result<()> {
 pub(super) fn route_data(value: &mut RouteData) -> Result<()> {
     let RouteData {
         reference: root,
+        authority_root,
         admission,
         assessment,
         block_pricing: _,
@@ -90,6 +91,9 @@ pub(super) fn route_data(value: &mut RouteData) -> Result<()> {
         candidates,
         choice: _, // Already normalized before the hidden child was shared.
     } = value;
+    if let Some(authority_root) = authority_root {
+        reference(authority_root)?;
+    }
     reference(root)?;
     if let Some(attachments) = admission {
         for attachment in attachments {

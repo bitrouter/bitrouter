@@ -10,7 +10,6 @@ use bitrouter_ai::tenancy::{
         ATTEMPT_DOMAIN, ATTEMPT_HEADER, Attempt, Disposition, OUTCOME_DOMAIN, OUTCOME_HEADER,
         Outcome as AdapterOutcome,
     },
-    resources_v3::ResourcePutV3,
     usage_evidence::{Protocol, Source},
 };
 use hmac::{Hmac, KeyInit, Mac};
@@ -267,10 +266,10 @@ impl Harness {
         let control = ordered.control(true, HttpVersion::Http1Only)?;
         ensure!(
             control
-                .resource_capabilities_v3(&ordered.fixture.installation)
+                .ordered_generate_content_capabilities()
                 .await
-                .context("native resource capability")?
-                .provisioning_enabled
+                .context("native inference capability")?
+                .enabled
         );
         // A preexisting Chat permission/root must never expose a native root.
         ensure!(
@@ -326,22 +325,14 @@ impl Harness {
             )
             .await
             .context("native resource status")?;
-        let command: ResourcePutV3 = serde_json::from_value(
-            json!({"format":3,"operation_id":"native-publish","installation_id":ordered.fixture.installation,"key":ordered.route.key(),"expected_revision":status.head_revision,"definition":definition}),
-        )?;
-        let published = control
-            .put_resource_v3(&ordered.fixture.tenant, &command)
-            .await
-            .map_err(|error| match &error {
-                bitrouter_sdk::error::Error::Tenancy(failure) => anyhow::anyhow!(
-                    "native resource publication: {error}; body={:?}",
-                    failure.body
-                ),
-                _ => anyhow::anyhow!("native resource publication: {error:?}"),
-            })?;
-        ordered.route.revision_id = published
-            .resource_revision
-            .context("published native revision")?;
+        ordered.route = crate::tenancy::tests::resources::history::seed(
+            &ordered.fixture.service,
+            &ordered.fixture.db,
+            ordered.route.key(),
+            status.head_revision,
+            definition,
+        )
+        .await?;
         let mut configuration = ordered
             .fixture
             .configuration_input("native-current-draft")?;
