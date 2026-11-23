@@ -26,17 +26,31 @@ struct Asset {
 
 impl Release {
     fn asset(&self, name: &str) -> Result<Url> {
-        let mut matches = self.assets.iter().filter(|a| a.name == name);
-        let asset = matches
-            .next()
-            .with_context(|| format!("release {} has no {name}", self.tag_name))?;
-        ensure!(matches.next().is_none(), "ambiguous release asset {name}");
-        Ok(Url::parse(&asset.browser_download_url)?)
+        self.asset_if_present(name)?
+            .with_context(|| format!("release {} has no {name}", self.tag_name))
     }
+
+    fn asset_if_present(&self, name: &str) -> Result<Option<Url>> {
+        let mut matches = self.assets.iter().filter(|a| a.name == name);
+        let asset = matches.next();
+        ensure!(matches.next().is_none(), "ambiguous release asset {name}");
+        asset
+            .map(|asset| {
+                Url::parse(&asset.browser_download_url).context("invalid release asset URL")
+            })
+            .transpose()
+    }
+}
+
+#[derive(Deserialize, PartialEq, Eq)]
+enum ManifestSchema {
+    #[serde(rename = "bitrouter.distribution.v1")]
+    V1,
 }
 
 #[derive(Deserialize)]
 struct Plan {
+    schema: Option<ManifestSchema>,
     tag: String,
     source_revision: String,
     products: Vec<PackagePlan>,
@@ -56,7 +70,24 @@ struct Distribution {
     profile: Option<String>,
     binary: String,
     archive: String,
-    checksum: String,
+    checksum: Option<String>,
+    sha256: Option<String>,
+}
+
+enum ArchiveDigest {
+    Inline(String),
+    Sidecar(Url),
+}
+
+fn validate_sha256(digest: &str) -> Result<()> {
+    ensure!(
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')),
+        "invalid archive SHA-256"
+    );
+    Ok(())
 }
 
 /// The resolved native archive and checksum from one product release.
@@ -67,7 +98,7 @@ pub struct Target {
     revision: String,
     distribution: Distribution,
     archive: Url,
-    checksum: Url,
+    digest: ArchiveDigest,
 }
 
 fn api_url(product: Product) -> Result<Url> {
@@ -197,13 +228,18 @@ pub async fn resolve(
         .timeout(Duration::from_secs(180))
         .build()?;
     let (version, release) = select(&client, product, tag, stable).await?;
+    let (inventory, schema) = match release.asset_if_present("distribution-manifest.json")? {
+        Some(url) => (url, Some(ManifestSchema::V1)),
+        None => (release.asset("distribution-plan.json")?, None),
+    };
     let plan: Plan = client
-        .get(release.asset("distribution-plan.json")?)
+        .get(inventory)
         .send()
         .await?
         .error_for_status()?
         .json()
         .await?;
+    ensure!(plan.schema == schema, "release manifest schema mismatch");
     ensure!(
         plan.tag == release.tag_name && !plan.source_revision.trim().is_empty(),
         "release plan tag or revision mismatch"
@@ -234,17 +270,26 @@ pub async fn resolve(
     ensure!(
         variants.next().is_none()
             && distribution.binary == product.binary()
-            && distribution.archive == name
-            && distribution.checksum == format!("{name}.sha256"),
+            && distribution.archive == name,
         "release distribution identity mismatch"
     );
+    let digest = match (&schema, &distribution.sha256, &distribution.checksum) {
+        (Some(ManifestSchema::V1), Some(digest), None) => {
+            validate_sha256(digest)?;
+            ArchiveDigest::Inline(digest.clone())
+        }
+        (None, None, Some(name)) if *name == format!("{}.sha256", distribution.archive) => {
+            ArchiveDigest::Sidecar(release.asset(name)?)
+        }
+        _ => bail!("release distribution has an invalid checksum declaration"),
+    };
     Ok(Target {
         client,
         version,
         product,
         revision: plan.source_revision,
         archive: release.asset(&name)?,
-        checksum: release.asset(&distribution.checksum)?,
+        digest,
         distribution,
     })
 }
@@ -271,22 +316,29 @@ impl Target {
     /// Refuses a corrupt archive or an executable with a different built-in identity.
     pub async fn stage(self) -> Result<Candidate> {
         let dir = tempfile::tempdir()?;
-        let sidecar = self
-            .client
-            .get(self.checksum)
-            .send()
-            .await?
-            .error_for_status()?
-            .text()
-            .await?;
-        let mut parts = sidecar.split_whitespace();
-        let digest = parts.next().context("empty checksum")?;
-        ensure!(
-            parts.next().map(|s| s.trim_start_matches('*'))
-                == Some(self.distribution.archive.as_str())
-                && parts.next().is_none(),
-            "checksum does not name the selected archive"
-        );
+        let digest = match self.digest {
+            ArchiveDigest::Inline(digest) => digest,
+            ArchiveDigest::Sidecar(url) => {
+                let sidecar = self
+                    .client
+                    .get(url)
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .text()
+                    .await?;
+                let mut parts = sidecar.split_whitespace();
+                let digest = parts.next().context("empty checksum")?;
+                ensure!(
+                    parts.next().map(|s| s.trim_start_matches('*'))
+                        == Some(self.distribution.archive.as_str())
+                        && parts.next().is_none(),
+                    "checksum does not name the selected archive"
+                );
+                validate_sha256(digest)?;
+                digest.to_owned()
+            }
+        };
         let archive = dir.path().join(&self.distribution.archive);
         let mut response = self
             .client

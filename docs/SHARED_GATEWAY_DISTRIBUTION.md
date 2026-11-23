@@ -5,10 +5,11 @@
 features are exactly `["db-postgres", "multi-instance"]`. The process configuration selects shared authority at startup.
 
 The archive root and filename are `bitrouter-gateway-shared-<target>` with a
-`.tar.gz` extension, or `.zip` on Windows. The adjacent `.sha256` checks
-the downloaded bytes against the published checksum; `manifest.json` records
-the embedded identity, compilation profile, and binary digest. The profile
-spelling is `gateway-shared` in JSON, human output and archive names.
+`.tar.gz` extension, or `.zip` on Windows. The release's
+`distribution-manifest.json` records the archive SHA-256. The archive's
+`manifest.json` records the embedded identity, compilation profile and binary
+digest. The profile spelling is `gateway-shared` in JSON, human output and
+archive names.
 
 The `gateway` profile disables optional application features. Additional
 capabilities combined with `multi-instance` are classified as `custom`.
@@ -16,14 +17,14 @@ Set `gateway_state.mode: shared` to select shared PostgreSQL authority.
 
 ## CI and release path
 
-`.github/workflows/ci.yml` calls the reusable `gateway-artifacts.yml` with the
-`dev` compilation profile on PRs and the existing main/v1 pushes.
-`dist-workspace.toml` registers that same workflow as a cargo-dist local-artifacts
-job. The generated `release.yml` already calls it, waits for completion, and
-collects its `artifacts-*` outputs for the release path. The reusable workflow
-builds both gateway distributions on all five supported targets, verifies
-the archive checksum and the executable's `build-info` against the manifest,
-and keeps their archive and CI artifact names distinct. Cargo-dist owns the separate default service and BRO installers.
+`distribution-acceptance.yml` calls the reusable `gateway-artifacts.yml` with
+the `dev` compilation profile for scheduled and manual acceptance runs.
+`release.yml` calls it with the distribution profile on release tags that
+include the service. The reusable workflow builds both gateway distributions on
+all four supported targets. It verifies each archive against its internal
+sidecar and checks the executable's
+`build-info` against its embedded manifest. Cargo-dist generates the default
+service and BRO installers.
 
 The reusable workflow also owns a Linux PostgreSQL 17 service job. It downloads
 the already packaged x86_64 GNU shared archive and runs the ignored

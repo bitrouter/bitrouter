@@ -1,13 +1,15 @@
 // Exercise the actual cargo-dist installers offline, with two tiny Cargo packages
 // and two real versioned releases. Pass the pinned dist executable on PATH.
 import assert from 'node:assert/strict';
-import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, copyFileSync, cpSync, existsSync, linkSync, mkdirSync, readFileSync, renameSync, rmSync,
+import { execFile, execFileSync, spawn, spawnSync } from 'node:child_process';
+import { appendFileSync, copyFileSync, cpSync, createReadStream, existsSync, linkSync, mkdirSync, readFileSync, renameSync, rmSync,
   symlinkSync, writeFileSync } from 'node:fs';
 import { installEnv, tempRoot } from './environment.mjs';
 import { dirname, join } from 'node:path';
 import { createHash } from 'node:crypto';
+import { createServer } from 'node:http';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
 
 const scripts = fileURLToPath(new URL('../', import.meta.url));
 const root = tempRoot('split-install-');
@@ -27,7 +29,7 @@ function write(path, data) {
 function buildReleases() {
   run('git', ['init', '-q']);
   run('git', ['remote', 'add', 'origin', 'https://github.com/bitrouter/bitrouter.git']);
-  // Keep the production five-target plan for validation and generate real
+  // Keep the production four-target plan for validation and generate real
   // checksums for the one native target used by this offline test.
   const config = readFileSync(join(scripts, '../../../dist-workspace.toml'), 'utf8');
   write(join(root, 'dist-workspace.toml'), config.replace('[dist]', '[dist]\nsource-tarball = false'));
@@ -71,6 +73,9 @@ path = "src/main.rs"
     write(global, run(dist, ['build', '--artifacts=global', '-o', 'json']));
     run(process.execPath, [join(scripts, 'guard-installers.mjs'), global]);
     cpSync(assets, join(root, version), { recursive: true });
+    for (const pkg of Object.keys(names)) {
+      rmSync(join(root, version, `${pkg}-${host}.${windows ? 'zip' : 'tar.xz'}.sha256`));
+    }
     rmSync(assets, { recursive: true });
   }
 }
@@ -81,7 +86,7 @@ function prefix(label) {
 }
 const receipt = (p, pkg) => join(p.config, pkg, pkg + '-receipt.json');
 const binary = (p, pkg) => join(p.bin, names[pkg] + ext);
-function installer(p, pkg, version, interrupt) {
+function installer(p, pkg, version, interrupt, extraArgs = pkg === 'bitrouter-bro' && windows ? ['-BroOnly'] : [], overrides = {}) {
   const dir = join(root, version);
   let file = join(dir, pkg + '-installer.' + (windows ? 'ps1' : 'sh'));
   if (interrupt) {
@@ -100,12 +105,12 @@ function installer(p, pkg, version, interrupt) {
     write(file, script.replace(marker, () => hook + '\n' + marker));
   }
   const env = { ...installEnv(p.base, join(p.base, 'cargo'), p.config),
-    INSTALLER_DOWNLOAD_URL: pathToFileURL(dir).href };
-  return windows ? ['powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file], { env, encoding: 'utf8' }]
-    : ['sh', [file], { env, encoding: 'utf8' }];
+    INSTALLER_DOWNLOAD_URL: pathToFileURL(dir).href, ...overrides };
+  return windows ? ['powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file, ...extraArgs], { env, encoding: 'utf8' }]
+    : ['sh', [file, ...extraArgs], { env, encoding: 'utf8' }];
 }
-function install(p, pkg, version, refuse, interrupt) {
-  const result = spawnSync(...installer(p, pkg, version, interrupt));
+function install(p, pkg, version, refuse, interrupt, extraArgs, overrides) {
+  const result = spawnSync(...installer(p, pkg, version, interrupt, extraArgs, overrides));
   const output = result.stdout + result.stderr;
   if (refuse) {
     assert.notEqual(result.status, 0);
@@ -207,11 +212,16 @@ function testInstalls() {
   }
 
   const archive = join(root, next, `bitrouter-${host}.${windows ? 'zip' : 'tar.xz'}`);
-  appendFileSync(archive, 'damaged release');
-  const receiptBefore = readFileSync(receipt(source, 'bitrouter'));
-  install(source, 'bitrouter', next, /checksum mismatch/i);
-  assert.deepEqual(readFileSync(receipt(source, 'bitrouter')), receiptBefore);
-  assert.equal(JSON.parse(execFileSync(binary(source, 'bitrouter'))).version, old);
+  const originalArchive = readFileSync(archive);
+  try {
+    appendFileSync(archive, 'damaged release');
+    const receiptBefore = readFileSync(receipt(source, 'bitrouter'));
+    install(source, 'bitrouter', next, /checksum mismatch/i);
+    assert.deepEqual(readFileSync(receipt(source, 'bitrouter')), receiptBefore);
+    assert.equal(JSON.parse(execFileSync(binary(source, 'bitrouter'))).version, old);
+  } finally {
+    writeFileSync(archive, originalArchive);
+  }
 }
 
 async function testContention() {
@@ -241,10 +251,142 @@ async function testContention() {
   }
 }
 
+async function testCombinedInstallers() {
+  const [version, next] = versions;
+  const release = join(root, version);
+  assert.match(readFileSync(join(release, 'bitrouter-bro.rb'), 'utf8'),
+    /^  depends_on "bitrouter\/tap\/bitrouter"$/m);
+  if (windows) {
+    const p = prefix('windows-both');
+    install(p, 'bitrouter-bro', version, undefined, undefined, []);
+    const core = JSON.parse(execFileSync(binary(p, 'bitrouter')));
+    assert.equal(core.product, 'bitrouter');
+    assert.equal(core.version, version);
+    const record = JSON.parse(readFileSync(receipt(p, 'bitrouter')));
+    assert.deepEqual(record.binaries, ['bitrouter.exe']);
+    assert.equal(record.source.app_name, 'bitrouter');
+    assert.equal(record.binary_sha256,
+      createHash('sha256').update(readFileSync(binary(p, 'bitrouter'))).digest('hex'));
+
+    // A core initially installed into its own directory keeps its location
+    // and independent receipt when a later BRO installer updates the pair.
+    const custom = join(p.base, 'separate-core');
+    const other = prefix('windows-custom-core');
+    const override = { BITROUTER_INSTALL_DIR: custom };
+    const customBin = join(custom, 'bin');
+    install({ ...other, bin: customBin }, 'bitrouter', version, undefined, undefined, [], override);
+    const archive = join(root, next, `bitrouter-${host}.zip`);
+    const original = readFileSync(archive);
+    const oldCore = readFileSync(join(customBin, 'bitrouter.exe'));
+    const oldReceipt = readFileSync(receipt(other, 'bitrouter'));
+    try {
+      appendFileSync(archive, 'damaged core archive');
+      install(other, 'bitrouter-bro', next,
+        /BRO was installed.*Archive checksum mismatch/s, undefined, [], override);
+      assert.equal(JSON.parse(execFileSync(binary(other, 'bitrouter-bro'))).version, next);
+      assert.deepEqual(readFileSync(join(customBin, 'bitrouter.exe')), oldCore);
+      assert.deepEqual(readFileSync(receipt(other, 'bitrouter')), oldReceipt);
+    } finally {
+      writeFileSync(archive, original);
+    }
+    install(other, 'bitrouter-bro', next, undefined, undefined, [], override);
+    assert.equal(JSON.parse(execFileSync(join(customBin, 'bitrouter.exe'))).version, next);
+    assert.ok(!existsSync(binary(other, 'bitrouter')));
+  }
+
+  const suffix = windows ? '.zip' : '.tar.xz';
+  const archives = Object.keys(names).map(pkg => `${pkg}-${host}${suffix}`);
+  const seen = [];
+  let corruptCore = false;
+  const server = createServer((req, res) => {
+    const [, selected, name] = req.url.split('/');
+    seen.push(name);
+    if (!versions.includes(selected) || !archives.includes(name)) return res.writeHead(404).end();
+    if (corruptCore && name === archives[0]) return res.end('damaged archive');
+    createReadStream(join(root, selected, name)).pipe(res);
+  });
+  const app = join(root, 'npm-both');
+  mkdirSync(app);
+  const npm = windows
+    ? [process.execPath, [join(dirname(process.execPath), 'node_modules/npm/bin/npm-cli.js')]]
+    : ['npm', []];
+  const env = { ...process.env, NO_PROXY: '127.0.0.1', no_proxy: '127.0.0.1' };
+  const exec = promisify(execFile);
+  try {
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const source = `http://127.0.0.1:${server.address().port}`;
+    const binaries = { bro: 'run-bro.js', bitrouter: 'core/run-bitrouter.js' };
+    function npmArchive(selected) {
+      const directory = join(app, selected);
+      mkdirSync(directory);
+      execFileSync('tar', ['xf', join(root, selected, 'bitrouter-bro-npm-package.tar.gz'), '-C', directory]);
+      for (const file of ['package/package.json', 'package/core/package.json']) {
+        const path = join(directory, file);
+        const pkg = JSON.parse(readFileSync(path));
+        if (file === 'package/package.json') assert.deepEqual(pkg.bin, binaries);
+        pkg.artifactDownloadUrls = [`${source}/${selected}`];
+        write(path, JSON.stringify(pkg));
+      }
+      const archive = join(directory, 'bitrouter-bro.tgz');
+      execFileSync('tar', ['czf', archive, '-C', directory, 'package']);
+      return archive;
+    }
+    const archive = npmArchive(version);
+    const cli = (prefix, ...args) => exec(npm[0],
+      [...npm[1], '--global', '--prefix', prefix, ...args], { cwd: app, env, timeout: 180_000 });
+    const installed = join(app, 'installed');
+    const oldPackage = join(app, 'legacy');
+    write(join(oldPackage, 'package.json'), JSON.stringify({
+      name: 'bitrouter', version, bin: { bitrouter: 'run.js' },
+    }));
+    write(join(oldPackage, 'run.js'), '#!/usr/bin/env node\n');
+    const [npmTool, npmArgs] = npm;
+    const packed = await exec(npmTool, [...npmArgs, 'pack', '--json'], { cwd: oldPackage, env });
+    const previous = join(oldPackage, JSON.parse(packed.stdout)[0].filename);
+    await cli(installed, 'install', '--no-audit', '--no-fund', previous);
+    const oldBin = windows ? join(installed, 'bitrouter.cmd') : join(installed, 'bin/bitrouter');
+    const oldContents = readFileSync(oldBin);
+    await assert.rejects(cli(installed, 'install', '--no-audit', '--no-fund', archive),
+      error => /EEXIST/.test(error.stderr));
+    assert.deepEqual(readFileSync(oldBin), oldContents);
+    await cli(installed, 'uninstall', 'bitrouter');
+    seen.length = 0;
+    await cli(installed, 'install', '--no-audit', '--no-fund', archive);
+    assert.deepEqual(seen.sort(), [...archives].sort());
+    async function checkInstalled(selected) {
+      for (const name of Object.keys(binaries)) {
+        const bin = windows ? join(installed, name + '.cmd') : join(installed, 'bin', name);
+        assert.ok(existsSync(bin), `missing npm command ${bin}`);
+        const output = windows
+          ? await exec('cmd.exe', ['/d', '/s', '/c', `""${bin}""`], { cwd: app, env, windowsVerbatimArguments: true })
+          : await exec(bin, [], { cwd: app, env });
+        const info = JSON.parse(output.stdout);
+        assert.equal(info.product, name === 'bro' ? 'bitrouter-bro' : 'bitrouter');
+        assert.equal(info.version, selected);
+      }
+    }
+    await checkInstalled(version);
+    seen.length = 0;
+    await cli(installed, 'install', '--no-audit', '--no-fund', npmArchive(next));
+    assert.deepEqual(seen.sort(), [...archives].sort());
+    await checkInstalled(next);
+    await cli(installed, 'uninstall', 'bitrouter-bro');
+    for (const name of Object.keys(binaries)) {
+      assert.ok(!existsSync(windows ? join(installed, name + '.cmd') : join(installed, 'bin', name)));
+    }
+    corruptCore = true;
+    await assert.rejects(cli(join(app, 'corrupt'), 'install', '--no-audit', '--no-fund', archive),
+      error => /Archive checksum mismatch/.test(error.stderr));
+  } finally {
+    server.close();
+  }
+}
+
 try {
   buildReleases();
   await testContention();
   testInstalls();
+  await testCombinedInstallers();
   console.log(`Passed release plans, packaged identity, install ownership, upgrade, rollback, process termination and lock contention on ${host}`);
 } finally {
   rmSync(root, { recursive: true, force: true });

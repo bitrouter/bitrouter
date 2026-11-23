@@ -510,7 +510,14 @@ the owning service manager to restart a foreground deployment.
 run `bitrouter restart`. `bitrouter update --check` only reports availability.
 Check `bitrouter status` after restarting to confirm the running version.
 `bro update` uses its own install receipt. Start a new BRO invocation to use
-the updated harness. See [distribution and updates](DISTRIBUTION.md#updates-and-profile-transitions).
+the updated harness.
+
+Use `bro core status` to inspect the local core installation. To install a full
+core after installing the standalone harness, run
+`bro core install --prefix <absolute-bin-directory>`. Use `bro core update` or
+`bro core update --check` to manage that executable. These commands work with
+the local installation independently of the gateway URL used by BRO sessions.
+See [distribution and updates](DISTRIBUTION.md#updates-and-profile-transitions).
 
 ### `bitrouter reload`
 
