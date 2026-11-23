@@ -3,6 +3,7 @@
 #![cfg(unix)]
 
 mod auth;
+mod cross_protocol;
 mod defaults;
 mod google_chat;
 mod recovery;
@@ -20,6 +21,7 @@ use axum::{
     body::Body,
     extract::State,
     http::{HeaderMap, Request, StatusCode},
+    response::IntoResponse,
     routing::post,
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -182,25 +184,45 @@ impl Provider {
                 let authorization = headers.get("authorization").and_then(|value| value.to_str().ok()).unwrap_or_default();
                 let owned = authorization == format!("Bearer {OWNED_SECRET}");
                 let encoded = body.to_string();
+                let stream = body["stream"] == true;
                 if (!owned && authorization != format!("Bearer {SECRET}"))
                     || body["model"] != "native-shared"
                     || body.get(bitrouter_ai::tenancy::catalog::BODY_MEMBER).is_some()
                     || encoded.contains(SECRET) || encoded.contains(OWNED_SECRET)
                     || state.sent.try_send((authorization.to_owned(), body)).is_err()
                 {
-                    return (StatusCode::BAD_REQUEST, Json(json!({"error":"wrong configured target"})));
+                    return (StatusCode::BAD_REQUEST, Json(json!({"error":"wrong configured target"}))).into_response();
                 }
                 if owned && state.reject_owned {
                     return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({
                         "error":{"message":"qualified terminal rejection"},
                         "usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}
-                    })));
+                    }))).into_response();
+                }
+                if stream {
+                    let mut wire = String::new();
+                    for delta in [
+                        json!({"role":"assistant","reasoning_content":"shared "}),
+                        json!({"reasoning_content":"reasoning"}),
+                        json!({"content":"shared reply"}),
+                    ] {
+                        let chunk = json!({"id":"chatcmpl-configured","object":"chat.completion.chunk",
+                            "created":0,"model":"native-shared",
+                            "choices":[{"index":0,"delta":delta,"finish_reason":null}]});
+                        wire.push_str(&format!("data: {chunk}\n\n"));
+                    }
+                    let terminal = json!({"id":"chatcmpl-configured","object":"chat.completion.chunk",
+                        "created":0,"model":"native-shared",
+                        "choices":[{"index":0,"delta":{},"finish_reason":"stop"}],
+                        "usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}});
+                    wire.push_str(&format!("data: {terminal}\n\ndata: [DONE]\n\n"));
+                    return ([("content-type", "text/event-stream")], wire).into_response();
                 }
                 (StatusCode::OK, Json(json!({
                     "id":"chatcmpl-configured", "object":"chat.completion", "model":"native-shared",
-                    "choices":[{"index":0,"message":{"role":"assistant","content":"shared reply"},"finish_reason":"stop"}],
+                    "choices":[{"index":0,"message":{"role":"assistant","reasoning_content":"shared reasoning","content":"shared reply"},"finish_reason":"stop"}],
                     "usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}
-                })))
+                }))).into_response()
             }
         )).with_state(ProviderState { calls: calls.clone(), sent, reject_owned });
         let task =
