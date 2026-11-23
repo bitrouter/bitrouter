@@ -1529,6 +1529,12 @@ async fn assemble_app(
         ),
         None => None,
     };
+    if let Some(service) = &tenancy
+        && let Err(error) = service.configure_catalog(config).await
+    {
+        service.shutdown().await?;
+        return Err(error);
+    }
     if let (Some(storage), Some(service)) = (&metering_storage, &tenancy)
         && storage.set(service.storage_budget()).is_err()
     {

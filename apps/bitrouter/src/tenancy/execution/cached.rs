@@ -100,6 +100,12 @@ impl Caches {
 
 #[derive(PartialEq, Eq)]
 enum ExecutionKey {
+    Catalog {
+        authority_revision: u64,
+        tenant: Box<str>,
+        revision: Box<str>,
+        route: Box<str>,
+    },
     Dispatch {
         authority_revision: u64,
         tenant: Box<str>,
@@ -120,6 +126,12 @@ impl ExecutionKey {
         // Validated identities have finite wire bounds; Box<str> has no spare
         // capacity. Inline key storage is charged by the cache's entry vector.
         match self {
+            Self::Catalog {
+                tenant,
+                revision,
+                route,
+                ..
+            } => tenant.len() + revision.len() + route.len(),
             Self::Dispatch {
                 tenant,
                 revision,
@@ -282,6 +294,12 @@ impl Service {
         let authority_revision = self
             .with_dispatch_authority(submission, |state| Ok(u64::from(state.revision)))
             .map_err(Failure::from)?;
+        if let Some(revision) = self
+            .configured_execution(submission, authority_revision)
+            .await?
+        {
+            return Ok(revision);
+        }
         // The stored envelope is immutable by contract, but a database replacement
         // must never select a different view only when the cache happens to be cold.
         // Read bounded facts before lookup; cache hits avoid authenticated decoding,
@@ -335,6 +353,104 @@ impl Service {
                 .insert(key, revision, heap, key_heap)
                 .map_err(|error| self.cache_failure(error).0.code)
         })
+        .map_err(Failure::from)
+    }
+
+    async fn configured_execution(
+        &self,
+        submission: &Submission,
+        authority_revision: u64,
+    ) -> Result<Option<Pin<RetainedExecutionRevision>>, Failure> {
+        let instructions = submission.binding.catalog_selection.as_ref();
+        let catalog = self.resources.configured().filter(|catalog| {
+            instructions.map_or(
+                catalog.revision == submission.binding.execution_revision,
+                |input| input.catalog_revision == catalog.revision,
+            )
+        });
+        let configured_route = if let Some(input) = instructions {
+            let catalog = catalog.ok_or(ErrorCode::CapabilityMismatch)?;
+            let selection = submission
+                .binding
+                .selection
+                .as_ref()
+                .ok_or(ErrorCode::InvalidRequest)?;
+            let revision = catalog
+                .selection_revision(&self.resources, input)
+                .map_err(|_| self.unavailable())?;
+            if revision != submission.binding.execution_revision
+                || selection.route.resource_id != input.route_id
+                || selection.route.revision_id != revision
+                || selection.candidate_indices.len() != input.candidates.len()
+                || selection
+                    .candidate_indices
+                    .iter()
+                    .enumerate()
+                    .any(|(i, ordinal)| usize::from(*ordinal) != i)
+            {
+                return Err(ErrorCode::CapabilityMismatch.into());
+            }
+            Some(input.route_id.as_str())
+        } else {
+            catalog.and_then(|catalog| {
+                submission
+                    .binding
+                    .selection
+                    .as_ref()
+                    .filter(|selection| catalog.contains(&selection.route))
+                    .map(|selection| selection.route.resource_id.as_str())
+            })
+        };
+        let Some(route) = configured_route else {
+            return Ok(None);
+        };
+        let catalog = catalog.ok_or(ErrorCode::CapabilityMismatch)?;
+        let key = ExecutionKey::Catalog {
+            authority_revision,
+            tenant: submission.tenant.as_str().into(),
+            revision: submission.binding.execution_revision.as_str().into(),
+            route: route.into(),
+        };
+        if let Some(revision) = self
+            .caches
+            .executions
+            .get(&key)
+            .map_err(|error| self.cache_failure(error))?
+        {
+            self.check_cached_revision(submission, &revision)?;
+            return Ok(Some(revision));
+        }
+        let _read = self.read_permit()?;
+        let observed = authority_revision
+            .try_into()
+            .map_err(|_| self.unavailable())?;
+        let revision = if let Some(input) = instructions {
+            let owned = tokio::time::timeout_at(
+                self.read_deadline(submission),
+                catalog.owned_targets(&self.resources, &self.db, &submission.tenant, input),
+            )
+            .await
+            .map_err(|_| Failure::from(ErrorCode::CapacityExceeded))?
+            .map_err(|_| Failure::from(ErrorCode::InvalidRequest))?;
+            catalog
+                .prepare_with_targets(&self.resources, &submission.tenant, input, observed, &owned)
+                .map_err(|_| Failure::from(ErrorCode::InvalidRequest))?
+                .0
+        } else {
+            catalog
+                .execution(&submission.tenant, route, observed)
+                .map_err(|_| self.unavailable())?
+        };
+        self.check_cached_revision(submission, &revision)?;
+        let heap = revision.retained_heap_bytes().map_err(Failure::from)?;
+        let key_heap = key.heap_bytes();
+        self.with_dispatch_authority(submission, |_| {
+            self.caches
+                .executions
+                .insert(key, revision, heap, key_heap)
+                .map_err(|error| self.cache_failure(error).0.code)
+        })
+        .map(Some)
         .map_err(Failure::from)
     }
 

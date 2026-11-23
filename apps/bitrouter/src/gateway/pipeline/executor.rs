@@ -1051,7 +1051,8 @@ impl HttpExecutor {
         upstream.stream = stream;
         let report = adapter.admission(&upstream);
         report.require_admitted()?;
-        let body = adapter.render_request_for_target(&upstream, &target.model_target())?;
+        let body =
+            adapter.render_request_for_target(&upstream, &tenancy::model_target(target, ctx)?)?;
         if let Some(execution) = tenancy::execution(ctx) {
             execution.validate_native_controls_body(prompt, target, &body)?;
         }
@@ -1123,7 +1124,7 @@ impl HttpExecutor {
         validate_continuation_authority(input.target, input.ctx, credential_authority.as_ref())?;
         crate::gateway::providers::google_chat::validate_authenticated_request(
             &request,
-            &input.target.model_target(),
+            &tenancy::model_target(input.target, input.ctx)?,
         )?;
         input
             .ctx
@@ -1558,6 +1559,7 @@ impl Executor for HttpExecutor {
         prompt: &Prompt,
         ctx: &PipelineContext,
     ) -> Result<ExecutionResult> {
+        tenancy::prepare_google_chat(target, ctx).await?;
         if crate::gateway::providers::codex::requires_streaming(&target.model_target())
             || self
                 .auth_applier(target)
@@ -1764,9 +1766,11 @@ impl Executor for HttpExecutor {
         let replayable = crate::gateway::model::protocol::responses::output_replayable(&json);
         let result = ModelClient::parse_response(adapter.as_ref(), &target.api_protocol, &text)
             .map_err(|error| error_scrubber.scrub_error(error.into()))?;
-        let result =
-            crate::gateway::providers::google_chat::bind_result(result, &target.model_target())
-                .map_err(|error| error_scrubber.scrub_error(error.into()))?;
+        let result = crate::gateway::providers::google_chat::bind_result(
+            result,
+            &tenancy::model_target(target, ctx)?,
+        )
+        .map_err(|error| error_scrubber.scrub_error(error.into()))?;
         if (shared_attempt.is_shared() || tenant_attempt.is_some())
             && result.finish_reason.is_none()
         {

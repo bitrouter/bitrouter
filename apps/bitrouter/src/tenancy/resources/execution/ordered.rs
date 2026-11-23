@@ -204,6 +204,10 @@ impl RetainedRoute {
         // not be removed merely because the caller supplied a shorter list.
         if self.data.dependencies.iter().any(|reference| {
             reference != self.reference()
+                && self.data.authority_root.as_ref() != Some(reference)
+                && !(self.data.authority_root.is_some()
+                    && reference.owner_kind == bitrouter_ai::tenancy::authority::OwnerKind::Tenant
+                    && reference.resource_kind == ResourceKind::Route)
                 && !self.data.admission.as_ref().is_some_and(|attachments| {
                     attachments.iter().any(|item| &item.profile == reference)
                 })
@@ -227,7 +231,23 @@ impl RetainedRoute {
         }
         let root = self.ordered_root()?;
         let mut candidates = Vec::with_capacity(ordinals.len());
-        let mut dependencies = vec![self.reference().clone()];
+        let mut dependencies = vec![
+            self.data
+                .authority_root
+                .as_ref()
+                .unwrap_or(self.reference())
+                .clone(),
+        ];
+        if self.data.authority_root.is_some() {
+            for reference in self.data.dependencies.iter().filter(|reference| {
+                reference.owner_kind == bitrouter_ai::tenancy::authority::OwnerKind::Tenant
+                    && reference.resource_kind == ResourceKind::Route
+            }) {
+                if !dependencies.contains(reference) {
+                    dependencies.push(reference.clone());
+                }
+            }
+        }
         for ordinal in ordinals {
             let index = *root
                 .candidates

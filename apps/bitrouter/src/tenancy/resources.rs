@@ -73,6 +73,8 @@ pub(super) struct Resources {
     installation: InstallationId,
     key: Option<DeploymentKey>,
     approved_origins: Vec<String>,
+    file_pool: Option<String>,
+    configured: std::sync::OnceLock<execution::catalog::Catalog>,
 }
 
 /// Safe for configuration_store.compiled_json; definitions are ciphertext only.
@@ -239,6 +241,16 @@ impl Resources {
         if reference.resource_kind != ResourceKind::Credential {
             return Err(ErrorCode::InvalidRequest);
         }
+        if let Some(secret) = self
+            .configured()
+            .and_then(|catalog| catalog.credential(reference))
+        {
+            return Ok(
+                crate::gateway::providers::auth::credentials::Credential::ApiKey {
+                    value: secret.to_owned(),
+                },
+            );
+        }
         let artifact = self.load(db, reference).await?;
         if artifact.reference != *reference || artifact.envelope.is_some() {
             return Err(ErrorCode::AuthorityUnavailable);
@@ -281,6 +293,11 @@ impl Resources {
         Ok(Self {
             installation: installation.clone(),
             key,
+            configured: std::sync::OnceLock::new(),
+            file_pool: config
+                .catalog
+                .as_ref()
+                .map(|catalog| catalog.pool_id.clone()),
 
             approved_origins: config
                 .resource_origins
@@ -300,6 +317,9 @@ impl Resources {
         db: &DatabaseConnection,
         import: Option<&Path>,
     ) -> Result<()> {
+        if let Some(pool) = self.file_pool.as_deref() {
+            self.require_unclaimed_pool(db, pool).await?;
+        }
         self.authenticate_retained(db).await?;
         if let Some(path) = import {
             let bytes = Self::read_import(Some(path))
@@ -315,6 +335,9 @@ impl Resources {
         db: &impl ConnectionTrait,
         import: Option<&[u8]>,
     ) -> Result<()> {
+        if let Some(pool) = self.file_pool.as_deref() {
+            self.require_unclaimed_pool(db, pool).await?;
+        }
         self.authenticate_retained(db).await?;
         if let Some(bytes) = import {
             self.import_in(db, bytes).await?;
@@ -368,6 +391,8 @@ impl Resources {
             installation,
             key: Some(DeploymentKey::from_bytes(secret)?),
             approved_origins: Vec::new(),
+            configured: std::sync::OnceLock::new(),
+            file_pool: None,
         })
     }
 
@@ -386,6 +411,56 @@ impl Resources {
             ),
             None => Self::with_key(installation.clone(), rand::random()),
         }
+    }
+
+    pub(in crate::tenancy) async fn require_unclaimed_pool(
+        &self,
+        db: &impl ConnectionTrait,
+        pool: &str,
+    ) -> Result<()> {
+        use sea_orm::sea_query::{Alias, Expr, Query};
+        let query = Query::select()
+            .expr(Expr::val(1))
+            .from(Alias::new("tenancy_resource_revisions"))
+            .and_where(Expr::col(Alias::new("owner_kind")).eq("operator_pool"))
+            .and_where(Expr::col(Alias::new("owner_id")).eq(pool))
+            .limit(1)
+            .to_owned();
+        ensure!(
+            db.query_one(db.get_database_backend().build(&query))
+                .await?
+                .is_none(),
+            "file catalog pool conflicts with retained managed or imported resources"
+        );
+        Ok(())
+    }
+
+    pub(in crate::tenancy) fn file_owned_key(
+        &self,
+        key: &bitrouter_ai::tenancy::authority::ResourceKey,
+    ) -> bool {
+        key.owner_kind == OwnerKind::OperatorPool
+            && self
+                .file_pool
+                .as_deref()
+                .or_else(|| self.configured().map(|catalog| catalog.pool()))
+                == Some(key.owner_id.as_str())
+    }
+
+    pub(in crate::tenancy) fn configured(&self) -> Option<&execution::catalog::Catalog> {
+        self.configured.get()
+    }
+
+    pub(in crate::tenancy) fn configure(&self, config: &crate::config::Config) -> Result<()> {
+        if config.tenancy.catalog.is_none() {
+            return Ok(());
+        }
+        let catalog = execution::catalog::Catalog::compile(config, self)?;
+        ensure!(
+            self.configured.set(catalog).is_ok(),
+            "configured catalog already loaded"
+        );
+        Ok(())
     }
 
     pub(super) async fn read_import(path: Option<&Path>) -> Result<Option<Vec<u8>>> {
@@ -458,6 +533,10 @@ impl Resources {
         let mut unique = HashSet::new();
         for resource in &manifest.resources {
             ensure!(
+                !self.file_owned_key(&resource.reference.key()),
+                "cannot import into file-owned catalog pool"
+            );
+            ensure!(
                 manifest.format == 4 || !resource.definition.uses_model_policy(),
                 "model policy requires import format four"
             );
@@ -523,6 +602,10 @@ impl Resources {
         }
         // Validate the complete dependency graph before the import becomes visible.
         for resource in &manifest.resources {
+            ensure!(
+                !self.file_owned_key(&resource.reference.key()),
+                "cannot import into file-owned catalog pool"
+            );
             let closure = self
                 .closure(db, std::slice::from_ref(&resource.reference))
                 .await

@@ -215,6 +215,27 @@ HTTP turns. Dispatch rechecks the tenant credential and binding even when a
 request carries caller labels, host inspection credentials, or local harness
 metadata.
 
+## File-configured catalog
+
+For an installation-wide static catalog, set `tenancy.catalog.pool_id`, map
+public route IDs to actual configured selectors in `routes`, and declare each
+exact `provider/account/canonical-model` membership in `profiles`. Profiles use
+the current `AdmissionProfile` schema version 1, including explicit nullable
+rate, health and health-group fields and the fallback rule. Tenancy, control
+authority and a stable wrapping key must already be configured.
+
+The file owns this operator-pool namespace. Startup rejects retained DB
+resources in that pool before import; public management cannot create, rotate,
+import or revoke its entries. Independent generic resource pools and tenant
+CaC keep their existing permissions and lifecycle. Catalog changes require
+restart, and no tenant configuration or activation is published automatically.
+
+Use the SDK catalog descriptor and selection-preparation methods under the real
+tenant and exact resource grants. Preparation grants no send authority. Keep the
+same closed selection instructions on ordered dispatch; BYOK uses an existing
+tenant credential, and a custom base requires an approved exact owned route.
+See the [catalog contract](../../../docs/specs/service-api/README.md#file-configured-catalog-and-request-local-composition).
+
 ## Tenant configuration commands
 
 Create a dedicated named context using the selected installation operator or

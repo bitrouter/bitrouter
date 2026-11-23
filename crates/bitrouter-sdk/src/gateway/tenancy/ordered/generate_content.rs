@@ -76,6 +76,9 @@ impl OrderedTenantGateway<'_> {
         self,
         request: &OrderedGenerateContentRequestV1,
     ) -> Result<Reply<Body<Value, Value>>, Error> {
+        self.check_catalog_protocol(
+            bitrouter_ai::tenancy::ordered::GenerationProtocol::GenerateContent,
+        )?;
         request
             .validate()
             .map_err(|_| Error::Request("invalid ordered GenerateContent request"))?;

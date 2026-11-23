@@ -72,6 +72,54 @@
         }
       ]
     },
+    "AdmissionProfile": {
+      "additionalProperties": false,
+      "description": "Immutable shared-health membership with an independently rotatable member RPM.",
+      "properties": {
+        "fallback": {
+          "$ref": "#/$defs/FallbackRule",
+          "description": "Explicit permission to advance after a qualified terminal rejection."
+        },
+        "health": {
+          "$ref": "#/$defs/RequiredNullable_HealthProfileV1",
+          "description": "Null disables health admission and observation. Requires a null group."
+        },
+        "health_group_id": {
+          "$ref": "#/$defs/RequiredNullable_ResourceId",
+          "description": "Installation/operator-pool-scoped circuit identity; present exactly when health is enabled."
+        },
+        "observe_rate_group_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResourceId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional read-only rate group in this profile's operator pool."
+        },
+        "rate": {
+          "$ref": "#/$defs/RequiredNullable_RateProfileV1",
+          "description": "Null disables charging; a zero member ceiling refuses locally."
+        },
+        "schema_version": {
+          "description": "Current profile format, exactly one. Health membership is explicit.",
+          "format": "uint8",
+          "maximum": 1,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "rate",
+        "health",
+        "health_group_id",
+        "fallback"
+      ],
+      "type": "object"
+    },
     "ApiProtocol": {
       "description": "Wire protocol. Known values: `chat_completions`, `messages`, `responses`, `decisions`; any other string names an externally-registered (outbound-only) custom protocol.",
       "examples": [
@@ -81,6 +129,21 @@
         "decisions"
       ],
       "type": "string"
+    },
+    "AuthScheme": {
+      "description": "How an upstream's credential is presented on the wire.\n\nConsulted by transports that support more than one credential scheme.\nToday that is only the Messages transport, which sends the key as either\n`x-api-key` (Anthropic's native scheme) or `Authorization: Bearer`. The\nChat Completions transport uses its selected authentication implementation.\n\nExactly one scheme is ever sent — never both: the Anthropic API rejects a\nrequest that carries `x-api-key` and `Authorization` together.",
+      "oneOf": [
+        {
+          "const": "x-api-key",
+          "description": "`x-api-key: <key>` — Anthropic's native scheme; the default.",
+          "type": "string"
+        },
+        {
+          "const": "bearer",
+          "description": "`Authorization: Bearer <key>`.",
+          "type": "string"
+        }
+      ]
     },
     "AuthorityViews": {
       "additionalProperties": false,
@@ -222,6 +285,36 @@
           "$ref": "#/$defs/Transport"
         }
       },
+      "type": "object"
+    },
+    "CatalogConfig": {
+      "additionalProperties": false,
+      "description": "One installation-wide catalog compiled from the normal process configuration.",
+      "properties": {
+        "pool_id": {
+          "description": "Stable operator-pool namespace used by explicit tenant resource grants.",
+          "type": "string"
+        },
+        "profiles": {
+          "additionalProperties": {
+            "$ref": "#/$defs/AdmissionProfile"
+          },
+          "description": "Exact provider/account/model rules; accounts may explicitly share a health group.",
+          "type": "object"
+        },
+        "routes": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Public route identity mapped to an existing models/routers selector.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "pool_id",
+        "routes",
+        "profiles"
+      ],
       "type": "object"
     },
     "ChatCompletionsCompatibility": {
@@ -621,6 +714,21 @@
       },
       "type": "object"
     },
+    "FallbackRule": {
+      "description": "Ordered fallback permission; uncertainty never authorizes another attempt.",
+      "oneOf": [
+        {
+          "const": "stop",
+          "description": "Stop after any reached provider attempt.",
+          "type": "string"
+        },
+        {
+          "const": "ordered_terminal_rejections_v1",
+          "description": "Advance only after an explicitly qualified terminal HTTP rejection.",
+          "type": "string"
+        }
+      ]
+    },
     "FusionSettings": {
       "description": "The `server_tools.fusion` config section. Its presence enables the Fusion\nserver tool and the `bitrouter/fusion` model alias; its fields supply the\nalias defaults (the panel/judge a bare `bitrouter/fusion` request expands\nto). An explicit `bitrouter:fusion` declaration on a request overrides these.",
       "properties": {
@@ -811,6 +919,58 @@
             "deployment_key_env"
           ],
           "type": "object"
+        }
+      ]
+    },
+    "HealthProfileV1": {
+      "additionalProperties": false,
+      "description": "Circuit rules, immutable for a profile key, including across RPM rotations.",
+      "properties": {
+        "failure_threshold": {
+          "description": "Consecutive failures needed to open the circuit; at least one.",
+          "format": "uint32",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "persistent_cooldown_seconds": {
+          "description": "Persistent cooldown in seconds, at least the transient cooldown.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "probe_lease_seconds": {
+          "description": "Exclusive probe lease in seconds; at least one.",
+          "format": "uint64",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "rules": {
+          "$ref": "#/$defs/HealthRules",
+          "description": "Closed classification of actual provider terminal outcomes."
+        },
+        "transient_cooldown_seconds": {
+          "description": "Transient cooldown in seconds; zero is valid.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "rules",
+        "failure_threshold",
+        "transient_cooldown_seconds",
+        "persistent_cooldown_seconds",
+        "probe_lease_seconds"
+      ],
+      "type": "object"
+    },
+    "HealthRules": {
+      "description": "Versioned provider availability classification.",
+      "oneOf": [
+        {
+          "const": "availability_v1",
+          "description": "Protocol terminal success, persistent authorization failures and transient failures.",
+          "type": "string"
         }
       ]
     },
@@ -1459,6 +1619,18 @@
           "$ref": "#/$defs/PatternMap_for_ProtocolList",
           "description": "Glob-prefix `api_protocol` pattern list — each pattern maps to an\nordered set of supported wire protocols (the head is the preferred\ndefault). Precedence: per-model override > longest matching pattern >\nhost-inferred default. A bare protocol string still parses to a\none-element set, so single-protocol providers are unchanged."
         },
+        "auth_scheme": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuthScheme"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Credential presentation for Messages-compatible providers. Omission uses\nthe native x-api-key scheme; derived providers inherit an explicit value."
+        },
         "auto_discover": {
           "default": false,
           "description": "When `true` and `models` is empty, discover models from the provider's\n`/models` endpoint at startup and on reload.",
@@ -1725,6 +1897,27 @@
       },
       "type": "object"
     },
+    "RateProfileV1": {
+      "additionalProperties": false,
+      "description": "Shared sliding-window identity and this member's current ceiling.",
+      "properties": {
+        "member_rpm": {
+          "description": "Maximum reached entries in the shared 60-second window; zero is valid.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rate_group_id": {
+          "$ref": "#/$defs/ResourceId",
+          "description": "Scoped by installation and operator-pool owner, independent of revisions."
+        }
+      },
+      "required": [
+        "rate_group_id",
+        "member_rpm"
+      ],
+      "type": "object"
+    },
     "ReasoningEffort": {
       "description": "Qualitative reasoning-effort levels understood by BitRouter's built-in\nOpenAI, Anthropic, and Gemini protocol adapters.\n\nThis is the cross-provider superset, not a claim that every model supports\nevery value. Exact provider/model routes advertise their supported subset\nseparately and policy-owned effort targets are validated against it before\ndispatch.",
       "oneOf": [
@@ -1860,6 +2053,42 @@
         }
       },
       "type": "object"
+    },
+    "RequiredNullable_HealthProfileV1": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/HealthProfileV1"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "RequiredNullable_RateProfileV1": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RateProfileV1"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "RequiredNullable_ResourceId": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ResourceId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "ResourceId": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+      "type": "string"
     },
     "RouterChecks": {
       "additionalProperties": false,
@@ -2229,6 +2458,17 @@
         "capacity": {
           "$ref": "#/$defs/CapacityConfig",
           "description": "Startup-only runtime budgets, independent of the stored directory size."
+        },
+        "catalog": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CatalogConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "File-owned shared routes from the ordinary process configuration."
         },
         "enabled": {
           "default": false,

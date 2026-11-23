@@ -1317,3 +1317,5 @@ async fn a_restricted_admin_cannot_delegate_tenant_wide_authority() -> Result<()
     )?;
     Ok(())
 }
+
+mod configured_catalog;

@@ -2581,8 +2581,18 @@ impl Pipeline {
             .map_or(Ok(()), |execution| {
                 execution.admit_native_controls(prompt, &target.api_protocol)
             });
-        let assessment = controls
-            .and_then(|()| self.executor.preflight(target, prompt, stream))
+        let google = match controls {
+            Ok(()) => super::executor::tenancy::prepare_google_chat(target, ctx).await,
+            Err(error) => Err(error),
+        };
+        let assessment = google
+            .and_then(|google| {
+                if google {
+                    self.executor.preflight_managed(target, prompt, stream, ctx)
+                } else {
+                    self.executor.preflight(target, prompt, stream)
+                }
+            })
             .and_then(|report| {
                 report.require_admitted()?;
                 Ok(report)
@@ -2599,9 +2609,12 @@ impl Pipeline {
         ctx: &PipelineContext,
         excluded: &mut crate::gateway::conversion_report::ConversionReport,
     ) -> Result<bool> {
-        let assessment = self
-            .executor
-            .preflight_generate_content(target, input, stream, ctx)
+        let assessment = super::executor::tenancy::prepare_google_chat(target, ctx)
+            .await
+            .and_then(|_| {
+                self.executor
+                    .preflight_generate_content(target, input, stream, ctx)
+            })
             .and_then(|report| {
                 report.require_admitted()?;
                 Ok(report)

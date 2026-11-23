@@ -207,6 +207,19 @@ impl State {
         Ok(())
     }
 
+    pub(in crate::tenancy) fn record_configured_profile(
+        &mut self,
+        reference: &ResourceRef,
+        profile: &AdmissionProfile,
+    ) {
+        self.record_profile(reference, profile);
+    }
+
+    pub(in crate::tenancy) fn record_profiled_route(&mut self, reference: &ResourceRef) {
+        self.protected_keys.insert(reference.key());
+        self.profiled_routes.insert(reference.clone());
+    }
+
     fn record_profile(&mut self, reference: &ResourceRef, profile: &AdmissionProfile) {
         if let (Some(group), Some(rules)) = (&profile.health_group_id, &profile.health) {
             self.group_rules

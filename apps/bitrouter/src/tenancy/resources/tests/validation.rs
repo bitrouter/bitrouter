@@ -189,6 +189,8 @@ async fn retained_validation_rejects_authenticated_invalid_envelope_shapes() -> 
 async fn empty_retained_marker_requires_exact_binding_without_a_key() -> Result<()> {
     let (db, keyed) = fixture().await?;
     let resources = Resources {
+        file_pool: None,
+        configured: std::sync::OnceLock::new(),
         installation: keyed.installation,
         key: None,
         approved_origins: Vec::new(),

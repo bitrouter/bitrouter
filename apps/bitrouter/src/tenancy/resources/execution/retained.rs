@@ -303,6 +303,7 @@ fn route_data(
     Ok(RouteData {
         admission: source.admission,
         reference: route.reference,
+        authority_root: None,
         dependencies,
         selector: route.selector,
         overrides: PromptOverrides {

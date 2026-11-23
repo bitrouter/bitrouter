@@ -256,7 +256,7 @@ fn build_targets(
             account_label: None,
             api_key_override: None,
             api_base_override: None,
-            auth_scheme: Default::default(),
+            auth_scheme: provider.auth_scheme.unwrap_or_default(),
             headers,
         }]);
     }
@@ -301,7 +301,7 @@ fn build_targets(
                 account_label: Some(label),
                 api_key_override: None,
                 api_base_override: None,
-                auth_scheme: Default::default(),
+                auth_scheme: provider.auth_scheme.unwrap_or_default(),
                 headers: headers.clone(),
             }
         })
