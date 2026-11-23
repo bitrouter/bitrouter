@@ -8,7 +8,7 @@ use bitrouter_ai::tenancy::{
 };
 
 fn terminal() -> Result<Terminal> {
-    Ok(Terminal::V1(Arc::new(Candidate::new(
+    Ok(Terminal::Strict(Arc::new(Candidate::new(
         ExecutionReceipt {
             dispatch: bitrouter_ai::tenancy::execution::Dispatch::Strict,
             installation_id: "installation".try_into()?,
@@ -267,7 +267,7 @@ async fn optional_bytes_restart_idempotence_corruption_archive_and_exact_parent_
                 .await
                 .is_err()
         );
-        let Terminal::V1(candidate) = &original else {
+        let Terminal::Strict(candidate) = &original else {
             anyhow::bail!("unit V1")
         };
         let charge = |_, _| Ok(());

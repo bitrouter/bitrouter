@@ -59,8 +59,7 @@ pub struct OtelConfig {
     pub content_attr_max_bytes: usize,
 
     /// Optional bearer token. When set, an `Authorization: Bearer <token>`
-    /// header is injected into the OTLP request (see
-    /// [`OtelConfig::effective_headers`]), authenticating the exporter to a
+    /// header is injected into the OTLP request, authenticating the exporter to a
     /// collector that requires it. `None` leaves the request unauthenticated
     /// (anonymous export).
     pub bearer_token: Option<String>,
@@ -183,6 +182,7 @@ impl Default for OtelConfig {
     }
 }
 
+#[cfg(any(test, feature = "otel-http", feature = "otel-grpc"))]
 impl OtelConfig {
     /// Headers handed to the OTLP transport: the configured [`headers`] plus an
     /// `Authorization: Bearer <token>` entry when [`bearer_token`] is set. An
@@ -227,9 +227,16 @@ impl Default for MetricsConfig {
     }
 }
 
+#[cfg(any(
+    test,
+    feature = "otel-http",
+    feature = "otel-grpc",
+    feature = "multi-instance"
+))]
 impl OtelConfig {
     /// Apply OTel-spec env-var overrides from the process environment. Env
     /// vars take precedence over YAML, matching the upstream SDK contract.
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
     pub fn with_env_overrides(self) -> Self {
         self.with_env_from(|k| std::env::var(k).ok())
     }
@@ -290,6 +297,12 @@ impl OtelConfig {
     }
 }
 
+#[cfg(any(
+    test,
+    feature = "otel-http",
+    feature = "otel-grpc",
+    feature = "multi-instance"
+))]
 fn parse_sampler(s: &str) -> Option<SamplerKind> {
     match s {
         "always_on" => Some(SamplerKind::AlwaysOn),
@@ -302,6 +315,12 @@ fn parse_sampler(s: &str) -> Option<SamplerKind> {
     }
 }
 
+#[cfg(any(
+    test,
+    feature = "otel-http",
+    feature = "otel-grpc",
+    feature = "multi-instance"
+))]
 fn parse_content_capture(s: &str) -> Option<ContentCaptureMode> {
     match s.to_ascii_lowercase().as_str() {
         "off" => Some(ContentCaptureMode::Off),

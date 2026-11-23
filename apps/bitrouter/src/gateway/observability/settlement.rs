@@ -1,11 +1,11 @@
-//! Gateway-owned terminal evidence, with an optional untracked-request consumer.
+//! Gateway-owned trajectory evidence and independent request evaluation.
 
-#[cfg(feature = "core")]
+#[cfg(feature = "eval-publication")]
 use std::sync::Arc;
 
 use async_trait::async_trait;
 
-#[cfg(feature = "core")]
+#[cfg(feature = "eval-publication")]
 use super::decision::CapturedEvalDecision;
 use super::decision::{EvalInvocation, PendingEvalDecision, PendingEvalDecisionStore};
 use crate::gateway::error::{BitrouterError, Result};
@@ -17,21 +17,21 @@ use crate::trajectory::settlement::{
 pub(crate) struct PolicySettlementRecorder {
     pending: PendingEvalDecisionStore,
     trajectory: Option<TrajectorySettlementRecorder>,
-    #[cfg(feature = "core")]
-    untracked: Option<Arc<dyn SettlementRecorder>>,
+    #[cfg(feature = "eval-publication")]
+    evaluation: Option<Arc<dyn SettlementRecorder>>,
 }
 
 impl PolicySettlementRecorder {
     pub(crate) fn new(
         pending: PendingEvalDecisionStore,
         trajectory: Option<TrajectorySettlementRecorder>,
-        #[cfg(feature = "core")] untracked: Option<Arc<dyn SettlementRecorder>>,
+        #[cfg(feature = "eval-publication")] evaluation: Option<Arc<dyn SettlementRecorder>>,
     ) -> Self {
         Self {
             pending,
             trajectory,
-            #[cfg(feature = "core")]
-            untracked,
+            #[cfg(feature = "eval-publication")]
+            evaluation,
         }
     }
 }
@@ -39,7 +39,7 @@ impl PolicySettlementRecorder {
 #[async_trait]
 impl SettlementRecorder for PolicySettlementRecorder {
     async fn record(&self, context: &mut SettlementContext) -> Result<()> {
-        if context.has_event::<crate::gateway::metering::replay::CanonicalRequestReplayRejected>() {
+        if crate::gateway::metering::replay::unadmitted(context) {
             return Ok(());
         }
         let invocation = context.get_event::<EvalInvocation>().cloned();
@@ -56,19 +56,15 @@ impl SettlementRecorder for PolicySettlementRecorder {
                 .map_err(|error| {
                     BitrouterError::internal(format!("persisting trajectory settlement: {error}"))
                 })? {
-                TrajectorySettlementDisposition::Untracked => {}
                 TrajectorySettlementDisposition::AwaitingAuthoritativeMetering => return Ok(()),
-                TrajectorySettlementDisposition::Persisted
-                | TrajectorySettlementDisposition::AlreadyTerminal => {
-                    if let Some(invocation) = &invocation {
-                        self.pending.remove(invocation, context.caller.user_id());
-                    }
-                    return Ok(());
-                }
+                TrajectorySettlementDisposition::Untracked
+                | TrajectorySettlementDisposition::Persisted
+                | TrajectorySettlementDisposition::AlreadyTerminal => {}
             }
         }
-        #[cfg(feature = "core")]
-        if let Some(consumer) = &self.untracked {
+        // Episode persistence does not consume the independent request policy decision.
+        #[cfg(feature = "eval-publication")]
+        if let Some(consumer) = &self.evaluation {
             if let Some(invocation) = &invocation {
                 // Preserve this lookup even if its cache entry expires or is evicted
                 // while trajectory storage is awaited. A missing snapshot stays missing.

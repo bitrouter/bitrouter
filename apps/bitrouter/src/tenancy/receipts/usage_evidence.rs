@@ -1,4 +1,4 @@
-//! Original numeric observations, bounded independently of the v1 projection.
+//! Original numeric observations with bounds independent of receipt totals.
 
 use bitrouter_ai::tenancy::{
     execution::ExecutionReceipt,
@@ -159,26 +159,6 @@ impl Snapshot {
             truncated: self.dropped > 0,
             dropped_frames: self.dropped,
         }
-    }
-}
-
-#[cfg(all(feature = "core", feature = "harness"))]
-pub(super) fn unavailable_at_recovery(receipt: &ExecutionReceipt) -> ExecutionUsageEvidence {
-    ExecutionUsageEvidence {
-        dispatch: receipt.dispatch.clone(),
-        installation_id: receipt.installation_id.clone(),
-        tenant_id: receipt.tenant_id.clone(),
-        execution_id: receipt.execution_id.clone(),
-        capture: Capture::Unavailable,
-        extractor_version: ExecutionUsageEvidence::extractor_version_for(&receipt.dispatch, &[]),
-        estimation: Estimation::NotCaptured,
-        estimate: None,
-        parent_execution_id: None,
-        child_execution_ids: Vec::new(),
-        attempts: Vec::new(),
-        frames: Vec::new(),
-        truncated: false,
-        dropped_frames: 0,
     }
 }
 

@@ -85,9 +85,8 @@ type Charge<'a> = dyn Fn(usize, usize) -> Result<()> + Sync + 'a;
 async fn preflight(
     db: &impl ConnectionTrait,
     receipt: &ExecutionReceipt,
-    expected: Option<&str>,
     charge: &Charge<'_>,
-) -> Result<Option<usize>> {
+) -> Result<usize> {
     charge(2, 1024)?;
     let backend = db.get_database_backend();
     let json_bytes = octets(backend, "evidence_json");
@@ -108,32 +107,24 @@ async fn preflight(
     let rows = db.query_all(backend.build(&query)).await?;
     charge(0, 0)?;
     ensure!(rows.len() <= 1, "usage evidence multiplicity");
-    match (expected, rows.first()) {
-        (None, None) => Ok(None),
-        (Some(_), Some(row)) => {
-            let bytes = usize::try_from(row.try_get::<i64>("", "evidence_bytes")?)?;
-            ensure!(
-                row.try_get::<i64>("", "byte_count")? == i64::try_from(bytes)?
-                    && row.try_get::<i32>("", "schema_version")? == 1,
-                "usage evidence length or version"
-            );
-            Ok(Some(bytes))
-        }
-        _ => anyhow::bail!("usage evidence presence mismatch"),
-    }
+    let row = rows.first().context("missing usage evidence")?;
+    let bytes = usize::try_from(row.try_get::<i64>("", "evidence_bytes")?)?;
+    ensure!(
+        row.try_get::<i64>("", "byte_count")? == i64::try_from(bytes)?
+            && row.try_get::<i32>("", "schema_version")? == 1,
+        "usage evidence length or version"
+    );
+    Ok(bytes)
 }
 async fn load_inline(
     db: &impl ConnectionTrait,
     receipt: &ExecutionReceipt,
     receipt_digest: &str,
-    expected: Option<&str>,
+    expected: &str,
     charge: Option<&Charge<'_>>,
-) -> Result<Option<Evidence>> {
+) -> Result<Evidence> {
     let measured = if let Some(charge) = charge {
-        let Some(bytes) = preflight(db, receipt, expected, charge).await? else {
-            return Ok(None);
-        };
-        Some(bytes)
+        Some(preflight(db, receipt, charge).await?)
     } else {
         None
     };
@@ -144,10 +135,10 @@ async fn load_inline_body(
     db: &impl ConnectionTrait,
     receipt: &ExecutionReceipt,
     receipt_digest: &str,
-    expected: Option<&str>,
+    expected: &str,
     charge: Option<&Charge<'_>>,
     measured: Option<usize>,
-) -> Result<Option<Evidence>> {
+) -> Result<Evidence> {
     if let (Some(charge), Some(bytes)) = (charge, measured) {
         // Three copies cover transfer, decoding and canonical encoding.
         // Both digest strings are exactly 64 bytes; fixed overhead covers
@@ -192,77 +183,69 @@ async fn load_inline_body(
         charge(0, 0)?;
     }
     ensure!(rows.len() <= 1, "usage evidence multiplicity");
-    match (expected, rows.first()) {
-        (None, None) => Ok(None),
-        (Some(expected), Some(row)) => {
-            let json: String = row.try_get("", "evidence_json")?;
-            ensure!(
-                measured.is_none_or(|bytes| json.len() == bytes),
-                "usage evidence length changed"
-            );
-            let evidence = Evidence::new(serde_json::from_str(&json)?, receipt)?;
-            ensure!(
-                evidence.json == json
-                    && evidence.digest == expected
-                    && row.try_get::<String>("", "evidence_digest")? == expected
-                    && row.try_get::<String>("", "receipt_digest")? == receipt_digest
-                    && row.try_get::<i64>("", "byte_count")? == i64::try_from(json.len())?
-                    && row.try_get::<i32>("", "schema_version")? == 1,
-                "usage evidence integrity"
-            );
-            Ok(Some(evidence))
-        }
-        _ => anyhow::bail!("usage evidence presence mismatch"),
-    }
+    let row = rows.first().context("missing usage evidence")?;
+    let json: String = row.try_get("", "evidence_json")?;
+    ensure!(
+        measured.is_none_or(|bytes| json.len() == bytes),
+        "usage evidence length changed"
+    );
+    let evidence = Evidence::new(serde_json::from_str(&json)?, receipt)?;
+    ensure!(
+        evidence.json == json
+            && evidence.digest == expected
+            && row.try_get::<String>("", "evidence_digest")? == expected
+            && row.try_get::<String>("", "receipt_digest")? == receipt_digest
+            && row.try_get::<i64>("", "byte_count")? == i64::try_from(json.len())?
+            && row.try_get::<i32>("", "schema_version")? == 1,
+        "usage evidence integrity"
+    );
+    Ok(evidence)
 }
 /// The canonical reader calls only this inline path, avoiding recursion when a
 /// direct sidecar reader follows an archive location back through that reader.
 pub(in crate::tenancy::receipts) async fn validate_inline(
     db: &impl ConnectionTrait,
-    candidate: &mut Candidate,
-    expected: Option<&str>,
+    receipt: &ExecutionReceipt,
+    receipt_digest: &str,
+    expected: &str,
     charge: Option<&Charge<'_>>,
-) -> Result<()> {
-    let uncharged = |_, _| Ok(());
-    let measured =
-        store::archive::usage_metadata(db, candidate, false, charge.unwrap_or(&uncharged)).await?;
-    candidate.usage_evidence = if db.get_database_backend() == DatabaseBackend::Sqlite
-        && let Some(charge) = charge
-    {
-        // Reuse only the scalar validation just performed on this database.
-        // Retain the original preflight debits/checkpoints, including absence.
-        charge(2, 1024)?;
-        charge(0, 0)?;
-        ensure!(
-            measured.is_some() == expected.is_some(),
-            "usage evidence presence mismatch"
-        );
-        if measured.is_some() {
-            load_inline_body(
+) -> Result<Evidence> {
+    if db.get_database_backend() == DatabaseBackend::Sqlite {
+        let uncharged = |_, _| Ok(());
+        let measured = store::archive::usage_metadata(
+            db,
+            receipt,
+            receipt_digest,
+            expected,
+            false,
+            charge.unwrap_or(&uncharged),
+        )
+        .await?;
+        if let Some(charge) = charge {
+            // Reuse the scalar validation and preserve the preflight charge.
+            charge(2, 1024)?;
+            charge(0, 0)?;
+            return load_inline_body(
                 db,
-                &candidate.receipt,
-                &candidate.digest,
+                receipt,
+                receipt_digest,
                 expected,
                 Some(charge),
-                measured,
+                Some(measured),
             )
-            .await?
-        } else {
-            None
+            .await;
         }
-    } else {
-        load_inline(db, &candidate.receipt, &candidate.digest, expected, charge).await?
-    };
-    Ok(())
+    }
+    load_inline(db, receipt, receipt_digest, expected, charge).await
 }
 
 async fn load(
     db: &impl ConnectionTrait,
     receipt: &ExecutionReceipt,
     receipt_digest: &str,
-    expected: Option<&str>,
+    expected: &str,
     charge: Option<&Charge<'_>>,
-) -> Result<Option<Evidence>> {
+) -> Result<Evidence> {
     if db.get_database_backend() == DatabaseBackend::Sqlite {
         if let Some(charge) = charge {
             charge(1, 256)?;
@@ -304,8 +287,7 @@ async fn load(
                     }
                     .context("archived usage receipt missing")?;
                     ensure!(
-                        saved.digest == receipt_digest
-                            && saved.usage_evidence.as_ref().map(|e| e.digest.as_str()) == expected,
+                        saved.digest == receipt_digest && saved.usage_evidence.digest == expected,
                         "archived usage receipt binding"
                     );
                     return Ok(saved.usage_evidence);
@@ -321,27 +303,10 @@ async fn load(
 pub(in crate::tenancy::receipts) async fn validate(
     db: &impl ConnectionTrait,
     candidate: &mut Candidate,
-    expected: Option<&str>,
+    expected: &str,
 ) -> Result<()> {
     candidate.usage_evidence =
         load(db, &candidate.receipt, &candidate.digest, expected, None).await?;
-    Ok(())
-}
-#[cfg(all(test, feature = "core", feature = "harness"))]
-pub(in crate::tenancy::receipts) async fn validate_bounded(
-    db: &impl ConnectionTrait,
-    candidate: &mut Candidate,
-    expected: Option<&str>,
-    charge: &Charge<'_>,
-) -> Result<()> {
-    candidate.usage_evidence = load(
-        db,
-        &candidate.receipt,
-        &candidate.digest,
-        expected,
-        Some(charge),
-    )
-    .await?;
     Ok(())
 }
 /// The terminal caller must still verify the complete database candidate.
@@ -349,31 +314,30 @@ pub(in crate::tenancy::receipts) async fn insert_fresh(
     db: &impl ConnectionTrait,
     candidate: &Candidate,
 ) -> Result<()> {
-    if let Some(evidence) = &candidate.usage_evidence {
-        let receipt = &candidate.receipt;
-        let fields: Vec<(&str, sea_orm::Value)> = vec![
-            ("installation_id", receipt.installation_id.as_str().into()),
-            ("tenant_id", receipt.tenant_id.as_str().into()),
-            ("execution_id", receipt.execution_id.as_str().into()),
-            ("schema_version", 1_i32.into()),
-            ("receipt_digest", candidate.digest.clone().into()),
-            ("evidence_digest", evidence.digest.clone().into()),
-            ("evidence_json", evidence.json.clone().into()),
-            ("byte_count", i64::try_from(evidence.json.len())?.into()),
-        ];
-        let mut query = Query::insert();
-        query
-            .into_table(Alias::new(TABLE))
-            .columns(fields.iter().map(|(n, _)| Alias::new(*n)))
-            .values(fields.into_iter().map(|(_, v)| v.into()))?;
-        ensure!(
-            db.execute(db.get_database_backend().build(&query))
-                .await?
-                .rows_affected()
-                == 1,
-            "usage evidence insert count"
-        );
-    }
+    let evidence = &candidate.usage_evidence;
+    let receipt = &candidate.receipt;
+    let fields: Vec<(&str, sea_orm::Value)> = vec![
+        ("installation_id", receipt.installation_id.as_str().into()),
+        ("tenant_id", receipt.tenant_id.as_str().into()),
+        ("execution_id", receipt.execution_id.as_str().into()),
+        ("schema_version", 1_i32.into()),
+        ("receipt_digest", candidate.digest.clone().into()),
+        ("evidence_digest", evidence.digest.clone().into()),
+        ("evidence_json", evidence.json.clone().into()),
+        ("byte_count", i64::try_from(evidence.json.len())?.into()),
+    ];
+    let mut query = Query::insert();
+    query
+        .into_table(Alias::new(TABLE))
+        .columns(fields.iter().map(|(n, _)| Alias::new(*n)))
+        .values(fields.into_iter().map(|(_, v)| v.into()))?;
+    ensure!(
+        db.execute(db.get_database_backend().build(&query))
+            .await?
+            .rows_affected()
+            == 1,
+        "usage evidence insert count"
+    );
     Ok(())
 }
 pub(in crate::tenancy::receipts) async fn insert(
@@ -381,17 +345,20 @@ pub(in crate::tenancy::receipts) async fn insert(
     candidate: &Candidate,
     new_receipt: bool,
 ) -> Result<()> {
-    let expected = candidate.usage_evidence.as_ref().map(|e| e.digest.as_str());
+    let evidence = &candidate.usage_evidence;
     if new_receipt {
         insert_fresh(db, candidate).await?;
     }
-    let saved = load(db, &candidate.receipt, &candidate.digest, expected, None).await?;
+    let saved = load(
+        db,
+        &candidate.receipt,
+        &candidate.digest,
+        &evidence.digest,
+        None,
+    )
+    .await?;
     ensure!(
-        saved.as_ref().map(|e| (&e.json, &e.digest))
-            == candidate
-                .usage_evidence
-                .as_ref()
-                .map(|e| (&e.json, &e.digest)),
+        saved.json == evidence.json && saved.digest == evidence.digest,
         "immutable usage evidence conflict"
     );
     Ok(())
@@ -405,11 +372,9 @@ pub(in crate::tenancy::receipts) async fn inventory(
 ) -> Result<u64> {
     let mut bytes = 0_u64;
     super::super::store::inventory::scan(db, installation, |candidate| {
-        if let Some(evidence) = &candidate.usage_evidence {
-            bytes = bytes
-                .checked_add(evidence.json.len() as u64 + 16 * 1024)
-                .context("usage evidence inventory overflow")?;
-        }
+        bytes = bytes
+            .checked_add(candidate.usage_evidence.json.len() as u64 + 16 * 1024)
+            .context("usage evidence inventory overflow")?;
         Ok(())
     })
     .await?;
@@ -449,9 +414,8 @@ fn ordered_scope(receipt: Namespace<'_>) -> SelectStatement {
 async fn preflight_ordered(
     db: &impl ConnectionTrait,
     receipt: Namespace<'_>,
-    expected: Option<&str>,
     charge: &Charge<'_>,
-) -> Result<Option<usize>> {
+) -> Result<usize> {
     let max_bytes = receipt.max_bytes;
     charge(2, 1024)?;
     let backend = db.get_database_backend();
@@ -473,44 +437,35 @@ async fn preflight_ordered(
     let rows = db.query_all(backend.build(&query)).await?;
     charge(0, 0)?;
     ensure!(rows.len() <= 1, "usage evidence multiplicity");
-    match (expected, rows.first()) {
-        (None, None) => Ok(None),
-        (Some(_), Some(row)) => {
-            let bytes = usize::try_from(row.try_get::<i64>("", "evidence_bytes")?)?;
-            ensure!(
-                row.try_get::<i64>("", "byte_count")? == i64::try_from(bytes)?
-                    && row.try_get::<i32>("", "schema_version")? == receipt.version,
-                "usage evidence length or version"
-            );
-            // Three copies cover transfer, decoding and canonical encoding.
-            // Both digest strings are exactly 64 bytes; fixed overhead covers
-            // scalar cells and allocation metadata. A duplicate is rejected
-            // before decoding, so its two transferred bodies fit this allowance.
-            let allocation = bytes
-                .checked_add(128)
-                .and_then(|bytes| bytes.checked_mul(3))
-                .and_then(|bytes| bytes.checked_add(4096))
-                .context("usage evidence allocation bound")?;
-            charge(2, allocation)?;
-            Ok(Some(bytes))
-        }
-        _ => anyhow::bail!("usage evidence presence mismatch"),
-    }
+    let row = rows.first().context("missing ordered usage evidence")?;
+    let bytes = usize::try_from(row.try_get::<i64>("", "evidence_bytes")?)?;
+    ensure!(
+        row.try_get::<i64>("", "byte_count")? == i64::try_from(bytes)?
+            && row.try_get::<i32>("", "schema_version")? == receipt.version,
+        "usage evidence length or version"
+    );
+    // Three copies cover transfer, decoding and canonical encoding.
+    // Both digest strings are exactly 64 bytes; fixed overhead covers
+    // scalar cells and allocation metadata. A duplicate is rejected
+    // before decoding, so its two transferred bodies fit this allowance.
+    let allocation = bytes
+        .checked_add(128)
+        .and_then(|bytes| bytes.checked_mul(3))
+        .and_then(|bytes| bytes.checked_add(4096))
+        .context("usage evidence allocation bound")?;
+    charge(2, allocation)?;
+    Ok(bytes)
 }
 async fn load_raw(
     db: &impl ConnectionTrait,
     receipt: Namespace<'_>,
     receipt_digest: &str,
-    expected: Option<&str>,
+    expected: &str,
     charge: Option<&Charge<'_>>,
-) -> Result<Option<String>> {
+) -> Result<String> {
     // Always scalar-preflight, including live reads without an operation budget.
     let noop = |_: usize, _: usize| Ok(());
-    let Some(bytes) = preflight_ordered(db, receipt, expected, charge.unwrap_or(&noop)).await?
-    else {
-        return Ok(None);
-    };
-    let measured = Some(bytes);
+    let measured = preflight_ordered(db, receipt, charge.unwrap_or(&noop)).await?;
     let backend = db.get_database_backend();
     let mut query = ordered_scope(receipt);
     for (name, bound) in [
@@ -521,15 +476,14 @@ async fn load_raw(
         let length = octets(backend, name);
         // Keep the absolute CASE guard, and also cap transfer to the measured
         // length. Growth between queries must become NULL before allocation.
-        let unchanged = measured.map_or_else(String::new, |bytes| {
-            format!(
-                " AND {length}={}",
-                if name == "evidence_json" { bytes } else { 64 }
-            )
-        });
+        let size = if name == "evidence_json" {
+            measured
+        } else {
+            64
+        };
         query.expr_as(
             Expr::cust(format!(
-                "CASE WHEN {length} <= {bound}{unchanged} THEN {name} ELSE NULL END"
+                "CASE WHEN {length} <= {bound} AND {length}={size} THEN {name} ELSE NULL END"
             )),
             Alias::new(name),
         );
@@ -543,40 +497,30 @@ async fn load_raw(
         charge(0, 0)?;
     }
     ensure!(rows.len() <= 1, "usage evidence multiplicity");
-    match (expected, rows.first()) {
-        (None, None) => Ok(None),
-        (Some(expected), Some(row)) => {
-            let json: String = row.try_get("", "evidence_json")?;
-            ensure!(
-                measured.is_none_or(|bytes| json.len() == bytes),
-                "usage evidence length changed"
-            );
+    let row = rows.first().context("missing ordered usage evidence")?;
+    let json: String = row.try_get("", "evidence_json")?;
+    ensure!(json.len() == measured, "usage evidence length changed");
 
-            ensure!(
-                row.try_get::<String>("", "evidence_digest")? == expected
-                    && row.try_get::<String>("", "receipt_digest")? == receipt_digest
-                    && row.try_get::<i64>("", "byte_count")? == i64::try_from(json.len())?
-                    && row.try_get::<i32>("", "schema_version")? == receipt.version,
-                "usage evidence integrity"
-            );
-            Ok(Some(json))
-        }
-        _ => anyhow::bail!("usage evidence presence mismatch"),
-    }
+    ensure!(
+        row.try_get::<String>("", "evidence_digest")? == expected
+            && row.try_get::<String>("", "receipt_digest")? == receipt_digest
+            && row.try_get::<i64>("", "byte_count")? == i64::try_from(json.len())?
+            && row.try_get::<i32>("", "schema_version")? == receipt.version,
+        "usage evidence integrity"
+    );
+    Ok(json)
 }
 pub(in crate::tenancy::receipts) async fn load_v2(
     db: &impl ConnectionTrait,
     receipt: &bitrouter_ai::tenancy::execution::ExecutionReceipt,
     digest: &str,
-    expected: Option<&str>,
+    expected: &str,
     charge: Option<&Charge<'_>>,
 ) -> Result<Evidence> {
-    let json = load_raw(db, Namespace::v2(receipt)?, digest, expected, charge)
-        .await?
-        .context("ordered evidence missing")?;
+    let json = load_raw(db, Namespace::v2(receipt)?, digest, expected, charge).await?;
     let evidence = Evidence::new(serde_json::from_str(&json)?, receipt)?;
     ensure!(
-        evidence.json == json && Some(evidence.digest.as_str()) == expected,
+        evidence.json == json && evidence.digest == expected,
         "ordered evidence integrity"
     );
     Ok(evidence)
@@ -612,6 +556,6 @@ pub(in crate::tenancy::receipts) async fn insert_v2(
             "ordered evidence insert count"
         );
     }
-    load_v2(db, receipt, &candidate.digest, Some(&e.digest), None).await?;
+    load_v2(db, receipt, &candidate.digest, &e.digest, None).await?;
     Ok(())
 }

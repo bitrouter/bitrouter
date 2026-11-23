@@ -1,4 +1,4 @@
-//! Read-only catalog validation against the reviewed ordinary server baseline.
+//! Current declarative gateway schema and exact backend catalog validation.
 use anyhow::{Context, Result, ensure};
 use sea_orm::{ConnectionTrait, DatabaseBackend, DbErr, QueryResult, Statement};
 use serde::Deserialize;
@@ -6,6 +6,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[path = "current_schema/catalog.rs"]
 mod catalog;
+#[path = "current_schema/definition.rs"]
+mod definition;
+#[path = "current_schema/sqlite.rs"]
+mod sqlite;
 #[cfg(test)]
 #[path = "current_schema/tests.rs"]
 mod tests;
@@ -14,11 +18,15 @@ mod tests;
 #[serde(deny_unknown_fields)]
 struct Table {
     name: String,
+    #[serde(default)]
+    sqlite_only: bool,
     columns: Vec<Column>,
     primary: Vec<String>,
     unique: Vec<Vec<String>>,
     foreign: Vec<Foreign>,
     checks: Vec<String>,
+    #[serde(default)]
+    sqlite_checks: Vec<String>,
     indexes: Vec<Index>,
 }
 #[derive(Clone, Debug, Deserialize)]
@@ -27,6 +35,9 @@ struct Column {
     name: String,
     kind: String,
     mysql_kind: Option<String>,
+    sqlite_kind: Option<String>,
+    #[serde(default)]
+    sqlite_only: bool,
     nullable: bool,
     binary: bool,
     automatic: bool,
@@ -48,6 +59,8 @@ struct Index {
     columns: Vec<String>,
     unique: bool,
     #[serde(default)]
+    sqlite_only: bool,
+    #[serde(default)]
     mysql_prefixes: BTreeMap<String, u32>,
 }
 #[derive(Clone, Default)]
@@ -67,9 +80,38 @@ struct Constraint {
     update: String,
     expression: String,
 }
-fn expected() -> Result<Vec<Table>> {
-    serde_json::from_str(include_str!("current_schema/expected.json"))
-        .context("invalid compiled current schema model")
+fn expected(backend: DatabaseBackend) -> Result<Vec<Table>> {
+    let mut tables: Vec<Table> = serde_json::from_str(include_str!("current_schema/expected.json"))
+        .context("invalid compiled current schema model")?;
+    if backend != DatabaseBackend::Sqlite {
+        tables.retain(|table| !table.sqlite_only);
+        for table in &mut tables {
+            table.columns.retain(|column| !column.sqlite_only);
+            table.indexes.retain(|index| !index.sqlite_only);
+        }
+    } else {
+        for table in &mut tables {
+            table.checks.append(&mut table.sqlite_checks);
+        }
+    }
+    Ok(tables)
+}
+
+/// Render fresh DDL from the same definition used by all catalog validators.
+pub(super) fn statements(backend: DatabaseBackend) -> Result<Vec<String>> {
+    definition::statements(backend, expected(backend)?)
+}
+
+pub(super) async fn validate_sqlite_metadata(
+    db: &impl ConnectionTrait,
+    selected: Option<&[&str]>,
+) -> Result<()> {
+    for table in expected(DatabaseBackend::Sqlite)? {
+        if selected.is_none_or(|names| names.contains(&table.name.as_str())) {
+            sqlite::validate(db, &table).await?;
+        }
+    }
+    Ok(())
 }
 
 /// Validate all ordinary server tables before selecting current data.
@@ -95,7 +137,7 @@ async fn validate_inner(db: &impl ConnectionTrait) -> Result<()> {
         backend != DatabaseBackend::Sqlite,
         "server catalog required"
     );
-    let expected = expected()?;
+    let expected = expected(backend)?;
     let tables = rows(db, catalog::tables(backend)).await?;
     let mut names = BTreeSet::new();
     for row in tables {
@@ -188,6 +230,13 @@ async fn validate_inner(db: &impl ConnectionTrait) -> Result<()> {
             table.name
         );
         for (column, row) in table.columns.iter().zip(&observed) {
+            if backend == DatabaseBackend::MySql && table.name == "requests" && column.binary {
+                ensure!(
+                    row.try_get::<String>("", "binary_value")? == "yes",
+                    "requests.{} requires utf8mb4_0900_bin; stop writers and correct the metering identity collations on a verified backup before restart",
+                    column.name
+                );
+            }
             validate_column(backend, column, row)
                 .with_context(|| format!("column {}.{}", table.name, column.name))?;
         }

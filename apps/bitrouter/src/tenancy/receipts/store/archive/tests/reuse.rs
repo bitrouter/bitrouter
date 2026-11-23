@@ -76,13 +76,7 @@ fn sizable(id: &str) -> Result<Candidate> {
         "fixture needs sizable receipt bytes"
     );
     ensure!(
-        result
-            .usage_evidence
-            .as_ref()
-            .context("fixture usage")?
-            .json
-            .len()
-            >= 128 * 1024,
+        result.usage_evidence.json.len() >= 128 * 1024,
         "fixture needs overflow pages, not just small logical rows"
     );
     Ok(result)

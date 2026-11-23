@@ -203,7 +203,8 @@ impl ContinuationRegistry {
             .context("shared continuation backend is absent")
     }
 
-    pub(in crate::continuation) async fn shared_bind(
+    #[cfg(test)]
+    pub(in crate::continuation) async fn shared_bind_fixture(
         &self,
         owner: &str,
         request: &str,

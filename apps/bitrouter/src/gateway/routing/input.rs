@@ -9,7 +9,7 @@ use bitrouter_ai::types::{Content, Prompt, Role, ToolResultOutput};
 /// A visible observation. These values are classifier input, never authority.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Signal {
-    /// Semantic content kind, independent of transport or harness name.
+    /// Semantic content kind, independent of transport or client identity.
     pub kind: String,
     /// Public text or serialized public tool value.
     pub text: String,
@@ -24,8 +24,7 @@ pub struct Task {
     pub acceptance_criteria: Vec<String>,
 }
 
-/// Source-independent semantic input. Rich HTTP history and a Core work unit
-/// can supply the same facts. Context mutation rights are supplied separately.
+/// Public semantic input, independent of protocol and client identity.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Input {
     /// Explicit task facts when available; omission is not a different mode.

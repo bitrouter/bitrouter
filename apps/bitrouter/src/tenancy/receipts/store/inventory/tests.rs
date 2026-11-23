@@ -82,12 +82,18 @@ async fn inventory_rejects_a_malformed_key_after_the_first_page() -> Result<()> 
         ensure!(commit(&db, &candidate("installation", "tenant", &id, "creator")?).await?);
     }
     let damaged = format!("execution-{PAGE_ROWS:04}");
-    let changed = db.execute(Statement::from_sql_and_values(
-        DatabaseBackend::Sqlite,
-        "UPDATE tenancy_execution_receipts SET execution_id=CAST(execution_id AS BLOB) WHERE installation_id=? AND tenant_id=? AND execution_id=?",
-        [installation.as_str().into(), "tenant".into(), damaged.into()],
-    )).await?;
-    ensure!(changed.rows_affected() == 1);
+    let tx = db.begin().await?;
+    // Keep the mandatory evidence linked so reverse-link preflight does not
+    // preempt the malformed receipt key on the second page.
+    for table in ["tenancy_execution_receipts", "tenancy_usage_evidence"] {
+        let changed = tx.execute(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            format!("UPDATE {table} SET execution_id=CAST(execution_id AS BLOB) WHERE installation_id=? AND tenant_id=? AND execution_id=?"),
+            [installation.as_str().into(), "tenant".into(), damaged.as_str().into()],
+        )).await?;
+        ensure!(changed.rows_affected() == 1);
+    }
+    tx.commit().await?;
     let mut visited = 0_u64;
     let result = scan(&db, &installation, |_| {
         visited += 1;
@@ -131,7 +137,7 @@ async fn complete_mixed_history_scan_preserves_unknowns_and_detects_late_digest_
         },
     )?;
     commit(&db, &unknown).await?;
-    expected_bytes += unknown.bytes();
+    expected_bytes += unknown.bytes() + unknown.auxiliary_bytes();
     let mut visited = 0usize;
     scan(&db, &unknown.receipt.installation_id, |_| {
         visited += 1;
@@ -156,19 +162,11 @@ async fn archive_usage_reader_replay_and_offline_body_preserve_bytes_without_res
         .with_usage_evidence(Snapshot::default())?;
     commit(&db, &value).await?;
     archive(&db, &value).await?;
-    let original = value.usage_evidence.as_ref().context("original usage")?;
+    let original = &value.usage_evidence;
     let expected = original.digest.clone();
     let bytes = original.json.as_bytes().to_vec();
-    storage::validate(&db, &mut value, Some(&expected)).await?;
-    ensure!(
-        value
-            .usage_evidence
-            .as_ref()
-            .context("archived usage")?
-            .json
-            .as_bytes()
-            == bytes
-    );
+    storage::validate(&db, &mut value, &expected).await?;
+    ensure!(value.usage_evidence.json.as_bytes() == bytes);
     let tx = db.begin().await?;
     storage::insert(&tx, &value, false).await?;
     tx.commit().await?;

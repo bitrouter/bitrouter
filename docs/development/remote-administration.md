@@ -21,6 +21,13 @@ subsystems and storage errors remain distinguishable from an empty successful
 report. Preserve the last successful observation as stale when appropriate;
 never present stale state as a newly completed query.
 
+## Service updates
+
+Install the replacement executable on the service host. Then restart a local
+daemon with `bitrouter restart`, or use the supervisor for a foreground or
+shared deployment. Restart drains active HTTP requests before starting the
+replacement. Named contexts can inspect the running service after restart.
+
 ## Reload and configuration state
 
 Reload prepares the server's own saved source. It does not upload the client's

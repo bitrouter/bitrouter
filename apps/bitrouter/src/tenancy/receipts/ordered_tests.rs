@@ -65,7 +65,7 @@ async fn open(path: &std::path::Path, lease: &ownership::Lease) -> Result<Databa
     Ok(db)
 }
 fn terminal(intent: &Intent) -> Result<Terminal> {
-    let Terminal::V2(base) = intent.unknown()? else {
+    let Terminal::Ordered(base) = intent.unknown()? else {
         anyhow::bail!("wrong fixture format");
     };
     let mut r = base.receipt.clone();
@@ -100,7 +100,7 @@ fn terminal(intent: &Intent) -> Result<Terminal> {
             terminal_observed: true,
         })
         .collect();
-    Ok(Terminal::V2(Arc::new(CandidateV2::new(
+    Ok(Terminal::Ordered(Arc::new(CandidateV2::new(
         r,
         Disposition {
             dispatch: DispatchState::Started,
@@ -152,7 +152,7 @@ fn profiled_final_intent_serializer_is_bounded_and_mode_is_identity() -> Result<
         extended.selection.generation_defaults_digest = Some("a".repeat(64).try_into()?);
         extended.validate()?;
         ensure!(serde_json::to_vec(&extended)?.len() == expected + 96 && expected + 96 < MAX_BYTES);
-        let Terminal::V2(unknown) = extended.unknown()? else {
+        let Terminal::Ordered(unknown) = extended.unknown()? else {
             anyhow::bail!("format")
         };
         ensure!(extended.matches(&unknown.receipt) && !intent.matches(&unknown.receipt));
@@ -160,7 +160,7 @@ fn profiled_final_intent_serializer_is_bounded_and_mode_is_identity() -> Result<
             .evidence
             .document
             .validate_against(&unknown.receipt)?;
-        let Terminal::V2(terminal) = intent.unknown()? else {
+        let Terminal::Ordered(terminal) = intent.unknown()? else {
             anyhow::bail!("format");
         };
         ensure!(intent.matches(&terminal.receipt));
@@ -210,8 +210,8 @@ async fn ordered_1_8_9_64_attempts_preserve_ordinals_and_explicit_format_reads()
                 .await?
                 .context("terminal")?;
         ensure!(saved.json() == candidate.json() && saved.digest() == candidate.digest());
-        let Terminal::V2(saved) = saved else {
-            anyhow::bail!("v2 format lost")
+        let Terminal::Ordered(saved) = saved else {
+            anyhow::bail!("ordered receipt dispatch lost")
         };
         ensure!(
             saved.receipt.attempts.len() == count
@@ -232,7 +232,7 @@ async fn ordered_1_8_9_64_attempts_preserve_ordinals_and_explicit_format_reads()
                 bitrouter_ai::tenancy::operation::ErrorCode::StorageUnavailable,
             )
         };
-        let v2 = read::body(
+        let ordered = read::body(
             &db,
             &installation,
             &identity.tenant,
@@ -240,8 +240,8 @@ async fn ordered_1_8_9_64_attempts_preserve_ordinals_and_explicit_format_reads()
             failure,
         )
         .await
-        .map_err(|error| anyhow::anyhow!("v2 read failed: {:?}", error.0.code))?;
-        ensure!(v2 == candidate.json().as_bytes());
+        .map_err(|error| anyhow::anyhow!("ordered read failed: {:?}", error.0.code))?;
+        ensure!(ordered == candidate.json().as_bytes());
         let evidence = read::body(
             &db,
             &installation,
@@ -424,7 +424,7 @@ async fn restart_case(digest: Option<bitrouter_ai::tenancy::identity::Digest>) -
     ensure!(!saved.json().contains("request-only-secret"));
     ensure!(!saved.json().contains("configuration_defaults"));
     let bytes = saved.json().to_owned();
-    let Terminal::V2(candidate) = saved else {
+    let Terminal::Ordered(candidate) = saved else {
         anyhow::bail!("recovery format lost")
     };
     ensure!(
@@ -626,7 +626,7 @@ async fn ordered_terminal_cannot_change_intent_ingress_protocol() -> Result<()> 
     let identity = identity(&installation, "execution", 9)?;
     let intent = Intent::new(&identity, startup.bootstrap_stamp(&proof)?)?;
     persist_intent(&db, &intent).await?;
-    let Terminal::V2(candidate) = terminal(&intent)? else {
+    let Terminal::Ordered(candidate) = terminal(&intent)? else {
         anyhow::bail!("fixture format")
     };
     let mut receipt = candidate.receipt.clone();
@@ -638,7 +638,7 @@ async fn ordered_terminal_cannot_change_intent_ingress_protocol() -> Result<()> 
     }
     let mut evidence = candidate.evidence.document.clone();
     evidence.dispatch = receipt.dispatch.clone();
-    let replacement = Terminal::V2(Arc::new(CandidateV2::new(
+    let replacement = Terminal::Ordered(Arc::new(CandidateV2::new(
         receipt,
         Disposition {
             dispatch: DispatchState::Started,
@@ -754,7 +754,7 @@ async fn provider_technical_facts_read_ordered_attempts_1_8_9_64_without_receipt
             );
             let capture = Arc::new(Capture::default());
             let operation = capture.begin(std::time::Instant::now(), false);
-            let Terminal::V2(value) = &original else {
+            let Terminal::Ordered(value) = &original else {
                 anyhow::bail!("ordered storage fixture")
             };
             for attempt in &value.receipt.attempts {

@@ -54,7 +54,7 @@ async fn receipts(
         let terminal = store::lookup_terminal(db, installation, &tenant, &execution)
             .await?
             .with_context(|| format!("missing recovered receipt for {tenant}/{execution}"))?;
-        let Terminal::V2(value) = &terminal else {
+        let Terminal::Ordered(value) = &terminal else {
             anyhow::bail!("expected ordered receipt for {tenant}/{execution}");
         };
         let receipt = &value.receipt;

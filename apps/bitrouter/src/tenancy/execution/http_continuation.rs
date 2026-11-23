@@ -35,15 +35,6 @@ impl Access {
         {
             return Err(ErrorCode::AuthorityUnavailable);
         }
-        #[cfg(all(feature = "core", feature = "harness"))]
-        if self
-            .submission
-            .session_closed
-            .as_ref()
-            .is_some_and(|closed| closed.load(std::sync::atomic::Ordering::Acquire))
-        {
-            return Err(ErrorCode::AuthorityUnavailable);
-        }
         if self.deadline() <= tokio::time::Instant::now()
             || self.submission.cancelled.is_cancelled()
         {

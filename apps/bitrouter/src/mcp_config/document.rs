@@ -139,7 +139,7 @@ impl Snapshot {
             crate::paths::ensure_home_directory(parent)?;
         }
         // Shared with router/policy config writers. Held across version check and rename.
-        let _lock = crate::policy_lock::acquire_publication_lock(&self.path)?;
+        let _lock = crate::policy_source::acquire_publication_lock(&self.path)?;
         let exists = regular(&self.path)?;
         match self.raw {
             Some(raw) => {
@@ -147,7 +147,7 @@ impl Snapshot {
                     exists,
                     "configuration changed since it was loaded; refusing to overwrite"
                 );
-                crate::policy_lock::write_text_atomic_unlocked(&self.path, &raw, updated)
+                crate::policy_source::write_text_atomic_unlocked(&self.path, &raw, updated)
                     .context("publishing MCP configuration; if a directory sync failed, inspect saved state before retrying because rename may already have completed")
             }
             None => {
@@ -155,7 +155,7 @@ impl Snapshot {
                     !exists,
                     "configuration appeared since it was loaded; refusing to overwrite"
                 );
-                crate::policy_lock::write_new_file_atomic(&self.path, updated.as_bytes())
+                crate::policy_source::write_new_file_atomic(&self.path, updated.as_bytes())
                     .context("creating MCP configuration; inspect saved state before retrying after a directory sync failure")
             }
         }
@@ -369,12 +369,12 @@ mod tests {
     fn preserves_other_nodes_comments_order_and_crlf() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let path = dir.path().join("config.yaml");
-        let original = "# before\r\ninherit_defaults: false\r\nmcp_servers: # MCP heading\r\n  old:\r\n    name: old\r\n    transport: {type: http, url: 'https://example.com/${ENDPOINT}'}\r\n# next heading\r\nchat:\r\n  model: 'unchanged' # keep\r\n";
+        let original = "# before\r\ninherit_defaults: false\r\nmcp_servers: # MCP heading\r\n  old:\r\n    name: old\r\n    transport: {type: http, url: 'https://example.com/${ENDPOINT}'}\r\n# next heading\r\nserver:\r\n  host: '127.0.0.1' # keep\r\n";
         std::fs::write(&path, original)?;
         let snap = Snapshot::read(path.clone())?;
         let candidate = snap.candidate("new", Some(&entry("new")), true)?;
         ensure!(candidate.contains("url: 'https://example.com/${ENDPOINT}'"));
-        ensure!(candidate.ends_with("# next heading\r\nchat:\r\n  model: 'unchanged' # keep\r\n"));
+        ensure!(candidate.ends_with("# next heading\r\nserver:\r\n  host: '127.0.0.1' # keep\r\n"));
         ensure!(!candidate.replace("\r\n", "").contains('\n'));
         snap.commit(&candidate)?;
         let snap = Snapshot::read(path.clone())?;
@@ -390,7 +390,7 @@ mod tests {
     #[cfg(feature = "mcp")]
     #[test]
     fn header_braces_and_literal_comment_lines_are_not_reinterpreted() -> Result<()> {
-        let snapshot = Snapshot { path: PathBuf::from("/unused/config.yaml"), raw: Some("inherit_defaults: false\nmcp_servers: # keep {} literally\n  old:\n    name: old\n    transport:\n      type: stdio\n      command: |\n        # literal command, not a YAML comment\n# next root comment\nchat: {}\n".into()) };
+        let snapshot = Snapshot { path: PathBuf::from("/unused/config.yaml"), raw: Some("inherit_defaults: false\nmcp_servers: # keep {} literally\n  old:\n    name: old\n    transport:\n      type: stdio\n      command: |\n        # literal command, not a YAML comment\n# next root comment\nserver: {}\n".into()) };
         let candidate = snapshot.candidate("new", Some(&entry("new")), true)?;
         ensure!(candidate.contains("mcp_servers: # keep {} literally"));
         let next = Snapshot {
@@ -399,7 +399,7 @@ mod tests {
         };
         let removed = next.candidate("old", None, false)?;
         ensure!(!removed.contains("literal command, not a YAML comment"));
-        ensure!(removed.contains("# next root comment\nchat: {}\n"));
+        ensure!(removed.contains("# next root comment\nserver: {}\n"));
         Ok(())
     }
 

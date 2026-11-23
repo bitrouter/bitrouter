@@ -32,7 +32,7 @@ pub(super) struct RouteEnvelope {
     pub policy_name: Option<String>,
     pub system_prompt: Option<String>,
     pub defaults: serde_json::Map<String, Value>,
-    /// One entry per base/tier/exploration selector, retaining fallback order for
+    /// One entry per base/tier selector, retaining fallback order for
     /// each inbound protocol. Entries from another route are never combined.
     pub chains: Vec<ApprovedChain>,
 }
@@ -57,44 +57,27 @@ pub(super) struct ApprovedTarget {
 }
 
 pub(super) fn prepare_route(import: &Import, policy: Option<&Artifact>) -> Result<RouteEnvelope> {
-    import.definition.require_service()?;
     prepare_current_route(import, policy)
 }
 
-pub(super) fn prepare_bro_capture_route(
+pub(super) fn prepare_current_route(
     import: &Import,
     policy: Option<&Artifact>,
 ) -> Result<RouteEnvelope> {
-    import.definition.require_bro_capture()?;
-    prepare_current_route(import, policy)
-}
-
-fn prepare_current_route(import: &Import, policy: Option<&Artifact>) -> Result<RouteEnvelope> {
-    let (routing, selector, policy_ref, credentials, exploration, block) = match &import.definition
-    {
+    let (routing, selector, policy_ref, credentials) = match &import.definition {
         Definition::Route {
             routing,
             selector,
             policy,
             credentials,
-            exploration,
-            block,
-            ..
-        } => (
-            routing,
-            selector,
-            policy,
-            credentials,
-            exploration.as_slice(),
-            block.as_deref(),
-        ),
-        Definition::ProfiledRoute {
+        }
+        | Definition::ProfiledRoute {
             routing,
             selector,
             policy,
             credentials,
             ..
-        } => (routing, selector, policy, credentials, &[][..], None),
+        } => (routing, selector, policy, credentials),
         _ => anyhow::bail!("route definition required"),
     };
     let (mut config, provider_sizes) =
@@ -134,7 +117,7 @@ fn prepare_current_route(import: &Import, policy: Option<&Artifact>) -> Result<R
                 anyhow::bail!("policy definition required");
             };
             ensure!(selected == name, "selected policy name mismatch");
-            crate::policy_lock::validate_for_config(&config, document)
+            crate::policy_source::validate_for_config(&config, document)
                 .map_err(|_| anyhow::anyhow!("policy routing validation failed"))?;
             let definition = document
                 .policies
@@ -149,11 +132,10 @@ fn prepare_current_route(import: &Import, policy: Option<&Artifact>) -> Result<R
             // Construction qualifies the immutable in-memory policy path without
             // introducing a shared backend or any policy-file access.
             if !config.trajectory.enabled {
-                crate::policy_lock::PolicyRuntime::from_document(
+                crate::policy_source::PolicyRuntime::from_document(
                     &config,
                     Some(document.clone()),
                     Default::default(),
-                    None,
                 )
                 .map_err(|_| anyhow::anyhow!("immutable policy construction failed"))?;
             }
@@ -162,11 +144,6 @@ fn prepare_current_route(import: &Import, policy: Option<&Artifact>) -> Result<R
         (None, None, None) => None,
         _ => anyhow::bail!("route requires its exact qualified policy"),
     };
-    selections.extend(exploration.iter().cloned());
-    if let Some(profile) = block {
-        profile.validate(selector)?;
-        selections.push(profile.challenger()?.to_owned());
-    }
     let mut unique = HashSet::new();
     selections.retain(|selector| unique.insert(selector.clone()));
     ensure!(
@@ -197,7 +174,7 @@ fn prepare_current_route(import: &Import, policy: Option<&Artifact>) -> Result<R
         .context("route envelope byte capacity exceeded")?;
     let mut used_slots = HashSet::new();
     for (index, selection) in selections.into_iter().enumerate() {
-        // Only tier/exploration inputs still need Stage 0. Resolve them once,
+        // Only tier inputs still need Stage 0. Resolve them once,
         // retain their preferences, then refine with the root route's settings
         // in the same order as resolve_route_chain's caller preferences.
         let selected = if index == 0 {
@@ -205,17 +182,11 @@ fn prepare_current_route(import: &Import, policy: Option<&Artifact>) -> Result<R
         } else {
             let selected = config
                 .resolve_router(&selection)
-                .map_err(|_| anyhow::anyhow!("invalid policy or exploration selector"))?;
+                .map_err(|_| anyhow::anyhow!("invalid policy selector"))?;
             ensure!(
                 selected.policy.is_none() && selected.request_checks.is_empty(),
                 "nested policy or native checker selection is not qualified"
             );
-            if block.is_some() {
-                ensure!(
-                    selected.overrides.is_empty(),
-                    "Block arm overrides are not qualified"
-                );
-            }
             Some(selected)
         };
         let (clean, prefs) = match &selected {
@@ -518,10 +489,6 @@ pub(super) fn resolution_capacity(
         }
     }
     Ok((count, bytes))
-}
-
-pub(super) fn target_value(target: &RoutingTarget) -> Result<Value> {
-    target_value_scoped(target, false)
 }
 
 // Only the explicit native route compiler admits the paired bridge identity.

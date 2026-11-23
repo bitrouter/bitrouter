@@ -27,10 +27,9 @@ async fn main() -> Result<()> {
         args.next().is_none(),
         "expected only CONFIG and RULES paths"
     );
-    let source = bitrouter::paths::resolve_config(Some(&config_path))?;
     let rules: InputGuardrailConfig =
         serde_saphyr::from_str(&std::fs::read_to_string(rules_path)?)?;
     // This module owns the revision; do not read it back from config and
     // blindly echo it. Update it when the callback or loaded rule set changes.
-    bitrouter::host::serve_with_extensions(&source, move |api| register(api, rules)).await
+    bitrouter::host::serve_with_extensions(&config_path, move |api| register(api, rules)).await
 }

@@ -191,8 +191,6 @@ pub(super) fn seal(resources: &Resources, artifact: &Artifact) -> Result<StoredR
     );
     let version = if artifact.definition.uses_model_policy() {
         super::MODEL_POLICY_COMPILER_VERSION
-    } else if artifact.definition.requires_envelope_v2() {
-        super::BRO_OBLIGATION_COMPILER_VERSION
     } else if artifact.definition.is_native_route() {
         super::NATIVE_COMPILER_VERSION
     } else if artifact.definition.is_admission_profile() {
@@ -237,7 +235,6 @@ pub(super) fn seal(resources: &Resources, artifact: &Artifact) -> Result<StoredR
 pub(super) fn authenticate(resources: &Resources, record: StoredResource) -> Result<Artifact> {
     ensure!(
         record.compiler_version == super::MODEL_POLICY_COMPILER_VERSION
-            || record.compiler_version == super::BRO_OBLIGATION_COMPILER_VERSION
             || record.compiler_version == COMPILER_VERSION
             || record.compiler_version == super::PROFILED_COMPILER_VERSION
             || record.compiler_version == super::SHARED_HEALTH_COMPILER_VERSION
@@ -268,8 +265,6 @@ pub(super) fn authenticate(resources: &Resources, record: StoredResource) -> Res
     let artifact: Artifact = serde_json::from_slice(&bytes)?;
     let expected_version = if artifact.definition.uses_model_policy() {
         super::MODEL_POLICY_COMPILER_VERSION
-    } else if artifact.definition.requires_envelope_v2() {
-        super::BRO_OBLIGATION_COMPILER_VERSION
     } else if artifact.definition.is_native_route() {
         super::NATIVE_COMPILER_VERSION
     } else if artifact.definition.is_admission_profile() {
@@ -312,6 +307,5 @@ pub(super) fn authenticate(resources: &Resources, record: StoredResource) -> Res
         fingerprint == record.content_digest.as_str(),
         "resource fingerprint mismatch"
     );
-    artifact.definition.validate_current_profile()?;
     Ok(artifact)
 }

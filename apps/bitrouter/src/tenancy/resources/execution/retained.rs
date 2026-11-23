@@ -12,7 +12,7 @@ use super::super::{
     compiler::RouteEnvelope,
     manifest::{Artifact, CredentialBinding, Definition},
 };
-use super::{Candidate, Chain, RetainedPolicy, RouteData, ValidatedEnvelope, native_v1, target};
+use super::{Candidate, Chain, RetainedPolicy, RouteData, ValidatedEnvelope, budget, target};
 use crate::gateway::pipeline::routing::PromptOverrides;
 use bitrouter_ai::policy::Document;
 
@@ -29,10 +29,6 @@ struct Source {
     admission: Option<Vec<bitrouter_ai::tenancy::admission::AdmissionAttachment>>,
     routing: Arc<serde_json::Value>,
     credentials: Vec<CredentialBinding>,
-    choice: Option<super::super::core_choice::Profile>,
-    envelope: Option<RouteEnvelope>,
-    assessment: Option<ResourceRef>,
-    block: Option<Box<super::super::block::Profile>>,
 }
 
 struct Policy {
@@ -63,7 +59,6 @@ pub(super) fn decode_with_operation(
         artifacts.len() <= MAX_CLOSURE && routes.len() <= 256,
         ExecutionCapacityExceeded
     );
-    super::super::core_choice::validate_graph(&artifacts, &document.routes, false)?;
     super::super::admission::validate_graph(&artifacts)?;
     let mut sources = HashMap::new();
     let mut policies = HashMap::new();
@@ -71,7 +66,7 @@ pub(super) fn decode_with_operation(
     for Artifact {
         reference,
         definition,
-        envelope,
+        envelope: _,
     } in artifacts
     {
         graph.insert(reference.clone(), definition.dependencies());
@@ -79,9 +74,6 @@ pub(super) fn decode_with_operation(
             Definition::Route {
                 routing,
                 credentials,
-                core_choice,
-                assessment,
-                block,
                 ..
             } => {
                 sources.insert(
@@ -91,10 +83,6 @@ pub(super) fn decode_with_operation(
                         admission: None,
                         routing: Arc::new(routing),
                         credentials,
-                        choice: core_choice.map(|profile| *profile),
-                        envelope,
-                        assessment: assessment.map(|profile| profile.route),
-                        block,
                     },
                 );
             }
@@ -110,11 +98,7 @@ pub(super) fn decode_with_operation(
                         native_route: attachments.iter().any(|item| item.inbound_protocol == bitrouter_ai::tenancy::ordered::GenerationProtocol::GenerateContent),
                         routing: Arc::new(routing),
                         credentials,
-                        envelope,
                         admission: Some(attachments),
-                        choice: None,
-                        assessment: None,
-                        block: None,
                     },
                 );
             }
@@ -137,57 +121,7 @@ pub(super) fn decode_with_operation(
     let mut target_count = 0_usize;
     let mut content_bytes = 0_usize;
     let mut dependency_count = 0_usize;
-    let mut native_budget = native_v1::Budget::with_operation(operation);
-    // Hidden children are decoded once by complete identity, using the SAME
-    // cumulative work/target/dependency budgets as visible roots.
-    let child_refs: HashSet<_> = sources
-        .values()
-        .filter_map(|source| source.choice.as_ref().map(|profile| profile.route.clone()))
-        .collect();
-    let mut children = HashMap::new();
-    for reference in child_refs {
-        let dependencies = dependencies(&reference, &graph)?;
-        dependency_count = dependency_count
-            .checked_add(dependencies.len())
-            .context(ExecutionCapacityExceeded)?;
-        ensure!(
-            dependency_count <= MAX_ROUTE_DEPENDENCIES,
-            ExecutionCapacityExceeded
-        );
-        let mut source = sources
-            .remove(&reference)
-            .context("missing CoreChoice child source")?;
-        let route = source
-            .envelope
-            .take()
-            .context("missing CoreChoice child envelope")?;
-        let mut data = route_data(
-            route,
-            source,
-            dependencies,
-            &policies,
-            &mut target_count,
-            &mut content_bytes,
-            &mut native_budget,
-        )?;
-        let native = data.native.chains().map_err(|code| match code {
-            bitrouter_ai::tenancy::operation::ErrorCode::CapacityExceeded => {
-                anyhow::Error::new(ExecutionCapacityExceeded)
-            }
-            _ => anyhow::anyhow!("CoreChoice child cannot execute canonical Decisions"),
-        })?;
-        ensure!(
-            native.len() == 1
-                && native[0].selector == data.selector
-                && native[0].operation == bitrouter_ai::types::ModelOperation::Decisions
-                && native[0].candidates.len() == 1,
-            "CoreChoice canonical child must have one target"
-        );
-        // Normalize opaque IDs before sharing the child Arc among parents.
-        super::compact::route_data(&mut data)
-            .map_err(|_| anyhow::anyhow!("CoreChoice identifier normalization failed"))?;
-        children.insert(reference, Arc::new(data));
-    }
+    let mut decode_budget = budget::Budget::with_operation(operation);
     for route in routes {
         let dependencies = dependencies(&route.reference, &graph)?;
         dependency_count = dependency_count
@@ -197,39 +131,18 @@ pub(super) fn decode_with_operation(
             dependency_count <= MAX_ROUTE_DEPENDENCIES,
             ExecutionCapacityExceeded
         );
-        let mut source = sources
+        let source = sources
             .remove(&route.reference)
             .context("missing retained route source")?;
-        let choice = source.choice.take();
-        let mut data = route_data(
+        let data = route_data(
             route,
             source,
             dependencies,
             &policies,
             &mut target_count,
             &mut content_bytes,
-            &mut native_budget,
+            &mut decode_budget,
         )?;
-        if let Some(profile) = choice {
-            ensure!(
-                data.native
-                    .chains()
-                    .map_err(|_| anyhow::anyhow!("CoreChoice parent native route unavailable"))?
-                    .iter()
-                    .any(|chain| chain.selector == data.selector
-                        && chain.operation == bitrouter_ai::types::ModelOperation::Generation),
-                "CoreChoice parent must support native Generation"
-            );
-            data.choice = Some(super::RetainedChoice {
-                route: children
-                    .get(&profile.route)
-                    .context("CoreChoice child projection missing")?
-                    .clone(),
-                digest: profile.digest()?,
-                #[cfg(all(feature = "core", feature = "harness"))]
-                policy: profile.policy,
-            });
-        }
         ensure!(
             retained
                 .insert(data.reference.resource_id.to_string(), Arc::new(data))
@@ -244,27 +157,8 @@ pub(super) fn decode_with_operation(
                 "profiled route requires static ordered configuration"
             );
         }
-        if let Some(reference) = &parent.assessment {
-            ensure!(
-                matches!(&parent.native, super::NativeChains::Ready(chains) if chains.iter().any(|chain|
-                chain.selector == parent.selector && chain.operation == bitrouter_ai::types::ModelOperation::Generation)),
-                "assessment parent must support native generation"
-            );
-            let child = retained
-                .get(reference.resource_id.as_str())
-                .context("assessment route is not an explicit configuration root")?;
-            ensure!(
-                child.reference == *reference,
-                "assessment revision mismatch"
-            );
-            child
-                .static_assessment()
-                .map_err(|_| anyhow::anyhow!("unsupported assessment route"))?;
-        }
     }
     Ok(ValidatedEnvelope {
-        bro_capture: false,
-
         document,
         routes: retained,
     })
@@ -304,14 +198,14 @@ fn route_data(
     policies: &HashMap<ResourceRef, Policy>,
     target_count: &mut usize,
     content_bytes: &mut usize,
-    native_budget: &mut native_v1::Budget<'_>,
+    decode_budget: &mut budget::Budget<'_>,
 ) -> Result<RouteData> {
     // Derive runtime-only limits/ordering from authenticated source. Keeping
-    // these out of the exact target codec preserves compiler-v1 ciphertext.
+    // these out of the target codec preserves the authenticated representation.
     let runtime_config = if source.native_route {
-        native_budget.native_route_config(&source.routing)?
+        decode_budget.native_route_config(&source.routing)?
     } else {
-        native_budget.block_config(&source.routing)?
+        decode_budget.routing_config(&source.routing)?
     };
     let root_preferences = runtime_config.resolve_router(&route.selector)?.prefs;
     let policy = match (&route.policy, &route.policy_name) {
@@ -342,7 +236,7 @@ fn route_data(
                 .checked_add(1)
                 .context(ExecutionCapacityExceeded)?;
             ensure!(*target_count <= MAX_TARGETS, ExecutionCapacityExceeded);
-            native_budget.target(&approved.target)?;
+            decode_budget.target(&approved.target)?;
             let (target, projection) = target::decode(approved.target)?;
             *content_bytes = content_bytes
                 .checked_add(projection.len().saturating_mul(2))
@@ -405,79 +299,10 @@ fn route_data(
         chains.iter().any(|chain| chain.selector == route.selector),
         "retained base chain missing"
     );
-    if let Some(block) = &source.block {
-        block.validate(&route.selector)?;
-        ensure!(
-            policy.is_none() && source.choice.is_none(),
-            "unsupported Block closure"
-        );
-        for selector in [route.selector.as_str(), block.challenger()?] {
-            ensure!(
-                chains.iter().any(|chain| chain.selector == selector
-                    && chain.inbound.operation()
-                        == bitrouter_ai::types::ModelOperation::Generation),
-                "retained Block arm is missing"
-            );
-        }
-    }
-    let mut block_pricing = Vec::new();
-    if source.block.is_some() {
-        let config = native_budget.block_config(&source.routing)?;
-        native_budget.block_pricing_bytes(
-            candidates
-                .len()
-                .checked_mul(std::mem::size_of::<
-                    Option<crate::gateway::pipeline::stream::UsagePricing>,
-                >())
-                .context(ExecutionCapacityExceeded)?,
-        )?;
-        block_pricing.reserve_exact(candidates.len());
-        for candidate in &candidates {
-            let tiers = config
-                .providers
-                .get(&candidate.target.provider_name)
-                .and_then(|provider| provider.model_config(&candidate.target.service_id))
-                .and_then(|model| model.pricing_for(&candidate.target.api_protocol))
-                .map_or(0, |pricing| pricing.context_tiers.len());
-            native_budget.block_pricing_bytes(
-                tiers
-                    .checked_mul(std::mem::size_of::<
-                        crate::gateway::pipeline::stream::UsagePricingTier,
-                    >())
-                    .context(ExecutionCapacityExceeded)?,
-            )?;
-            let pricing =
-                crate::config::routing_table::retained_usage_pricing(&config, &candidate.target);
-            ensure!(
-                pricing
-                    .as_ref()
-                    .is_none_or(|price| price.registry_price.is_none()),
-                "registry pricing is not qualified by the owned manifest"
-            );
-            block_pricing.push(pricing);
-        }
-    }
-    let native = if source.native_route {
-        // This explicit ordered wire artifact grants no native-selection-v1
-        // authority, whose original source/protocol contract remains closed.
-        native_v1::NativeChains::Unavailable(native_v1::Unavailable::Unsupported)
-    } else {
-        native_v1::derive(
-            &route.selector,
-            &source.routing,
-            &source.credentials,
-            &chains,
-            &candidates,
-            native_budget,
-        )
-    };
-    native_budget.check_operation()?;
+    decode_budget.check_operation()?;
     Ok(RouteData {
         admission: source.admission,
         reference: route.reference,
-        assessment: source.assessment,
-        block: source.block,
-        block_pricing,
         dependencies,
         selector: route.selector,
         overrides: PromptOverrides {
@@ -486,9 +311,7 @@ fn route_data(
         },
         policy,
         chains,
-        native,
         candidates,
-        choice: None,
     })
 }
 

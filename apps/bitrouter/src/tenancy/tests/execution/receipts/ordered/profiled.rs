@@ -38,7 +38,7 @@ pub(super) async fn grant_pool(
     .context("binding")?;
     // Resource edits may share profiles across many candidate ordinals. Grant
     // every retained pool key, including unselected profiles, without inventing
-    // keys for profiles the fixture no longer imports.
+    // keys for absent profiles.
     let mut operator_pools = Vec::new();
     for reference in references.iter().filter(|reference| {
         reference.owner_kind == OwnerKind::OperatorPool

@@ -72,40 +72,11 @@ impl ModelSelector for SemanticPolicy {
             .as_ref()
             .and_then(|receipt| receipt.assessment.as_ref())
             .ok_or_else(|| BitrouterError::internal("missing semantic assessment"))?;
-        assert_eq!(assessment.next_step_role, NextStep::Verify);
+        assert_eq!(assessment.route_class.next_step, NextStep::Verify);
         self.0.lock().await.push(assessment.clone());
         ctx.set_model("verification-model");
         Ok(())
     }
-}
-
-struct SemanticControl {
-    runtime: DecisionRuntime,
-    acknowledgements: AtomicUsize,
-    plans: Mutex<Vec<native::NativePlan>>,
-}
-#[async_trait]
-impl native::NativeExecutionControl for SemanticControl {
-    async fn prepare_routing(&self, prompt: &Prompt) -> Result<Option<Prepared>> {
-        Ok(Some(
-            Prepared::from_prompt(prompt, Some(&self.runtime), "committed-decision").await,
-        ))
-    }
-    async fn commit_routing(&self, _: &crate::gateway::routing::plan::Plan) -> Result<()> {
-        self.acknowledgements.fetch_add(1, Ordering::SeqCst);
-        Ok(())
-    }
-    async fn plan(&self, plan: native::NativePlan) -> Result<native::NativePlanAdmission> {
-        assert_eq!(self.acknowledgements.load(Ordering::SeqCst), 1);
-        self.plans.lock().await.push(plan);
-        Ok(native::NativePlanAdmission {
-            route_indices: vec![0],
-        })
-    }
-    async fn before_attempt(&self, _: &str, _: u32) -> Result<()> {
-        Ok(())
-    }
-    async fn after_attempt(&self, _: crate::managed_contract::evidence::NativeAttemptReport) {}
 }
 
 #[derive(Default, Clone)]
@@ -116,17 +87,13 @@ impl SettlementRecorder for SemanticSettlement {
         let receipt = ctx
             .get_event::<Receipt>()
             .ok_or_else(|| BitrouterError::internal("missing settled receipt"))?;
-        assert!(
-            ctx.get_event::<crate::gateway::routing::plan::Selection>()
-                .is_some()
-        );
         self.0.lock().await.push(receipt.clone());
         Ok(())
     }
 }
 
 #[tokio::test]
-async fn rich_request_and_managed_input_share_classification_policy_and_settlement() -> Result<()> {
+async fn rich_request_uses_classification_policy_and_settlement() -> Result<()> {
     let semantic = Arc::new(SemanticFixture::default());
     let runtime = DecisionRuntime {
         model: "fixture-semantic".into(),
@@ -161,58 +128,19 @@ async fn rich_request_and_managed_input_share_classification_policy_and_settleme
             "The failing case is reproduced and the parser fix is applied. Run the tests to verify it.",
         ),
     ];
-    let prompt = request
-        .input
-        .generation_prompt()
-        .ok_or_else(|| BitrouterError::internal("expected generation input"))?
-        .clone();
     let pipeline = app
         .language_model()
         .ok_or_else(|| BitrouterError::internal("missing pipeline"))?;
-    let ordinary = pipeline.execute(request).await?;
-    let control = Arc::new(SemanticControl {
-        runtime,
-        acknowledgements: AtomicUsize::new(0),
-        plans: Default::default(),
-    });
-    let managed = app
-        .execute_native_controlled(prompt, CallerContext::local(), control.clone())
-        .await?;
-    assert_eq!(
-        ordinary
-            .result
-            .generation()
-            .ok_or_else(|| BitrouterError::internal("expected generation result"))?
-            .content,
-        managed
-            .result
-            .generation()
-            .ok_or_else(|| BitrouterError::internal("expected generation result"))?
-            .content
-    );
+    let response = pipeline.execute(request).await?;
+    assert!(response.result.generation().is_some());
     let inputs = semantic.0.lock().await;
-    assert_eq!(
-        inputs.len(),
-        2,
-        "one semantic attempt for each input, no second Core classification"
-    );
-    assert_eq!(inputs[0], inputs[1]);
+    assert_eq!(inputs.len(), 1, "one semantic attempt per request");
     let classifications = policy.0.lock().await;
-    assert_eq!(classifications.len(), 2);
-    assert_eq!(classifications[0], classifications[1]);
-    let plans = control.plans.lock().await;
-    assert_eq!(plans[0].original_model, "bitrouter/adaptive");
-    assert_eq!(plans[0].effective_model, "verification-model");
-    assert_eq!(
-        plans[0]
-            .router
-            .as_ref()
-            .map(|router| router.router_id.as_str()),
-        Some("adaptive")
-    );
+    assert_eq!(classifications.len(), 1);
     let receipts = settlement.0.lock().await;
-    assert_eq!(receipts.len(), 2);
-    assert_eq!(receipts[1].id, "committed-decision");
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(receipts[0].assessment.as_ref(), Some(&classifications[0]));
+
     Ok(())
 }
 

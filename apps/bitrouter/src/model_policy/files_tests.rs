@@ -140,12 +140,8 @@ async fn prepared_request_keeps_the_exact_source_generation_across_reload() -> R
         inherit_defaults: false,
         ..Default::default()
     };
-    let runtime = PolicyRuntime::from_document(
-        &config,
-        Some(document("fixture:first")),
-        Default::default(),
-        None,
-    )?;
+    let runtime =
+        PolicyRuntime::from_document(&config, Some(document("fixture:first")), Default::default())?;
     let input = crate::gateway::http::parse_input(
         &bitrouter_ai::types::ApiProtocol::ChatCompletions,
         serde_json::json!({"model":"bitrouter/auto","messages":[{"role":"user","content":"keep all context"}]}),
@@ -168,6 +164,10 @@ async fn prepared_request_keeps_the_exact_source_generation_across_reload() -> R
     )?);
     runtime.select_policy("auto", &mut admitted).await?;
     assert_eq!(admitted.model(), "fixture:first");
+    assert_eq!(
+        admitted.require_generation_prompt()?.messages,
+        prompt.messages
+    );
     let mut fresh = PipelineContext::new(PipelineRequest::new(
         "bitrouter/auto",
         CallerContext::local(),
@@ -176,7 +176,10 @@ async fn prepared_request_keeps_the_exact_source_generation_across_reload() -> R
     runtime.prepare_selection("auto", &mut fresh).await?;
     runtime.select_policy("auto", &mut fresh).await?;
     assert_eq!(fresh.model(), "fixture:second");
-    assert!(runtime.preserves_context());
+    assert_eq!(
+        fresh.require_generation_prompt()?.messages,
+        admitted.require_generation_prompt()?.messages
+    );
     Ok(())
 }
 

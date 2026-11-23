@@ -133,18 +133,6 @@ impl RequestsAction {
         Self { source, socket }
     }
 
-    /// Build one host-wide request snapshot.
-    ///
-    /// Metering reads remain best-effort as on the original local CLI: an
-    /// unavailable store retains daemon state and labels every metering
-    /// component unavailable rather than presenting placeholders as observed
-    /// zero usage. Transport/auth/version failures are handled outside this
-    /// action and remain hard errors for remote clients.
-    pub async fn report(&self, limit: u64) -> Result<RequestsReport> {
-        self.report_filtered(RequestFilters::with_limit(limit))
-            .await
-    }
-
     /// Build one host-wide filtered request snapshot.
     pub async fn report_filtered(&self, filters: RequestFilters) -> Result<RequestsReport> {
         let filters = filters.resolve()?;
@@ -265,7 +253,9 @@ mod tests {
             },
             directory.path().join("missing.sock"),
         );
-        let report = action.report(10).await?;
+        let report = action
+            .report_filtered(RequestFilters::with_limit(10))
+            .await?;
         assert!(report.rows.is_empty());
         assert!(report.daemon.is_none());
         assert_eq!(report.metering, MeteringAvailability::unavailable());
@@ -281,8 +271,18 @@ mod tests {
             },
             directory.path().join("missing.sock"),
         );
-        assert!(action.report(0).await.is_err());
-        assert!(action.report(MAX_REQUEST_ROWS + 1).await.is_err());
+        assert!(
+            action
+                .report_filtered(RequestFilters::with_limit(0))
+                .await
+                .is_err()
+        );
+        assert!(
+            action
+                .report_filtered(RequestFilters::with_limit(MAX_REQUEST_ROWS + 1))
+                .await
+                .is_err()
+        );
         Ok(())
     }
 

@@ -27,7 +27,7 @@ pub fn is_reserved(model: &str) -> bool {
 
 /// One resolved named router or unchanged upstream selector.
 #[derive(Debug, Clone)]
-pub struct RouterResolution {
+pub(crate) struct RouterResolution {
     /// Upstream model after explicit router selection.
     pub clean_model: String,
     /// Routing constraints supplied by the named router.

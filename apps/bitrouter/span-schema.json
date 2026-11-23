@@ -977,90 +977,6 @@
         }
       ],
       "events": []
-    },
-    {
-      "name": "invoke_agent {gen_ai.agent.name}",
-      "kind": "internal",
-      "parent": "A trace root. ACP session updates carry no causal parent ids.",
-      "note": "Emitted once per completed prompt turn, back-dated by the turn latency so its duration is real.",
-      "attributes": [
-        {
-          "key": "gen_ai.operation.name",
-          "type": "string",
-          "requirement": "required",
-          "note": "Always `invoke_agent` on this span."
-        },
-        {
-          "key": "gen_ai.agent.name",
-          "type": "string",
-          "requirement": "required",
-          "note": "Configured agent id."
-        },
-        {
-          "key": "gen_ai.conversation.id",
-          "type": "string",
-          "requirement": "required",
-          "note": "The session's stable record id. Also the join key to the HTTP plane: when the agent routes its model calls through BitRouter, one backend sees both the agent turns and the `chat` generations they caused."
-        },
-        {
-          "key": "bitrouter.stop_reason",
-          "type": "string",
-          "requirement": "required",
-          "note": "Turn stop reason, rendered as a string."
-        },
-        {
-          "key": "bitrouter.context.used",
-          "type": "int",
-          "requirement": "conditional",
-          "note": "Context-window occupancy, when the upstream reported usage. See the `occupancy-is-not-usage` invariant."
-        },
-        {
-          "key": "bitrouter.context.size",
-          "type": "int",
-          "requirement": "conditional",
-          "note": "Context-window size, when the upstream reported it."
-        }
-      ],
-      "events": []
-    },
-    {
-      "name": "execute_tool {gen_ai.tool.name}",
-      "kind": "internal",
-      "parent": "A trace root — a *sibling* of the turn span, not a child. ACP session updates carry no causal parent ids, so correlation runs through `gen_ai.conversation.id`.",
-      "note": "Emitted when a tool call reports a terminal status. A tool that never finishes emits no span.",
-      "attributes": [
-        {
-          "key": "gen_ai.operation.name",
-          "type": "string",
-          "requirement": "required",
-          "note": "Always `execute_tool` on this span."
-        },
-        {
-          "key": "gen_ai.tool.name",
-          "type": "string",
-          "requirement": "required",
-          "note": "Tool title when the update carried one, else the tool call id."
-        },
-        {
-          "key": "gen_ai.conversation.id",
-          "type": "string",
-          "requirement": "required",
-          "note": "Correlates the tool call with its turn."
-        },
-        {
-          "key": "gen_ai.agent.name",
-          "type": "string",
-          "requirement": "required",
-          "note": "Configured agent id."
-        },
-        {
-          "key": "error.type",
-          "type": "string",
-          "requirement": "conditional",
-          "note": "`tool_failed` when the tool reported failure."
-        }
-      ],
-      "events": []
     }
   ],
   "meter_name": "bitrouter",
@@ -1169,7 +1085,7 @@
           "key": "api_key_id",
           "type": "string",
           "requirement": "required",
-          "note": "Calling key's id, replaced by an overflow sentinel once the configured cardinality cap is reached. Unprefixed for historical reasons — frozen, not exemplary."
+          "note": "Calling key's id, replaced by an overflow sentinel once the configured cardinality cap is reached. This counter uses the documented unprefixed metric name."
         },
         {
           "key": "user_id",
@@ -1214,7 +1130,7 @@
           "key": "api_key_id",
           "type": "string",
           "requirement": "required",
-          "note": "Calling key's id, replaced by an overflow sentinel once the configured cardinality cap is reached. Unprefixed for historical reasons — frozen, not exemplary."
+          "note": "Calling key's id, replaced by an overflow sentinel once the configured cardinality cap is reached. This counter uses the documented unprefixed metric name."
         },
         {
           "key": "user_id",
@@ -1259,7 +1175,7 @@
           "key": "api_key_id",
           "type": "string",
           "requirement": "required",
-          "note": "Calling key's id, replaced by an overflow sentinel once the configured cardinality cap is reached. Unprefixed for historical reasons — frozen, not exemplary."
+          "note": "Calling key's id, replaced by an overflow sentinel once the configured cardinality cap is reached. This counter uses the documented unprefixed metric name."
         },
         {
           "key": "user_id",
@@ -1376,11 +1292,6 @@
       "id": "single-generation",
       "rule": "Only the root `chat` or `decisions` INTERNAL span carries `gen_ai.*` attributes. The auxiliary spans — `route`, the per-hop CLIENT spans, `settle` — carry `bitrouter.*` and `server.*` only.",
       "failure": "A gen_ai-aware backend renders any span carrying `gen_ai.*` as its own generation. Stamping a hop makes it count two generations per request and double the reported cost. Nothing errors; the bill is just wrong."
-    },
-    {
-      "id": "occupancy-is-not-usage",
-      "rule": "ACP agent spans never carry `gen_ai.usage.*`. Context-window occupancy rides `bitrouter.context.used` / `bitrouter.context.size` instead.",
-      "failure": "The substrate reports occupancy, not per-turn deltas. Writing occupancy into the token attributes corrupts every token dashboard built on them, and the numbers look plausible."
     },
     {
       "id": "gateway-observable-ids",

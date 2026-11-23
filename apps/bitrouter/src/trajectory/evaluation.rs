@@ -49,7 +49,7 @@ pub(crate) fn validate_evaluation_envelope(envelope: &TrajectoryEvaluationEnvelo
     Ok(())
 }
 
-#[cfg(feature = "core")]
+#[cfg(feature = "eval-publication")]
 pub(crate) fn validate_builtin_trajectory_result(result: &EvaluationResult) -> Result<()> {
     use crate::trajectory::evaluation::{
         TRAJECTORY_EVALUATOR_AUTHORITY_ID, TRAJECTORY_EVALUATOR_ID, TRAJECTORY_EVALUATOR_VERSION,
@@ -83,7 +83,7 @@ pub(crate) fn build_operational_evaluation(
         .last()
         .filter(|event| event.kind == TrajectoryEventKind::RequestSettled)
         .ok_or_else(|| anyhow::anyhow!("trajectory evaluation requires a terminal settlement"))?;
-    let snapshot = reduce(events, &BTreeSet::new())?;
+    let snapshot = reduce(events)?;
     // Episode observations retain operational facts and routing receipts. Policy
     // decisions belong to the independent typed request/shared Eval producers.
     let metrics = operational_metrics(&snapshot.health, settlement)?;
@@ -198,11 +198,6 @@ fn prediction_observation_evidence(settlement: &TrajectoryEvent) -> Result<Optio
         ("routing.predicted_role", "predicted_role"),
         ("routing.predicted_task_family", "predicted_task_family"),
         (
-            "routing.task_family_reason_codes",
-            "task_family_reason_codes",
-        ),
-        ("routing.predicted_action", "predicted_action"),
-        (
             "routing.predictor_contract_digest",
             "predictor_contract_digest",
         ),
@@ -212,7 +207,6 @@ fn prediction_observation_evidence(settlement: &TrajectoryEvent) -> Result<Optio
         ),
         ("routing.observed_action", "observed_action"),
         ("routing.observation_reason_code", "observation_reason_code"),
-        ("routing.action_match", "action_match"),
         (
             "routing.continuation_proposed_tier",
             "continuation_proposed_tier",
@@ -304,18 +298,6 @@ fn operational_metrics(
         health.same_selected_tier_streak,
         MetricUnit::Count,
     )?;
-    insert_u64(
-        &mut metrics,
-        "trajectory.unprotected_streak",
-        health.consecutive_unprotected_requests,
-        MetricUnit::Count,
-    )?;
-    insert_u64(
-        &mut metrics,
-        "trajectory.recovery_count",
-        health.recovery_count,
-        MetricUnit::Count,
-    )?;
     if let Some(value) = health.context_growth_ppm {
         insert_u64(
             &mut metrics,
@@ -392,7 +374,7 @@ fn completeness_name(value: HistoryCompleteness) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::BTreeMap;
 
     use super::{build_operational_evaluation, operational_metrics};
     use crate::trajectory::types::{
@@ -518,9 +500,6 @@ mod tests {
                 latest_projection: None,
                 same_projection_streak: 1,
                 same_selected_tier_streak: 1,
-                consecutive_unprotected_requests: 1,
-                recovery_count: 0,
-                requests_since_recovery: None,
                 context_growth_ppm: Some(1_500_000),
                 total_tokens: None,
                 settled_cost_micro_usd: None,
@@ -607,39 +586,26 @@ mod tests {
     }
 
     #[test]
-    fn raw_old_guard_intent_never_becomes_policy_decision_or_credit() -> anyhow::Result<()> {
+    fn unmeasured_route_metadata_never_becomes_policy_decision_or_credit() -> anyhow::Result<()> {
         let start = request_start(1, "start-old", "request-old", 20)?;
-        let snapshot =
-            crate::trajectory::health::reduce(std::slice::from_ref(&start), &BTreeSet::new())?;
-        // Opaque historical journal input, never a typed current Policy producer.
+        let snapshot = crate::trajectory::health::reduce(std::slice::from_ref(&start))?;
+        // Plain route metadata is not an admitted typed Policy measurement.
         let mut route: TrajectoryEvent = serde_json::from_value(json!({
             "schema_version":TRAJECTORY_SCHEMA_VERSION, "event_id":"old-route",
             "owner_user_id":"owner-1", "episode_id":"episode-1", "request_id":"request-old",
             "sequence":2, "kind":"route_intent_recorded", "captured_at":"2026-08-01T00:00:01Z",
             "content_digest":"", "evidence":{
-                "structural":{"route.applied_clause_count":0,"route.selected_is_protected":0,
-                    "route.experiment_challenger_propensity_ppm":100000},
+                "structural":{},
                 "categorical":{
-                    "route.eval_schema":"trajectory.v1", "route.policy":"retired-policy",
+                    "route.eval_schema":"trajectory.v1", "route.policy":"auto:cost",
                     "route.request_key":"unknown|orchestrate|normal",
                     "route.route_projection":"unknown|orchestrate|normal",
                     "route.baseline_tier":"reference", "route.preset":"auto:cost",
-                    "route.projection":"agent_trace/v2|planning|normal", "route.workflow_state":"planning",
-                    "route.selected_tier":"economy", "route.experiment_id":format!("sha256:{}", "a".repeat(64)),
-                    "route.experiment_arm":"challenger", "route.experiment_assignment_unit":"task",
-                    "route.clause_00.id":"progress_guard.active_hold", "route.clause_00.disposition":"skipped",
-                    "route.clause_01.id":"progress_guard.incomplete_history", "route.clause_01.disposition":"skipped",
-                    "route.clause_02.id":"progress_guard.max_consecutive_unprotected", "route.clause_02.disposition":"skipped",
-                    "route.clause_03.id":"progress_guard.max_same_projection_unprotected", "route.clause_03.disposition":"skipped",
-                    "route.clause_04.id":"progress_guard.max_recovery_count", "route.clause_04.disposition":"skipped",
-                    "route.clause_05.id":"progress_guard.max_episode_requests", "route.clause_05.disposition":"skipped",
-                    "route.clause_06.id":"progress_guard.max_episode_elapsed_ms", "route.clause_06.disposition":"skipped",
-                    "route.clause_07.id":"progress_guard.max_episode_cost_micro_usd", "route.clause_07.disposition":"skipped",
-                    "route.clause_08.id":"tool_safety.floor", "route.clause_08.disposition":"skipped"
+                    "route.projection":"unknown|orchestrate|normal",
+                    "route.selected_tier":"economy"
                 },
                 "digests":{"route.policy_lock":format!("sha256:{}", "b".repeat(64)),
-                    "route.health_snapshot":snapshot.evidence_digest,
-                    "route.experiment_assignment_id":format!("sha256:{}", "c".repeat(64))}
+                    "route.health_snapshot":snapshot.evidence_digest}
             }
         }))?;
         resign(&mut route)?;

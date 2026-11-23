@@ -23,27 +23,27 @@ jobs:
     runs-on: ubuntu-latest
     env:
       BITROUTER_TEST_EXAMPLES_DIR: ${{ github.workspace }}/target/debug/examples
+      BITROUTER_TEST_GATEWAY_BINARY: ${{ github.workspace }}/target/debug/bitrouter
+      BITROUTER_TEST_PREBUILT_ONLY: '1'
     strategy:
       fail-fast: false
       matrix:
         features:
         - ''
         - http2
-        - core
-        - harness
-        - core,harness
+        - eval-publication
         - mcp
         - server-tools
         - guardrails
         - otel-http
         - otel-grpc
         - otel-http,otel-grpc
-        - harness,otel-http
+        - eval-publication,otel-http
         - db-postgres
         - multi-instance
         - multi-instance,http2
         - db-mysql
-        - mcp,server-tools,otel-http,db-postgres,db-mysql
+        - eval-publication,mcp,server-tools,otel-http,db-postgres,db-mysql,http2
       max-parallel: 2
     steps:
     - uses: actions/checkout@v6
@@ -53,7 +53,7 @@ jobs:
         PROFILE_FEATURES: ${{ matrix.features }}
       run: |
         # Check production before dev-dependencies can unify extra features.
-        cargo check --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --bin bro
+        cargo check --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --bin bitrouter
         cargo check --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --all-targets
         cargo tree --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" -e normal,build --prefix none > profile-tree.txt
         # Only the minimal gateway distributions promise an h2-free
@@ -64,28 +64,17 @@ jobs:
               echo '::error::minimal HTTP/1 gateway profile pulled h2'; exit 1
             fi ;;
         esac
-        if grep -Eq '^(ratatui(-[^ ]*)?|crossterm) v' profile-tree.txt; then
-               echo '::error::headless profile pulled terminal dependencies'; exit 1
+        cargo tree --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" -e normal,build,dev --prefix none > service-tree.txt
+        if grep -Eq '^(agent-client-protocol[^ ]*|bitrouter-bro) v' service-tree.txt; then
+          echo '::error::service tests or binary linked a BRO implementation'; exit 1
+        fi
+        cargo tree --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" \
+          -e normal,build -i jsonschema --depth 1 --prefix none > profile-schema-owners.txt
+        if grep -Ev '^(jsonschema|bitrouter-registry) v' profile-schema-owners.txt; then
+          echo '::error::service schema validation must be owned by registry'; exit 1
         fi
         case ",$PROFILE_FEATURES," in
-          *,harness,*) ;;
-          *) if grep -Eq '^agent-client-protocol[^ ]* v' profile-tree.txt; then
-               echo '::error::profile without harness pulled ACP runtime'; exit 1
-             fi ;;
-        esac
-        case ",$PROFILE_FEATURES," in
-          *,harness,*) ;;
-          *)
-             # Registry admission validates its wire schema in every profile.
-             # The application must still keep harness result validation optional.
-             cargo tree --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" \
-               -e normal,build -i jsonschema --depth 1 --prefix none > profile-schema-owners.txt
-             if grep -Ev '^(jsonschema|bitrouter-registry) v' profile-schema-owners.txt; then
-               echo '::error::profile without harness pulled schema validation outside registry'; exit 1
-             fi ;;
-        esac
-        case ",$PROFILE_FEATURES," in
-          *,mcp,*|*,server-tools,*|*,harness,*) ;;
+          *,mcp,*|*,server-tools,*) ;;
           *) if grep -Eq '^(rmcp|process-wrap) v' profile-tree.txt; then
                echo '::error::profile without MCP pulled its transport runtime'; exit 1
              fi ;;
@@ -114,94 +103,78 @@ jobs:
                echo '::error::profile without MySQL pulled its driver'; exit 1
              fi ;;
         esac
+    - name: prebuild the selected gateway for CLI and lifecycle tests
+      if: matrix.features == '' || matrix.features == 'eval-publication' || matrix.features == 'server-tools' || matrix.features == 'mcp' || matrix.features == 'db-postgres' || matrix.features == 'db-mysql'
+      env:
+        PROFILE_FEATURES: ${{ matrix.features }}
+      run: cargo build --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --bin bitrouter --jobs 2
     - name: verify gRPC-only telemetry delivery
       if: matrix.features == 'otel-grpc'
       uses: ./.github/actions/test-grpc
     - name: prebuild selected-profile protocol fixtures
-      if: contains(matrix.features, 'harness') || matrix.features == 'mcp'
+      if: matrix.features == 'mcp'
       env:
         PROFILE_FEATURES: ${{ matrix.features }}
-      run: cargo build --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --jobs 2 --example onboarding_fixture --example pty_acp_fixture
-        --example harness_mcp_fixture
+      run: cargo build --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --jobs 2 --example harness_mcp_fixture
     - name: verify HTTP/2 ingress in lean profiles
       if: matrix.features == 'http2' || matrix.features == 'multi-instance,http2'
       env:
         PROFILE_FEATURES: ${{ matrix.features }}
-      run: cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --test http2_ingress --jobs 2 -- --test-threads=2
+      run: cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --lib "tests::http2_ingress::" --jobs 2 -- --test-threads=2
     - uses: taiki-e/install-action@nextest
-      if: matrix.features == '' || matrix.features == 'core' || matrix.features == 'harness' || matrix.features == 'core,harness' || matrix.features == 'multi-instance' || matrix.features == 'multi-instance,http2'
+      if: matrix.features == '' || matrix.features == 'eval-publication' || matrix.features == 'multi-instance' || matrix.features == 'multi-instance,http2'
     - name: verify transport bounds and connection ownership
       if: matrix.features == 'multi-instance' || matrix.features == 'multi-instance,http2'
       env:
         PROFILE_FEATURES: ${{ matrix.features }}
       run: cargo nextest run --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --lib --build-jobs 2 --test-threads 2 --no-tests fail -E 'test(gateway::transport::)'
-    - name: verify gateway behavior without learning services
-      if: matrix.features == '' || matrix.features == 'harness'
+    - name: verify minimal gateway routing and operator commands
+      if: matrix.features == ''
       env:
         PROFILE_FEATURES: ${{ matrix.features }}
-      run: cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --test core_disabled --test policy_eval_control_plane --test policy_cli --test offline_cutover_cli --test gateway_workflow
-        --test feature_ingress
+      run: cargo nextest run --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --lib --build-jobs 2 --test-threads 2 --no-tests fail
+        -E 'test(/^tests::policy_eval_control_plane::/) | test(/^tests::policy_cli::/) | test(/^tests::feature_ingress::/)'
     - name: verify mature tenant Policy and Eval in reduced profiles
-      if: matrix.features == '' || matrix.features == 'core' || matrix.features == 'harness'
+      if: matrix.features == '' || matrix.features == 'eval-publication'
       env:
         PROFILE_FEATURES: ${{ matrix.features }}
       run: cargo nextest run --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --lib --build-jobs 2 --test-threads 2 --no-tests fail
         -E 'test(tenancy::tests::execution::model_policy::) | test(tenancy::tests::eval::)'
-    - name: verify noninteractive setup and source boundaries
-      if: matrix.features == '' || matrix.features == 'harness' || matrix.features == 'core,harness'
-      env:
-        PROFILE_FEATURES: ${{ matrix.features }}
-      run: cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --test onboarding --test source_boundaries
-    - name: verify unavailable telemetry before startup side effects
-      if: matrix.features == '' || matrix.features == 'harness'
-      env:
-        PROFILE_FEATURES: ${{ matrix.features }}
-      run: cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --test telemetry_disabled --jobs 2 -- --test-threads=2
-    - name: verify host handoff and shutdown draining
-      if: matrix.features == '' || matrix.features == 'core' || matrix.features == 'core,harness'
-      env:
-        PROFILE_FEATURES: ${{ matrix.features }}
-      run: cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --test host_lifecycle --jobs 2 -- --test-threads=2
-    - name: verify base contracts without harness
+    - name: verify noninteractive setup
       if: matrix.features == ''
-      run: cargo nextest run -p bitrouter --no-default-features --lib --bin bro --build-jobs 2 --test-threads 2 -E 'test(client::agent_local::) | test(providers::cli_install::)
-        | test(skills::) | test(skills_init_tests) | test(config::yaml::) | test(daemon::tests::opaque_session) | binary(bro)'
-    - name: verify stored history without live capture
-      if: matrix.features == '' || matrix.features == 'core'
       env:
         PROFILE_FEATURES: ${{ matrix.features }}
-      run: cargo nextest run -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --lib --test acp_checkpoints --test daemon --build-jobs 2 --test-threads
-        2 -E 'test(acp_trajectory::) | test(storage::acp_history::) | test(gateway::routing::blocks::) | test(core::evolution::) | binary(acp_checkpoints) | binary(daemon)'
-    - name: verify headless ACP, capture and shared transcript behavior
-      if: matrix.features == 'harness' || matrix.features == 'core,harness'
+      run: |
+        cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --lib "tests::onboarding::"
+    - name: verify unavailable telemetry before startup side effects
+      if: matrix.features == ''
       env:
         PROFILE_FEATURES: ${{ matrix.features }}
-      run: cargo nextest run -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --lib --test acp --test database_capture --build-jobs 2 --test-threads
-        2 -E 'test(presentation::) | test(output::plain::) | test(text_presenter_tests) | test(agent_sessions::) | test(agent_api::) | test(commands::tests::) | test(onboarding::tests::)
-        | test(acp_trajectory::live_tests::) | test(acp_trajectory::checkpoint::tests::live::) | test(harness::resources::mcp::) | test(harness::service::core_disabled_tests::)
-        | test(harness::service::recovery::tests::baseline_) | test(harness::service::recovery::tests::historical::) | test(harness::agent::native::replay_tests::)
-        | test(harness::acp::native::core_disabled_tests::) | test(harness::permission::) | test(harness::local::) | test(harness::result_contract::) | binary(acp)
-        | binary(database_capture)'
-    - name: verify scheduler acknowledgements and recovery without harness
-      if: matrix.features == 'core'
-      run: cargo nextest run --locked -p bitrouter --no-default-features --features core --test core_contract --test core_execution --build-jobs 2 --test-threads
-        2
-
+      run: cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --lib "tests::telemetry_disabled::" --jobs 2 -- --test-threads=2
+    - name: verify host shutdown draining
+      if: matrix.features == '' || matrix.features == 'eval-publication'
+      env:
+        PROFILE_FEATURES: ${{ matrix.features }}
+      run: cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --lib "tests::host_lifecycle::" --jobs 2 -- --test-threads=2
+    - name: verify gateway operators
+      if: matrix.features == ''
+      run: cargo nextest run --locked -p bitrouter --no-default-features --lib --test tenancy_offline_cli --no-tests fail
+        -E 'test(config::yaml::) | test(/^cli::/) | test(/^tests::daemon::/) | binary(=tenancy_offline_cli)'
     - name: verify database feature availability
       if: matrix.features == 'db-postgres' || matrix.features == 'db-mysql'
       env:
         PROFILE_FEATURES: ${{ matrix.features }}
-      run: cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --test feature_ingress
+      run: cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --lib "tests::feature_ingress::"
     - name: verify optional server tools
       if: matrix.features == 'server-tools' || matrix.features == 'mcp'
       env:
         PROFILE_FEATURES: ${{ matrix.features }}
       run: |
-        cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --test feature_ingress
+        cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --lib "tests::feature_ingress::"
         cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --lib server_tool
-    - name: verify MCP discovery and process cleanup without harness
+    - name: verify gateway MCP discovery and process cleanup
       if: matrix.features == 'mcp'
-      run: cargo test -p bitrouter --no-default-features --features mcp --test harness_mcp_check --jobs 2 -- --test-threads=2
+      run: cargo test -p bitrouter --no-default-features --features mcp --lib "tests::harness_mcp_check::" --jobs 2 -- --test-threads=2
   artifact-profiles:
     name: artifact profiles (${{ matrix.os }})
     strategy:
@@ -211,7 +184,7 @@ jobs:
         - ubuntu-latest
       max-parallel: 2
     runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ matrix.os == 'macos-latest' && 90 || 45 }}
+    timeout-minutes: 150
     env:
       CARGO_INCREMENTAL: '0'
       CARGO_PROFILE_DEV_DEBUG: '0'
@@ -222,55 +195,35 @@ jobs:
     - uses: taiki-e/install-action@v2
       with:
         tool: nextest@0.9.114
-    - name: preserve full, minimum and harness executables from the same revision
+    - name: preserve three independently built product artifacts
       shell: bash
       run: |
-        mkdir -p "$RUNNER_TEMP/profile-full" "$RUNNER_TEMP/profile-gateway" "$RUNNER_TEMP/profile-harness"
-        cargo build --locked -p bitrouter --bin bro --jobs 2
-        cp target/debug/bro "$RUNNER_TEMP/profile-full/bro"
-        cargo build --locked -p bitrouter --no-default-features --bin bro --jobs 2
-        cp target/debug/bro "$RUNNER_TEMP/profile-gateway/bro"
-        cargo build --locked -p bitrouter --no-default-features --features harness --bin bro --jobs 2
-        cp target/debug/bro "$RUNNER_TEMP/profile-harness/bro"
-    - name: verify real daemon profile transitions and artifact metadata
+        mkdir -p "$RUNNER_TEMP/profile-full" "$RUNNER_TEMP/profile-gateway" "$RUNNER_TEMP/profile-bro"
+        cargo build --locked -p bitrouter --bin bitrouter
+        cp target/debug/bitrouter "$RUNNER_TEMP/profile-full/bitrouter"
+        cargo build --locked -p bitrouter --no-default-features --bin bitrouter
+        cp target/debug/bitrouter "$RUNNER_TEMP/profile-gateway/bitrouter"
+        cargo build --locked -p bitrouter-bro --bin bro
+        cp target/debug/bro "$RUNNER_TEMP/profile-bro/bro"
+    - name: Provision and probe the BRO process-test sandbox
+      run: bash .github/scripts/ci-bro-sandbox.sh
+    - name: verify resident transitions, storage, policy and the public product boundary
       shell: bash
       env:
-        BITROUTER_TEST_FULL_BINARY: ${{ runner.temp }}/profile-full/bro
-        BITROUTER_TEST_GATEWAY_BINARY: ${{ runner.temp }}/profile-gateway/bro
-        BITROUTER_TEST_HARNESS_BINARY: ${{ runner.temp }}/profile-harness/bro
+        BITROUTER_TEST_FULL_BINARY: ${{ runner.temp }}/profile-full/bitrouter
+        BITROUTER_TEST_GATEWAY_BINARY: ${{ runner.temp }}/profile-gateway/bitrouter
+        BITROUTER_TEST_BRO: ${{ runner.temp }}/profile-bro/bro
       run: |
-        cargo test --locked -p bitrouter --no-default-features --jobs 2 --test artifact_build_metadata
-        result=0
+        cargo test --locked -p bitrouter --no-default-features --lib "tests::artifact_build_metadata::"
         for selector in \
           artifact_profiles_preserve_residents_and_gate_explicit_replacement \
-          persistence::historical_dataset_is_refused_by_full_minimum_and_harness_artifacts; do
-          cargo nextest run --locked -p bitrouter --no-default-features --build-jobs 2 \
-            --test artifact_profiles --test-threads 1 --retries 0 \
-            --run-ignored only --no-tests fail -E "test(=$selector)" || result=1
-        done
-        # Full-feature fixtures create current BRO history, publish state and
-        # dispatch the original judge attempt. The test campaigns serve and
-        # replay requests through the separately built immutable binaries.
-        for selector in \
-          persistence::current_records_survive_full_minimum_full_harness_full_transitions \
           gateway_state::published_policy_and_accounting_survive_full_minimum_full \
-          gateway_state::judge::reserved_judge_charge_survives_full_minimum_full \
           gateway_state::trajectory::explicit_trajectory_facts_and_outbox_survive_full_minimum_full; do
-          cargo nextest run --locked -p bitrouter --build-jobs 2 --test artifact_profiles \
-            --test-threads 1 --retries 0 --run-ignored only --no-tests fail \
-            -E "test(=$selector)" || result=1
+          cargo nextest run --locked -p bitrouter --no-default-features --lib \
+            --test-threads 1 --retries 0 --run-ignored only --no-tests fail -E "test(=tests::artifact_profiles::$selector)"
         done
-        exit "$result"
-    - name: validate local measurement fixture and interruption cleanup
-      shell: bash
-      env:
-        CARGO_TARGET_DIR: ${{ runner.temp }}/measurement-target
-        BITROUTER_MEASUREMENT_TEST_BINARY: ${{ runner.temp }}/profile-gateway/bro
-      run: |
-        cargo fmt --manifest-path apps/bitrouter/tests/fixtures/gateway_measurements/Cargo.toml -- --check
-        cargo test --locked --manifest-path apps/bitrouter/tests/fixtures/gateway_measurements/Cargo.toml --jobs 2
-        cargo test --release --locked --manifest-path apps/bitrouter/tests/fixtures/gateway_measurements/Cargo.toml --jobs 2 --test cancellation -- --ignored --test-threads=1 --nocapture
-        cargo clippy --locked --manifest-path apps/bitrouter/tests/fixtures/gateway_measurements/Cargo.toml --all-targets --jobs 2 -- -D warnings
+        cargo nextest run --locked -p bitrouter --no-default-features --test product_process \
+          --retries 0 --run-ignored only --no-tests fail -E 'test(=gateway_routes_the_approved_bro_tool_continuation)'
   packaged-gateway:
     uses: ./.github/workflows/gateway-artifacts.yml
     with:
@@ -286,15 +239,18 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: '0'
       CARGO_PROFILE_TEST_DEBUG: '0'
       BITROUTER_TEST_DIST_HELPER_BINARY: ${{ github.workspace }}/target/debug/dist-helper
+      BITROUTER_TEST_GATEWAY_BINARY: ${{ github.workspace }}/target/debug/bitrouter
     steps:
     - uses: actions/checkout@v6
     - uses: actions-rust-lang/setup-rust-toolchain@v1
     - name: build the production registry producer
-      run: cargo build --locked -p dist-helper --jobs 2
+      run: |
+        cargo build --locked -p dist-helper --jobs 2
+        cargo build --locked -p bitrouter --no-default-features --bin bitrouter --jobs 2
     - name: sync the public provider and route through its exact artifact
       env:
         BITROUTER_TEST_REGISTRY_EVIDENCE_DIR: ${{ runner.temp }}/registry-closed-loop
-      run: cargo test --locked -p bitrouter --no-default-features --jobs 2 --test registry_lifecycle live_sync::provider_sync_artifact_is_consumed_by_official_host_and_routes_requests
+      run: cargo test --locked -p bitrouter --no-default-features --jobs 2 --lib tests::registry_lifecycle::live_sync::provider_sync_artifact_is_consumed_by_official_host_and_routes_requests
         -- --ignored --exact --nocapture
     - name: preserve sync, byte identity and routing evidence
       if: always()
@@ -303,17 +259,58 @@ jobs:
         name: registry-provider-closed-loop
         path: ${{ runner.temp }}/registry-closed-loop
         if-no-files-found: warn
+  cargo-install:
+    name: standalone Cargo install (${{ matrix.package }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - {package: bitrouter, binary: bitrouter, peer: bitrouter-bro}
+        - {package: bitrouter-bro, binary: bro, peer: bitrouter}
+    steps:
+    - uses: actions/checkout@v6
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
+    - name: package and install from independent source archives
+      shell: bash
+      env:
+        PRODUCT: ${{ matrix.package }}
+        BINARY: ${{ matrix.binary }}
+        PEER: ${{ matrix.peer }}
+      run: |
+        set -euo pipefail
+        scratch="$(mktemp -d "$RUNNER_TEMP/source-install.XXXXXXXX")"
+        cargo package --locked --no-verify --target-dir "$scratch/pkg" --workspace --exclude "$PEER" --exclude dist-helper
+        version="$(cargo metadata --locked --no-deps --format-version 1 | jq -er --arg p "$PRODUCT" '.packages[] | select(.name == $p).version')"
+        test -f "$scratch/pkg/package/$PRODUCT-$version.crate"
+        test ! -e "$scratch/pkg/package/$PEER-$version.crate"
+        cd "$scratch"
+        mkdir -p crates .cargo
+        printf '[patch.crates-io]\n' > .cargo/config.toml
+        for archive in pkg/package/*.crate; do
+          tar -xzf "$archive" -C crates
+          dir="$(basename "$archive" .crate)"
+          name="${dir%-$version}"
+          if [[ "$name" != "$PRODUCT" ]]; then
+            printf '%s = { path = "%s" }\n' "$name" "$scratch/crates/$dir" >> .cargo/config.toml
+          fi
+        done
+        unset BITROUTER_BUILD_REVISION
+        cargo install --path "crates/$PRODUCT-$version" --debug --root "$scratch/install" --target-dir "$scratch/target"
+        test "$(ls "$scratch/install/bin")" = "$BINARY"
+        if [[ "$PRODUCT" == bitrouter ]]; then
+          "$scratch/install/bin/bitrouter" --json build-info > identity.json
+        else
+          "$scratch/install/bin/bro" build-info > identity.json
+        fi
+        jq -e --arg sha "$GITHUB_SHA" --arg version "$version" '.source_revision == $sha and .version == $version' identity.json
   public-library-boundaries:
     name: public-library-boundaries
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v6
     - uses: actions-rust-lang/setup-rust-toolchain@v1
-    - name: verify final workspace membership
-      run: |
-        cargo metadata --no-deps --format-version 1 | jq -e '
-          [.packages[].name] | sort ==
-          ["bitrouter", "bitrouter-ai", "bitrouter-guardrails", "bitrouter-registry", "bitrouter-sdk", "dist-helper"]'
     - name: verify SDK without HTTP/2
       run: |
         # Check production before test dependencies can enable HTTP/2.
@@ -337,11 +334,11 @@ jobs:
           if grep -Eq '^(axum|axum-core|hyper|hyper-util) v' ai-tree.txt; then
             echo '::error::AI contracts pulled HTTP framework dependencies'; exit 1
           fi
-          if grep -Eq '^(bitrouter(-sdk)?|reqwest|tokio(-[^ ]*)?|sea-orm(-[^ ]*)?|sqlx(-[^ ]*)?|ratatui(-[^ ]*)?|crossterm|opentelemetry[^ ]*|tracing-opentelemetry|agent-client-protocol[^ ]*|rmcp) v' ai-tree.txt; then
+          if grep -Eq '^(bitrouter(-sdk|-bro|-build|-update)?|reqwest|tokio(-[^ ]*)?|sea-orm(-[^ ]*)?|sqlx(-[^ ]*)?|opentelemetry[^ ]*|tracing-opentelemetry|agent-client-protocol[^ ]*|rmcp) v' ai-tree.txt; then
             echo '::error::AI public contracts pulled runtime dependencies'; exit 1
           fi
           cargo tree --locked -p bitrouter-sdk $flags -e normal,build --prefix none > sdk-tree.txt
-          if grep -Eq '^(bitrouter|axum|sea-orm(-[^ ]*)?|sqlx(-[^ ]*)?|ratatui(-[^ ]*)?|crossterm|opentelemetry[^ ]*|tracing-opentelemetry|agent-client-protocol[^ ]*|rmcp) v' sdk-tree.txt; then
+          if grep -Eq '^(bitrouter(-bro|-build|-update)?|axum|sea-orm(-[^ ]*)?|sqlx(-[^ ]*)?|opentelemetry[^ ]*|tracing-opentelemetry|agent-client-protocol[^ ]*|rmcp) v' sdk-tree.txt; then
             echo '::error::HTTP SDK pulled service, execution or UI dependencies'; exit 1
           fi
         done
@@ -351,15 +348,10 @@ jobs:
         fi
         cargo tree --locked -p bitrouter -e normal,build --prefix none > host-tree.txt
         if grep -Eq '^bitrouter-guardrails v' host-tree.txt; then
-          echo '::error::default bro links the optional matcher'; exit 1
+          echo '::error::default gateway links the optional matcher'; exit 1
         fi
-    - name: preserve prehashed manifests in an independent SDK consumer
+    - name: check the independent public SDK consumer
       run: |
-        mkdir -p target/sdk-manifest-fidelity
-        cargo run --locked -p bitrouter --no-default-features --features core \
-          --example sdk_manifest_fixture > target/sdk-manifest-fidelity/manifest.json
-        export BITROUTER_TEST_MANIFEST_FIXTURE="$PWD/target/sdk-manifest-fidelity/manifest.json"
-        cargo test --locked \
+        cargo check --locked \
           --manifest-path apps/bitrouter/tests/fixtures/sdk_consumer/Cargo.toml \
-          --target-dir target/sdk-consumer --test manifest_fidelity -- \
-          --ignored --exact server_prehashed_manifest_survives_isolated_bind_and_restore
+          --target-dir target/sdk-consumer --all-targets

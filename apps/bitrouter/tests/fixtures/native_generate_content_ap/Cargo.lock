@@ -761,7 +761,7 @@ dependencies = [
 
 [[package]]
 name = "native-ap-sdk-consumer"
-version = "0.0.0"
+version = "1.0.0-beta.1"
 dependencies = [
  "bitrouter-ai",
  "bitrouter-sdk",

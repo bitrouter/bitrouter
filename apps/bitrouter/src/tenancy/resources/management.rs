@@ -437,9 +437,7 @@ impl Service {
         Ok(bitrouter_ai::tenancy::resources::PolicyCapabilities {
             installation_id: capabilities.installation_id,
             spec_version: bitrouter_ai::policy::SpecVersion::Beta1,
-            classifier_digest:
-                crate::gateway::routing::workflow::predictive::compiled_predictor_contract()
-                    .config_digest,
+            classifier_digest: crate::gateway::routing::assessment::contract_digest(),
             provisioning_enabled: capabilities.provisioning_enabled,
         })
     }

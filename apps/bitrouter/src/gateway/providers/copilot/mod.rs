@@ -2,7 +2,7 @@
 //!
 //! Two-step authentication:
 //!
-//! 1. The user runs `bro providers login github-copilot` once, which
+//! 1. The user runs `bitrouter providers login github-copilot` once, which
 //!    drives the OAuth Device Authorization Grant against `github.com` and
 //!    stores a long-lived GitHub user-to-server access token (e.g. `ghu_…`) in
 //!    the injected selected-account storage.
@@ -165,7 +165,8 @@ impl CopilotAuthApplier {
         Ok(auth)
     }
     /// Resolve an ephemeral Copilot token for this exact selected source/account.
-    pub async fn obtain_copilot_token(&self, target: &ModelTarget) -> Result<CopilotToken> {
+    #[cfg(test)]
+    pub(crate) async fn fixture_token(&self, target: &ModelTarget) -> Result<CopilotToken> {
         Ok(self.obtain_copilot_auth(target, None).await?.token)
     }
 }

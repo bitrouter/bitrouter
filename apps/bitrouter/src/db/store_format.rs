@@ -3,8 +3,9 @@
 use anyhow::{Context, Result, ensure};
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
-/// The migration ledger is the ordinary store's sole format discriminator.
-pub(crate) const BASELINE: &str = "m20261118_000001_model_policy_store";
+pub(crate) const GATEWAY_SQLITE: &str = "m20261118_000006_gateway_sqlite";
+
+pub(crate) const GATEWAY_SERVER: &str = "m20261118_000007_gateway_server";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum State {
@@ -12,7 +13,34 @@ pub(crate) enum State {
     Current,
 }
 
+/// Select the product schema before enabling WAL or acquiring write authority.
 pub(crate) async fn inspect(db: &impl ConnectionTrait) -> Result<State> {
+    let marker = if db.get_database_backend() == DatabaseBackend::Sqlite {
+        GATEWAY_SQLITE
+    } else {
+        GATEWAY_SERVER
+    };
+    let state = inspect_marker(db, marker).await?;
+    if state == State::Current && db.get_database_backend() == DatabaseBackend::Sqlite {
+        super::sqlite_schema::validate(db, true).await?;
+    }
+    Ok(state)
+}
+
+/// Recheck the archive's exact inventory marker inside the original read transaction.
+pub(crate) async fn inspect_archive(db: &impl ConnectionTrait, marker: &str) -> Result<()> {
+    ensure!(
+        db.get_database_backend() == DatabaseBackend::Sqlite && marker == GATEWAY_SQLITE,
+        "unsupported archive database role"
+    );
+    ensure!(
+        inspect_marker(db, marker).await? == State::Current,
+        "archive is empty"
+    );
+    super::sqlite_schema::validate(db, false).await
+}
+
+async fn inspect_marker(db: &impl ConnectionTrait, marker: &str) -> Result<State> {
     let backend = db.get_database_backend();
     if backend == DatabaseBackend::Sqlite {
         ensure!(
@@ -82,13 +110,18 @@ pub(crate) async fn inspect(db: &impl ConnectionTrait) -> Result<State> {
         rows.len() == 1,
         "incomplete or unsupported store format ledger"
     );
-    ensure!(
-        rows[0].try_get::<String>("", "version")? == BASELINE,
-        "unsupported historical or future store format; use a fresh database"
-    );
+    let version: String = rows[0].try_get("", "version")?;
+    if version != marker {
+        if backend == DatabaseBackend::Sqlite {
+            anyhow::bail!("unsupported database role or format; use a fresh gateway database");
+        }
+        anyhow::bail!(
+            "unsupported server database role or format; retain the stopped database and its original binary for recovery, and initialize this gateway in a new empty database"
+        );
+    }
     let _: i64 = rows[0].try_get("", "applied_at")?;
     // Format selection is not content authentication. This cheap catalog pass
-    // catches retired compiler domains even when somebody has forged a marker.
+    // requires supported compiler domains even with a forged schema marker.
     // Policy-kind admission profiles retain their independent current compilers;
     // the authenticated decoder binds each compiler to the decrypted definition.
     // Resources authenticates every retained source before authority publication.
@@ -118,7 +151,7 @@ pub(crate) async fn inspect(db: &impl ConnectionTrait) -> Result<State> {
             header.try_get::<i32>("", "singleton")? == 1
                 && header.try_get::<i32>("", "schema_version")?
                     == crate::tenancy::AUTHORITY_SCHEMA_VERSION,
-            "historical or future authority format is unsupported"
+            "unsupported authority format"
         );
     }
     let query = sea_orm::sea_query::Query::select()
@@ -140,7 +173,7 @@ pub(crate) async fn inspect(db: &impl ConnectionTrait) -> Result<State> {
         .to_owned();
     ensure!(
         db.query_one(backend.build(&query)).await?.is_none(),
-        "retained historical Policy resource"
+        "unsupported Policy compiler"
     );
     Ok(State::Current)
 }
@@ -173,11 +206,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn refuses_development_gateway_with_principal_keyed_request_admission() -> Result<()> {
+        let db = crate::db::connect("sqlite::memory:").await?;
+        super::super::run_migrations(&db).await?;
+        ensure!(inspect(&db).await? == State::Current);
+        let old = "m20261118_000003_gateway_sqlite";
+        let result = db
+            .execute(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "UPDATE seaql_migrations SET version = ? WHERE version = ?",
+                [old.into(), GATEWAY_SQLITE.into()],
+            ))
+            .await?;
+        ensure!(result.rows_affected() == 1);
+        ensure!(inspect(&db).await.is_err());
+        let row = db
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT version FROM seaql_migrations",
+            ))
+            .await?
+            .context("missing version after rejection")?;
+        ensure!(row.try_get::<String>("", "version")? == old);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn partial_future_and_old_markers_never_select_a_dataset() -> Result<()> {
         for marker in [
             None,
-            Some("m20240101_000048_native_generate_content"),
-            Some(BASELINE),
+            Some("unsupported-store-format"),
+            Some("m20261118_000001_model_policy_store"),
+            Some(GATEWAY_SQLITE),
+            Some("m20261118_000004_bro_sqlite"),
             Some("m20990101_future"),
         ] {
             let db = crate::db::connect("sqlite::memory:").await?;

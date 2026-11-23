@@ -30,7 +30,6 @@ const OPERATOR: &str = "ordered-test-operator-secret-at-least-32-bytes";
 
 mod authorization;
 
-mod archive;
 mod barrier;
 mod caller_timeout;
 mod canonical;
@@ -38,7 +37,6 @@ mod defaults;
 mod envelope;
 mod generate_content_native;
 mod native_controls;
-mod predecessor;
 mod private_adapter;
 mod profiled;
 

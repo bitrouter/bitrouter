@@ -38,8 +38,6 @@ pub(in crate::tenancy) struct Totals {
     pub unknown: u64,
     pub uncovered: u64,
     pub live: u64,
-    pub repair_reserved: u64,
-    pub repair_live: u64,
 }
 
 pub(in crate::tenancy) struct Accounting {
@@ -285,47 +283,6 @@ impl Accounting {
         self.totals = next;
         Ok(())
     }
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub fn reserve_repair(
-        &mut self,
-        bytes: u64,
-        rows: u64,
-        uncovered: u64,
-    ) -> Result<u64, ErrorCode> {
-        let charged = rows
-            .checked_mul(ROW_OVERHEAD)
-            .and_then(|n| n.checked_add(bytes))
-            .ok_or(ErrorCode::CapacityExceeded)?;
-        if self.fenced {
-            return Err(ErrorCode::StorageUnavailable);
-        }
-        if uncovered > rows || !self.physical_fit(charged, 0) {
-            return Err(ErrorCode::CapacityExceeded);
-        }
-        let mut next = self.totals;
-        next.reserved = next
-            .reserved
-            .checked_add(charged)
-            .ok_or(ErrorCode::CapacityExceeded)?;
-        next.repair_reserved = next
-            .repair_reserved
-            .checked_add(charged)
-            .ok_or(ErrorCode::CapacityExceeded)?;
-        next.live = next
-            .live
-            .checked_add(rows)
-            .ok_or(ErrorCode::CapacityExceeded)?;
-        next.repair_live = next
-            .repair_live
-            .checked_add(rows)
-            .ok_or(ErrorCode::CapacityExceeded)?;
-        next.uncovered = next
-            .uncovered
-            .checked_add(uncovered)
-            .ok_or(ErrorCode::CapacityExceeded)?;
-        self.totals = next;
-        Ok(charged)
-    }
     #[cfg(any(test, feature = "otel-http", feature = "otel-grpc"))]
     pub fn physical_write_reserved(&self) -> u64 {
         self.physical_write_reserved
@@ -333,14 +290,9 @@ impl Accounting {
     #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
     pub fn observed(&self, active: u64) -> Option<(u64, u64, u64, u64)> {
         let total = self.totals;
-        let executions = total.live.checked_sub(total.repair_live)?;
         if total.uncovered > total.live
-            || executions > active
-            || executions
-                .checked_mul(RESERVATION)?
-                .checked_add(total.repair_reserved)?
-                != total.reserved
-            || total.repair_live.checked_mul(ROW_OVERHEAD)? > total.repair_reserved
+            || total.live > active
+            || total.live.checked_mul(RESERVATION)? != total.reserved
         {
             return None;
         }
@@ -381,12 +333,5 @@ pub(in crate::tenancy) fn free_space(volume: Option<&std::path::Path>) -> anyhow
     }
 }
 
-#[cfg(all(
-    test,
-    feature = "core",
-    feature = "harness",
-    any(feature = "otel-http", feature = "otel-grpc")
-))]
-mod observation_tests;
 #[cfg(test)]
 mod tests;

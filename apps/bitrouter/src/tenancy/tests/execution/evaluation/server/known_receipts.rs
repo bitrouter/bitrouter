@@ -230,20 +230,23 @@ pub(super) async fn check(database: &mut database::Fixture) -> Result<()> {
     let slot = database.start(&db).await?;
     let malformed = async {
         let tx = database.tx(slot)?;
-        // This copied receipt has no sidecar. The other 65 receipts stay valid.
-        let query = Query::update()
-            .table(Alias::new("tenancy_execution_receipts"))
-            .value(Alias::new("execution_id"), "")
-            .and_where(Expr::col(Alias::new("installation_id")).eq(installation.as_str()))
-            .and_where(Expr::col(Alias::new("tenant_id")).eq(tenant.as_str()))
-            .and_where(Expr::col(Alias::new("execution_id")).eq("known-scan-064"))
-            .to_owned();
-        ensure!(
-            tx.execute(tx.get_database_backend().build(&query))
-                .await?
-                .rows_affected()
-                == 1
-        );
+        // Keep mandatory evidence linked so this isolates the raw-key guard.
+        // The other 65 receipts stay valid.
+        for table in ["tenancy_execution_receipts", "tenancy_usage_evidence"] {
+            let query = Query::update()
+                .table(Alias::new(table))
+                .value(Alias::new("execution_id"), "")
+                .and_where(Expr::col(Alias::new("installation_id")).eq(installation.as_str()))
+                .and_where(Expr::col(Alias::new("tenant_id")).eq(tenant.as_str()))
+                .and_where(Expr::col(Alias::new("execution_id")).eq("known-scan-064"))
+                .to_owned();
+            ensure!(
+                tx.execute(tx.get_database_backend().build(&query))
+                    .await?
+                    .rows_affected()
+                    == 1
+            );
+        }
         pages.store(0, Ordering::Relaxed);
         let retained = obligations::Key {
             tenant: tenant.clone(),

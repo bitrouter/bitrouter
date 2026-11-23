@@ -109,10 +109,9 @@ archive compression does not prove space was returned to the filesystem.
 Monitor real disk/WAL growth and maintain headroom: other filesystem users and
 SQLite write amplification can still cause ENOSPC after an admission probe.
 
-The current store has no lifetime directory or history count quota. Startup
-walks all retained pages before serving. Allow enough working capacity for
-complete validation. Keep retained history and operation IDs when an outcome
-is uncertain.
+Startup validates all retained pages of the current dataset before serving. An
+insufficient validation budget blocks readiness. Keep a consistent stopped-writer
+backup of the database and its external credentials.
 
 Submission bounds upload and admission, not the lifetime of an admitted stream.
 `ordered_attempt_limit` bounds explicit ordered submissions to 1–64 candidates
@@ -128,26 +127,20 @@ endpoint requires a profiled ordered generation request and a peer that
 authenticates and consumes each attempt before sending it upstream. See the
 [configuration contract](../../../docs/specs/configuration/README.md#private-generation-adapter).
 
-Ordered selections require an explicit `admission_mode` (`unprofiled` or
-`profiled`), matching the retained root; missing mode is not a default.
-Installation authority alone can provision admission profiles or profiled
-routes through the existing resource API. Profiles use explicit rate/health
-rules; zero RPM is valid local refusal. A profiled route permanently protects
-its key, including old revisions and configurations. Use the current resource
-capabilities endpoint and format-one puts. Every profile has a required nullable
-`health_group_id`; health rules and the group are enabled or disabled together.
-Use distinct group IDs for isolated circuits or the same ID for shared health
-within one operator pool. Group rules and membership remain immutable, including
-revoked history. Only a member's RPM ceiling can rotate.
+Ordered selections use the retained admission profile. Installation authority
+provisions profiles and routes through the resource API. Profiles define
+rate and health rules, and zero RPM explicitly denies admission. A profiled
+route protects its key across retained revisions. For shared health, use an
+explicit `health_group_id` on eligible members. Group rules and membership are
+immutable. Read the capabilities endpoint before provisioning and consult the
+[resource contract](../../../docs/specs/service-api/README.md#resource-provisioning)
+for exact fields and semantics.
 
 The current SQLite tenant baseline uses a format-6 authority header and a
 persistent admission index. Publication and import record the index witnesses
 with the resource revisions. Startup authenticates all retained definitions
 and checks their witnesses through read-only validation before readiness. A
-missing or inconsistent witness prevents startup. Retain a compatible
-stopped-writer backup before changing binaries.
-See the [service contract](../../../docs/specs/service-api/README.md#resource-provisioning)
-for exact profile, import-head and protection semantics.
+missing or inconsistent witness prevents startup.
 
 Use `observe_rate_group_id` only for an explicit same-owner read-only association.
 It can expose a measured shared count while `rate:null` remains uncharged;
@@ -156,7 +149,7 @@ candidate-manifest endpoint, retain the instance identity, and do not treat the
 sample as admission authority or a durable/fleet-wide counter.
 The optional execution total starts at admission; `null` or omission permits
 ongoing active work. The idle setting bounds each provider read and blocked
-output handoff, preventing silent upstreams or unread response bodies from
+output delivery, preventing silent upstreams or unread response bodies from
 indefinitely retaining reservations. These lifetime durations are positive integer seconds
 up to 31,536,000. Preparation callbacks follow the execution's optional total;
 per-part callbacks use the idle budget and storage keeps its shorter limits.
@@ -165,11 +158,13 @@ has a fixed 30-second budget; cancellation/shutdown has a separate 30-second
 producer-join budget so unread output does not spend cleanup time in advance.
 Repeated cancellation does not renew either budget. Late confirmed joins can
 release capacity, but genuine cleanup failure keeps admission fenced. Unknown
-effects remain unknown and inference is never replayed. With exclusive startup
-custody, the service settles retained ordered intents as unknown before
-dispatch becomes available. An interrupted startup leaves uncommitted intents
-for the next startup, while committed receipts keep their execution identities.
-Successful delivery still waits for durable receipt acknowledgement.
+effects remain unknown and inference is never replayed. Successful delivery
+still waits for durable receipt acknowledgement.
+
+With exclusive startup custody, the gateway settles retained ordered intents as
+unknown before dispatch becomes available. An interrupted startup leaves
+uncommitted intents for the next startup. Committed receipts keep their
+execution identities.
 
 `resource_origins` defaults to empty, which keeps tenant-managed route
 provisioning disabled. Installation operators remain trusted. An enabled host
@@ -193,7 +188,7 @@ new qualified resource revision. Importing resources does not grant tenant acces
 or activate a configuration. Never put resource-import definitions or secret key
 values into a tenant draft; drafts contain resource references only.
 
-Use the HTTP `TenancyClient` for tenant management or the `bro tenancy`
+Use the HTTP `TenancyClient` for tenant management or the `bitrouter tenancy`
 configuration adapter below. The tenant-operation namespace
 is `/control/v1/tenancy/operations/{operation_id}`, separate from host reload
 operations. Retain operation IDs after a lost response; credential secrets are
@@ -216,8 +211,9 @@ read authority. Correlation is not an idempotency key: do not automatically
 refresh the binding and resend the inference request.
 
 Controlled native turns use the same tenant credential and dispatch binding as
-HTTP turns. Dispatch checks the tenant credential and binding for requests
-that carry caller labels, host inspection credentials or local harness metadata.
+HTTP turns. Dispatch rechecks the tenant credential and binding even when a
+request carries caller labels, host inspection credentials, or local harness
+metadata.
 
 ## Tenant configuration commands
 
@@ -228,14 +224,14 @@ explicit `--endpoint URL --token-env NAME` pair. Targets cannot be mixed, and
 there is no `--context local` or implicit local discovery.
 
 ```console
-bro context add resource-admin --endpoint https://router.example/control/v1 --token-env RESOURCE_ADMIN_TOKEN
-bro --context resource-admin tenancy capabilities
-bro tenancy configuration validate --input draft.json
-bro --context resource-admin tenancy configuration apply --tenant tenant-a --input draft.json
-bro --context resource-admin tenancy configuration read --installation-id install-a --tenant tenant-a --revision config-r1
-bro --context resource-admin tenancy configuration active --installation-id install-a --tenant tenant-a
-bro --context resource-admin tenancy configuration activate --tenant tenant-a --input activation.json
-bro --context resource-admin tenancy operation --installation-id install-a --operation-id prepare-1
+bitrouter context add resource-admin --endpoint https://router.example/control/v1 --token-env RESOURCE_ADMIN_TOKEN
+bitrouter --context resource-admin tenancy capabilities
+bitrouter tenancy configuration validate --input draft.json
+bitrouter --context resource-admin tenancy configuration apply --tenant tenant-a --input draft.json
+bitrouter --context resource-admin tenancy configuration read --installation-id install-a --tenant tenant-a --revision config-r1
+bitrouter --context resource-admin tenancy configuration active --installation-id install-a --tenant tenant-a
+bitrouter --context resource-admin tenancy configuration activate --tenant tenant-a --input activation.json
+bitrouter --context resource-admin tenancy operation --installation-id install-a --operation-id prepare-1
 ```
 
 `draft.json` must be the complete `ConfigurationPut` request: a caller-chosen
@@ -271,12 +267,12 @@ dispatch flags before strict inference; these client commands do not turn them o
 Set the selected token in the client's environment, then save its variable name:
 
 ```console
-bro context add workstation \
+bitrouter context add workstation \
   --endpoint https://router.example/control/v1 \
   --token-env WORKSTATION_CONTROL_TOKEN
-bro --context workstation status
-bro --context workstation models
-bro --context workstation code
+bitrouter --context workstation status
+bitrouter --context workstation models
+bitrouter --context workstation code
 ```
 
 Plain HTTP is accepted only for a loopback URL, such as an SSH port-forward.
@@ -293,21 +289,21 @@ start/stop/restart continue to require host-local execution.
 ## Inspect the host
 
 ```console
-bro --context workstation providers list
-bro --context workstation observe status
-bro --context workstation agents list
-bro --context workstation policy status
-bro --context workstation policy show production --view active
-bro --context workstation policy status --view disk
-bro --context workstation requests --limit 50 --provider openai \
+bitrouter --context workstation providers list
+bitrouter --context workstation observe status
+bitrouter --context workstation agents list
+bitrouter --context workstation policy status
+bitrouter --context workstation policy show production --view active
+bitrouter --context workstation policy status --view disk
+bitrouter --context workstation requests --limit 50 --provider openai \
   --since 2026-09-07T00:00:00Z --until 2026-09-08T00:00:00Z
 ```
 
 Policy reads default to `active` for every target. Select `--disk` or
 `--view disk` explicitly for host files waiting to be applied. `show` returns
 the complete resubmittable document in `source`; `source_digest`, view,
-availability and router bindings remain separate report metadata. Agent listing is passive and never starts an agent. Remote
-`agents list --remote` is rejected because that flag selects an external registry.
+availability and router bindings remain separate report metadata. Agent listing is a passive
+catalog read. BRO launches adapters locally.
 
 Request intervals require both RFC3339 bounds, span at most seven days, and use
 an inclusive start and exclusive end. Limits are 1–500 rows. Summary filters
@@ -321,8 +317,8 @@ Prepare configuration using the host's existing deployment workflow, inspect
 its disk policy, then use a credential with `control:reload`:
 
 ```console
-bro --context workstation reload
-bro --context workstation operations show REQUEST_UUID --instance BOOT_UUID
+bitrouter --context workstation reload
+bitrouter --context workstation operations show REQUEST_UUID --instance BOOT_UUID
 ```
 
 Reload reads only server-owned files and does not forward client environment
@@ -341,6 +337,14 @@ credential, and results remain in memory for at least 24 hours after completion,
 with a maximum of 1,024 retained operations. A restart or expired/missing result
 means the outcome is unknown, not that the earlier reload did not happen.
 
+## Update the host
+
+On the service host, use `bitrouter update` to install the new executable.
+Then run `bitrouter restart` or use the owning service manager for a foreground
+or shared gateway. Shutdown drains in-flight requests before the replacement
+starts. Inspect the running version or the server's reported artifact after
+restart.
+
 ## Saved versus running configuration
 
 `status.config_state` is computed by the target daemon, including independently
@@ -351,19 +355,9 @@ remote reload now share startup-field rejection rules. Read `running` and the
 safe changed-field categories before choosing reload or restart; file writes
 alone do not establish activation.
 
-For ordered per-call generation defaults, freeze the binding returned by
-`OrderedDispatchBindingV2::with_generation_defaults`, then attach the same
-closed object with `OrderedTenantGateway::with_generation_defaults`. Use only
-the nine canonical fields in the service API specification. Keep the object in
-the existing bounded body, never in provider extras or a custom header. Typed
-null and empty stop permit default filling; explicit typed values win. An
-unused extension leaves existing request and selection bytes unchanged.
-
-For opaque provider defaults, use `GenerationDefaultsEnvelopeV1`, bind it with
-`with_generation_defaults_envelope`, and attach the same object on the ordered
-gateway. Put the nine canonical fields in `canonical` and other parameter
-defaults in `supplemental`. The two defaults body families are mutually
-exclusive. Supplemental JSON cannot change selected routing, authentication,
-HTTP headers or continuation permissions. See the service API contract for
-caller precedence, null/invalid fallthrough, hash domains and exact reserved
-names; never copy supplemental fields into ingress DTO extras.
+For ordered per-call generation defaults, bind and send the same generation
+defaults envelope through the SDK. Put canonical parameters in `canonical`
+and provider-specific defaults in `supplemental`. Supplemental fields cannot
+change routing, authentication, headers or continuation permissions. See the
+[service API](../../../docs/specs/service-api/README.md) for precedence and
+the reserved body member.

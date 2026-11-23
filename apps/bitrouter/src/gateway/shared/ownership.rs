@@ -2,7 +2,7 @@
 //!
 //! The registry never lends an existing custody handle or stores admissions.
 //! Without weak handles, a sole registry reference proves that local request,
-//! provider and finalization futures can no longer create work for that entry.
+//! provider and finalization futures cannot create further work for that entry.
 //! Transport buffering and native continuation compensation have separate bounds.
 
 use std::collections::{HashMap, VecDeque};

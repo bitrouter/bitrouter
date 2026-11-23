@@ -23,7 +23,7 @@ const CREATED_AT: &str = "2026-11-18T00:00:00Z";
 
 #[tokio::test]
 #[ignore = "requires BITROUTER_TEST_DATABASE_URL with PostgreSQL CREATEDB privilege"]
-async fn postgres_shared_eval_subject_prejoin() -> Result<()> {
+async fn db_server_postgres_shared_eval_subject_prejoin() -> Result<()> {
     let mut database = EmptyDatabase::create().await?;
     let result = tokio::time::timeout(Duration::from_secs(60), exercise(&mut database))
         .await
@@ -203,7 +203,7 @@ fn legacy_body(subject: &EvalSubject) -> Result<String> {
     old.as_object_mut()
         .context("subject object")?
         .remove("identity");
-    old["policy_digest"] = canonical_digest(&"pre-M0-policy")?.into();
+    old["policy_digest"] = canonical_digest(&"unbound-policy-source")?.into();
     old["preset"] = Value::Null;
     Ok(serde_json::to_string(&old)?)
 }

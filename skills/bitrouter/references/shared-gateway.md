@@ -24,15 +24,15 @@ The shared capability does not select shared mode without explicit configuration
 For manual archive verification and capability-preserving updates, see
 [updating](updating.md).
 
-Run `bro serve --config <file>`. Shared
+Run `bitrouter serve --config <file>`. Shared
 mode is a foreground service managed by the operator; it does not use the
 local daemon launcher, PID/socket locator, home directory or compiled extension
 host. It never initializes or publishes a namespace as a startup side effect.
 Routing, policies and provider credentials must already be published there.
-`bro start` and `bro restart` reject shared configuration before local daemon
+`bitrouter start` and `bitrouter restart` reject shared configuration before local daemon
 discovery or runtime-file creation. Use your service manager to run and stop the
 foreground process; do not use the local daemon launcher for a shared deployment.
-Local `bro mcp` configuration commands also reject shared process files before
+Local `bitrouter mcp` configuration commands also reject shared process files before
 reading entry input or launching an editor; they do not publish MCP authority
 to the shared namespace.
 
@@ -100,15 +100,8 @@ confirmed complete. Readiness still requires the loaded authority revision to
 be current.
 
 Shared assembly rejects MCP servers, active server tools, decision-model
-execution, request checkers and the agent API. These execution capabilities
-remain local until they have explicit shared worker ownership.
-
-Shared guarded policies retain the episode's original correlation key across
-rotation. Native continuation pins must match the committed guard's selected
-tier, model and reasoning effort; a conflicting pin is rejected before provider
-dispatch. Local capture/evolution controller headers and local reserved judge
-requests are unsupported. Access policies cannot use local spend or rate counters;
-configure shared admission limits instead.
+execution and request checkers. Use shared admission limits for spend and rate
+enforcement.
 
 Run the same shared-gateway build on every replica in a namespace. Rolling
 replacement is supported within that build; mixed versions of private durable
@@ -243,9 +236,9 @@ listeners drain or force-stop under the same process deadline.
 Use a build with `multi-instance` and the separate operator token:
 
 ```sh
-bro shared apply --endpoint http://127.0.0.1:4358 \
+bitrouter shared apply --endpoint http://127.0.0.1:4358 \
   --token-env SHARED_OPERATOR_TOKEN --input mutation.json
-bro shared operation --endpoint http://127.0.0.1:4358 \
+bitrouter shared operation --endpoint http://127.0.0.1:4358 \
   --token-env SHARED_OPERATOR_TOKEN --operation-id original-id
 ```
 
@@ -289,7 +282,7 @@ polling, repeating inference or expanding IDs into URL paths.
 Use a build with `multi-instance`:
 
 ```sh
-bro shared init --config PROCESS.yaml --plan SEED.json \
+bitrouter shared init --config PROCESS.yaml --plan SEED.json \
   --operator-id bootstrap-admin --operation-id initial-seed
 ```
 

@@ -298,10 +298,10 @@ async fn actual_http_json_and_sse_issue_and_resume_only_with_owned_binding() -> 
         let mut server = Server::start().await?;
         let ready = ready(&server).await?;
         let result:Result<()>=async{
-            let (status,bytes)=send(&ready,ready.headers.clone(),body(first_stream,None)).await?;ensure!(status==StatusCode::OK);let id=public_id(&bytes,first_stream)?;
+            let (status,bytes)=send(&ready,ready.headers.clone(),body(first_stream,None)).await?;ensure!(status==StatusCode::OK,"HTTP {status}: {}",String::from_utf8_lossy(&bytes));let id=public_id(&bytes,first_stream)?;
             ensure!(server.wire().await?.get("previous_response_id").is_none());ensure!(row_count(&ready).await?==1);
             for stream in [false,true]{
-                let (status,bytes)=send(&ready,ready.headers.clone(),body(stream,Some(&id))).await?;ensure!(status==StatusCode::OK);public_id(&bytes,stream)?;
+                let (status,bytes)=send(&ready,ready.headers.clone(),body(stream,Some(&id))).await?;ensure!(status==StatusCode::OK,"HTTP {status}: {}",String::from_utf8_lossy(&bytes));public_id(&bytes,stream)?;
                 ensure!(server.wire().await?["previous_response_id"]=="resp-http-private-1");
             }
             let row=ready.fixture.db.query_one(Statement::from_string(ready.fixture.db.get_database_backend(),"SELECT ciphertext,nonce,cipher_version,installation_id,tenant_id,creator_principal_id FROM provider_continuations LIMIT 1".to_owned())).await?.context("retained row")?;

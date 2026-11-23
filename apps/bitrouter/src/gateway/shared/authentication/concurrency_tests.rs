@@ -9,13 +9,13 @@ use crate::runtime_crypto::DeploymentKey;
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL CREATEDB privilege"]
-async fn postgres_static_reads_share_one_pool() -> anyhow::Result<()> {
+async fn db_server_postgres_static_reads_share_one_pool() -> anyhow::Result<()> {
     exercise(false).await
 }
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL CREATEDB privilege"]
-async fn postgres_static_reads_cross_independent_pools() -> anyhow::Result<()> {
+async fn db_server_postgres_static_reads_cross_independent_pools() -> anyhow::Result<()> {
     exercise(true).await
 }
 

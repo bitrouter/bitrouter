@@ -136,7 +136,7 @@ async fn parsed_recovery_commands_keep_leading_hyphen_query_handles() -> Result<
     let result = async {
         for id in ids {
             let argument = format!("--operation-id={id}");
-            let cli = crate::Cli::try_parse_from([
+            let cli = crate::cli::Cli::try_parse_from([
                 "bro",
                 "shared",
                 "operation",
@@ -146,8 +146,8 @@ async fn parsed_recovery_commands_keep_leading_hyphen_query_handles() -> Result<
                 "FIXTURE_OPERATOR",
                 &argument,
             ])?;
-            let Some(crate::Command::Shared {
-                action: crate::SharedAction::Operator(action),
+            let Some(crate::cli::Command::Shared {
+                action: crate::cli::SharedAction::Operator(action),
             }) = cli.command
             else {
                 anyhow::bail!("operator action missing");

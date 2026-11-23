@@ -2,7 +2,7 @@
 //! table**; policies are pure config.
 //!
 //! The store is *reloadable*: when built via [`PolicyStore::load_dir`] it
-//! remembers the source directory and [`PolicyStore::reload`] re-scans it. The
+//! remembers the source directory and the reload coordinator re-scans it. The
 //! `PolicyHook` reads via a read lock so reload is safe under concurrent
 //! requests — reload must not affect in-flight requests.
 
@@ -19,7 +19,7 @@ use crate::policy::{EffectivePolicy, Policy};
 #[derive(Debug, Default)]
 pub struct PolicyStore {
     policies: RwLock<HashMap<String, Policy>>,
-    /// Source directory; set by [`PolicyStore::load_dir`] so [`Self::reload`]
+    /// Source directory; set by [`PolicyStore::load_dir`] so the reload coordinator
     /// can re-scan. `None` means the store was built in memory (tests / API),
     /// and reload is a no-op.
     path: RwLock<Option<PathBuf>>,
@@ -49,6 +49,7 @@ impl PolicyStore {
     }
 
     /// Build a store from a list of policies.
+    #[cfg(any(feature = "multi-instance", test))]
     pub fn from_policies(policies: impl IntoIterator<Item = Policy>) -> Self {
         let store = Self::new();
         {
@@ -61,7 +62,7 @@ impl PolicyStore {
     }
 
     /// Load every `*.yaml` / `*.yml` file in `dir` as one policy. Remembers
-    /// `dir` so [`Self::reload`] can re-read it later.
+    /// `dir` so the reload coordinator can re-read it later.
     pub async fn load_dir(dir: impl AsRef<Path>) -> Result<Self> {
         let dir = dir.as_ref().to_path_buf();
         let fresh = scan_policy_dir(&dir).await?;
@@ -69,16 +70,6 @@ impl PolicyStore {
         *store.policies.write().expect("policy lock poisoned") = fresh;
         *store.path.write().expect("policy lock poisoned") = Some(dir);
         Ok(store)
-    }
-
-    /// Re-scan the source directory and atomically swap the in-memory set. A
-    /// no-op for stores not built from a directory. The new set REPLACES the
-    /// old set (a deleted yaml file → that policy is gone).
-    pub async fn reload(&self) -> Result<()> {
-        let Some(prepared) = self.prepare_reload().await? else {
-            return Ok(());
-        };
-        self.commit_prepared(prepared)
     }
 
     /// Read a complete replacement policy set without altering the live store.
@@ -139,31 +130,12 @@ impl PolicyStore {
         }
     }
 
-    /// Look up a policy by id, applying `f` while the lock is held.
-    pub fn with_policy<R>(&self, id: &str, f: impl FnOnce(Option<&Policy>) -> R) -> R {
-        let map = self.policies.read().expect("policy lock poisoned");
-        f(map.get(id))
-    }
-
     /// The combined effect of the named policies. Unknown ids are skipped (a
     /// missing policy contributes no constraints — the combination is
     /// permissive by default; see [`EffectivePolicy::combine`]).
     pub fn effective_for(&self, ids: &[&str]) -> EffectivePolicy {
         let map = self.policies.read().expect("policy lock poisoned");
         EffectivePolicy::combine(ids.iter().filter_map(|id| map.get(*id)))
-    }
-
-    /// Number of loaded policies.
-    pub fn len(&self) -> usize {
-        self.policies.read().expect("policy lock poisoned").len()
-    }
-
-    /// Whether the store is empty.
-    pub fn is_empty(&self) -> bool {
-        self.policies
-            .read()
-            .expect("policy lock poisoned")
-            .is_empty()
     }
 }
 

@@ -5,15 +5,18 @@
 use anyhow::{Context, Result};
 
 use crate::config::Config;
+#[cfg(test)]
 use crate::config::routing_table::ConfigRoutingTable;
+#[cfg(test)]
 use crate::gateway::caller::CallerContext;
+#[cfg(test)]
 use crate::gateway::pipeline::routing::{RoutingPrefs, RoutingTable};
+#[cfg(test)]
 use bitrouter_ai::routing::ModelInfo;
 
-use crate::actions::skills::SkillsReport;
 use crate::auth::{NewApiKey, db as auth_db, generate};
+#[cfg(test)]
 use crate::daemon::RouteHop;
-use crate::output::reports::skills::SkillInitReport;
 
 /// The starter `bitrouter.yaml` written by `bro init`. Mirrors
 /// the zero-config in-memory default so a user who runs `init` and
@@ -30,10 +33,10 @@ server:
   # exposing `0.0.0.0` would let any host on the network use bitrouter
   # without a credential check. Flip to `0.0.0.0:4356` only when you've
   # also set `skip_auth: false` and minted virtual keys with
-  # `bro key sign`.
+  # `bitrouter key sign`.
   listen: "127.0.0.1:4356"
   # skip_auth=true admits credential-less local requests (cc-switch /
-  # litellm style). Set to false and create keys with `bro key
+  # litellm style). Set to false and create keys with `bitrouter key
   # sign` for a multi-tenant deployment.
   skip_auth: true
 
@@ -50,10 +53,10 @@ database:
   url: "sqlite://./bitrouter.db"
 
 # `bitrouter/auto` uses the bundled model-only policy. To customize routing,
-# `bro policy init <name> --router <id> --strong <model> --economy <model>`
+# `bitrouter policy init <name> --router <id> --strong <model> --economy <model>`
 # creates policy.yaml and an explicit named router binding.
-# `bro policy show --disk` exports source; publish changes with an explicit
-# --expected-digest. Access-control files use `bro access-policy create`.
+# `bitrouter policy show --disk` exports source; publish changes with an explicit
+# --expected-digest. Access-control files use `bitrouter access-policy create`.
 
 # Built-in providers auto-enable when their env var is set. An entry
 # with `inherit_defaults: true` (the workspace default) plus an empty
@@ -65,7 +68,7 @@ providers:
   anthropic: {}     # uses ANTHROPIC_API_KEY
   google: {}        # uses GEMINI_API_KEY
   openrouter: {}    # uses OPENROUTER_API_KEY
-  # github-copilot needs `bro providers login github-copilot` first:
+  # github-copilot needs `bitrouter providers login github-copilot` first:
   # github-copilot: {}
   # A provider can hold multiple accounts — e.g. two subscriptions to
   # the same upstream. `account_strategy` is `failover` (try the first,
@@ -73,11 +76,11 @@ providers:
   # or `balance` (spread load evenly across accounts):
   # opencode-go: { account_strategy: failover, accounts: [{ api_key: "${OPENCODE_GO_KEY_A}", label: primary }, { api_key: "${OPENCODE_GO_KEY_B}", label: backup }] }
 
-# Upstream MCP (Model Context Protocol) servers — `bro tools
+# Upstream MCP (Model Context Protocol) servers — `bitrouter tools
 # list/status` reads this, and `POST /mcp/<name>` proxies JSON-RPC
 # against the entry. Discover servers from the official MCP registry
-# with `bro mcp search <query>` and print a paste-ready stub with
-# `bro mcp add <name>`. Spec:
+# with `bitrouter mcp search <query>` and print a paste-ready stub with
+# `bitrouter mcp add <name>`. Spec:
 # https://modelcontextprotocol.io/specification/2025-06-18
 # mcp_servers:
 #   ctx7:
@@ -114,32 +117,6 @@ providers:
 inherit_defaults: true
 "#;
 
-/// Outcome of a [`write_starter_config`] scaffold write.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScaffoldOutcome {
-    /// The starter `bitrouter.yaml` was written.
-    Wrote,
-    /// A file already existed and `force` was not set — left untouched.
-    Skipped,
-}
-
-/// `bro init` — write the starter `bitrouter.yaml` to `path`. Without
-/// `force`, an existing file is left untouched (returns
-/// [`ScaffoldOutcome::Skipped`]) so the onboarding wizard's `--yes` run never
-/// clobbers a config the user already tuned; with `force` it overwrites. This
-/// is the single sanctioned `bitrouter.yaml` write — nothing else in the tree
-/// serializes a `Config`.
-pub async fn write_starter_config(path: &std::path::Path, force: bool) -> Result<ScaffoldOutcome> {
-    if !force && tokio::fs::try_exists(path).await.unwrap_or(false) {
-        return Ok(ScaffoldOutcome::Skipped);
-    }
-    tokio::fs::write(path, STARTER_CONFIG)
-        .await
-        .with_context(|| format!("writing {}", path.display()))?;
-    Ok(ScaffoldOutcome::Wrote)
-}
-
-/// The outcome of `bro key generate` — the plaintext secret is shown to
 /// the user **once** and never persisted (only its SHA-256 hash is stored).
 pub struct GeneratedKey {
     /// The api key id.
@@ -148,7 +125,7 @@ pub struct GeneratedKey {
     pub secret: String,
 }
 
-/// `bro key sign` — mint a `brvk_` virtual key for `user_id`, persist only
+/// `bitrouter key sign` — mint a `brvk_` virtual key for `user_id`, persist only
 /// its hash, and return the plaintext once. v1 does **not** sign a JWT (004
 /// §3.0); the command keeps the `sign` name but creates a DB-backed virtual key.
 pub async fn key_sign(
@@ -156,6 +133,12 @@ pub async fn key_sign(
     user_id: &str,
     policy_id: Option<&str>,
 ) -> Result<GeneratedKey> {
+    if let Ok(home) = crate::paths::runtime_home() {
+        crate::paths::check_gateway_home(&home)?;
+    }
+    if let Some(home) = crate::paths::gateway_database_home(db_url, &std::env::current_dir()?)? {
+        crate::paths::claim_gateway_home(&home)?;
+    }
     let db = crate::db::connect(db_url)
         .await
         .context("connecting to database")?;
@@ -191,7 +174,7 @@ pub async fn key_sign(
 /// The routable catalog a config alone can describe — the fallback the
 /// `list_models` action uses when no daemon answers.
 ///
-/// Unfiltered by design: `bro models --provider` and the MCP tool's
+/// Unfiltered by design: `bitrouter models --provider` and the MCP tool's
 /// `provider` argument are one filter applied to the shared report
 /// (`ModelsReport::filtered`), so neither surface can narrow it its own way.
 ///
@@ -201,6 +184,7 @@ pub async fn key_sign(
 /// connect, 5s total) and failures leave the provider with no models rather
 /// than bubbling an error, but a caller on a hot path should prefer the
 /// daemon: see `crate::actions::models`.
+#[cfg(test)]
 pub async fn list_models(config: &Config) -> Result<Vec<ModelInfo>> {
     config.validate_router_config()?;
     let mut resolved = resolve_static(config.clone());
@@ -224,7 +208,7 @@ pub(crate) async fn resolve_discovered(config: Config) -> Config {
 /// subscription / "use your Claude Code session" login stores its credential in
 /// the store, not the config, so the defaults pass marks that provider inactive
 /// for want of an api key and the routing table drops it — and a standalone
-/// answer (`bro models` / `route` with no daemon, `spawn`'s preflight)
+/// answer (`bitrouter models` / `route` with no daemon, `spawn`'s preflight)
 /// would then be missing exactly the providers the daemon routes to. Mirrors
 /// `assemble.rs`; best-effort, an unreadable store is a no-op.
 pub fn resolve_static(mut config: Config) -> Config {
@@ -238,8 +222,9 @@ pub fn resolve_static(mut config: Config) -> Config {
     config
 }
 
-/// `bro route <model>` — resolve a model name through the routing table,
+/// `bitrouter route <model>` — resolve a model name through the routing table,
 /// **standalone** (no running daemon needed). Returns the fallback chain.
+#[cfg(test)]
 pub async fn resolve_route(config: &Config, model: &str) -> Result<Vec<RouteHop>> {
     let table = ConfigRoutingTable::from_config(resolve_discovered(config.clone()).await);
     let chain = table
@@ -256,7 +241,7 @@ pub async fn resolve_route(config: &Config, model: &str) -> Result<Vec<RouteHop>
         .collect())
 }
 
-/// One provider entry for `bro providers list`.
+/// One provider entry for `bitrouter providers list`.
 pub struct ProviderListing {
     /// Provider id.
     pub id: String,
@@ -268,7 +253,7 @@ pub struct ProviderListing {
     pub model_count: usize,
 }
 
-/// `bro providers list` — list every configured provider.
+/// `bitrouter providers list` — list every configured provider.
 /// Applies built-in catalog defaults first so a zero-config or
 /// minimally-declared provider (`openai: {}`) shows its real `api_base`
 /// and `active` state instead of empty placeholders.
@@ -312,7 +297,7 @@ fn validate_policy_id(id: &str) -> Result<()> {
     Ok(())
 }
 
-/// `bro access-policy create` — write a starter ACL file into `policy_dir`.
+/// `bitrouter access-policy create` — write a starter ACL file into `policy_dir`.
 /// Refuses to overwrite an existing policy of the same id. The `id` must be a
 /// plain filename (no path separators, no `..`, no leading dot) so the joined
 /// path cannot escape `policy_dir`.
@@ -327,7 +312,7 @@ pub async fn create_policy(policy_dir: &std::path::Path, id: &str) -> Result<std
     }
     let body = format!(
         "# policy '{id}' — edit to taste, then bind it to a key:\n\
-         #   bro key sign --user <id> --policy {id}\n\
+         #   bitrouter key sign --user <id> --policy {id}\n\
          id: {id}\n\
          # allowed_models: [gpt-5, claude-sonnet-4-6]\n\
          # denied_models: []\n\
@@ -446,7 +431,7 @@ fn available_methods(entry: &crate::providers::entry::ProviderEntry) -> Vec<Auth
             // Codex backend literally rejects sk-… credentials), so
             // there's no API-key fallback to offer.
         }
-        AuthScheme::None | AuthScheme::Native { .. } => {}
+        AuthScheme::None | AuthScheme::Native => {}
     }
     methods
 }
@@ -469,7 +454,7 @@ async fn prompt_method_choice(provider: &str, options: &[AuthMethod]) -> Result<
         .context("no authentication method selected")
 }
 
-/// `bro providers login <provider> [--label <name>]` — interactive
+/// `bitrouter providers login <provider> [--label <name>]` — interactive
 /// credential setup.
 ///
 /// Resolves which auth methods are wired for `provider_id` (subscription
@@ -498,10 +483,6 @@ pub struct ProviderLoginOptions {
     /// --api-key` / `--key-stdin` and the onboarding wizard's per-provider
     /// `--provider-api-key`. The provider must offer the API-key method.
     pub api_key: Option<String>,
-}
-
-pub async fn login_provider(provider_id: &str, label: &str) -> Result<LoginOutcome> {
-    login_provider_with_options(provider_id, label, ProviderLoginOptions::default()).await
 }
 
 pub async fn login_provider_with_options(
@@ -688,7 +669,7 @@ async fn choose_auth_method(
 /// bitrouter's own store, so bitrouter and Claude Code share one credential and
 /// can't refresh-rotate each other out (RFC 6749 §6). `login_provider` stores
 /// this marker under the `provider_id` it was invoked with, so
-/// `bro providers login claude-code` lands it under `claude-code`.
+/// `bitrouter providers login claude-code` lands it under `claude-code`.
 ///
 /// # Why this names a login command, when the ACP path may not
 ///
@@ -714,9 +695,7 @@ async fn run_claude_code_session()
     use crate::gateway::providers::auth::credentials::Credential;
     use crate::providers::import::claude_code::ClaudeCodeStore;
 
-    // Adopt a legacy #590 marker stored under `anthropic` before checking the
-    // live session, so a returning user's existing sign-in is recognised under
-    // the new `claude-code` provider.
+    // Resolve the stored Claude Code session identity before inspecting live sign-in.
     crate::claude_code::migrate_legacy_anthropic_marker_default();
 
     let store = ClaudeCodeStore::system().ok_or_else(|| {
@@ -742,7 +721,7 @@ async fn run_claude_code_session()
         anyhow::bail!(
             "not signed in to Claude Code. Run `claude auth login` (install the CLI first with \
              `curl -fsSL https://claude.ai/install.sh | bash`), then re-run \
-             `bro providers login claude-code`."
+             `bitrouter providers login claude-code`."
         );
     }
 
@@ -784,7 +763,7 @@ async fn run_claude_code_session()
             "`claude auth login` exited without completing the sign-in ({status}). \
              If a browser opened, the flow may still need the code from it pasted \
              into that prompt. Check with `claude auth status`, then re-run \
-             `bro providers login claude-code`."
+             `bitrouter providers login claude-code`."
         );
     }
 
@@ -957,7 +936,7 @@ pub(crate) async fn read_api_key(display_name: &str) -> Result<String> {
 }
 
 /// `LoginUx` implementation that drives stderr + stdin. Used by the
-/// `bro providers login` CLI; library tests provide their own scripted
+/// `bitrouter providers login` CLI; library tests provide their own scripted
 /// UX.
 struct StderrLoginUx;
 
@@ -1003,7 +982,7 @@ impl crate::gateway::providers::auth::login::LoginUx for StderrLoginUx {
     }
 }
 
-/// `bro providers logout <provider>` — drop every stored credential for
+/// `bitrouter providers logout <provider>` — drop every stored credential for
 /// the provider (subscription OAuth or pasted API key), if any.
 pub async fn logout_provider(provider_id: &str) -> Result<usize> {
     let mut store =
@@ -1018,138 +997,9 @@ pub async fn logout_provider(provider_id: &str) -> Result<usize> {
     Ok(removed)
 }
 
-// ===== shared unmanaged reads and source scaffolding =====
-//
-// Library/session consumers retain this discovery adapter. The product CLI's
-// managed install/list/show/update/uninstall path lives in crate::skills::cli.
-
-/// Compatibility discovery of skills under the chosen roots.
-///
-/// One [action](crate::actions::skills), shared by the CLI report and local
-/// session consumers. It gains two things the old single `read_dir` could not
-/// do: the `./skills/foo`
-/// and root-level layouts, and a `problem` on any skill that cannot actually be
-/// loaded.
-pub fn skills_list(global: bool) -> Result<SkillsReport> {
-    let cwd = std::env::current_dir().context("resolving the current directory")?;
-    let roots = crate::skills::root::SkillsRoot::cli_scope(global, cwd)?;
-    Ok(crate::actions::skills::InstalledSkills::new(roots).report())
-}
-
-/// `bro skills init` — scaffold a SKILL.md.
-pub fn skills_init(name: &str, output: &std::path::Path) -> Result<SkillInitReport> {
-    crate::skills::validate_skill_name(name)?;
-    if output.file_name().and_then(|file| file.to_str()) != Some("SKILL.md") {
-        anyhow::bail!("skill output must be named SKILL.md");
-    }
-    let declared_parent = output
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| std::path::Path::new("."));
-    let resolved_parent = if declared_parent == std::path::Path::new(".") {
-        std::env::current_dir().context("resolving the current directory")?
-    } else {
-        declared_parent.to_path_buf()
-    };
-    if resolved_parent.file_name().and_then(|dir| dir.to_str()) != Some(name) {
-        anyhow::bail!("skill parent directory must be named '{name}' to match its frontmatter");
-    }
-    if output.exists() {
-        anyhow::bail!("{} already exists; refusing to overwrite", output.display());
-    }
-    std::fs::create_dir_all(declared_parent)
-        .with_context(|| format!("creating {}", declared_parent.display()))?;
-    let body = format!(
-        "---\nname: {name}\ndescription: TODO — one line on what this skill does and when to use it.\n---\n\n# {name}\n\nTODO: instructions for the agent.\n\n## When to use\n\n## Steps\n"
-    );
-    std::fs::write(output, body).with_context(|| format!("writing {}", output.display()))?;
-    Ok(SkillInitReport {
-        path: output.display().to_string(),
-        created: true,
-    })
-}
-
-#[cfg(test)]
-mod skills_init_tests {
-    use super::*;
-
-    #[test]
-    fn scaffold_requires_skill_md_under_the_named_directory() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let wrong = dir.path().join("other").join("SKILL.md");
-        std::fs::create_dir_all(wrong.parent().expect("parent")).expect("mkdir");
-
-        let Err(err) = skills_init("demo", &wrong) else {
-            panic!("directory/name mismatch must be invalid");
-        };
-        assert!(err.to_string().contains("parent directory"), "{err}");
-    }
-
-    #[test]
-    fn scaffold_creates_a_valid_named_skill_directory() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let output = dir.path().join("demo").join("SKILL.md");
-
-        let report = skills_init("demo", &output).expect("scaffold");
-
-        assert!(output.is_file());
-        assert_eq!(report.path, output.display().to_string());
-        let parsed = crate::skills::format::parse_frontmatter(
-            &std::fs::read_to_string(output).expect("read scaffold"),
-        )
-        .expect("valid frontmatter");
-        assert_eq!(parsed.name, "demo");
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn init_writes_skip_auth_true_config() {
-        let dir = std::env::temp_dir().join(format!(
-            "brinit-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        tokio::fs::create_dir_all(&dir).await.unwrap();
-        let path = dir.join("bitrouter.yaml");
-        assert_eq!(
-            write_starter_config(&path, false).await.unwrap(),
-            ScaffoldOutcome::Wrote
-        );
-        let written = tokio::fs::read_to_string(&path).await.unwrap();
-        assert!(written.contains("skip_auth: true"));
-        // and it parses back into a valid Config
-        let cfg = crate::config::parse_with(&written, |_| Some("x".to_string())).unwrap();
-        assert!(cfg.server.skip_auth);
-        // Without --force, an existing file is left untouched (Skipped) — the
-        // wizard's `--yes` run must never clobber a tuned config.
-        tokio::fs::write(&path, "# hand-edited\n").await.unwrap();
-        assert_eq!(
-            write_starter_config(&path, false).await.unwrap(),
-            ScaffoldOutcome::Skipped
-        );
-        assert_eq!(
-            tokio::fs::read_to_string(&path).await.unwrap(),
-            "# hand-edited\n"
-        );
-        // With --force it overwrites.
-        assert_eq!(
-            write_starter_config(&path, true).await.unwrap(),
-            ScaffoldOutcome::Wrote
-        );
-        assert!(
-            tokio::fs::read_to_string(&path)
-                .await
-                .unwrap()
-                .contains("skip_auth: true")
-        );
-        let _ = tokio::fs::remove_dir_all(&dir).await;
-    }
 
     #[tokio::test]
     async fn key_sign_produces_brvk_secret_and_persists_only_hash() {
@@ -1219,9 +1069,9 @@ mod tests {
         );
     }
 
-    /// Build a [`ProviderEntry`] from a registry-provider fixture — anthropic
-    /// and openai-codex are no longer compiled-in built-ins, so `login` resolves
-    /// their auth shape from the fetched registry via `entry_from_registry`.
+    /// Build a [`ProviderEntry`] from a registry-provider fixture. Login resolves
+    /// anthropic and openai-codex authentication from the fetched registry via
+    /// `entry_from_registry`.
     fn entry_for(json: serde_json::Value) -> crate::providers::entry::ProviderEntry {
         let p: crate::gateway::catalog::types::RegistryProvider =
             serde_json::from_value(json).expect("valid registry-provider fixture");
@@ -1416,7 +1266,7 @@ providers:
     /// The config projection is unfiltered and keeps every provider of every
     /// model — `shared` is declared by both, and both must survive. Filtering
     /// is the shared report's job (`ModelsReport::filtered`), so that one
-    /// filter serves `bro models --provider` and the MCP tool alike.
+    /// filter serves `bitrouter models --provider` and the MCP tool alike.
     #[tokio::test]
     async fn list_models_keeps_every_provider_of_a_model() {
         let cfg = sample_config();
@@ -1503,6 +1353,4 @@ providers:
     }
 }
 
-pub mod agent_options;
-pub mod chat;
 pub mod invocation;

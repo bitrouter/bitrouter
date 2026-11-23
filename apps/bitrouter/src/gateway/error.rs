@@ -1,6 +1,6 @@
 //! Crate-wide error type.
 //!
-//! Every fallible SDK call returns [`Result<T>`](Result) (an alias for
+//! Gateway execution and extension registration return [`Result<T>`](Result) (an alias for
 //! `std::result::Result<T, BitrouterError>`). Variants carry an HTTP status so
 //! the server handlers can render OpenAI/Anthropic-style error envelopes
 //! without a separate mapping table. The type is `Clone` because the pipeline
@@ -160,7 +160,7 @@ fn upstream_payload_text(error: &serde_json::Value) -> String {
 
 impl BitrouterError {
     /// Select the safe public presentation before a model codec encodes SSE.
-    pub fn stream_error(&self) -> crate::gateway::model::stream::StreamError {
+    pub(crate) fn stream_error(&self) -> crate::gateway::model::stream::StreamError {
         crate::gateway::model::stream::StreamError {
             message: self.public_message(),
             error_type: self.error_type().to_owned(),

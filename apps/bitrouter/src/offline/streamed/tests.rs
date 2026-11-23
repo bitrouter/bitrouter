@@ -36,7 +36,7 @@ async fn take(source: &Path, bundle: &Path, options: Options) -> Result<Report> 
 }
 
 #[tokio::test]
-async fn complete_evidence_keeps_v1_digests_and_requires_explicit_v2_reader() -> Result<()> {
+async fn complete_evidence_verifies_database_and_independent_digest() -> Result<()> {
     let home = tempfile::Builder::new()
         .permissions(std::fs::Permissions::from_mode(0o700))
         .tempdir()?;
@@ -47,7 +47,7 @@ async fn complete_evidence_keeps_v1_digests_and_requires_explicit_v2_reader() ->
     let report = take(&source, &bundle, options(home.path())).await?;
     assert_eq!(report.evidence.format, FORMAT_V2);
     assert_eq!(report.evidence.inventory.rows, 7);
-    assert!(!report.evidence.complete && !report.evidence.cutover_ready);
+    assert!(!report.evidence.complete);
     assert!(!serde_json::to_string(&report)?.contains("secret-payload"));
     assert_eq!(std::fs::read(&source)?, original);
     assert_eq!(std::fs::read(bundle.join("snapshot.sqlite"))?, original);
@@ -72,43 +72,24 @@ async fn complete_evidence_keeps_v1_digests_and_requires_explicit_v2_reader() ->
             report.evidence.snapshot_digest.clone()
         )
     );
-    assert!(
-        crate::offline::read_bundle(&bundle, Some(&report.evidence_digest), "verify")
-            .await
-            .is_err()
-    );
-    let verified = crate::offline::read_bundle_with_options(
-        &bundle,
-        Some(&report.evidence_digest),
-        "verify",
-        &options(home.path()),
-    )
-    .await?;
+    let verify = |expected: String| {
+        run(
+            Action::Read {
+                bundle: bundle.clone(),
+                expected: Some(expected),
+                action: "verify",
+            },
+            options(home.path()),
+        )
+    };
+    let verified = verify(report.evidence_digest.clone()).await?;
     assert!(verified.evidence_anchor_checked && verified.database_inventory_verified);
     assert_eq!(verified.evidence.inventory, old);
     let wrong = "0".repeat(64);
-    assert!(
-        crate::offline::read_bundle_with_options(
-            &bundle,
-            Some(&wrong),
-            "verify",
-            &options(home.path())
-        )
-        .await
-        .is_err()
-    );
+    assert!(verify(wrong.clone()).await.is_err());
     assert!(take(&source, &bundle, options(home.path())).await.is_err());
     std::fs::write(bundle.join("READY"), format!("{wrong}\n"))?;
-    assert!(
-        crate::offline::read_bundle_with_options(
-            &bundle,
-            Some(&report.evidence_digest),
-            "verify",
-            &options(home.path())
-        )
-        .await
-        .is_err()
-    );
+    assert!(verify(report.evidence_digest).await.is_err());
     Ok(())
 }
 

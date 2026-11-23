@@ -38,8 +38,7 @@ pub(in crate::tenancy) struct Disposition {
     pub auxiliary_digest: Option<String>,
 }
 
-// The internal envelope may evolve without changing the frozen public receipt
-// or forcing unrelated receipt producers to fabricate observation evidence.
+// The durable disposition binds the receipt to its required usage evidence.
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct StoredDisposition {
@@ -47,16 +46,15 @@ pub(super) struct StoredDisposition {
     pub(super) statuses: Vec<Option<u16>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) auxiliary_digest: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) usage_evidence_digest: Option<String>,
+    pub(super) usage_evidence_digest: String,
 }
-impl From<Disposition> for StoredDisposition {
-    fn from(value: Disposition) -> Self {
+impl StoredDisposition {
+    pub(super) fn new(value: Disposition, usage_evidence_digest: String) -> Self {
         Self {
             dispatch: value.dispatch,
             statuses: value.statuses,
             auxiliary_digest: value.auxiliary_digest,
-            usage_evidence_digest: None,
+            usage_evidence_digest,
         }
     }
 }
@@ -67,45 +65,28 @@ pub(in crate::tenancy) struct Candidate {
     private_json: String,
     pub(in crate::tenancy) digest: String,
     pub(super) auxiliary: Option<super::auxiliary_store::Evidence>,
-    pub(super) usage_evidence: Option<super::usage_evidence::storage::Evidence>,
+    pub(super) usage_evidence: super::usage_evidence::storage::Evidence,
 }
 
 impl Candidate {
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(in crate::tenancy) fn learning_digest(&self) -> &str {
-        &self.digest
+    #[cfg(test)]
+    pub fn new(receipt: ExecutionReceipt, disposition: Disposition) -> Result<Self> {
+        Self::captured(
+            receipt,
+            disposition,
+            super::usage_evidence::Snapshot::default(),
+        )
     }
 
-    pub fn new(receipt: ExecutionReceipt, disposition: Disposition) -> Result<Self> {
-        Self::from_parts(receipt, disposition.into())
-    }
-    fn from_parts(receipt: ExecutionReceipt, disposition: StoredDisposition) -> Result<Self> {
-        receipt.validate()?;
-        ensure!(
-            matches!(
-                receipt.dispatch,
-                bitrouter_ai::tenancy::execution::Dispatch::Strict
-            ),
-            "strict storage dispatch"
-        );
-        ensure!(
-            disposition.statuses.len() == receipt.attempts.len(),
-            "receipt attempt disposition count"
-        );
-        ensure!(
-            disposition
-                .statuses
-                .iter()
-                .flatten()
-                .all(|status| (200..=599).contains(status)),
-            "receipt status range"
-        );
-        let json = serde_json::to_string(&receipt)?;
-        let private_json = serde_json::to_string(&disposition)?;
-        ensure!(
-            json.len() <= MAX_RECEIPT && private_json.len() <= MAX_DISPOSITION,
-            "receipt byte bound"
-        );
+    pub(super) fn captured(
+        receipt: ExecutionReceipt,
+        disposition: Disposition,
+        snapshot: super::usage_evidence::Snapshot,
+    ) -> Result<Self> {
+        let document = snapshot.document(&receipt);
+        let usage_evidence = super::usage_evidence::storage::Evidence::new(document, &receipt)?;
+        let disposition = StoredDisposition::new(disposition, usage_evidence.digest.clone());
+        let (json, private_json) = encode_strict(&receipt, &disposition)?;
         let digest = digest(&json, &private_json);
         Ok(Self {
             receipt,
@@ -113,7 +94,7 @@ impl Candidate {
             private_json,
             digest,
             auxiliary: None,
-            usage_evidence: None,
+            usage_evidence,
         })
     }
     #[cfg(all(test, unix))]
@@ -148,6 +129,7 @@ impl Candidate {
         self.auxiliary = Some(evidence);
         Ok(self)
     }
+    #[cfg(test)]
     pub fn with_usage_evidence(self, snapshot: super::usage_evidence::Snapshot) -> Result<Self> {
         let document = snapshot.document(&self.receipt);
         self.with_usage_document(document)
@@ -159,36 +141,24 @@ impl Candidate {
         self,
         original: &Self,
     ) -> Result<Self> {
-        let evidence = original
-            .usage_evidence
-            .as_ref()
-            .context("original usage evidence")?;
-        self.with_usage_document(evidence.document.clone())
+        self.with_usage_document(original.usage_evidence.document.clone())
     }
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(super) fn with_unavailable_usage_evidence(self) -> Result<Self> {
-        let document = super::usage_evidence::unavailable_at_recovery(&self.receipt);
-        self.with_usage_document(document)
-    }
+    #[cfg(test)]
     fn with_usage_document(
         mut self,
         document: bitrouter_ai::tenancy::usage_evidence::ExecutionUsageEvidence,
     ) -> Result<Self> {
         let evidence = super::usage_evidence::storage::Evidence::new(document, &self.receipt)?;
         let mut disposition: StoredDisposition = serde_json::from_str(&self.private_json)?;
-        disposition.usage_evidence_digest = Some(evidence.digest.clone());
+        disposition.usage_evidence_digest = evidence.digest.clone();
         self.private_json = serde_json::to_string(&disposition)?;
         ensure!(
             self.private_json.len() <= MAX_DISPOSITION,
             "receipt disposition byte bound"
         );
         self.digest = digest(&self.json, &self.private_json);
-        self.usage_evidence = Some(evidence);
+        self.usage_evidence = evidence;
         Ok(self)
-    }
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(in crate::tenancy) fn has_auxiliary(&self) -> bool {
-        self.auxiliary.is_some()
     }
     pub fn auxiliary_unclean(&self) -> bool {
         self.auxiliary.as_ref().is_some_and(|aux| aux.unclean())
@@ -197,10 +167,7 @@ impl Candidate {
         self.auxiliary.as_ref().is_some_and(|aux| aux.unknown())
     }
     pub fn auxiliary_bytes(&self) -> u64 {
-        let usage = self
-            .usage_evidence
-            .as_ref()
-            .map_or(0, |e| e.json.len() as u64 + 16 * 1024);
+        let usage = self.usage_evidence.json.len() as u64 + 16 * 1024;
         usage
             + self
                 .auxiliary
@@ -215,14 +182,47 @@ impl Candidate {
     }
 }
 
+fn encode_strict(
+    receipt: &ExecutionReceipt,
+    disposition: &StoredDisposition,
+) -> Result<(String, String)> {
+    receipt.validate()?;
+    ensure!(
+        matches!(
+            receipt.dispatch,
+            bitrouter_ai::tenancy::execution::Dispatch::Strict
+        ),
+        "strict storage dispatch"
+    );
+    ensure!(
+        disposition.statuses.len() == receipt.attempts.len(),
+        "receipt attempt disposition count"
+    );
+    ensure!(
+        disposition
+            .statuses
+            .iter()
+            .flatten()
+            .all(|status| (200..=599).contains(status)),
+        "receipt status range"
+    );
+    let json = serde_json::to_string(receipt)?;
+    let private_json = serde_json::to_string(disposition)?;
+    ensure!(
+        json.len() <= MAX_RECEIPT && private_json.len() <= MAX_DISPOSITION,
+        "receipt byte bound"
+    );
+    Ok((json, private_json))
+}
+
 fn digest(json: &str, disposition: &str) -> String {
-    digest_for(format::Format::V1, json, disposition)
+    digest_for(format::Format::Strict, json, disposition)
 }
 pub(super) fn digest_for(format: format::Format, json: &str, disposition: &str) -> String {
     let mut hash = Sha256::new();
     hash.update(match format {
-        format::Format::V1 => b"bitrouter.receipt.immutable.v1",
-        format::Format::V2 => b"bitrouter.receipt.immutable.v2",
+        format::Format::Strict => b"bitrouter.receipt.immutable.v1",
+        format::Format::Ordered => b"bitrouter.receipt.immutable.v2",
     });
     for part in [json, disposition] {
         hash.update((part.len() as u64).to_be_bytes());
@@ -407,12 +407,12 @@ async fn bounded_row(
 
 fn decode(
     row: &QueryResult,
-    json: String,
+    json: &str,
+    private: &str,
     installation: &InstallationId,
     tenant: &TenantId,
     id: &ExecutionId,
-) -> Result<Candidate> {
-    let private: String = row.try_get("", "disposition_json")?;
+) -> Result<(ExecutionReceipt, StoredDisposition, String)> {
     ensure!(
         json.len() <= MAX_RECEIPT && private.len() <= MAX_DISPOSITION,
         "receipt byte bound"
@@ -421,11 +421,10 @@ fn decode(
         row.try_get::<i32>("", "receipt_format")? == 1,
         "receipt format mismatch"
     );
-    let candidate = Candidate::from_parts(
-        serde_json::from_str(&json)?,
-        serde_json::from_str(&private)?,
-    )?;
-    let receipt = &candidate.receipt;
+    let receipt: ExecutionReceipt = serde_json::from_str(json)?;
+    let disposition: StoredDisposition = serde_json::from_str(private)?;
+    let (encoded, encoded_private) = encode_strict(&receipt, &disposition)?;
+    let digest = digest(json, private);
     ensure!(
         &receipt.installation_id == installation
             && &receipt.tenant_id == tenant
@@ -446,14 +445,15 @@ fn decode(
         );
     }
     ensure!(
-        candidate.json == json
-            && candidate.private_json == private
-            && row.try_get::<String>("", "content_digest")? == candidate.digest
-            && row.try_get::<i64>("", "byte_count")? == i64::try_from(candidate.bytes())?
-            && row.try_get::<bool>("", "unknown_outcome")? == candidate.unknown(),
+        encoded == json
+            && encoded_private == private
+            && row.try_get::<String>("", "content_digest")? == digest
+            && row.try_get::<i64>("", "byte_count")? == i64::try_from(json.len() + private.len())?
+            && row.try_get::<bool>("", "unknown_outcome")?
+                == (receipt.state == ReceiptState::Unknown),
         "receipt integrity mismatch"
     );
-    Ok(candidate)
+    Ok((receipt, disposition, digest))
 }
 
 #[cfg(test)]
@@ -496,11 +496,8 @@ fn same_completion(saved: &Candidate, candidate: &Candidate) -> Result<()> {
         saved.digest == candidate.digest
             && saved.json == candidate.json
             && saved.private_json == candidate.private_json
-            && saved.usage_evidence.as_ref().map(|e| (&e.json, &e.digest))
-                == candidate
-                    .usage_evidence
-                    .as_ref()
-                    .map(|e| (&e.json, &e.digest))
+            && saved.usage_evidence.json == candidate.usage_evidence.json
+            && saved.usage_evidence.digest == candidate.usage_evidence.digest
             && saved.auxiliary.as_ref().map(|e| (&e.json, &e.digest))
                 == candidate.auxiliary.as_ref().map(|e| (&e.json, &e.digest)),
         "immutable receipt conflict"
@@ -597,17 +594,18 @@ pub(in crate::tenancy) async fn insert(
     )
     .await?
     .context("receipt physical collision")?;
-    let saved = decode(
+    let json: String = row.try_get("", "receipt_json")?;
+    let private: String = row.try_get("", "disposition_json")?;
+    let (_, _, digest) = decode(
         &row,
-        row.try_get("", "receipt_json")?,
+        &json,
+        &private,
         &receipt.installation_id,
         &receipt.tenant_id,
         &receipt.execution_id,
     )?;
     ensure!(
-        saved.digest == candidate.digest
-            && saved.json == candidate.json
-            && saved.private_json == candidate.private_json,
+        digest == candidate.digest && json == candidate.json && private == candidate.private_json,
         "immutable receipt conflict"
     );
     super::usage_evidence::storage::insert(tx, candidate, changed).await?;
@@ -710,8 +708,8 @@ pub(in crate::tenancy) async fn insert_terminal(
     terminal: &format::Terminal,
 ) -> Result<bool> {
     match terminal {
-        format::Terminal::V1(candidate) => insert(tx, candidate).await,
-        format::Terminal::V2(candidate) => {
+        format::Terminal::Strict(candidate) => insert(tx, candidate).await,
+        format::Terminal::Ordered(candidate) => {
             let changed = insert_bytes(
                 tx,
                 Row {
@@ -746,7 +744,7 @@ pub(in crate::tenancy) struct TerminalWrite<'a> {
     inserted: bool,
 }
 enum ExpectedTerminal<'a> {
-    Legacy(&'a Candidate),
+    Strict(&'a Candidate),
     Ordered(&'a super::ordered::CandidateV2),
 }
 impl TerminalWrite<'_> {
@@ -759,12 +757,12 @@ impl TerminalWrite<'_> {
     ) -> Result<obligations::Change> {
         if self.inserted
             && self.tx.get_database_backend() == DatabaseBackend::Sqlite
-            && let ExpectedTerminal::Legacy(candidate) = self.expected
+            && let ExpectedTerminal::Strict(candidate) = self.expected
         {
             return obligations::reconcile_completion(self.tx, candidate, charge).await;
         }
         let (installation, tenant, execution) = match self.expected {
-            ExpectedTerminal::Legacy(c) => (
+            ExpectedTerminal::Strict(c) => (
                 &c.receipt.installation_id,
                 &c.receipt.tenant_id,
                 &c.receipt.execution_id,
@@ -793,8 +791,8 @@ pub(in crate::tenancy) async fn stage_dispatch_terminal<'a>(
     terminal: &'a format::Terminal,
 ) -> Result<TerminalWrite<'a>> {
     match terminal {
-        format::Terminal::V1(candidate) => stage_terminal(tx, candidate).await,
-        format::Terminal::V2(candidate) => Ok(TerminalWrite {
+        format::Terminal::Strict(candidate) => stage_terminal(tx, candidate).await,
+        format::Terminal::Ordered(candidate) => Ok(TerminalWrite {
             tx,
             expected: ExpectedTerminal::Ordered(candidate),
             inserted: insert_terminal(tx, terminal).await?,
@@ -830,7 +828,7 @@ pub(in crate::tenancy) async fn stage_terminal<'a>(
     };
     Ok(TerminalWrite {
         tx,
-        expected: ExpectedTerminal::Legacy(candidate),
+        expected: ExpectedTerminal::Strict(candidate),
         inserted,
     })
 }
@@ -902,88 +900,4 @@ pub(in crate::tenancy) async fn inventory(
     installation: &InstallationId,
 ) -> Result<Inventory> {
     inventory::load(db, installation).await
-}
-
-#[cfg(all(feature = "core", feature = "harness"))]
-pub(in crate::tenancy) async fn recovery_lookup(
-    db: &impl ConnectionTrait,
-    installation: &InstallationId,
-    tenant: &TenantId,
-    id: &ExecutionId,
-    budget: &crate::tenancy::session::recovery::Budget,
-) -> Result<Option<Candidate>> {
-    ensure!(
-        db.get_database_backend() == DatabaseBackend::Sqlite,
-        "native recovery requires SQLite"
-    );
-    let mut invalid = point(installation, tenant, id);
-    invalid.expr(Expr::val(1)).and_where(Expr::cust(
-        "typeof(byte_count)!='integer' OR typeof(unknown_outcome)!='integer' OR unknown_outcome NOT IN (0,1) OR typeof(receipt_json)!='text' OR typeof(disposition_json)!='text'"
-    )).limit(1);
-    ensure!(
-        db.query_one(db.get_database_backend().build(&invalid))
-            .await?
-            .is_none(),
-        "invalid receipt recovery SQL types"
-    );
-    budget.charge(0, 1024)?;
-    // This first profile has no auxiliary recovery proof. Check presence without
-    // materializing O1/C1 evidence outside the shared operation byte budget.
-    let auxiliary = Query::select()
-        .expr(Expr::val(1))
-        .from(Alias::new("tenancy_receipt_auxiliary"))
-        .and_where(Expr::col(Alias::new("installation_id")).eq(installation.as_str()))
-        .and_where(Expr::col(Alias::new("tenant_id")).eq(tenant.as_str()))
-        .and_where(Expr::col(Alias::new("execution_id")).eq(id.as_str()))
-        .limit(1)
-        .to_owned();
-    ensure!(
-        db.query_one(db.get_database_backend().build(&auxiliary))
-            .await?
-            .is_none(),
-        "auxiliary receipt work has no stopped recovery proof"
-    );
-    let Some(candidate) = lookup_candidate_bounded(db, installation, tenant, id, &|rows, bytes| {
-        budget.charge(rows, bytes)
-    })
-    .await?
-    else {
-        return Ok(None);
-    };
-    let disposition: StoredDisposition = serde_json::from_str(&candidate.private_json)?;
-    ensure!(
-        disposition.auxiliary_digest.is_none(),
-        "auxiliary receipt link has no recovery proof"
-    );
-    Ok(Some(candidate))
-}
-
-/// The live original capture authority supplies the namespace; an imported
-/// descriptor or an opaque-link string can never invoke this reader by itself.
-#[cfg(all(feature = "core", feature = "harness"))]
-pub(in crate::tenancy) async fn block_candidate_in(
-    tx: &DatabaseTransaction,
-    binding: &crate::tenancy::capture::Binding,
-    id: &ExecutionId,
-    budget: &crate::storage::operation_budget::OperationBudget<'_>,
-) -> Result<Option<Candidate>> {
-    binding
-        .check()
-        .map_err(|failure| crate::storage::operation_budget::Error::Rejected(failure.0.code))?;
-    let (installation, tenant, _) = binding.authority().identity();
-    native_namespace_candidate_in(tx, installation, tenant, id, budget).await
-}
-
-#[cfg(all(feature = "core", feature = "harness"))]
-async fn native_namespace_candidate_in(
-    tx: &sea_orm::DatabaseTransaction,
-    installation: &InstallationId,
-    tenant: &TenantId,
-    id: &ExecutionId,
-    budget: &crate::storage::operation_budget::OperationBudget<'_>,
-) -> Result<Option<Candidate>> {
-    lookup_candidate_bounded(tx, installation, tenant, id, &|rows, bytes| {
-        Ok(budget.charge(rows, bytes)?)
-    })
-    .await
 }

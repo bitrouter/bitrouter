@@ -1,9 +1,8 @@
 # Compiled request-check extensions
 
 Beta extensions are Rust code linked into a custom host and registered at startup.
-The default `bro` does not include the regex matcher and cannot install code from
-configuration. The HTTP checker executable and protocol are no longer supported.
-Do not launch the former `bitrouter-regex-checker` service as a migration path.
+The official `bitrouter` binary has no custom request-check registrations.
+Configuration selects compiled callbacks; it cannot install extension code.
 
 `regex-checker` is an extension implementing the request-check capability. Its
 Cargo library remains `bitrouter-guardrails`. It matches supplied regex rules;
@@ -14,7 +13,7 @@ The foreground host calls `bitrouter::host::serve_with_extensions`; see the runn
 No separate extension API or checker-protocol crate is required.
 The shared entry runs inference, the local management socket and optional remote
 control with the same configuration baseline, reload and shutdown as
-`bro serve`. Use `assemble::build_app_with_extensions` only when owning a separate
+`bitrouter serve`. Use `assemble::build_app_with_extensions` only when owning a separate
 embedding lifecycle.
 On Unix, the host keeps a small `.sock.lock` file beside its control socket to
 serialize endpoint ownership. The OS lock releases when the host exits; the file
@@ -42,13 +41,13 @@ checks:
 ```
 
 Restart the same custom executable after editing bindings. The example is a
-foreground process, not a complete `bro` CLI: official `bro restart` would launch
+foreground process, not a complete `bitrouter` CLI: official `bitrouter restart` would launch
 the official binary without your registrations. Use your custom invocation or
-service manager to restart, and explicitly target its config/socket for `bro`
+service manager to restart, and explicitly target its config/socket for `bitrouter`
 management status and `stop`. Clients select `model: bitrouter/<id>`; direct
-model requests do not inherit checks. Use `bro config validate` before starting;
+model requests do not inherit checks. Use `bitrouter config validate` before starting;
 activation additionally checks compiled registrations.
-Default bro rejects Native declarations without corresponding registrations.
+The default gateway rejects Native declarations without corresponding registrations.
 Missing or mismatched configured registrations fail activation even when unbound.
 Valid unconfigured registrations remain inactive with a sorted startup diagnostic;
 they create no execution state. Duplicate/invalid
@@ -83,32 +82,20 @@ stops waiting, but cannot kill a started synchronous callback; its concurrency
 slot stays held until it ends. Extensions may call external services internally,
 but BitRouter does not supply a remote extension protocol.
 
-## Breaking migration
+## Callback and global-hook ownership
 
-- Replace former `bitrouter_sdk::extension::ExtensionApi` or
-  `bitrouter::extension::ExtensionApi` imports with
-  `bitrouter::gateway::extensions::registry::ExtensionApi`.
-- Replace Native map assembly with `assemble::build_app_with_extensions`.
-- Replace hand-built foreground HTTP serving with `host::serve_with_extensions`
-  when the full BitRouter daemon lifecycle is wanted.
-- Import fragment and coverage author types from AI `extension::request_check`;
-  the former `language_model::request_checks` paths have no compatibility aliases.
-- Replace former protocol callback inputs with AI request-check business inputs.
-- Former HTTP `endpoint`, `credential_env` and `contract_version` fields are rejected.
-  Link and register an implementation, then explicitly migrate the declaration.
-- No replacement executable is installed or launched automatically.
+Import callback, fragment and coverage types from
+`bitrouter::gateway::extensions::request_check`. They belong to the gateway
+application; AI contains shared wire DTOs and the SDK contains HTTP clients.
 
-Any `plugins.bitrouter-guardrails` key, including null/empty or alongside a new
-check, still blocks default-host activation. Review input fragment ordering,
-all entry points and output requirements before removing it. Old Plugin hooks
-were global and supported stream/output block/redact. They remain available for
-custom hosts in `bitrouter::gateway::extensions::guardrails` through the
-application's explicit `guardrails` feature; request checks do not
-replace that scope. Do not convert redact to block automatically or claim that
-removing an old key proves the protection has migrated.
+Global stream/output block and redact hooks use the application adapter in
+`bitrouter::gateway::extensions::guardrails`, enabled by the application's
+`guardrails` feature. A custom host explicitly installs `plugin::GuardrailsPlugin`
+or individual `hooks`. A Cargo feature makes the adapter available but does not
+activate protection. Input request checks and global output hooks have different
+coverage; configure and verify the intended scope.
 
-The matcher package no longer depends on the SDK or exposes its former `sdk`
-feature. Import `plugin::GuardrailsPlugin` and individual `hooks` from the
-application adapter; import `config` and `rules` types from their owning matcher
-modules. Explicit plugin installation is still required to activate global
-protection. A Cargo feature only makes the adapter available.
+The matcher library owns `config` and `rules` without a gateway or SDK dependency.
+The gateway adapter converts matcher results into callback values and pipeline
+hooks. The official gateway rejects `plugins.bitrouter-guardrails` configuration;
+use a custom host with explicit assembly for global hooks.

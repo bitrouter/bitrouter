@@ -669,10 +669,6 @@ fn render_gc_function_calling_config(tc: &ToolChoice) -> serde_json::Value {
 }
 
 impl InboundAdapter for GenerateContentAdapter {
-    fn protocol(&self) -> ApiProtocol {
-        protocol()
-    }
-
     fn parse_request(&self, body: serde_json::Value) -> Result<Prompt> {
         crate::gateway::wire::json(&body, 16 * 1024 * 1024).map_err(|_| {
             ModelError::invalid_request("GenerateContent request exceeds codec bound")

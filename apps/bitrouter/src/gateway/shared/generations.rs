@@ -246,7 +246,7 @@ impl Generations {
     }
 
     /// Keep the previous complete application before releasing the publication
-    /// gate's snapshot. The retired vector is preallocated to the exact bound.
+    /// gate's snapshot. The draining vector is preallocated to the exact bound.
     pub fn publish_candidate(&self) -> Result<Generation> {
         let (id, previous) = {
             let mut state = self.lock();
@@ -302,7 +302,7 @@ impl Generations {
     }
 
     /// Terminal withdrawal also closes models/metrics acquisition. Current and
-    /// candidate stay in their own slots, even when the retired budget is full.
+    /// candidate stay in their own slots, even when the draining budget is full.
     pub fn withdraw(&self) {
         let mut state = self.lock();
         state.closed = true;

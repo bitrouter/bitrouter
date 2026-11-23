@@ -39,9 +39,9 @@ impl Worker {
         let candidate = prepared.map_err(|_| Failure::from(ErrorCode::StorageUnavailable))?;
         #[cfg(test)]
         let observation = candidate
-            .v1()
+            .strict()
             .ok()
-            .and_then(|legacy| self.proof.receipt_started_for_test(legacy));
+            .and_then(|strict| self.proof.receipt_started_for_test(strict));
         #[cfg(test)]
         use crate::tenancy::transaction::receipt_observation::Step;
         let checked = control.check_read();
@@ -54,8 +54,6 @@ impl Worker {
             .checked_add(candidate.auxiliary_bytes())
             .ok_or(ErrorCode::CapacityExceeded)?;
         let encoded = usize::try_from(durable_bytes).map_err(|_| ErrorCode::CapacityExceeded)?;
-        #[cfg(all(feature = "core", feature = "harness"))]
-        let encoded = encoded.max(crate::storage::operation_budget::MAX_BYTES);
         control.reserve_write(encoded, true)?;
         let transaction_span = owner.observation.span(Phase::Transaction);
         let beginning = control.begin_write_receipt(&self.db).await;
@@ -109,8 +107,8 @@ impl Worker {
             }
             let staged = insertion?;
             let inserted = staged.inserted();
-            if let store::format::Terminal::V1(legacy) = candidate.as_ref() {
-                crate::tenancy::receipts::auxiliary_store::insert(&transaction, legacy).await?;
+            if let store::format::Terminal::Strict(strict) = candidate.as_ref() {
+                crate::tenancy::receipts::auxiliary_store::insert(&transaction, strict).await?;
             }
             let change = staged
                 .reconcile(&|rows, bytes| budget.charge(rows, bytes).map_err(Into::into))

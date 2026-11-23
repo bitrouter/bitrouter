@@ -21,10 +21,7 @@ pub(super) async fn restored_unknown_keeps_evidence(
     .await?
     .context("actual receipt after actor restart")?;
     ensure!(serde_json::to_value(loaded)? == original);
-    let before = restarted
-        .admission
-        .observed_capacity()
-        .map_err(|_| anyhow::anyhow!("actual restored capacity"))?;
+    let before = capacity::observed_snapshot(restarted).await?;
     ensure!(before.accounted == bytes && before.live_unknown == u64::from(unknown));
     ensure!(before.active == 0 && before.potential_unknown == 0 && before.completion_reserved == 0);
     ensure!(
@@ -46,7 +43,11 @@ pub(super) async fn restored_unknown_keeps_evidence(
             .map_err(failure)?
             == 0
     );
-    ensure!(restarted.admission.observed_capacity() == Ok(before));
+    let after = capacity::observed_snapshot(restarted).await?;
+    ensure!(
+        after == before,
+        "early escalation changed capacity: {before:?} -> {after:?}"
+    );
     ensure!(
         restarted
             .escalate_obligations_for_test(due)
@@ -68,9 +69,10 @@ pub(super) async fn restored_unknown_keeps_evidence(
             == 0,
         "already escalated Unknown must not escalate again"
     );
+    let after = capacity::observed_snapshot(restarted).await?;
     ensure!(
-        restarted.admission.observed_capacity() == Ok(before),
-        "escalation must retain Unknown and accounting"
+        after == before,
+        "escalation must retain Unknown and accounting: {before:?} -> {after:?}"
     );
     ensure!(
         raw_receipt(h, &receipt.execution_id).await? == raw,

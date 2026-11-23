@@ -15,6 +15,7 @@ use crate::gateway::pipeline::hooks::ExecutionHook;
 use crate::gateway::pipeline::hooks::ObserveHook;
 use crate::gateway::pipeline::hooks::PreRequestHook;
 use crate::gateway::pipeline::hooks::RouteHook;
+#[cfg(test)]
 use crate::gateway::pipeline::hooks::StreamHook;
 use crate::gateway::pipeline::operations::HookRegistration;
 use crate::gateway::pipeline::operations::HookStage;
@@ -41,6 +42,7 @@ pub struct PipelineBuilder {
     model_selectors: Vec<HookRegistration<dyn ModelSelector>>,
     execution_hooks: Vec<HookRegistration<dyn ExecutionHook>>,
     pub(crate) decision_model: Option<crate::gateway::model::decision::DecisionRuntime>,
+    #[cfg(test)]
     stream_hooks: Vec<Arc<dyn StreamHook>>,
     settlement_recorders: Vec<HookRegistration<dyn SettlementRecorder>>,
     required_finalizers: Vec<HookRegistration<dyn RequiredFinalizer>>,
@@ -50,12 +52,8 @@ pub struct PipelineBuilder {
     executor: Option<Arc<dyn Executor>>,
     #[cfg(feature = "server-tools")]
     server_tool_loop: Option<Arc<ServerToolLoop>>,
-    keepalive_interval: Duration,
     fallback_backoff: Vec<Duration>,
     request_checker_runner: Option<Arc<dyn RequestCheckerRunner>>,
-    native_cost_estimator: Option<Arc<dyn super::native_accounting::NativeCostEstimator>>,
-    native_cost_source: Option<Arc<dyn super::native_accounting::NativeCostSource>>,
-    native_private_context: Option<Arc<dyn super::native_context::NativePrivateContextPolicy>>,
     served_operations: OperationScope,
     requirements: Vec<HookRequirement>,
     owned_drain: bool,
@@ -79,6 +77,7 @@ impl PipelineBuilder {
             model_selectors: Vec::new(),
             decision_model: None,
             execution_hooks: Vec::new(),
+            #[cfg(test)]
             stream_hooks: Vec::new(),
             settlement_recorders: Vec::new(),
             required_finalizers: Vec::new(),
@@ -88,12 +87,8 @@ impl PipelineBuilder {
             executor: None,
             #[cfg(feature = "server-tools")]
             server_tool_loop: None,
-            keepalive_interval: DEFAULT_KEEPALIVE,
             fallback_backoff: Vec::new(),
             request_checker_runner: None,
-            native_cost_estimator: None,
-            native_cost_source: None,
-            native_private_context: None,
             served_operations: OperationScope::Generation,
             requirements: Vec::new(),
             owned_drain: false,
@@ -140,54 +135,12 @@ impl PipelineBuilder {
         self
     }
 
-    /// Attach local token accounting for every managed provider attempt. The
-    /// estimator must share the host's settlement price snapshot and perform no I/O.
-    pub fn native_cost_estimator(
-        &mut self,
-        estimator: Arc<dyn super::native_accounting::NativeCostEstimator>,
-    ) -> &mut Self {
-        self.native_cost_estimator = Some(estimator);
-        self
-    }
-
-    /// Read owner-scoped monetary evidence from the host's settlement store.
-    pub fn native_cost_source(
-        &mut self,
-        source: Arc<dyn super::native_accounting::NativeCostSource>,
-    ) -> &mut Self {
-        self.native_cost_source = Some(source);
-        self
-    }
-
-    /// Install host authentication for provider-private managed history. Hosts
-    /// must also call `validate_managed_history` immediately after authenticating
-    /// the caller and before any preparation hook capable of external I/O.
-    pub fn native_private_context(
-        &mut self,
-        policy: Arc<dyn super::native_context::NativePrivateContextPolicy>,
-    ) -> &mut Self {
-        self.native_private_context = Some(policy);
-        self
-    }
-
     /// Attach a server-side tool loop (`server_tools`). When set, non-streaming
     /// execution injects the loop's router tools, executes the model's calls to
     /// them, and re-calls the upstream until the model stops calling them.
     #[cfg(feature = "server-tools")]
     pub fn server_tool_loop(&mut self, server_loop: Arc<ServerToolLoop>) -> &mut Self {
         self.server_tool_loop = Some(server_loop);
-        self
-    }
-
-    /// Override the fallback policy (defaults to [`DefaultFallbackPolicy`]).
-    pub fn fallback_policy(&mut self, policy: Arc<dyn FallbackPolicy>) -> &mut Self {
-        self.fallback_policy = Some(policy);
-        self
-    }
-
-    /// Set the SSE keepalive interval.
-    pub fn keepalive_interval(&mut self, interval: Duration) -> &mut Self {
-        self.keepalive_interval = interval;
         self
     }
 
@@ -199,23 +152,9 @@ impl PipelineBuilder {
         self
     }
 
-    /// Register a local pre-request hook (runs in registration order before
-    /// configured native request checks).
-    ///
-    /// For a router with request checks, these hooks see the effective
-    /// router defaults and must not change
-    /// [`PipelineContext::model`](crate::gateway::pipeline::context::PipelineContext::model).
-    /// Register checked-router selector rewrites with
-    /// [`Self::router_preparation_hook`] so they happen before defaults while
-    /// the ingress router identity and checker bindings stay frozen.
-    ///
-    /// Requests without checks retain the legacy SDK order: ordinary hooks
-    /// run before the final selector's defaults and may rewrite the selector.
-    pub fn pre_request_hook<H: PreRequestHook + 'static>(&mut self, hook: H) -> &mut Self {
-        self.pre_request_hook_for(hook, OperationScope::Generation)
-    }
-
-    /// Register explicit operation support for this stage.
+    /// Register a local pre-request hook for explicit operations, before configured
+    /// native request checks. Checked requests see effective router defaults;
+    /// selector rewrites belong in [`Self::router_preparation_hook`].
     pub fn pre_request_hook_for<H: PreRequestHook + 'static>(
         &mut self,
         hook: H,
@@ -320,11 +259,6 @@ impl PipelineBuilder {
         self
     }
 
-    /// Register a Stage-3 execution hook.
-    pub fn execution_hook<H: ExecutionHook + 'static>(&mut self, hook: H) -> &mut Self {
-        self.execution_hook_for(hook, OperationScope::Generation)
-    }
-
     /// Register explicit operation support for this stage.
     pub fn execution_hook_for<H: ExecutionHook + 'static>(
         &mut self,
@@ -336,13 +270,6 @@ impl PipelineBuilder {
             supported_operations,
             TypeId::of::<H>(),
         ));
-        self
-    }
-
-    /// Register a StreamHook-stage hook (runs in registration order; each sees
-    /// the previous hook's rewritten output).
-    pub fn stream_hook(&mut self, hook: impl StreamHook + 'static) -> &mut Self {
-        self.stream_hooks.push(Arc::new(hook));
         self
     }
 
@@ -437,29 +364,15 @@ impl PipelineBuilder {
                     HookStage::PreResolution => {
                         covers(&self.pre_resolution_hooks, requirement.type_id, operation)
                     }
-                    HookStage::RouterPreparation => covers(
-                        &self.router_preparation_hooks,
-                        requirement.type_id,
-                        operation,
-                    ),
                     HookStage::PreRequest => {
                         covers(&self.pre_request_hooks, requirement.type_id, operation)
                     }
                     HookStage::Route => covers(&self.route_hooks, requirement.type_id, operation),
-                    HookStage::ModelSelection => {
-                        covers(&self.model_selectors, requirement.type_id, operation)
-                    }
-                    HookStage::Execution => {
-                        covers(&self.execution_hooks, requirement.type_id, operation)
-                    }
                     HookStage::Settlement => {
                         covers(&self.settlement_recorders, requirement.type_id, operation)
                     }
                     HookStage::Finalization => {
                         covers(&self.required_finalizers, requirement.type_id, operation)
-                    }
-                    HookStage::Observation => {
-                        covers(&self.observe_hooks, requirement.type_id, operation)
                     }
                 };
                 if !installed {
@@ -505,6 +418,7 @@ impl PipelineBuilder {
             model_selectors: self.model_selectors,
             decision_model: self.decision_model,
             execution_hooks: self.execution_hooks,
+            #[cfg(test)]
             stream_hooks: self.stream_hooks,
             settlement_recorders: self.settlement_recorders,
             required_finalizers: self.required_finalizers,
@@ -514,7 +428,7 @@ impl PipelineBuilder {
             executor,
             #[cfg(feature = "server-tools")]
             server_tool_loop: self.server_tool_loop,
-            keepalive_interval: self.keepalive_interval,
+            keepalive_interval: DEFAULT_KEEPALIVE,
             fallback_backoff: self.fallback_backoff,
             pending_settlements: {
                 let mut tasks = super::tasks::Settlements::default();
@@ -525,9 +439,6 @@ impl PipelineBuilder {
             },
             detached_executions: tokio_util::task::TaskTracker::new(),
             request_checker_runner: self.request_checker_runner,
-            native_cost_estimator: self.native_cost_estimator,
-            native_cost_source: self.native_cost_source,
-            native_private_context: self.native_private_context,
             served_operations: self.served_operations,
         })
     }
@@ -546,5 +457,34 @@ fn covers<T: ?Sized>(
 impl Default for PipelineBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod fixtures {
+    use super::*;
+
+    impl PipelineBuilder {
+        /// Override fallback classification for a pipeline fixture.
+        pub fn fallback_policy(&mut self, policy: Arc<dyn FallbackPolicy>) -> &mut Self {
+            self.fallback_policy = Some(policy);
+            self
+        }
+
+        /// Register a generation pre-request hook for a pipeline fixture.
+        pub fn pre_request_hook<H: PreRequestHook + 'static>(&mut self, hook: H) -> &mut Self {
+            self.pre_request_hook_for(hook, OperationScope::Generation)
+        }
+
+        /// Register a generation execution hook for a pipeline fixture.
+        pub fn execution_hook<H: ExecutionHook + 'static>(&mut self, hook: H) -> &mut Self {
+            self.execution_hook_for(hook, OperationScope::Generation)
+        }
+
+        /// Inject a stream transformation into a pipeline fixture.
+        pub fn stream_hook(&mut self, hook: impl StreamHook + 'static) -> &mut Self {
+            self.stream_hooks.push(Arc::new(hook));
+            self
+        }
     }
 }

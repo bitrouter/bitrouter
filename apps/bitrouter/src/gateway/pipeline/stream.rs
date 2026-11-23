@@ -1,6 +1,6 @@
 //! Streaming primitives for the `language_model` protocol: `StreamInterest`,
-//! `StreamAction` / `StreamOutcome`, AI `SseFrame` framing, `SseKeepaliveStream`,
-//! and the `StreamProcessor` that drives the StreamHook stage.
+//! `StreamOutcome`, AI `SseFrame` framing, `SseKeepaliveStream`, and the
+//! `StreamProcessor` that records evidence and delivers stream observations.
 
 use crate::gateway::model::stream::SseFrame;
 use std::pin::Pin;
@@ -14,13 +14,12 @@ use tokio::time::{Instant, Sleep};
 
 use crate::gateway::error::{BitrouterError, Result};
 use crate::gateway::pipeline::context::StreamContext;
-use crate::gateway::pipeline::hooks::{ObserveHook, StreamHook};
+use crate::gateway::pipeline::hooks::ObserveHook;
+#[cfg(test)]
+use crate::gateway::pipeline::hooks::StreamHook;
 use bitrouter_ai::types::{ApiProtocol, StreamPart, Usage};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-
-/// Stable identifier for the SDK's character-count fallback estimator.
-pub const STREAM_USAGE_ESTIMATOR_VERSION: &str = "bitrouter-sdk/stream-char-div-ceil-4-v1";
 
 /// Characters per token used by the SDK's fallback stream estimator.
 pub const STREAM_USAGE_ESTIMATOR_CHARS_PER_TOKEN: u64 = 4;
@@ -45,6 +44,7 @@ impl StreamInterest {
     }
 
     /// Interested in every part kind.
+    #[cfg(any(test, feature = "otel-http", feature = "otel-grpc"))]
     pub const fn all() -> Self {
         Self(
             Self::TEXT_DELTA
@@ -61,11 +61,6 @@ impl StreamInterest {
         Self(self.0 | Self::TEXT_DELTA)
     }
 
-    /// Add interest in `ReasoningDelta`.
-    pub const fn with_reasoning_delta(self) -> Self {
-        Self(self.0 | Self::REASONING_DELTA)
-    }
-
     /// Add interest in `ToolCallDelta`.
     pub const fn with_tool_call_delta(self) -> Self {
         Self(self.0 | Self::TOOL_CALL_DELTA)
@@ -79,11 +74,6 @@ impl StreamInterest {
     /// Add interest in `Finish`.
     pub const fn with_finish(self) -> Self {
         Self(self.0 | Self::FINISH)
-    }
-
-    /// Add interest in `ResponseStarted`.
-    pub const fn with_response_started(self) -> Self {
-        Self(self.0 | Self::RESPONSE_STARTED)
     }
 
     /// Whether this interest set matches `part`.
@@ -117,14 +107,10 @@ impl StreamInterest {
         };
         self.0 & bit != 0
     }
-
-    /// Whether the set is empty.
-    pub fn is_empty(&self) -> bool {
-        self.0 == 0
-    }
 }
 
-/// What a `StreamHook` decides to do with a part.
+/// Test-only mutation of a canonical stream part.
+#[cfg(test)]
 #[derive(Debug)]
 pub enum StreamAction {
     /// Emit the part unchanged.
@@ -154,8 +140,7 @@ pub enum StreamOutcome {
 
 pin_project! {
     /// Wraps a frame stream and injects a host-selected keepalive frame
-    /// whenever the inner stream is idle longer than `interval`. Fixes v0 #422
-    /// (slow generations dropping the connection after 5 minutes of silence).
+    /// whenever the inner stream is idle longer than `interval`.
     pub struct SseKeepaliveStream<S, T = SseFrame> {
         #[pin]
         inner: S,
@@ -170,6 +155,7 @@ pin_project! {
 impl<S> SseKeepaliveStream<S> {
     /// Wrap `inner`, emitting a `:keepalive` comment after each `interval` of
     /// inner-stream silence.
+    #[cfg(test)]
     pub fn new(inner: S, interval: Duration) -> Self {
         Self {
             inner,
@@ -501,13 +487,10 @@ impl UsageAccumulator {
     }
 }
 
-/// Drives the StreamHook stage: applies the hook chain to each part, fans parts
-/// out to `ObserveHook`s, and guarantees `on_stream_end` fires exactly once for
-/// every hook regardless of how the stream terminated.
-///
-/// Kept as an explicit driver (rather than a `Stream` impl) so the StreamHook
-/// stage is unit-testable in isolation.
+/// Records original upstream evidence and delivers canonical parts to observers.
+/// Test hooks exercise mutations without adding production interception APIs.
 pub struct StreamProcessor {
+    #[cfg(test)]
     hooks: Vec<Arc<dyn StreamHook>>,
     observe: Vec<Arc<dyn ObserveHook>>,
     ctx: StreamContext,
@@ -515,13 +498,14 @@ pub struct StreamProcessor {
 }
 
 impl StreamProcessor {
-    /// Build a processor over the given hooks, observers and stream context.
+    /// Build a processor over the observers and stream context.
     pub fn new(
-        hooks: Vec<Arc<dyn StreamHook>>,
+        #[cfg(test)] hooks: Vec<Arc<dyn StreamHook>>,
         observe: Vec<Arc<dyn ObserveHook>>,
         ctx: StreamContext,
     ) -> Self {
         Self {
+            #[cfg(test)]
             hooks,
             observe,
             ctx,
@@ -530,32 +514,21 @@ impl StreamProcessor {
     }
 
     /// Shared access to the in-flight stream context.
+    #[cfg(test)]
     pub fn context(&self) -> &StreamContext {
         &self.ctx
     }
 
-    /// Retain authoritative counters carried by a rejected terminal response.
-    /// These are original upstream evidence, independent of display policy.
-    pub(crate) fn record_failed_response_usage(&mut self, usage: &Usage) {
-        self.ctx.accumulated_usage.observe(&StreamPart::Usage {
-            usage: usage.clone(),
-        });
-    }
-
-    /// Run one part through the hook chain. Returns the parts to emit
-    /// downstream, or an `Abort` error if a hook aborted the stream.
-    ///
-    /// Each hook in registration order sees the (possibly rewritten) output of
-    /// the previous hook. The accumulator always observes the *original*
-    /// upstream part so usage is never lost to a rewrite. Standalone provider
-    /// usage snapshots are buffered; immediately before the terminal, hooks
-    /// and downstream observers see exactly one normalized snapshot.
+    /// Record the original part and return canonical downstream parts.
+    /// Standalone usage snapshots are buffered until the terminal, when
+    /// observers receive the selected snapshot. Test mutations run after
+    /// original evidence is recorded.
     pub async fn process_part(&mut self, part: StreamPart) -> Result<Vec<StreamPart>> {
         self.ctx.accumulated_usage.observe(&part);
         self.ctx.observe_upstream_part(&part);
         self.ctx.parts_emitted += 1;
 
-        let mut current = match part {
+        let current = match part {
             StreamPart::Usage { .. } => Vec::new(),
             StreamPart::Finish { reason } => {
                 let mut parts = Vec::new();
@@ -580,6 +553,23 @@ impl StreamProcessor {
             }],
             part => vec![part],
         };
+        #[cfg(test)]
+        let current = self.apply_test_hooks(current).await?;
+
+        // Fan out to observers (read-only, errors swallowed).
+        for p in &current {
+            self.ctx.observe_downstream_part(p);
+            for obs in &self.observe {
+                if obs.stream_interest().matches(p) {
+                    obs.on_stream_part(&self.ctx, p).await;
+                }
+            }
+        }
+        Ok(current)
+    }
+
+    #[cfg(test)]
+    async fn apply_test_hooks(&mut self, mut current: Vec<StreamPart>) -> Result<Vec<StreamPart>> {
         for hook in &self.hooks {
             let interest = hook.interest();
             let mut next = Vec::with_capacity(current.len());
@@ -602,21 +592,11 @@ impl StreamProcessor {
             current = next;
         }
 
-        // Fan out to observers (read-only, errors swallowed).
-        for p in &current {
-            self.ctx.observe_downstream_part(p);
-            for obs in &self.observe {
-                if obs.stream_interest().matches(p) {
-                    obs.on_stream_part(&self.ctx, p).await;
-                }
-            }
-        }
         Ok(current)
     }
 
-    /// Terminate the stream: fire `on_stream_end` on every hook exactly once.
-    /// Idempotent — repeated calls are no-ops. Hook errors are swallowed (the
-    /// stream is already over) but logged.
+    /// Finalize stream evidence exactly once. Repeated calls are no-ops.
+    /// Test hooks receive the terminal outcome before usage is selected.
     ///
     /// Technical usage selection at the end of a stream:
     /// - If an authoritative `Usage` part was observed at any point, that
@@ -638,6 +618,7 @@ impl StreamProcessor {
             return &self.ctx;
         }
         self.ended = true;
+        #[cfg(test)]
         for hook in &self.hooks {
             if let Err(e) = hook.on_stream_end(&mut self.ctx, &outcome).await {
                 tracing::warn!(error = %e, "StreamHook::on_stream_end failed");
@@ -714,7 +695,6 @@ impl StreamProcessor {
             let estimate = if estimator_used {
                 self.ctx.final_usage.as_ref().map(|usage| Estimate {
                     algorithm: EstimatorAlgorithm::StreamCharacterCeiling,
-                    // STREAM_USAGE_ESTIMATOR_VERSION: stream-char-div-ceil-4-v1.
                     version: 1,
                     characters_per_token: 4,
                     coverage: EstimateCoverage::PromptTextAndObservedTextReasoning,

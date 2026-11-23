@@ -1,54 +1,34 @@
 # Agent runtime ownership
 
-This guide follows the application as its architecture evolves. Serialized
-messages are defined once in the [service API](../specs/service-api/README.md).
-The [source guide](../../apps/bitrouter/HARNESS.md) maps the current modules.
+## Gateway and harness
 
-## Core and harness
+BitRouter accepts inference requests, selects models and effort, applies
+gateway policy and records usage. Tenant configuration, Policy and Eval are
+service resources. BRO runs on the user's machine, schedules local agents,
+owns their workspaces and stores its turns, approvals and tool effects in its local home. A client provides the gateway endpoint and its own client credential.
+The gateway retains its provider credentials.
 
-Application Core owns model/context routing and managed scheduling. Harness owns
-workspace tools, complete session history, durable checkpoint storage and ACKs.
-An SDK client transports public values; it does not execute tools, persist
-sessions or acknowledge checkpoints automatically. A public DTO alone confers
-neither execution nor storage authority. Keep runtime services in the application
-and dependency-light data contracts in `bitrouter-ai`.
-
-The native `ThreadService` owns one durable Thread/Turn path. CLI, HTTP and native
-ACP project it; they must not create independent queues, permission registries or
-provider loops. Thread, Turn and Item identities are durable execution facts;
-transport connection generations and request IDs are delivery identities.
-Disconnecting observation does not cancel accepted execution or answer approval.
-Explicit cancellation and close use the service's own admission/cleanup barriers.
-
-Accepted input and effect intent are committed before execution. Complete tool
-results are reused on supported recovery; uncertain effects, accounting or lost
-ownership block execution rather than being replayed under a new identity.
-Current workspace, caller, configuration and feature checks remain necessary
-when reconstructing an execution. Reading stored history does not start work.
-The configured execution owner retains cleanup custody until workers actually
-finish; a timeout is not evidence that a provider or shell stopped.
+BRO records a turn's dispatch and tool checkpoints locally. A resumed turn
+can reuse a committed reply or tool result. An unresolved effect requires
+reconciliation before another dispatch. The gateway records its own admission,
+metering and settlement using the authenticated principal. Caller-provided
+session identifiers do not confer access to another thread or principal's
+records. The [service API](../specs/service-api/README.md) defines the wire
+boundary. The [BRO source guide](../../apps/bro/HARNESS.md) maps the implementation.
 
 ## External ACP controller
 
-External ACP sessions retain the upstream harness's session identity, execution
-and complete history. BitRouter's controller owns a connection and routing/cost
-adaptation, and can record opt-in observed evidence. The transport-generic
-client is shared by CLI consumers; a UI adapter does not implement another ACP
-stack. Standard capability declarations, initialize gates and current protocol
-permissions apply at that boundary.
-
-The CLI correlation record uses the harness-native `session_id` and controller
-instance. A locally minted `record_id` alias is not a public session identity.
-Agent authentication and provider-routing authentication are distinct. The
-controller cannot infer a harness's login command from its name; it consumes
-protocol-declared authentication information. See
-[ACP authentication](acp-authentication.md) for that interaction.
+Use `bro acp list` for the bundled adapter catalog. `bro acp prompt` sends a
+prompt through a selected gateway-bound adapter. `bro acp serve` supervises an
+adapter over stdio for a local ACP controller. A custom stdio command and its
+environment belong to the local operator. The controller and adapter exchange
+ACP messages directly over the supervised pipes. See [ACP authentication](acp-authentication.md).
 
 ## Tools and resources
 
-[Native tools](native-tools.md) describe the six built-in tool interfaces and
-filesystem/interpreter constraints. [Harness resources](harness-resources.md)
-describe project instructions, MCP source grants, skills, immutable inventories
-and consent. Preserve those resource boundaries on every frontend; cached bytes
-or metadata do not authorize execution. Recording, checkpoints and learning use
-observed evidence through the [evidence workflow](evidence-learning.md).
+The user grants a workspace and chooses a native tool mode. BRO records tool
+requests and approval decisions with the turn. It retains the content and
+digest of each explicitly selected skill for subsequent turns. Gateway MCP
+upstreams, service credentials and access policies are configured by the
+service operator. See [local skills](../CLI.md#local-skills) and
+[gateway MCP configuration](../CLI.md#mcp-configuration-and-gateway-inspection).

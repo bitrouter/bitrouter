@@ -1,14 +1,16 @@
 [package]
 name = "native-ap-sdk-consumer"
-version = "0.0.0"
+version = "1.0.0-beta.1"
 edition = "2024"
+rust-version = "1.93"
 publish = false
 
 [workspace]
+resolver = "3"
 
 [dependencies]
-bitrouter-ai = { path = "../../../../../crates/bitrouter-ai" }
-bitrouter-sdk = { path = "../../../../../crates/bitrouter-sdk", features = ["http2"] }
+bitrouter-ai = { path = "../../../../../crates/bitrouter-ai", default-features = false }
+bitrouter-sdk = { path = "../../../../../crates/bitrouter-sdk", default-features = false, features = ["http2"] }
 futures = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["arbitrary_precision", "raw_value"] }

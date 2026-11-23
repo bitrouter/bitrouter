@@ -1,5 +1,3 @@
-use std::collections::BTreeSet;
-
 use anyhow::Result;
 
 use super::health::reduce;
@@ -10,15 +8,14 @@ pub async fn replay_episode(
     store: &TrajectoryStore,
     owner_user_id: &str,
     episode_id: &str,
-    protected_tiers: &BTreeSet<String>,
 ) -> Result<TrajectorySnapshot> {
     let events = store.events_for_episode(owner_user_id, episode_id).await?;
-    reduce(&events, protected_tiers)
+    reduce(&events)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::BTreeMap;
 
     use bitrouter_ai::types::{ApiProtocol, GenerationParams, Message, Prompt, Role};
 
@@ -58,7 +55,7 @@ mod tests {
                     &correlated.request_id,
                     2,
                     "economy",
-                    "opening",
+                    "orchestrate",
                 )?,
             )
             .await?;
@@ -69,45 +66,34 @@ mod tests {
                 settlement(&correlated.episode_id, &correlated.request_id, 3, 7, 9)?,
             )
             .await?;
-        let protected_tiers = BTreeSet::from(["protected".to_owned()]);
+
         let events = runtime
             .store()
             .events_for_episode("owner-a", &correlated.episode_id)
             .await?;
-        let direct = reduce(&events, &protected_tiers)?;
+        let direct = reduce(&events)?;
 
-        let replayed = replay_episode(
-            runtime.store(),
-            "owner-a",
-            &correlated.episode_id,
-            &protected_tiers,
-        )
-        .await?;
+        let replayed = replay_episode(runtime.store(), "owner-a", &correlated.episode_id).await?;
 
         assert_eq!(replayed, direct);
         assert_eq!(replayed.evidence_digest, direct.evidence_digest);
         assert!(
-            replay_episode(
-                runtime.store(),
-                "owner-b",
-                &correlated.episode_id,
-                &protected_tiers,
-            )
-            .await
-            .is_err()
+            replay_episode(runtime.store(), "owner-b", &correlated.episode_id)
+                .await
+                .is_err()
         );
         Ok(())
     }
 
     #[tokio::test]
-    async fn file_sqlite_restart_replays_hold_and_next_request_prior_history() -> anyhow::Result<()>
-    {
+    async fn file_sqlite_restart_replays_settlement_and_next_request_prior_history()
+    -> anyhow::Result<()> {
         let directory = tempfile::tempdir()?;
         let database_url = format!(
             "sqlite://{}?mode=rwc",
             directory.path().join("trajectory-restart.db").display()
         );
-        let protected_tiers = BTreeSet::from(["protected".to_owned()]);
+
         let db = crate::db::connect(&database_url).await?;
         crate::db::run_migrations(&db).await?;
         let correlation_key = CorrelationKey::from_bytes(rand::random())?;
@@ -137,7 +123,7 @@ mod tests {
                     &first.request_id,
                     2,
                     "economy",
-                    "opening",
+                    "orchestrate",
                 )?,
             )
             .await?;
@@ -171,35 +157,21 @@ mod tests {
                     &second.request_id,
                     5,
                     "protected",
-                    "recovery",
+                    "implement",
                 )?,
             )
             .await?;
-        let guard = guard(&first.episode_id, &second.request_id, 6, 2)?;
-        runtime
-            .store()
-            .append_guard_activation("owner-a", guard.clone())
-            .await?;
-        runtime
-            .store()
-            .append_guard_activation("owner-a", guard)
-            .await?;
-        runtime
-            .store()
-            .settle_request(
-                "owner-a",
-                settlement(&first.episode_id, &second.request_id, 7, 13, 5)?,
-            )
-            .await?;
+        let mut terminal = settlement(&first.episode_id, &second.request_id, 6, 13, 5)?;
+        terminal.event.captured_at = "2026-08-01T00:00:06Z".into();
+        terminal.event.content_digest = terminal.event.semantic_digest()?;
+        runtime.store().settle_request("owner-a", terminal).await?;
 
-        let uninterrupted = replay_episode(
-            runtime.store(),
-            "owner-a",
-            &first.episode_id,
-            &protected_tiers,
-        )
-        .await?;
-        assert_eq!(uninterrupted.active_hold_remaining, 2);
+        let uninterrupted = replay_episode(runtime.store(), "owner-a", &first.episode_id).await?;
+        assert_eq!(uninterrupted.health.elapsed_ms, 6_000);
+        assert_eq!(uninterrupted.health.request_count, 2);
+        assert_eq!(uninterrupted.health.settled_request_count, 2);
+        assert_eq!(uninterrupted.health.total_tokens, Some(24));
+        assert_eq!(uninterrupted.health.settled_cost_micro_usd, Some(8));
         let persisted = runtime
             .store()
             .events_for_episode("owner-a", &first.episode_id)
@@ -226,13 +198,8 @@ mod tests {
             TrajectoryStore::new(restarted_db),
             Canonicalizer::new(correlation_key),
         );
-        let restarted = replay_episode(
-            restarted_runtime.store(),
-            "owner-a",
-            &first.episode_id,
-            &protected_tiers,
-        )
-        .await?;
+        let restarted =
+            replay_episode(restarted_runtime.store(), "owner-a", &first.episode_id).await?;
         assert_eq!(restarted, uninterrupted);
         assert_eq!(restarted.evidence_digest, uninterrupted.evidence_digest);
 
@@ -245,7 +212,7 @@ mod tests {
                 "2026-08-01T00:00:07Z",
             )
             .await?;
-        let prior_snapshot = reduce(&third.prior_events, &protected_tiers)?;
+        let prior_snapshot = reduce(&third.prior_events)?;
         assert_eq!(prior_snapshot, uninterrupted);
         assert_eq!(
             prior_snapshot.evidence_digest,
@@ -262,7 +229,7 @@ mod tests {
             "sqlite://{}?mode=rwc",
             directory.path().join("trajectory-conflict.db").display()
         );
-        let protected_tiers = BTreeSet::from(["protected".to_owned()]);
+
         let db = crate::db::connect(&database_url).await?;
         crate::db::run_migrations(&db).await?;
         let correlation_key = CorrelationKey::from_bytes(rand::random())?;
@@ -328,13 +295,8 @@ mod tests {
                 .get("correlation.prefix_conflict"),
             Some(&1)
         );
-        let uninterrupted = replay_episode(
-            runtime.store(),
-            "owner-a",
-            &conflicting.episode_id,
-            &protected_tiers,
-        )
-        .await?;
+        let uninterrupted =
+            replay_episode(runtime.store(), "owner-a", &conflicting.episode_id).await?;
         assert_eq!(
             uninterrupted.health.completeness,
             HistoryCompleteness::Incomplete
@@ -349,13 +311,8 @@ mod tests {
             TrajectoryStore::new(restarted_db),
             Canonicalizer::new(correlation_key),
         );
-        let replayed = replay_episode(
-            restarted.store(),
-            "owner-a",
-            &conflicting.episode_id,
-            &protected_tiers,
-        )
-        .await?;
+        let replayed =
+            replay_episode(restarted.store(), "owner-a", &conflicting.episode_id).await?;
         assert_eq!(replayed, uninterrupted);
         assert_eq!(replayed.evidence_digest, uninterrupted.evidence_digest);
 
@@ -406,13 +363,8 @@ mod tests {
             Some(&0),
             "missing prefix evidence on a compacted native delta is not a conflict"
         );
-        let final_replay = replay_episode(
-            restarted.store(),
-            "owner-a",
-            &conflicting.episode_id,
-            &protected_tiers,
-        )
-        .await?;
+        let final_replay =
+            replay_episode(restarted.store(), "owner-a", &conflicting.episode_id).await?;
         assert_eq!(
             final_replay.health.completeness,
             HistoryCompleteness::Incomplete
@@ -485,27 +437,10 @@ mod tests {
             BTreeMap::from([
                 (
                     "route.projection".to_owned(),
-                    format!("agent_trace/v2|{state}|normal"),
+                    format!("code:generation|{state}|normal"),
                 ),
                 ("route.selected_tier".to_owned(), tier.to_owned()),
-                ("route.workflow_state".to_owned(), state.to_owned()),
             ]),
-        )
-    }
-
-    fn guard(
-        episode_id: &str,
-        request_id: &str,
-        sequence: u64,
-        hold: u64,
-    ) -> anyhow::Result<TrajectoryEvent> {
-        event(
-            episode_id,
-            Some(request_id),
-            sequence,
-            TrajectoryEventKind::GuardActivated,
-            BTreeMap::from([("guard.hold_for_requests".to_owned(), hold)]),
-            BTreeMap::new(),
         )
     }
 

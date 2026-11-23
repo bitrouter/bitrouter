@@ -114,7 +114,7 @@ pub(super) async fn load(
     tenant: &TenantId,
     id: &ExecutionId,
     charge: &Charge<'_>,
-) -> Result<(String, Option<String>)> {
+) -> Result<(String, String)> {
     ensure!(
         db.get_database_backend() == DatabaseBackend::Sqlite,
         "receipt archive requires SQLite"
@@ -135,8 +135,7 @@ pub(super) async fn load(
         "receipt archive format or codec"
     );
     let receipt_bytes = usize::try_from(row.try_get::<i64>("", "receipt_bytes")?)?;
-    let usage = usize::try_from(row.try_get::<i64>("", "usage_bytes")?)?;
-    let usage_bytes = (usage != 0).then_some(usage);
+    let usage_bytes = usize::try_from(row.try_get::<i64>("", "usage_bytes")?)?;
     let plain = codec::plaintext_len(receipt_bytes, usage_bytes)?;
     let stored = usize::try_from(row.try_get::<i64>("", "stored_bytes")?)?;
     ensure!(
@@ -152,7 +151,7 @@ pub(super) async fn load(
     // Guard again in the payload SELECT: growth or a type change after preflight
     // must become NULL before the database driver allocates a cell.
     let rows = db.query_all(sqlite(format!(
-        "SELECT CASE WHEN typeof(payload)='blob' AND length(payload)={stored} AND format_version={version} AND codec={codec} AND receipt_bytes={receipt_bytes} AND usage_bytes={usage} THEN payload ELSE NULL END AS payload FROM {TABLE} WHERE {KEY} LIMIT 2"
+        "SELECT CASE WHEN typeof(payload)='blob' AND length(payload)={stored} AND format_version={version} AND codec={codec} AND receipt_bytes={receipt_bytes} AND usage_bytes={usage_bytes} THEN payload ELSE NULL END AS payload FROM {TABLE} WHERE {KEY} LIMIT 2"
     ), values(installation, tenant, id))).await?;
     charge(0, 0)?;
     ensure!(rows.len() == 1, "receipt archive changed during load");
@@ -168,20 +167,20 @@ pub(super) async fn load(
 
 /// Check sidecar location without loading an inline body. Archived metadata
 /// remains authoritative for presence, schema, both digests and logical size.
-/// SQLite returns validated body length or absence. Other backends retain the
-/// no-op path; callers must not interpret its None as verified absence.
+/// Returns the required SQLite sidecar's verified length.
 pub(in crate::tenancy::receipts) async fn usage_metadata(
     db: &impl ConnectionTrait,
-    candidate: &Candidate,
+    r: &bitrouter_ai::tenancy::execution::ExecutionReceipt,
+    receipt_digest: &str,
+    expected: &str,
     archived: bool,
     charge: &Charge<'_>,
-) -> Result<Option<usize>> {
-    if db.get_database_backend() != DatabaseBackend::Sqlite {
-        ensure!(!archived, "receipt archive requires SQLite");
-        return Ok(None);
-    }
+) -> Result<usize> {
+    ensure!(
+        db.get_database_backend() == DatabaseBackend::Sqlite,
+        "receipt archive requires SQLite"
+    );
     charge(2, 2048)?;
-    let r = &candidate.receipt;
     let columns = ["schema_version", "byte_count", "storage_kind"]
         .map(integer)
         .join(",");
@@ -190,46 +189,26 @@ pub(in crate::tenancy::receipts) async fn usage_metadata(
     ), values(&r.installation_id, &r.tenant_id, &r.execution_id))).await?;
     charge(0, 0)?;
     ensure!(rows.len() <= 1, "usage evidence multiplicity");
-    let disposition: super::StoredDisposition = serde_json::from_str(&candidate.private_json)?;
-    match (disposition.usage_evidence_digest.as_deref(), rows.first()) {
-        (None, None) => {
-            ensure!(
-                candidate.usage_evidence.is_none(),
-                "unexpected archived usage"
-            );
-            Ok(None)
-        }
-        (Some(expected), Some(row)) => {
-            ensure!(
-                row.try_get::<i64>("", "schema_version")? == 1
-                    && row.try_get::<i64>("", "storage_kind")? == i64::from(archived)
-                    && row.try_get::<String>("", "evidence_digest")? == expected
-                    && row.try_get::<String>("", "receipt_digest")? == candidate.digest,
-                "usage evidence archive metadata"
-            );
-            let bytes = usize::try_from(row.try_get::<i64>("", "byte_count")?)?;
-            ensure!(
-                (1..=bitrouter_ai::tenancy::usage_evidence::EvidenceBudget::STRICT.max_bytes)
-                    .contains(&bytes),
-                "usage evidence archive length"
-            );
-            let inline = usize::try_from(row.try_get::<i64>("", "inline_bytes")?)?;
-            if archived {
-                let evidence = candidate
-                    .usage_evidence
-                    .as_ref()
-                    .context("missing archived usage")?;
-                ensure!(
-                    inline == 0 && evidence.json.len() == bytes && evidence.digest == expected,
-                    "archived usage evidence integrity"
-                );
-            } else {
-                ensure!(inline == bytes, "inline usage evidence length");
-            }
-            Ok(Some(bytes))
-        }
-        _ => anyhow::bail!("usage evidence presence mismatch"),
-    }
+    let row = rows.first().context("missing usage evidence")?;
+    ensure!(
+        row.try_get::<i64>("", "schema_version")? == 1
+            && row.try_get::<i64>("", "storage_kind")? == i64::from(archived)
+            && row.try_get::<String>("", "evidence_digest")? == expected
+            && row.try_get::<String>("", "receipt_digest")? == receipt_digest,
+        "usage evidence archive metadata"
+    );
+    let bytes = usize::try_from(row.try_get::<i64>("", "byte_count")?)?;
+    ensure!(
+        (1..=bitrouter_ai::tenancy::usage_evidence::EvidenceBudget::STRICT.max_bytes)
+            .contains(&bytes),
+        "usage evidence archive length"
+    );
+    let inline = usize::try_from(row.try_get::<i64>("", "inline_bytes")?)?;
+    ensure!(
+        inline == if archived { 0 } else { bytes },
+        "inline usage evidence length"
+    );
+    Ok(bytes)
 }
 
 pub(super) fn known(candidate: &Candidate) -> Result<()> {
@@ -282,11 +261,8 @@ impl Prepared {
             )
             .and_then(|n| n.checked_add(super::super::capacity::ROW_OVERHEAD))
             .context("archive retained index estimate overflow")?;
-        let encoded = codec::Encoded::encode(
-            &candidate.json,
-            candidate.usage_evidence.as_ref().map(|e| e.json.as_str()),
-            charge,
-        )?;
+        let encoded =
+            codec::Encoded::encode(&candidate.json, &candidate.usage_evidence.json, charge)?;
         let history_bytes = index_bytes
             .checked_add(u64::try_from(encoded.payload.len())?)
             .context("archive history estimate overflow")?;
@@ -322,7 +298,7 @@ impl Prepared {
         self.encoded.payload.len()
     }
     pub(in crate::tenancy) fn relocated_bytes(&self) -> usize {
-        self.encoded.receipt_bytes + self.encoded.usage_bytes.unwrap_or(0)
+        self.encoded.receipt_bytes + self.encoded.usage_bytes
     }
 }
 
@@ -377,14 +353,13 @@ pub(in crate::tenancy) async fn archive_one(
     if super::obligations::lookup(tx, &r.installation_id, &key, charge)
         .await?
         .is_some()
-        || select::held(tx, &saved, charge).await?
     {
         return Ok(false);
     }
     let encoded = &prepared.encoded;
     ensure!(
         encoded.receipt_bytes == saved.json.len()
-            && encoded.usage_bytes == saved.usage_evidence.as_ref().map(|e| e.json.len()),
+            && encoded.usage_bytes == saved.usage_evidence.json.len(),
         "receipt archive preparation mismatch"
     );
     charge(
@@ -399,16 +374,14 @@ pub(in crate::tenancy) async fn archive_one(
         encoded.version.into(),
         encoded.codec.into(),
         i64::try_from(encoded.receipt_bytes)?.into(),
-        i64::try_from(encoded.usage_bytes.unwrap_or(0))?.into(),
+        i64::try_from(encoded.usage_bytes)?.into(),
         encoded.payload.clone().into(),
     ]);
     ensure!(tx.execute(sqlite(format!("INSERT INTO {TABLE} (installation_id,tenant_id,execution_id,format_version,codec,receipt_bytes,usage_bytes,payload) VALUES (?,?,?,?,?,?,?,?)"), parameters)).await?.rows_affected() == 1,
         "receipt archive insert count");
-    if saved.usage_evidence.is_some() {
-        ensure!(tx.execute(sqlite(format!("UPDATE tenancy_usage_evidence SET evidence_json='',storage_kind=1 WHERE {KEY} AND storage_kind=0"),
-            values(&r.installation_id, &r.tenant_id, &r.execution_id))).await?.rows_affected() == 1,
-            "receipt archive usage update count");
-    }
+    ensure!(tx.execute(sqlite(format!("UPDATE tenancy_usage_evidence SET evidence_json='',storage_kind=1 WHERE {KEY} AND storage_kind=0"),
+        values(&r.installation_id, &r.tenant_id, &r.execution_id))).await?.rows_affected() == 1,
+        "receipt archive usage update count");
     ensure!(
         tx.execute(sqlite(
             format!(

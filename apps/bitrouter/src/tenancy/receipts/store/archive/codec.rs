@@ -1,4 +1,4 @@
-//! One bounded payload: exact receipt bytes followed by optional exact usage bytes.
+//! One bounded payload containing exact receipt and usage evidence bytes.
 use anyhow::{Context, Result, ensure};
 
 use super::Charge;
@@ -13,27 +13,26 @@ pub(super) struct Encoded {
     pub version: i64,
     pub codec: i64,
     pub receipt_bytes: usize,
-    pub usage_bytes: Option<usize>,
+    pub usage_bytes: usize,
     pub payload: Vec<u8>,
 }
 
-pub(super) fn plaintext_len(receipt: usize, usage: Option<usize>) -> Result<usize> {
+pub(super) fn plaintext_len(receipt: usize, usage: usize) -> Result<usize> {
     ensure!(
         (1..=super::super::MAX_RECEIPT).contains(&receipt)
-            && usage.is_none_or(|n| (1
-                ..=bitrouter_ai::tenancy::usage_evidence::EvidenceBudget::STRICT.max_bytes)
-                .contains(&n)),
+            && (1..=bitrouter_ai::tenancy::usage_evidence::EvidenceBudget::STRICT.max_bytes)
+                .contains(&usage),
         "receipt archive component bounds"
     );
     receipt
-        .checked_add(usage.unwrap_or(0))
+        .checked_add(usage)
         .context("receipt archive length overflow")
 }
 
 impl Encoded {
-    pub fn encode(receipt: &str, usage: Option<&str>, charge: &Charge<'_>) -> Result<Self> {
+    pub fn encode(receipt: &str, usage: &str, charge: &Charge<'_>) -> Result<Self> {
         let receipt_bytes = receipt.len();
-        let usage_bytes = usage.map(str::len);
+        let usage_bytes = usage.len();
         let size = plaintext_len(receipt_bytes, usage_bytes)?;
         let capacity = zstd::zstd_safe::compress_bound(size);
         charge(
@@ -44,9 +43,7 @@ impl Encoded {
         )?;
         let mut plain = Vec::with_capacity(size);
         plain.extend_from_slice(receipt.as_bytes());
-        if let Some(usage) = usage {
-            plain.extend_from_slice(usage.as_bytes());
-        }
+        plain.extend_from_slice(usage.as_bytes());
         // Level 1, bounded input, no dictionary or parallel workers. Explicitly
         // bound the context's tables/window as well as the output allocation.
         let mut compressor = zstd::bulk::Compressor::new(1)?;
@@ -74,7 +71,7 @@ impl Encoded {
         })
     }
 
-    pub fn decode(self, charge: &Charge<'_>) -> Result<(String, Option<String>)> {
+    pub fn decode(self, charge: &Charge<'_>) -> Result<(String, String)> {
         ensure!(self.version == 1, "receipt archive version");
         let size = plaintext_len(self.receipt_bytes, self.usage_bytes)?;
         ensure!(
@@ -123,10 +120,7 @@ impl Encoded {
         };
         ensure!(plain.len() == size, "receipt archive plaintext length");
         let receipt = String::from_utf8(plain[..self.receipt_bytes].to_vec())?;
-        let usage = self
-            .usage_bytes
-            .map(|_| String::from_utf8(plain[self.receipt_bytes..].to_vec()))
-            .transpose()?;
+        let usage = String::from_utf8(plain[self.receipt_bytes..].to_vec())?;
         charge(0, 0)?;
         Ok((receipt, usage))
     }

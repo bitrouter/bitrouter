@@ -34,7 +34,6 @@ pub(super) struct Live {
     pub covered: bool,
     pub pending: bool,
     pub dropped: bool,
-    pub repair: bool,
     pub published: bool,
 }
 struct Step {
@@ -193,10 +192,7 @@ impl Admission {
                         }
                         continue;
                     }
-                    if live.pending
-                        || live.covered != step.before
-                        || (live.repair && step.terminal.is_some())
-                    {
+                    if live.pending || live.covered != step.before {
                         return Err(ErrorCode::AuthorityUnavailable);
                     }
                     step.owner = Some(live.owner.clone());
@@ -343,7 +339,6 @@ impl Lease {
                     covered: false,
                     pending: false,
                     dropped: false,
-                    repair: false,
                     published: false,
                 },
             );
@@ -417,9 +412,6 @@ impl Publication {
                         .ok_or(ErrorCode::AuthorityUnavailable)?;
                 }
                 if live.dropped {
-                    if live.repair {
-                        return Err(ErrorCode::AuthorityUnavailable);
-                    }
                     active = active
                         .checked_sub(1)
                         .ok_or(ErrorCode::AuthorityUnavailable)?;
@@ -479,7 +471,7 @@ impl Publication {
     pub(in crate::tenancy) fn publish(mut self) -> Result<(), ErrorCode> {
         self.finish(false)
     }
-    #[cfg(any(test, all(feature = "core", feature = "harness")))]
+    #[cfg(test)]
     pub(in crate::tenancy) fn rollback(mut self) -> Result<(), ErrorCode> {
         self.finish(true)
     }
@@ -575,7 +567,7 @@ impl State {
                 .executions
                 .get_mut(key)
                 .ok_or(ErrorCode::AuthorityUnavailable)?;
-            if !Arc::ptr_eq(&live.owner, owner) || live.repair || live.dropped {
+            if !Arc::ptr_eq(&live.owner, owner) || live.dropped {
                 return Err(ErrorCode::AuthorityUnavailable);
             }
             if live.pending {

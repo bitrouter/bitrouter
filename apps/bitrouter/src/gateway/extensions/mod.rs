@@ -3,7 +3,7 @@
 #[cfg(feature = "guardrails")]
 pub mod guardrails;
 
-pub mod legacy;
+pub(crate) mod plugin;
 pub mod registry;
 
 /// Native request-check inputs, decisions and callback contract.

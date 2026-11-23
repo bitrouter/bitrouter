@@ -19,29 +19,18 @@ use sha2::{Digest, Sha256};
 
 /// Per-model pricing, in **micro-USD per token**.
 ///
-/// Each rate is `Option<f64>` so a *partially-configured* entry — e.g. input
-/// rate set, output rate omitted — can be distinguished from one that has
-/// been deliberately set to zero. Previously both were `0.0` and the charge
-/// math silently undercharged every output token for the partially-priced
-/// case (v0 bitrouter#463 / cloud#251 audit B4).
+/// Each rate is `Option<f64>` so an omitted price differs from an explicit zero.
+/// An all-`None` entry is unconfigured. If any token bucket with nonzero usage
+/// lacks a rate, `calculate_charge_evidence` records an unknown charge; settlement records
+/// an unknown charge instead of treating those tokens as free.
 ///
-/// Defences:
-/// - **#180** — a default (all-`None`) `ModelPricing` is treated as
-///   *unconfigured*: settlement records an explicit unknown charge rather
-///   than silently treating the request as zero cost.
-/// - **bitrouter#463-A** — if any token bucket with nonzero usage lacks a
-///   rate, `calculate_charge_micro_usd` returns `None` and the charge is
-///   skipped. A model with input rate set but `output_micro_usd_per_token`
-///   missing no longer bills every output token at $0.
-/// - **#440 → #441** — pricing lookup covers every level; a `(provider,
-///   model)` miss is reported, not papered over.
-/// - **#443 → #445** — the lookup is keyed by `(provider, service_id)` so a
-///   service id that differs from the public model name still resolves.
+/// Pricing lookup reports missing rates and uses `(provider, service_id)` so
+/// provider-native service identifiers resolve independently of public model names.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ModelPricing {
     /// Published processing-profile provenance, retained across tier selection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub endpoint_profile: Option<crate::gateway::catalog::types::PricingEndpointProfile>,
+    pub endpoint_profile: Option<crate::config::PricingEndpointProfile>,
     /// Micro-USD charged per prompt (input) token (base bracket). `None` =
     /// unconfigured.
     pub input_micro_usd_per_token: Option<f64>,
@@ -84,6 +73,7 @@ pub struct ContextTier {
 impl ModelPricing {
     /// Build a pricing entry with both base rates set and no context tiers.
     /// Use [`partial`](Self::partial) when only some rates are known.
+    #[cfg(test)]
     pub fn new(input_micro_usd_per_token: f64, output_micro_usd_per_token: f64) -> Self {
         Self {
             endpoint_profile: None,
@@ -97,6 +87,7 @@ impl ModelPricing {
 
     /// Build a partial pricing entry. Buckets with nonzero usage but no rate
     /// are billed as `None` (charge is skipped).
+    #[cfg(test)]
     pub fn partial(input: Option<f64>, output: Option<f64>) -> Self {
         Self {
             endpoint_profile: None,
@@ -110,6 +101,7 @@ impl ModelPricing {
 
     /// Build cache-aware pricing. Each rate remains optional so a missing
     /// provider rate is distinguishable from an explicitly free bucket.
+    #[cfg(test)]
     pub fn cache_aware(
         input: Option<f64>,
         cache_read: Option<f64>,
@@ -172,16 +164,6 @@ impl ModelPricing {
             && self.cache_read_micro_usd_per_token.is_none()
             && self.cache_write_micro_usd_per_token.is_none()
             && self.output_micro_usd_per_token.is_none()
-    }
-
-    /// Whether *every* rate this struct exposes is set. Useful for a
-    /// recommender / "cheapest" picker that should refuse placeholder
-    /// entries (v0 bitrouter#463 / cloud#251 audit B5).
-    pub fn is_complete(&self) -> bool {
-        self.input_micro_usd_per_token.is_some()
-            && self.cache_read_micro_usd_per_token.is_some()
-            && self.cache_write_micro_usd_per_token.is_some()
-            && self.output_micro_usd_per_token.is_some()
     }
 }
 
@@ -468,24 +450,6 @@ impl<'a> std::borrow::Borrow<dyn KeyLike + 'a> for (String, String) {
 /// above any plausible real value.
 pub const MAX_TRUSTED_TOKENS: u64 = 10_000_000;
 
-/// Compute the charge for a request, in micro-USD, from its usage and pricing.
-///
-/// Returns `None` when any token bucket with nonzero usage lacks a rate —
-/// the caller MUST treat that as "pricing unavailable" and skip the charge
-/// (never bill the zero). Returns `Some(0)` when all buckets are zero
-/// (genuinely no work to bill).
-///
-/// Each bucket's token count is clamped to [`MAX_TRUSTED_TOKENS`] before the
-/// math; an adversarial upstream can't drive the charge to overflow.
-/// Result rounds to the nearest whole micro-USD; never negative.
-///
-/// Context-tier pricing is resolved here: the prompt-token count selects the
-/// bracket (see [`ModelPricing::resolve_for_input_tokens`]) and its rates bill
-/// the whole request. Flat pricing (no tiers) resolves to its base rates.
-pub fn calculate_charge_micro_usd(usage: &Usage, pricing: &ModelPricing) -> Option<i64> {
-    calculate_charge_evidence(usage, pricing, PricingSource::Configured).charge_micro_usd
-}
-
 /// Normalize inclusive provider totals and calculate a four-bucket charge with
 /// sufficient evidence to audit the result later.
 pub fn calculate_charge_evidence(
@@ -706,7 +670,10 @@ mod tests {
             ..Default::default()
         };
         // 100*2 + 50*10 = 700
-        assert_eq!(calculate_charge_micro_usd(&usage, &pricing), Some(700));
+        assert_eq!(
+            calculate_charge_evidence(&usage, &pricing, PricingSource::Configured).charge_micro_usd,
+            Some(700)
+        );
     }
 
     #[test]
@@ -750,7 +717,10 @@ mod tests {
             ..Default::default()
         };
 
-        assert_eq!(calculate_charge_micro_usd(&usage, &pricing), Some(1_985));
+        assert_eq!(
+            calculate_charge_evidence(&usage, &pricing, PricingSource::Configured).charge_micro_usd,
+            Some(1_985)
+        );
     }
 
     #[test]
@@ -803,7 +773,10 @@ mod tests {
             ..Default::default()
         };
 
-        assert_eq!(calculate_charge_micro_usd(&usage, &pricing), Some(250));
+        assert_eq!(
+            calculate_charge_evidence(&usage, &pricing, PricingSource::Configured).charge_micro_usd,
+            Some(250)
+        );
     }
 
     #[test]
@@ -861,7 +834,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            calculate_charge_micro_usd(&usage, &pricing),
+            calculate_charge_evidence(&usage, &pricing, PricingSource::Configured).charge_micro_usd,
             None,
             "missing rate × nonzero usage MUST refuse to bill"
         );
@@ -877,7 +850,10 @@ mod tests {
             completion_tokens: 0,
             ..Default::default()
         };
-        assert_eq!(calculate_charge_micro_usd(&usage, &pricing), Some(200));
+        assert_eq!(
+            calculate_charge_evidence(&usage, &pricing, PricingSource::Configured).charge_micro_usd,
+            Some(200)
+        );
     }
 
     /// v0 audit B9: adversarial upstream usage gets clamped at MAX_TRUSTED_TOKENS.
@@ -891,19 +867,10 @@ mod tests {
         };
         // u64::MAX would overflow the i64 cast; the clamp keeps the charge
         // at the bounded maximum.
-        let charge = calculate_charge_micro_usd(&usage, &pricing).unwrap();
+        let charge = calculate_charge_evidence(&usage, &pricing, PricingSource::Configured)
+            .charge_micro_usd
+            .unwrap();
         assert_eq!(charge, MAX_TRUSTED_TOKENS as i64);
-    }
-
-    #[test]
-    fn is_complete_predicate() {
-        assert!(!ModelPricing::default().is_complete());
-        assert!(!ModelPricing::partial(Some(1.0), None).is_complete());
-        assert!(!ModelPricing::partial(None, Some(1.0)).is_complete());
-        assert!(!ModelPricing::new(1.0, 1.0).is_complete());
-        assert!(
-            ModelPricing::cache_aware(Some(1.0), Some(0.1), Some(1.25), Some(1.0)).is_complete()
-        );
     }
 
     #[test]
@@ -1019,14 +986,20 @@ mod tests {
             completion_tokens: 1_000,
             ..Default::default()
         };
-        assert_eq!(calculate_charge_micro_usd(&lo, &pricing), Some(137_800));
+        assert_eq!(
+            calculate_charge_evidence(&lo, &pricing, PricingSource::Configured).charge_micro_usd,
+            Some(137_800)
+        );
         // >128k → tier: 200_000*2.0 + 1_000*12.0 = 412_000.
         let hi = Usage {
             prompt_tokens: 200_000,
             completion_tokens: 1_000,
             ..Default::default()
         };
-        assert_eq!(calculate_charge_micro_usd(&hi, &pricing), Some(412_000));
+        assert_eq!(
+            calculate_charge_evidence(&hi, &pricing, PricingSource::Configured).charge_micro_usd,
+            Some(412_000)
+        );
     }
 
     #[test]
@@ -1040,7 +1013,8 @@ mod tests {
                 ..Default::default()
             };
             assert_eq!(
-                calculate_charge_micro_usd(&usage, &pricing),
+                calculate_charge_evidence(&usage, &pricing, PricingSource::Configured)
+                    .charge_micro_usd,
                 Some((n as f64 * 2.0) as i64)
             );
         }
@@ -1067,7 +1041,10 @@ mod tests {
             completion_tokens: 1_000,
             ..Default::default()
         };
-        assert_eq!(calculate_charge_micro_usd(&hi, &pricing), Some(407_800));
+        assert_eq!(
+            calculate_charge_evidence(&hi, &pricing, PricingSource::Configured).charge_micro_usd,
+            Some(407_800)
+        );
     }
     #[test]
     fn wire_tariff_does_not_inherit_other_bucket_rates_or_native_generation_price()
@@ -1093,7 +1070,11 @@ mod tests {
             completion_tokens: 3,
             ..Default::default()
         };
-        assert_eq!(calculate_charge_micro_usd(&usage, &response), None);
+        assert_eq!(
+            calculate_charge_evidence(&usage, &response, PricingSource::Configured)
+                .charge_micro_usd,
+            None
+        );
         let mut native = ModelPricing::cache_aware(Some(0.1), Some(0.0), Some(0.0), Some(0.0));
         native.context_tiers.push(ContextTier {
             above_input_tokens: 272000,
@@ -1111,7 +1092,11 @@ mod tests {
                 origin: UsageOrigin::ProviderReported,
                 ..Default::default()
             };
-            assert_eq!(calculate_charge_micro_usd(&usage, &native), Some(expected));
+            assert_eq!(
+                calculate_charge_evidence(&usage, &native, PricingSource::Configured)
+                    .charge_micro_usd,
+                Some(expected)
+            );
         }
         Ok(())
     }

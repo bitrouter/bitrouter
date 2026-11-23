@@ -24,39 +24,14 @@
 //!    failure (5xx, timeout, 408/429) the [`FallbackPolicy`](routing::FallbackPolicy) advances to the
 //!    next target. Every [`ExecutionHook`](hooks::ExecutionHook) runs on success and failure.
 //! 4. **Stream stage** (interleaved when the response is streaming) —
-//!    each [`StreamHook`](hooks::StreamHook) sees every canonical
-//!    [`StreamPart`](bitrouter_ai::types::StreamPart) and can
-//!    [`Pass`](stream::StreamAction::Pass), [`Replace`](stream::StreamAction::Replace), or
-//!    [`Abort`](stream::StreamAction::Abort) it.
+//!    records upstream usage and timing, then delivers canonical
+//!    [`StreamPart`](bitrouter_ai::types::StreamPart)s to observers and the caller.
 //! 5. **Settle** — every registered [`SettlementRecorder`](settlement::SettlementRecorder) runs in
 //!    registration order against the immutable [`SettlementContext`](settlement::SettlementContext).
 //!    Deployments use recorders for metering, charging, signed receipts,
 //!    etc.; the pipeline owns the request lifecycle and accounting evidence.
 //! 6. **Observe** — every [`ObserveHook`](hooks::ObserveHook) sees phase boundaries and the final
 //!    [`RequestOutcome`](hooks::RequestOutcome); observers are read-only and error-swallowing.
-//!
-//! ## Building a pipeline
-//!
-//! The usual entry point is [`crate::gateway::assembly::App::builder`] → `.language_model(...)`
-//! sub-builder, which exposes [`PipelineBuilder`](builder::PipelineBuilder):
-//!
-//! ```no_run
-//! use std::sync::Arc;
-//! use bitrouter::gateway::assembly::App;
-//! use bitrouter::gateway::pipeline::executor::HttpExecutor;
-//! use bitrouter::gateway::pipeline::routing::StaticRoutingTable;
-//!
-//! # fn run() -> bitrouter::gateway::error::Result<()> {
-//! let executor = HttpExecutor::with_defaults()?;
-//! let app = App::builder()
-//!     .language_model(|lm| {
-//!         lm.routing_table(Arc::new(StaticRoutingTable::new()))
-//!           .executor(Arc::new(executor));
-//!     })
-//!     .build()?;
-//! # let _ = app;
-//! # Ok(()) }
-//! ```
 //!
 //! ## Protocol isolation
 //!
@@ -71,20 +46,10 @@ pub mod execution;
 pub mod executor;
 pub mod hooks;
 pub mod native;
-pub mod native_accounting;
 pub mod native_auth;
-mod native_auxiliary;
-pub mod native_context;
-pub mod native_continuation;
-mod native_output;
-pub mod native_preparation;
-pub mod native_projection;
-pub mod native_report;
-mod native_stream;
-pub mod native_work;
 pub mod operations;
 pub(crate) mod owned_tasks;
-pub(crate) mod provider_admission;
+mod private_payload;
 mod provider_technical;
 pub mod request_checks;
 pub mod routing;

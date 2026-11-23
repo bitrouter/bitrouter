@@ -11,7 +11,6 @@ fn evidence() -> Evidence {
         format: FORMAT_V2.into(),
         scope: "sqlite_database_only".into(),
         complete: false,
-        cutover_ready: false,
         exclusions: EXCLUSIONS.iter().map(|value| (*value).into()).collect(),
         inspector: crate::artifact::current(),
         source_commit: None,
@@ -56,14 +55,26 @@ fn workspace(path: &Path, bytes: usize) -> Result<Workspace> {
 }
 
 #[test]
-fn large_schema_metadata_uses_working_budget_and_preserves_v1_refusal() -> Result<()> {
+fn database_snapshot_cannot_claim_complete_external_state() -> Result<()> {
+    let mut value = evidence();
+    value.validate_large_profile()?;
+    value.complete = true;
+    assert!(value.validate_large_profile().is_err());
+    value.complete = false;
+    value.scope = "whole_installation".into();
+    assert!(value.validate_large_profile().is_err());
+    Ok(())
+}
+
+#[test]
+fn large_schema_metadata_uses_working_budget_and_refuses_other_formats() -> Result<()> {
     let home = tempfile::Builder::new()
         .permissions(std::fs::Permissions::from_mode(0o700))
         .tempdir()?;
     let workspace = workspace(home.path(), 128 * 1024 * 1024)?;
     let mut value = evidence();
     let (bytes, charge) = encode(&value, &workspace)?;
-    assert!(bytes.len() as u64 > MAX_EVIDENCE);
+    assert!(bytes.len() as u64 > 2 * 1024 * 1024);
     let path = home.path().join("evidence.json");
     files::write_new(&path, &bytes)?;
     let (actual, anchor, decoded) = read(&path, &workspace)?;
@@ -71,7 +82,7 @@ fn large_schema_metadata_uses_working_budget_and_preserves_v1_refusal() -> Resul
     assert_eq!(anchor, files::sha(&bytes));
     assert_eq!(anchor, digest(&path, &workspace)?);
     drop((actual, decoded, charge, bytes));
-    value.format = FORMAT.into();
+    value.format = "bitrouter.offline.sqlite-evidence.v1".into();
     assert!(encode(&value, &workspace).is_err());
     drop(value);
     workspace.finish()?;

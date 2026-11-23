@@ -35,15 +35,6 @@ impl CodexRouter {
 }
 
 impl PromptTransform for CodexRouter {
-    fn validate_context_rebuild(
-        &self,
-        _original: &Prompt,
-        _rebuilt: &Prompt,
-    ) -> crate::gateway::error::Result<()> {
-        // Keep the already selected model without repeating ingress classification.
-        Ok(())
-    }
-
     fn apply(&self, _prompt: &mut Prompt) {}
 
     fn apply_with_headers(&self, prompt: &mut Prompt, headers: &HeaderMap) {
@@ -178,7 +169,7 @@ providers:
             .get_mut(PROVIDER)
             .context("missing provider")?;
         provider.models[0].provider_model_id = Some("gpt-next".into());
-        table.replace_config(updated.clone()).await?;
+        table.replace_prepared_config(updated.clone()).await?;
         let mut old = prompt("gpt-native");
         router.apply_with_headers(&mut old, &marker);
         assert_eq!(old.model, "gpt-native");
@@ -191,11 +182,11 @@ providers:
             .get_mut(PROVIDER)
             .context("missing provider")?
             .active = false;
-        table.replace_config(updated).await?;
+        table.replace_prepared_config(updated).await?;
         let mut inactive = prompt("gpt-next");
         router.apply_with_headers(&mut inactive, &marker);
         assert_eq!(inactive.model, "gpt-next");
-        table.replace_config(Config::default()).await?;
+        table.replace_prepared_config(Config::default()).await?;
         router.apply_with_headers(&mut inactive, &marker);
         assert_eq!(inactive.model, "gpt-next");
         Ok(())

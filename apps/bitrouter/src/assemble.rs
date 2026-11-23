@@ -1,8 +1,8 @@
 //! Assembly: turn a parsed [`Config`] into a running [`App`].
 //!
-//! This is the home of v0's `load_builtin_plugins` logic — it lives in the
-//! `apps/bitrouter` **lib** (above the SDK and the plugins), wiring the builtin
-//! hooks onto the `language_model` pipeline from config.
+//! Wires the configured gateway hooks and host-owned runtime services.
+
+mod shutdown;
 
 #[cfg(feature = "multi-instance")]
 mod shared_writers;
@@ -14,7 +14,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use sea_orm::DatabaseConnection;
 
-#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+#[cfg(feature = "otel-http")]
 use crate::commands::invocation;
 use crate::config::Config;
 use crate::config::routing_table::ConfigRoutingTable;
@@ -94,23 +94,20 @@ use crate::continuation::{ContinuationKeySource, ContinuationRegistry, Continuat
 use crate::daemon::ObserveStatusPayload;
 use crate::daemon::{NoopObserveStatus, ObserveStatusProvider};
 use crate::eval::EvalService;
-#[cfg(feature = "core")]
+#[cfg(feature = "eval-publication")]
 use crate::eval::publisher::TrajectoryOutboxPublisher;
-#[cfg(feature = "core")]
+#[cfg(feature = "eval-publication")]
 use crate::eval::settlement::EvalSettlementRecorder;
 use crate::eval::store::EvalStore;
 use crate::gateway::observability::decision::PendingEvalDecisionStore;
 use crate::gateway::observability::prediction::PredictiveResponseObserver;
 use crate::gateway::observability::settlement::PolicySettlementRecorder;
-#[cfg(feature = "harness")]
-use crate::harness::acp::runtime::AcpRuntime;
 use crate::metering::tariff::CaptureTariffs;
 use crate::metering::{MeteringRecorder, MeteringStore, ModelPricing, PricingTable};
 use crate::policy::{PolicyHook, PolicyStore};
 use crate::session_identity::SessionContextHook;
 use crate::trajectory::settlement::TrajectorySettlementRecorder;
 use crate::trajectory::store::TrajectoryStore;
-use crate::trajectory::{canonical::Canonicalizer, correlation::TrajectoryRuntime};
 
 /// A running application plus the database connection it was assembled
 /// over (the caller keeps the connection for management commands — key
@@ -119,55 +116,47 @@ pub struct Assembled {
     /// The fully wired application.
     pub app: App,
     /// The shared database connection.
-    pub db: DatabaseConnection,
+    pub(crate) db: DatabaseConnection,
     pub(crate) tenancy: Option<crate::tenancy::Service>,
-    /// In-memory API-principal-scoped ACP route leases.
-    #[cfg(feature = "harness")]
-    pub acp_runtime: Arc<AcpRuntime>,
     /// The policy store wired into the language_model pipeline. Held by the
-    /// caller (the daemon) so `bro reload` / SIGHUP can call
+    /// caller (the daemon) so `bitrouter reload` / SIGHUP can call
     /// [`PolicyStore::reload`] alongside the routing-table reload — reload
     /// must not affect in-flight requests.
-    pub policy_store: Arc<PolicyStore>,
+    pub(crate) policy_store: Arc<PolicyStore>,
     /// Live named routing policies loaded from current `policy.yaml` source. The model
     /// selector and daemon reloader share this last-known-good registry.
-    pub policy_runtime: Arc<crate::policy_lock::PolicyRuntime>,
-    /// Canonical checkpoint evolution. Mode is owner-scoped and disabled until
-    /// explicitly enabled; this handle shares the serving routing snapshots.
-    #[cfg(feature = "core")]
-    pub evolution: crate::core::evolution::runtime::EvolutionRuntime,
-    /// Canonical gateway request tracking; capture registration shares its runtime epoch.
-    pub gateway_requests: crate::gateway::observability::requests::GatewayRequestTracker,
+    pub(crate) policy_runtime: Arc<crate::policy_source::PolicyRuntime>,
     /// Generic eval exchange used by the local CLI and REST control plane.
-    pub eval_service: EvalService,
-    /// Always-active encrypted provider continuation registry.
-    pub continuation_registry: ContinuationRegistry,
+    pub(crate) eval_service: EvalService,
+    /// Registry handle for shared lifecycle control and tests.
+    #[cfg(any(test, feature = "multi-instance"))]
+    pub(crate) continuation_registry: ContinuationRegistry,
     #[cfg(test)]
     pub(crate) pending_eval_decisions: PendingEvalDecisionStore,
     #[cfg(test)]
     pub(crate) response_observer: PredictiveResponseObserver,
     /// Durable publisher shared by request settlement and startup/shutdown drains.
-    #[cfg(feature = "core")]
-    pub trajectory_outbox_publisher: Option<TrajectoryOutboxPublisher>,
+    #[cfg(feature = "eval-publication")]
+    pub(crate) trajectory_outbox_publisher: Option<TrajectoryOutboxPublisher>,
     /// Concrete handle on the routing table. The pipeline above also
     /// holds the same `Arc` (via `&dyn RoutingTable`), but reload code
     /// needs the concrete type to call
     /// [`ConfigRoutingTable::replace_config`] when there's no source
     /// file to re-read from (zero-config mode).
-    pub routing_table: Arc<ConfigRoutingTable>,
+    pub(crate) routing_table: Arc<ConfigRoutingTable>,
     /// Concrete upstream HTTP executor. The pipeline also holds this as a trait
     /// object, but reload needs the concrete handle to replace timeout clients.
-    pub upstream_executor: Arc<HttpExecutor>,
+    pub(crate) upstream_executor: Arc<HttpExecutor>,
     /// Snapshot provider for `bro observe status`. When the OTel
     /// exporter is wired, this reports its live state; when not, it
     /// reports `compiled_in` truthfully and everything else blank.
-    pub observe: Arc<dyn ObserveStatusProvider>,
+    pub(crate) observe: Arc<dyn ObserveStatusProvider>,
     /// Live OTel exporter handle, when one is wired. Held so the binary
     /// can hand it to the `tracing-opentelemetry` bridge layer at
     /// subscriber-init time (the bridge captures its tracer eagerly).
     /// `None` when OTel is disabled in config.
     #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
-    pub otel_exporter: Option<Arc<OtelExporter>>,
+    pub(crate) otel_exporter: Option<Arc<OtelExporter>>,
     /// Captured `OtelExporter::new` failure message, when one occurred.
     /// Surfaced as a `tracing::error!` line by the binary after the full
     /// subscriber is installed — `OtelExporter::new` itself runs before
@@ -189,12 +178,12 @@ pub struct Assembled {
 /// The coordinator owns migrations, publication and process lifecycle.
 #[cfg(feature = "multi-instance")]
 pub(crate) struct SharedAssembly {
-    pub continuation: crate::gateway::shared::continuation::SharedContinuationDb,
-    pub telemetry: Arc<crate::gateway::shared::telemetry::Telemetry>,
-    pub auth_appliers: AuthAppliers,
-    pub correlation_key: crate::trajectory::canonical::CorrelationKey,
-    pub policies: Vec<crate::policy::Policy>,
-    pub model_policy: Option<bitrouter_ai::policy::Document>,
+    pub(crate) continuation: crate::gateway::shared::continuation::SharedContinuationDb,
+    pub(crate) telemetry: Arc<crate::gateway::shared::telemetry::Telemetry>,
+    pub(crate) auth_appliers: AuthAppliers,
+    pub(crate) correlation_key: crate::trajectory::canonical::CorrelationKey,
+    pub(crate) policies: Vec<crate::policy::Policy>,
+    pub(crate) model_policy: Option<bitrouter_ai::policy::Document>,
 }
 
 #[cfg(feature = "multi-instance")]
@@ -212,14 +201,7 @@ pub(crate) async fn build_shared_app(
         shared.namespace == inputs.continuation.namespace(),
         "shared assembly namespace differs from its injected authority"
     );
-    assemble_app(
-        config,
-        None,
-        Default::default(),
-        Some(inputs),
-        AssemblyScope::Gateway,
-    )
-    .await
+    assemble_app(config, None, Default::default(), Some(inputs)).await
 }
 
 #[cfg(feature = "multi-instance")]
@@ -252,7 +234,7 @@ fn validate_shared_assembly(config: &Config, database: &DatabaseConnection) -> R
         "shared assembly does not support server tool execution"
     );
     anyhow::ensure!(
-        config.decision_model.is_none() && config.checkers.is_empty() && !config.agent_api.enabled,
+        config.decision_model.is_none() && config.checkers.is_empty(),
         "shared assembly requires published routing without local decision, extension or harness execution"
     );
     anyhow::ensure!(
@@ -401,19 +383,13 @@ pub(crate) fn otel_status(exporter: &OtelExporter) -> ObserveStatusPayload {
 /// Adding a reader without adding it here fails that test — the list cannot
 /// silently drift, which matters because a *missing* id is worse than no guard
 /// at all: the daemon would warn, on every start, about a plugin it reads.
-///
-/// It shipped wrong exactly once, for exactly that reason: `bitrouter-policy`
-/// is read through a line-wrapped `config` / `.plugins` / `.get(…)` chain that
-/// a single-line grep did not see. Hence the scan.
-pub const KNOWN_PLUGIN_IDS: &[&str] = &["bitrouter-policy", "bitrouter-telemetry"];
+pub(crate) const KNOWN_PLUGIN_IDS: &[&str] = &["bitrouter-policy", "bitrouter-telemetry"];
 
 /// Reject removed built-in configuration before activating the default host.
 ///
-/// Presence, not content, is the migration fence: even null/empty legacy config
-/// must be explicitly removed after the operator has reviewed protection scope.
-/// This belongs to the product host, not the SDK parser: trusted custom hosts
-/// may still explicitly install the compatibility guardrails plugin.
-pub fn validate_host_configuration(config: &Config) -> Result<()> {
+/// Every configured key must describe an available host capability, including
+/// empty and null values. Request checks require explicit router bindings.
+pub(crate) fn validate_host_configuration(config: &Config) -> Result<()> {
     validate_host_configuration_inner(config, true)
 }
 
@@ -447,22 +423,12 @@ fn validate_host_configuration_inner(config: &Config, resolve_telemetry: bool) -
         cfg!(feature = "mcp") || config.mcp_servers.is_empty(),
         "configured MCP servers require the mcp feature"
     );
-    anyhow::ensure!(
-        cfg!(feature = "harness") || !config.agent_api.enabled,
-        "agent_api.enabled requires the harness feature"
-    );
     if resolve_telemetry {
         validate_telemetry_availability(config)?;
     }
     anyhow::ensure!(
         !config.plugins.contains_key("bitrouter-guardrails"),
-        "plugins.bitrouter-guardrails requires migration: the default bro no longer \
-         includes the guardrails matcher. Compile the regex extension into a custom host, \
-         register it through crate::gateway::extensions::registry::ExtensionApi, and bind it through \
-         routers.<id>.checks.request. The request-check capability checks input \
-         only and does not replace global or output block/redact protection. Review \
-         every protected entry point and output requirement before explicitly removing \
-         the old key, including empty/null configuration; see docs/GUARDRAILS_EXTENSION.md."
+        "unknown field `bitrouter-guardrails` in `plugins`"
     );
     Ok(())
 }
@@ -525,9 +491,9 @@ const RENAMED_ENV_VARS: &[(&str, &str)] = &[
 
 /// The `plugins.*` keys in `config` that this binary does not read, sorted.
 ///
-/// Pure so `bro config validate` can report the same set the daemon
+/// Pure so `bitrouter config validate` can report the same set the daemon
 /// warns about, without building an `App`.
-pub fn unknown_plugin_ids(config: &Config) -> Vec<String> {
+pub(crate) fn unknown_plugin_ids(config: &Config) -> Vec<String> {
     let mut unknown: Vec<String> = config
         .plugins
         .keys()
@@ -540,15 +506,15 @@ pub fn unknown_plugin_ids(config: &Config) -> Vec<String> {
 
 /// Everything this binary read but will not act on, as operator-facing lines.
 ///
-/// Collected in [`build_app_with_path`] so it covers every daemon start rather
-/// than only `bro config validate` — validation is opt-in and the daemon
+/// Collected during assembly so it covers every daemon start rather
+/// than only `bitrouter config validate` — validation is opt-in and the daemon
 /// always runs, which is the wrong way round for a failure this quiet. The
 /// caller emits them; see [`Assembled::ignored_config`] for why.
 ///
-/// Public because `bro config validate` reports the same set from a
+/// `bitrouter config validate` reports the same set from a
 /// file it may never run against — see [`ignored_config_warnings`] for why the
 /// environment half is split off.
-pub fn ignored_config_file_warnings(config: &Config) -> Vec<String> {
+pub(crate) fn ignored_config_file_warnings(config: &Config) -> Vec<String> {
     let known = KNOWN_PLUGIN_IDS.join(", ");
     unknown_plugin_ids(config)
         .into_iter()
@@ -567,15 +533,14 @@ pub fn ignored_config_file_warnings(config: &Config) -> Vec<String> {
 
 /// [`ignored_config_file_warnings`] plus the environment ones.
 ///
-/// The split is what `bro config validate` needs: it validates a *file*,
+/// The split is what `bitrouter config validate` needs: it validates a *file*,
 /// possibly one belonging to another machine, so reporting this process's
 /// environment there would be noise at best and misleading at worst. Every
 /// runtime surface wants both.
 ///
-/// Public because standalone ACP surfaces never build an `App`. They report
-/// these warnings directly, whether or not an exporter is compiled in; a guard
-/// covering only daemon assembly would leave their configuration mistakes silent.
-pub fn ignored_config_warnings(config: &Config) -> Vec<String> {
+/// Command entry points also report these warnings before assembly, whether
+/// or not an exporter is compiled in.
+pub(crate) fn ignored_config_warnings(config: &Config) -> Vec<String> {
     ignored_config_file_warnings(config)
         .into_iter()
         .chain(renamed_env_warnings(|name| {
@@ -603,22 +568,16 @@ fn renamed_env_warnings(is_set: impl Fn(&str) -> bool) -> Vec<String> {
         .collect()
 }
 
-/// Code-owned product boundary, never selected by configuration or HTTP.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AssemblyScope {
-    Gateway,
-    #[cfg(all(feature = "core", feature = "harness"))]
-    BroHarness,
-}
-
 /// Assemble the gateway, storage and builtin inference hooks from a configuration.
-pub async fn build_app(config: &Config) -> Result<Assembled> {
+#[cfg(test)]
+pub(crate) async fn build_app(config: &Config) -> Result<Assembled> {
     build_app_with_path(config, None).await
 }
 
 /// Like [`build_app`], but remembering the config's source path so the routing
-/// table's `reload()` (driven by `bro reload` / `SIGHUP`) can re-read it.
-pub async fn build_app_with_path(
+/// table's `reload()` (driven by `bitrouter reload` / `SIGHUP`) can re-read it.
+#[cfg(test)]
+pub(crate) async fn build_app_with_path(
     config: &Config,
     config_path: Option<&std::path::Path>,
 ) -> Result<Assembled> {
@@ -635,15 +594,6 @@ pub async fn build_app_with_extensions(
     config_path: Option<&std::path::Path>,
     register: impl FnOnce(&mut crate::gateway::extensions::registry::ExtensionApi) -> Result<()>,
 ) -> Result<Assembled> {
-    build_scoped_app(config, config_path, register, AssemblyScope::Gateway).await
-}
-
-pub(crate) async fn build_scoped_app(
-    config: &Config,
-    config_path: Option<&std::path::Path>,
-    register: impl FnOnce(&mut crate::gateway::extensions::registry::ExtensionApi) -> Result<()>,
-    scope: AssemblyScope,
-) -> Result<Assembled> {
     let mut extensions = crate::gateway::extensions::registry::ExtensionApi::new();
     register(&mut extensions).context("registering extensions")?;
     let native = extensions
@@ -655,7 +605,6 @@ pub(crate) async fn build_scoped_app(
         native,
         #[cfg(feature = "multi-instance")]
         None,
-        scope,
     )
     .await
 }
@@ -668,7 +617,6 @@ async fn assemble_app(
         crate::gateway::extensions::registry::registration::Registration,
     >,
     #[cfg(feature = "multi-instance")] shared: Option<&SharedAssembly>,
-    scope: AssemblyScope,
 ) -> Result<Assembled> {
     #[cfg(feature = "multi-instance")]
     let is_shared = shared.is_some();
@@ -682,18 +630,8 @@ async fn assemble_app(
             ),
         "shared gateway requires the managed shared serving lifecycle"
     );
-    #[cfg(all(feature = "core", feature = "harness"))]
-    if scope == AssemblyScope::BroHarness {
-        anyhow::ensure!(
-            !is_shared,
-            "local BRO harness cannot use shared gateway authority"
-        );
-        validate_local_harness_listeners(config)?;
-    }
-    #[cfg(not(all(feature = "core", feature = "harness")))]
-    let _ = scope;
     let mut effective_config = config.clone();
-    crate::policy_lock::apply_defaults(&mut effective_config, config_path);
+    crate::policy_source::apply_defaults(&mut effective_config, config_path);
     let config = &effective_config;
     validate_host_configuration_inner(config, !is_shared)?;
     config.validate_router_config()?;
@@ -739,8 +677,8 @@ async fn assemble_app(
         crate::request_checks::RequestCheckRuntime::activate_with_registrations(config, native)?,
     );
     // Validate and construct ingress aliases before opening the database or
-    // performing any other startup work. A custom transform must not run ahead
-    // of Stage 0 and shadow `@preset` or reserved `bitrouter/` addresses.
+    // performing any other startup work. Named routers and reserved
+    // `bitrouter/` addresses resolve before custom transforms.
     #[cfg(feature = "server-tools")]
     let fusion_alias = build_fusion_alias(config)?;
 
@@ -778,8 +716,6 @@ async fn assemble_app(
         }
     };
     let tenancy_enabled = tenancy_database.is_some();
-    #[cfg(feature = "harness")]
-    let acp_runtime = Arc::new(AcpRuntime::new());
     // Resolve dynamic authentication once and share the same registry with
     // continuation route matching and the HTTP executor. This lets mapped
     // Responses requests preflight the provider's stable credential authority
@@ -802,8 +738,8 @@ async fn assemble_app(
                 .context("local credential manager is unavailable")?,
         )?,
     };
-    let (continuation_registry, private_context, continuation_runtime) = if tenancy_enabled {
-        (None, None, None)
+    let (continuation_registry, continuation_runtime) = if tenancy_enabled {
+        (None, None)
     } else {
         #[cfg(feature = "multi-instance")]
         let shared_continuation =
@@ -820,9 +756,6 @@ async fn assemble_app(
                 ContinuationKeySource::lazy(runtime_home)
             }
         };
-        let private_context = crate::continuation::native_context::PrivateContextPolicy::new(
-            continuation_keys.clone(),
-        );
         let continuation_registry = ContinuationRegistry::new(
             db.clone(),
             continuation_keys,
@@ -852,11 +785,7 @@ async fn assemble_app(
             continuation_registry.clone(),
             auth_appliers.clone(),
         );
-        (
-            Some(continuation_registry),
-            Some(private_context),
-            Some(continuation_runtime),
-        )
+        (Some(continuation_registry), Some(continuation_runtime))
     };
     // A SQLite database file holds SHA-256 hashes of every virtual key,
     // plus the metering audit trail. On Unix, tighten the file
@@ -894,20 +823,17 @@ async fn assemble_app(
         }
         crate::config::discover_models(&mut resolved).await;
     }
-    let routing_table = Arc::new(match config_path {
-        Some(path) => ConfigRoutingTable::from_config_with_path(resolved, path),
-        None => ConfigRoutingTable::from_config(resolved),
-    });
+    let routing_table = Arc::new(ConfigRoutingTable::from_config(resolved));
     // Hand-off clone — the builder closure below moves `routing_table`
     // into the App pipeline, but the daemon's reloader needs the
-    // concrete type to call `replace_config` in zero-config mode.
+    // concrete type to install its prepared configuration.
     let routing_table_for_reload = routing_table.clone();
     let continuation_for_pre_request = continuation_runtime.clone();
     let continuation_for_route = continuation_runtime.clone();
     let continuation_for_finalization = continuation_runtime;
     // Upstream timeouts: the `upstream.timeouts` block layered over the
     // built-in defaults, plus a per-provider override for any provider whose
-    // resolved timeouts differ (v0 #394 fixed these; now they're configurable).
+    // resolved timeouts differ.
     // Read from the user's `config` — per-provider timeouts are a user-only
     // field, never set by the registry/builtin-defaults merge.
     let (global_timeouts, provider_timeouts) = resolved_upstream_timeouts(config);
@@ -939,9 +865,7 @@ async fn assemble_app(
     };
     let metering_store_for_policy = metering_store.clone();
     let metering_store_for_recorder = metering_store.clone();
-    let metering_for_native_costs = metering_store.clone();
     let pricing_for_recorder = pricing.clone();
-    let pricing_for_native = pricing.clone();
     #[cfg(feature = "multi-instance")]
     let shared_policies = shared.map(|inputs| PolicyStore::from_policies(inputs.policies.clone()));
     #[cfg(not(feature = "multi-instance"))]
@@ -981,38 +905,48 @@ async fn assemble_app(
             Some(exporter) => (exporter, None),
             None => match build_otel_config(config, telemetry_install_id)? {
                 Some((otel_config, bearer_plan)) => {
-                    // Resolve the LIVE account-bearer source per the plan. Only the
-                    // telemetry opt-in with `attribution: auto`/`account` and no
-                    // explicit token wants one; `anonymous` (and every other
-                    // exporter path) is `StaticOnly` and never reads the credential
-                    // store. Best-effort: a `None` source means the export proceeds
-                    // anonymously — for `account` we additionally warn.
-                    let bearer: Option<Arc<dyn crate::telemetry::bearer::TelemetryBearer>> =
-                        match bearer_plan {
-                            BearerPlan::LiveSource { warn_if_unmet } => {
-                                let source = match cloud_manager.as_ref() {
-                                    Some(manager) => {
-                                        crate::cloud::cloud_bearer_source(
-                                            Arc::clone(manager),
-                                            otel_config.endpoint.clone(),
-                                        )
-                                        .await
-                                    }
-                                    None => None,
-                                };
-                                if source.is_none() && warn_if_unmet {
-                                    tracing::warn!(
-                                        "telemetry: attribution=account but no signed-in session \
+                    #[cfg(feature = "otel-http")]
+                    let bearer = match bearer_plan {
+                        BearerPlan::LiveSource { warn_if_unmet } => {
+                            // Only HTTP account attribution without an explicit
+                            // token reads the credential store. An unavailable
+                            // source exports anonymously, with a warning when
+                            // the operator explicitly requested an account.
+                            let source = match cloud_manager.as_ref() {
+                                Some(manager) => {
+                                    crate::cloud::cloud_bearer_source(
+                                        Arc::clone(manager),
+                                        otel_config.endpoint.clone(),
+                                    )
+                                    .await
+                                }
+                                None => None,
+                            };
+                            if source.is_none() && warn_if_unmet {
+                                tracing::warn!(
+                                    "telemetry: attribution=account but no signed-in session \
                                      is available — exporting anonymously (sign in with `{} \
                                      cloud login`)",
-                                        invocation::name()
-                                    );
-                                }
-                                source
+                                    invocation::name()
+                                );
                             }
-                            BearerPlan::StaticOnly => None,
-                        };
-                    match OtelExporter::new(otel_config, bearer) {
+                            source
+                        }
+                        BearerPlan::StaticOnly => None,
+                    };
+                    #[cfg(all(feature = "otel-grpc", not(feature = "otel-http")))]
+                    let otel_config = otel_config.with_env_overrides();
+                    #[cfg(all(feature = "otel-grpc", not(feature = "otel-http")))]
+                    if let Some(warning) = grpc_account_warning(&otel_config, bearer_plan) {
+                        // The host emits startup diagnostics after installing
+                        // its subscriber; logging here would lose the warning.
+                        ignored_config.push(warning.to_owned());
+                    }
+                    match OtelExporter::new(
+                        otel_config,
+                        #[cfg(feature = "otel-http")]
+                        bearer,
+                    ) {
                         Ok(exporter) => (Some(Arc::new(exporter)), None),
                         Err(e) => (
                             None,
@@ -1169,10 +1103,7 @@ async fn assemble_app(
                 pricing.clone(),
                 config.server.require_known_pricing,
             ))
-            .settlement_recorder(
-                MeteringRecorder::new(metering_store.clone(), pricing.clone())
-                    .with_reconciliation_provider("bitrouter"),
-            );
+            .settlement_recorder(MeteringRecorder::new(metering_store.clone()));
         let sub_pipeline = Arc::new(
             sub.build()
                 .context("building the server-tool sub-completion pipeline")?,
@@ -1194,22 +1125,23 @@ async fn assemble_app(
     let policy_decision_recorder = if is_shared {
         None
     } else {
-        crate::gateway::routing::workflow::decision::PolicyDecisionJsonlRecorder::from_env()
+        crate::gateway::routing::decision_log::PolicyDecisionJsonlRecorder::from_env()
             .map_err(anyhow::Error::from)?
             .map(Arc::new)
     };
     if policy_decision_recorder.is_some() {
         tracing::info!(
-            env = crate::gateway::routing::workflow::decision::POLICY_DECISION_JSONL_ENV,
+            env = crate::gateway::routing::decision_log::POLICY_DECISION_JSONL_ENV,
             "policy decision JSONL recording enabled"
         );
     }
     let pending_eval_decisions = PendingEvalDecisionStore::default();
     let eval_store = EvalStore::new(db.clone()).with_storage_budget(metering_storage.clone());
     let eval_service = EvalService::new(eval_store.clone(), config.eval.clone());
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     let mut trajectory_outbox_publisher = None;
-    let trajectory_services = if config.trajectory.enabled && !config.tenancy.enabled {
+    let mut trajectory_for_ingress = None;
+    let trajectory_for_settlement = if config.trajectory.enabled && !config.tenancy.enabled {
         let trajectory_store = TrajectoryStore::new(db.clone());
         let retention = chrono::TimeDelta::try_days(i64::from(config.trajectory.retention_days))
             .ok_or_else(|| anyhow::anyhow!("trajectory retention_days exceeds time range"))?;
@@ -1235,7 +1167,7 @@ async fn assemble_app(
             );
         }
         let notify_outbox = {
-            #[cfg(feature = "core")]
+            #[cfg(feature = "eval-publication")]
             {
                 if is_shared {
                     None
@@ -1259,7 +1191,7 @@ async fn assemble_app(
                     Some(Arc::new(move || publisher.kick()) as Arc<dyn Fn() + Send + Sync>)
                 }
             }
-            #[cfg(not(feature = "core"))]
+            #[cfg(not(feature = "eval-publication"))]
             {
                 None
             }
@@ -1278,73 +1210,43 @@ async fn assemble_app(
                 crate::paths::get_or_create_correlation_key(&home)?
             }
         };
-        let runtime = Arc::new(TrajectoryRuntime::new(
-            trajectory_store.clone(),
-            Canonicalizer::new(correlation_key.clone()),
-        ));
-        // Shared guard entry still uses this runtime marker; the shared engine
-        // owns its durable start/settlement path rather than this local recorder.
-        let settlement = (!is_shared).then(|| {
+        // The shared engine owns durable settlement; local execution uses this recorder.
+        (!is_shared).then(|| {
+            trajectory_for_ingress = Some(crate::trajectory::ingress::CaptureIngress::new(
+                crate::trajectory::correlation::TrajectoryRuntime::new(
+                    trajectory_store.clone(),
+                    crate::trajectory::canonical::Canonicalizer::new(correlation_key.clone()),
+                ),
+            ));
             TrajectorySettlementRecorder::new(trajectory_store, notify_outbox, correlation_key)
-        });
-        Some((runtime, settlement))
+        })
     } else {
         None
     };
-    let trajectory_runtime = trajectory_services
-        .as_ref()
-        .map(|(runtime, _)| runtime.clone());
-    let trajectory_for_settlement = trajectory_services
-        .as_ref()
-        .and_then(|(_, settlement)| settlement.clone());
     #[cfg(feature = "multi-instance")]
     let shared_policy_runtime = shared
         .map(|inputs| {
-            crate::policy_lock::PolicyRuntime::from_document(
+            crate::policy_source::PolicyRuntime::from_document(
                 config,
                 inputs.model_policy.clone(),
                 pending_eval_decisions.clone(),
-                trajectory_runtime.clone(),
             )
         })
         .transpose()?;
     #[cfg(not(feature = "multi-instance"))]
-    let shared_policy_runtime: Option<Arc<crate::policy_lock::PolicyRuntime>> = None;
+    let shared_policy_runtime: Option<Arc<crate::policy_source::PolicyRuntime>> = None;
     let policy_runtime = match shared_policy_runtime {
         Some(runtime) => runtime,
-        None => crate::policy_lock::PolicyRuntime::new(
+        None => crate::policy_source::PolicyRuntime::new(
             config,
             config_path,
             policy_decision_recorder.clone(),
             pending_eval_decisions.clone(),
-            trajectory_runtime,
         )
         .await
         .context("loading model Policy source")?,
     };
     let policy_runtime_for_selector = policy_runtime.clone();
-    #[cfg(feature = "core")]
-    let evolution = crate::core::evolution::runtime::EvolutionRuntime::new(
-        db.clone(),
-        routing_table.clone(),
-        policy_runtime.clone(),
-    )
-    .with_storage_budget(metering_storage.clone());
-    // Experimental adoption must never override a mature gateway's published
-    // source, including when its database retains unrelated local Block state.
-    let block_policies: Option<crate::gateway::routing::blocks::runtime::BlockPolicyRouter> =
-        match scope {
-            #[cfg(all(feature = "core", feature = "harness"))]
-            AssemblyScope::BroHarness if !is_shared => Some(
-                crate::gateway::routing::blocks::runtime::BlockPolicyRouter::new(
-                    db.clone(),
-                    routing_table.clone(),
-                    policy_runtime.clone(),
-                )
-                .with_storage_budget(metering_storage.clone()),
-            ),
-            _ => None,
-        };
     let canonical_binding = (!is_shared).then(|| {
         let binding = crate::gateway::observability::binding::CanonicalRequestBinding::new(
             db.clone(),
@@ -1358,7 +1260,6 @@ async fn assemble_app(
     });
     let gateway_requests =
         crate::gateway::observability::requests::GatewayRequestTracker::new(db.clone());
-    // The host's local control inventory is cloned from this same tracker.
     let gateway_requests = match &metering_storage {
         Some(storage) => gateway_requests.with_storage_budget(storage.clone()),
         None => gateway_requests,
@@ -1373,7 +1274,7 @@ async fn assemble_app(
     let response_observer = PredictiveResponseObserver::new(pending_eval_decisions.clone());
     #[cfg(test)]
     let response_observer_for_tests = response_observer.clone();
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     let untracked_recorder = (!is_shared).then(|| {
         Arc::new(EvalSettlementRecorder::new(
             eval_service.store().clone(),
@@ -1382,14 +1283,6 @@ async fn assemble_app(
     });
     let db_for_hooks = db.clone();
     let db_for_mcp_auth = db.clone();
-    #[cfg(feature = "harness")]
-    let session_context = if is_shared {
-        // A replica-local ACP route lease is not shared gateway authority.
-        SessionContextHook::default()
-    } else {
-        SessionContextHook::new(Arc::clone(&acp_runtime))
-    };
-    #[cfg(not(feature = "harness"))]
     let session_context = SessionContextHook::default();
     let request_checks_for_pipeline = request_checks.clone();
     let app = App::builder()
@@ -1401,13 +1294,6 @@ async fn assemble_app(
                 lm.owned_drain();
             }
             lm.routing_table(routing_table).executor(executor);
-            if !is_shared {
-                lm.native_cost_estimator(pricing_for_native);
-                lm.native_cost_source(Arc::new(metering_for_native_costs));
-            }
-            if let Some(policy) = &private_context {
-                lm.native_private_context(Arc::new(policy.clone()));
-            }
             lm.served_operations(OperationScope::Both);
             lm.require_hook::<AuthHook>(HookStage::PreResolution, OperationScope::Both);
             lm.require_hook::<SessionContextHook>(HookStage::PreResolution, OperationScope::Both);
@@ -1450,12 +1336,9 @@ async fn assemble_app(
             if let Some(runtime) = continuation_for_route {
                 lm.route_hook(runtime);
             }
-            lm.route_hook(crate::policy_lock::PredictiveSingleTargetRouteHook);
+            lm.route_hook(crate::policy_source::PredictiveSingleTargetRouteHook);
             if let Some(binding) = &canonical_binding {
                 lm.route_hook(binding.clone());
-            }
-            if let Some(policies) = &block_policies {
-                lm.route_hook(policies.clone());
             }
             // Tariffs are dispatch inputs in both modes. Shared accounting is
             // projected from the engine's immutable attempt facts, not requests.
@@ -1466,14 +1349,18 @@ async fn assemble_app(
                 ),
                 OperationScope::Both,
             );
-            let metering_recorder = (!is_shared).then(|| {
-                MeteringRecorder::new(metering_store_for_recorder, pricing_for_recorder)
-                    .with_reconciliation_provider("bitrouter")
-            });
+            let metering_recorder =
+                (!is_shared).then(|| MeteringRecorder::new(metering_store_for_recorder));
             if let Some(runtime) = continuation_for_finalization {
                 lm.required_finalizer(runtime);
             }
-            // Server-tool declaration capture runs first and is pure
+            if !is_shared {
+                lm.pre_resolution_hook_for(
+                    crate::gateway::observability::requests::RequestIdOrigin,
+                    OperationScope::Both,
+                );
+            }
+            // Server-tool declaration capture is pure
             // observation: it parses any advisor / sub-agent / fusion
             // declaration (or the one the fusion alias injected) off the prompt
             // and stashes it, before auth, so the toolsets can read it
@@ -1501,22 +1388,24 @@ async fn assemble_app(
                 OperationScope::Both,
             );
             lm.pre_resolution_hook_for(session_context, OperationScope::Both);
-            if let Some(policy) = private_context {
-                lm.pre_resolution_hook(policy);
-            }
             if let Some(runtime) = continuation_for_pre_request {
                 lm.pre_resolution_hook(runtime);
             }
             // Candidate recipe selection may replace defaults and the policy,
             // but cannot replace the ingress router's frozen checker bindings.
             if !is_shared {
-                lm.router_preparation_hook(gateway_requests_for_hooks.clone());
-            }
-            if let Some(policies) = block_policies {
-                lm.router_preparation_hook(policies);
+                lm.router_preparation_hook_for(
+                    gateway_requests_for_hooks.clone(),
+                    OperationScope::Both,
+                );
             }
             if let Some(binding) = canonical_binding {
                 lm.router_preparation_hook(binding);
+            }
+            // Capture only after the request identity is admitted. Early route
+            // failures and duplicate caller IDs cannot create unowned ledgers.
+            if let Some(capture) = trajectory_for_ingress {
+                lm.router_preparation_hook(capture);
             }
             lm.pre_request_hook_for(
                 PolicyHook::new(
@@ -1534,17 +1423,17 @@ async fn assemble_app(
             }
             lm.observe_hook(response_observer);
             if !is_shared {
-                lm.observe_hook(gateway_requests_for_hooks.clone());
+                lm.observe_hook_for(gateway_requests_for_hooks.clone(), OperationScope::Both);
             }
             if let Some(costs) = &judge_costs {
                 lm.observe_hook(costs.clone());
             }
-            // Only local serving owns these legacy durable gateway writers.
+            // Local serving owns these durable gateway writers.
             if let Some(recorder) = metering_recorder {
                 lm.settlement_recorder_for(recorder, OperationScope::Both);
             }
             if !is_shared {
-                lm.settlement_recorder(gateway_requests_for_hooks);
+                lm.settlement_recorder_for(gateway_requests_for_hooks, OperationScope::Both);
             }
             if let Some(costs) = judge_costs {
                 lm.settlement_recorder(costs);
@@ -1561,7 +1450,7 @@ async fn assemble_app(
                     PolicySettlementRecorder::new(
                         pending_eval_decisions,
                         trajectory_for_settlement,
-                        #[cfg(feature = "core")]
+                        #[cfg(feature = "eval-publication")]
                         untracked_recorder,
                     ),
                     OperationScope::Both,
@@ -1600,9 +1489,7 @@ async fn assemble_app(
     let app = app.prompt_transform(Arc::new(crate::codex_router::CodexRouter::new(Arc::clone(
         &routing_table_for_reload,
     ))) as Arc<dyn PromptTransform>);
-    // Apply the optional MCP pipeline configuration in a second builder step
-    // so the language_model configuration above stays the same shape it has
-    // had since v0.
+    // Assemble the optional MCP routing pipeline after the model pipeline.
     let app = match (mcp_routing, mcp_executor) {
         (Some(table), Some(exec)) => {
             let app = app.mcp(move |m| {
@@ -1623,16 +1510,6 @@ async fn assemble_app(
     // Start the authority actor only after every other fallible assembly step.
     // Failed startup must not leave a detached owner behind during a retry.
     let tenancy = match tenancy_database {
-        #[cfg(all(feature = "core", feature = "harness"))]
-        Some(database) if scope == AssemblyScope::BroHarness => Some(
-            crate::tenancy::Service::open_owned_bro_profile_observed(
-                database,
-                &config.tenancy,
-                &config.continuation,
-                receipt_observer,
-            )
-            .await?,
-        ),
         Some(database) if receipt_observer.enabled() => Some(
             crate::tenancy::Service::open_owned_profile_observed(
                 database,
@@ -1667,7 +1544,7 @@ async fn assemble_app(
     };
     let continuation_registry = match &tenancy {
         Some(service) => service.continuation_registry().clone(),
-        None => continuation_registry.context("Legacy continuation registry unavailable")?,
+        None => continuation_registry.context("Local continuation registry unavailable")?,
     };
     if !is_shared && !tenancy_enabled {
         continuation_registry.start_reconciler();
@@ -1676,20 +1553,16 @@ async fn assemble_app(
         app,
         db,
         tenancy,
-        #[cfg(feature = "harness")]
-        acp_runtime,
         policy_store: policy_store_for_reload,
         policy_runtime,
-        #[cfg(feature = "core")]
-        evolution,
-        gateway_requests,
         eval_service,
+        #[cfg(any(test, feature = "multi-instance"))]
         continuation_registry,
         #[cfg(test)]
         pending_eval_decisions: pending_eval_decisions_for_tests,
         #[cfg(test)]
         response_observer: response_observer_for_tests,
-        #[cfg(feature = "core")]
+        #[cfg(feature = "eval-publication")]
         trajectory_outbox_publisher,
         routing_table: routing_table_for_reload,
         upstream_executor: executor_for_reload,
@@ -1728,7 +1601,7 @@ fn build_fusion_alias(config: &Config) -> Result<Option<Arc<dyn PromptTransform>
 /// integration tests assemble explicit configs through it. Lives in the app
 /// layer because the SDK routing table receives a resolved configuration
 /// and does not own application catalog fetching or persistence.
-pub async fn merge_registry_into(config: &mut Config) {
+pub(crate) async fn merge_registry_into(config: &mut Config) {
     if !config.inherit_defaults || !config.registry.enabled {
         return;
     }
@@ -1991,7 +1864,7 @@ fn resolve_byok_key(explicit: &Option<String>, env_var: &str, backend: &str) -> 
 /// Build the per-provider `AuthAppliers` registry. Each entry covers a
 /// provider whose credential flow needs more than the per-protocol
 /// `Transport::authorise` default — today: `bitrouter` (the official
-/// hosted gateway; OAuth from `bro cloud login` with a
+/// hosted gateway; OAuth from `bitrouter cloud login` with a
 /// `BITROUTER_API_KEY` fallback), GitHub Copilot (device-code OAuth +
 /// token exchange), Anthropic Platform API (`x-api-key`), the Claude
 /// Pro/Max subscription (`claude-code`, OAuth / live `~/.claude` session),
@@ -2215,63 +2088,25 @@ impl MetricsRenderer for EmptyMetricsRenderer {
 /// Whether the OTLP exporter should resolve its account bearer LIVE per export
 /// (refresh-aware) and, if so, whether to warn when no credential is available.
 ///
-/// Only the first-party telemetry opt-in (`attribution: auto`/`account` with no
-/// explicit token) wants a live source. Every other exporter path — an explicit
-/// static `bearer_token`, `attribution: anonymous`, or the generic `otel` /
-/// legacy / env opt-ins — uses the static header path (`StaticOnly`) and never
-/// reads the credential store.
+/// Only OTLP/HTTP with the first-party telemetry opt-in (`attribution: auto`
+/// or `account`, without an explicit token) wants a live source. Every other
+/// exporter path — gRPC, a static `bearer_token`, `attribution: anonymous`,
+/// or the generic `otel` / environment opt-ins — uses the static header path
+/// and never reads the credential store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BearerPlan {
     /// Build a live account-bearer source (resolved per export, refresh-aware).
     /// `warn_if_unmet` is set for `attribution: account` so the call site logs
     /// the "exporting anonymously" warning when the source resolves to `None`.
+    #[cfg(feature = "otel-http")]
     LiveSource { warn_if_unmet: bool },
+    /// gRPC account attribution has no explicit token. Check effective headers
+    /// before reporting missing credentials through startup diagnostics.
+    #[cfg(all(feature = "otel-grpc", not(feature = "otel-http")))]
+    MissingStaticBearer,
     /// No live source — static `Authorization` header (or anonymous). The
     /// credential store is never read.
     StaticOnly,
-}
-
-/// Build the OTel exporter for **out-of-daemon** surfaces (`bro acp
-/// serve|prompt`). Same config resolution as the daemon path (the telemetry
-/// opt-in, the `otel:` block, env vars), including the live account-bearer
-/// plan. Returns `None` when nothing opts telemetry in; telemetry failures are
-/// surfaced as warnings, never as session failures.
-#[cfg(all(feature = "harness", any(feature = "otel-http", feature = "otel-grpc")))]
-pub(crate) async fn build_otel_exporter_standalone_with_credentials(
-    config: &Config,
-    cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
-) -> Option<Arc<OtelExporter>> {
-    let (otel_config, bearer_plan) = match build_otel_config(config, telemetry_install_id) {
-        Ok(Some(plan)) => plan,
-        Ok(None) => return None,
-        Err(e) => {
-            tracing::warn!("telemetry: invalid observe config, exporting disabled: {e:#}");
-            return None;
-        }
-    };
-    let bearer: Option<Arc<dyn crate::telemetry::bearer::TelemetryBearer>> = match bearer_plan {
-        BearerPlan::LiveSource { warn_if_unmet } => {
-            let source = cloud_credentials
-                .telemetry_bearer(&otel_config.endpoint)
-                .await;
-            if source.is_none() && warn_if_unmet {
-                tracing::warn!(
-                    "telemetry: attribution=account but no signed-in session is available — \
-                     exporting anonymously (sign in with `{} cloud login`)",
-                    invocation::name()
-                );
-            }
-            source
-        }
-        BearerPlan::StaticOnly => None,
-    };
-    match OtelExporter::new(otel_config, bearer) {
-        Ok(exporter) => Some(Arc::new(exporter)),
-        Err(e) => {
-            tracing::warn!("telemetry: failed to initialise OpenTelemetry: {e}");
-            None
-        }
-    }
 }
 
 /// Resolve optional attribution only after a selected exporter is available.
@@ -2304,7 +2139,7 @@ fn build_otel_config(
     config: &Config,
     install_id: impl FnOnce() -> Option<String>,
 ) -> Result<Option<(OtelConfig, BearerPlan)>> {
-    // Named for the crate that reads it, like `plugins.bitrouter-guardrails`.
+    // Named for the extension that reads it.
     // It was `bitrouter-observe` until the OTLP renderer moved out of the SDK;
     // the rename is safe to have made because `ignored_config_warnings` reports an
     // unread `plugins.<id>` block on every daemon start, so a stale key is
@@ -2330,9 +2165,9 @@ fn build_otel_config(
             // Decide the live-bearer plan from attribution + whether an explicit
             // static token is present. The account bearer is NOT snapshotted
             // here anymore — when no explicit token is set and attribution is
-            // auto/account, the call site builds a live source that refreshes
-            // per export. `build_telemetry_otel_config` resolves the explicit
-            // token itself into the static `bearer_token`.
+            // auto/account, the HTTP call site builds a live source that
+            // refreshes per export. `build_telemetry_otel_config` resolves the
+            // explicit token itself into the static `bearer_token`.
             let has_explicit =
                 opt_in.bearer_token.is_some() || std::env::var("BITROUTER_TELEMETRY_TOKEN").is_ok();
             let bearer_plan = telemetry_bearer_plan(opt_in.attribution, has_explicit);
@@ -2343,7 +2178,7 @@ fn build_otel_config(
 
     // 1. New nested `otel: { … }` block. A malformed block is a hard error:
     //    the operator explicitly opted in, so silently falling back to the
-    //    legacy shim / env-only path would hide their mistake and start the
+    //    environment-only path would hide their mistake and start the
     //    exporter with a config they never asked for.
     if let Some(otel_value) = telemetry.and_then(|c| c.get("otel")) {
         let cfg = serde_json::from_value::<OtelConfig>(otel_value.clone())
@@ -2353,12 +2188,6 @@ fn build_otel_config(
     }
 
     // 2. Env-var-only opt-in.
-    //
-    // The v0 flat `otlp_endpoint` shim used to sit here, marked for removal in
-    // v1.1. It went with the key rename instead, and not to save a release:
-    // keeping it would have meant carrying a **v0** compatibility path under a
-    // key name v0 never had. `plugins.bitrouter-telemetry.otlp_endpoint` has
-    // never existed in a released config, so there was nothing to preserve.
     if std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").is_ok() {
         require_otel_transport("OTEL_EXPORTER_OTLP_ENDPOINT")?;
         return Ok(Some((OtelConfig::default(), BearerPlan::StaticOnly)));
@@ -2372,28 +2201,62 @@ fn build_otel_config(
 ///
 /// - `anonymous` → never read the credential store: `StaticOnly`.
 /// - an explicit token is set → use the static header: `StaticOnly`.
-/// - `auto` / `account` with no explicit token → `LiveSource`; `account`
+/// - gRPC → static metadata only; `account` without an explicit token requests
+///   a startup warning.
+/// - HTTP `auto` / `account` with no explicit token → `LiveSource`; `account`
 ///   additionally asks the call site to warn when no credential is available.
+#[cfg(feature = "otel-http")]
 fn telemetry_bearer_plan(attribution: TelemetryAttribution, has_explicit: bool) -> BearerPlan {
-    match attribution {
-        // Never touch the credential store when the user opted out of account
-        // attribution.
-        TelemetryAttribution::Anonymous => BearerPlan::StaticOnly,
-        // An explicit token wins and rides as a static header (the live source
-        // would otherwise never fill the slot anyway).
-        _ if has_explicit => BearerPlan::StaticOnly,
-        TelemetryAttribution::Auto => BearerPlan::LiveSource {
+    match (attribution, has_explicit) {
+        (TelemetryAttribution::Auto, false) => BearerPlan::LiveSource {
             warn_if_unmet: false,
         },
-        TelemetryAttribution::Account => BearerPlan::LiveSource {
+        (TelemetryAttribution::Account, false) => BearerPlan::LiveSource {
             warn_if_unmet: true,
         },
+        _ => BearerPlan::StaticOnly,
+    }
+}
+
+#[cfg(all(feature = "otel-grpc", not(feature = "otel-http")))]
+fn telemetry_bearer_plan(attribution: TelemetryAttribution, has_explicit: bool) -> BearerPlan {
+    if attribution == TelemetryAttribution::Account && !has_explicit {
+        BearerPlan::MissingStaticBearer
+    } else {
+        BearerPlan::StaticOnly
+    }
+}
+
+#[cfg(not(any(feature = "otel-http", feature = "otel-grpc")))]
+fn telemetry_bearer_plan(_: TelemetryAttribution, _: bool) -> BearerPlan {
+    BearerPlan::StaticOnly
+}
+
+/// Inspect the same resolved headers the gRPC transport sends. Account lookup
+/// is unnecessary; the host emits any returned diagnostic after tracing starts.
+#[cfg(all(feature = "otel-grpc", not(feature = "otel-http")))]
+fn grpc_account_warning(config: &OtelConfig, bearer_plan: BearerPlan) -> Option<&'static str> {
+    if bearer_plan != BearerPlan::MissingStaticBearer {
+        return None;
+    }
+    let has_authorization = config.effective_headers().iter().any(|(name, value)| {
+        name.eq_ignore_ascii_case("authorization")
+            && http::HeaderValue::from_str(value).is_ok_and(|value| !value.is_empty())
+    });
+    if has_authorization {
+        None
+    } else {
+        Some(
+            "telemetry: attribution=account requires static Authorization credentials for \
+             OTLP/gRPC; configure telemetry.bearer_token, BITROUTER_TELEMETRY_TOKEN, or \
+             OTEL_EXPORTER_OTLP_HEADERS; the signed-in session is HTTP-only",
+        )
     }
 }
 
 /// BitRouter's first-party telemetry endpoint. A neutral, overridable default
 /// used when the telemetry opt-in is enabled without an explicit `endpoint`.
-pub const DEFAULT_TELEMETRY_ENDPOINT: &str = "https://telemetry.bitrouter.ai";
+pub(crate) const DEFAULT_TELEMETRY_ENDPOINT: &str = "https://telemetry.bitrouter.ai";
 
 /// Capture level for the telemetry opt-in. `Metadata` exports spans without
 /// message bodies; `Full` additionally includes request + response content.
@@ -2409,15 +2272,15 @@ enum TelemetryLevel {
 #[derive(Debug, Clone, Copy, serde::Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum TelemetryAttribution {
-    /// Account-attributed when a `bro cloud login` session (or an explicit
-    /// `bearer_token`) is available; anonymous otherwise. The default — signing
-    /// in upgrades attribution automatically, with no config change.
+    /// Account-attributed when explicit Authorization credentials are available,
+    /// or with OTLP/HTTP when a `bitrouter cloud login` session is available; anonymous
+    /// otherwise. Signing in upgrades HTTP attribution without a config change.
     #[default]
     Auto,
-    /// Require account attribution: use the signed-in session / explicit bearer.
-    /// If neither is available the export still proceeds **anonymously** (it is
-    /// best-effort and must never be dropped for want of a token), but a warning
-    /// is logged so the misconfiguration is visible.
+    /// Request account attribution: use explicit Authorization credentials or,
+    /// with OTLP/HTTP, the signed-in session. gRPC requires static credentials.
+    /// If none are available, export still proceeds anonymously with a warning;
+    /// missing attribution must not drop telemetry.
     Account,
     /// Always anonymous — never attach a bearer, even when signed in or a
     /// `bearer_token` is configured. The opt-out for users who want telemetry
@@ -2470,9 +2333,8 @@ fn otlp_traces_endpoint(endpoint: &str) -> String {
 /// account.
 ///
 /// Only the **static** explicit token lands in `OtelConfig.bearer_token` here.
-/// The signed-in account bearer is NO LONGER snapshotted into the config — it is
-/// resolved live per export by a `TelemetryBearer`
-/// source the async call site builds (refresh-aware), so account attribution
+/// With OTLP/HTTP, the account bearer is resolved per export by a refresh-aware
+/// `TelemetryBearer` source built at the async call site, so account attribution
 /// survives token expiry without a daemon restart. `attribution: anonymous`
 /// still drops even the explicit token (the opt-out guarantee).
 ///
@@ -2486,9 +2348,8 @@ fn build_telemetry_otel_config(opt_in: TelemetryOptIn, install_id: Option<String
     // Resolve the EXPLICIT static token (config `bearer_token`, else the
     // `BITROUTER_TELEMETRY_TOKEN` env var). `attribution: anonymous` forces no
     // bearer regardless — even an explicit token is dropped (the opt-out
-    // guarantee). The account bearer is NO LONGER snapshotted here: when wanted
-    // (auto/account, no explicit token) it is the live source the call site
-    // attaches, refreshed per export.
+    // guarantee). For auto/account attribution without an explicit token,
+    // the HTTP call site attaches an account bearer source, refreshed per export.
     let explicit = opt_in
         .bearer_token
         .or_else(|| std::env::var("BITROUTER_TELEMETRY_TOKEN").ok());
@@ -2675,6 +2536,7 @@ mod telemetry_opt_in_tests {
         );
     }
 
+    #[cfg(feature = "otel-http")]
     #[test]
     fn bearer_plan_auto_builds_live_source_no_warn() {
         // `auto`, no explicit token → live source, and no warning when unmet
@@ -2687,6 +2549,7 @@ mod telemetry_opt_in_tests {
         );
     }
 
+    #[cfg(feature = "otel-http")]
     #[test]
     fn bearer_plan_account_builds_live_source_and_warns_when_unmet() {
         // `account`, no explicit token → live source, and warn when the source
@@ -2697,6 +2560,126 @@ mod telemetry_opt_in_tests {
                 warn_if_unmet: true
             }
         );
+    }
+
+    #[cfg(not(feature = "otel-http"))]
+    #[test]
+    fn bearer_plan_without_http_always_uses_static_authentication() {
+        for attribution in [
+            TelemetryAttribution::Auto,
+            TelemetryAttribution::Account,
+            TelemetryAttribution::Anonymous,
+        ] {
+            for has_explicit in [false, true] {
+                #[cfg(feature = "otel-grpc")]
+                if attribution == TelemetryAttribution::Account && !has_explicit {
+                    assert_eq!(
+                        telemetry_bearer_plan(attribution, has_explicit),
+                        BearerPlan::MissingStaticBearer
+                    );
+                    continue;
+                }
+                assert_eq!(
+                    telemetry_bearer_plan(attribution, has_explicit),
+                    BearerPlan::StaticOnly
+                );
+            }
+        }
+    }
+
+    #[cfg(all(feature = "otel-grpc", not(feature = "otel-http")))]
+    #[test]
+    fn grpc_account_warning_uses_effective_authorization() {
+        for name in ["Authorization", "authorization", "aUtHoRiZaTiOn"] {
+            let config = OtelConfig {
+                headers: [(name.into(), "Bearer private-header".into())].into(),
+                ..OtelConfig::default()
+            };
+            let account = telemetry_bearer_plan(TelemetryAttribution::Account, false);
+            assert!(grpc_account_warning(&config, account).is_none());
+        }
+    }
+
+    #[cfg(all(unix, feature = "otel-grpc", not(feature = "otel-http")))]
+    #[tokio::test]
+    async fn grpc_account_startup_diagnostic_is_emitted_only_without_credentials()
+    -> anyhow::Result<()> {
+        for (attribution, token, headers, warns) in [
+            ("account", None, None, true),
+            ("account", Some("private-token"), None, false),
+            (
+                "account",
+                None,
+                Some("aUtHoRiZaTiOn=Bearer private-header"),
+                false,
+            ),
+            ("auto", None, None, false),
+            ("anonymous", None, None, false),
+        ] {
+            let home = tempfile::tempdir()?;
+            let occupied = std::net::TcpListener::bind("127.0.0.1:0")?;
+            let config_path = home.path().join("bitrouter.yaml");
+            let config = serde_json::json!({
+                "inherit_defaults": false,
+                "registry": { "enabled": false },
+                "server": { "listen": occupied.local_addr()?.to_string(), "log_level": "warn" },
+                "database": { "url": "sqlite::memory:" },
+                "plugins": { "bitrouter-telemetry": { "telemetry": {
+                    "enabled": true,
+                    "endpoint": "http://127.0.0.1:1",
+                    "attribution": attribution,
+                    "bearer_token": token
+                } } }
+            });
+            std::fs::write(&config_path, serde_json::to_vec(&config)?)?;
+            // Reuse the real host child: it installs tracing, emits startup
+            // diagnostics, then exits at the intentionally occupied listener.
+            let mut command = tokio::process::Command::new(std::env::current_exe()?);
+            command
+                .args([
+                    "--exact",
+                    "tests::extension_host::extension_host_child",
+                    "--nocapture",
+                ])
+                .env("BITROUTER_TEST_EXTENSION_HOST_CONFIG", &config_path)
+                .env("BITROUTER_TEST_EXTENSION_HOST_MODE", "missing")
+                .env("BITROUTER_HOME", home.path())
+                .env(
+                    "BITROUTER_CONTROL_TOKEN",
+                    "grpc-warning-test-control-token-at-least-32-bytes",
+                )
+                .env("RUST_LOG", "warn")
+                .env("OTEL_TRACES_SAMPLER", "always_off")
+                .env_remove("BITROUTER_API_KEY")
+                .env_remove("BITROUTER_WORKFLOW_TRACE_JSONL")
+                .env_remove("BITROUTER_TELEMETRY_TOKEN")
+                .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
+                .env_remove("OTEL_EXPORTER_OTLP_HEADERS")
+                .kill_on_drop(true);
+            if let Some(headers) = headers {
+                command.env("OTEL_EXPORTER_OTLP_HEADERS", headers);
+            }
+            let output = tokio::time::timeout(std::time::Duration::from_secs(30), command.output())
+                .await
+                .context("telemetry warning host did not exit")??;
+            let logs = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(!output.status.success());
+            assert!(logs.contains("bind inference listener"), "{logs}");
+            let diagnostic = "telemetry: attribution=account requires static Authorization credentials for OTLP/gRPC";
+            assert_eq!(
+                logs.matches(diagnostic).count(),
+                usize::from(warns),
+                "{logs}"
+            );
+            assert!(!logs.contains("cloud login"), "{logs}");
+            assert!(!logs.contains("private-token"));
+            assert!(!logs.contains("private-header"));
+        }
+        Ok(())
     }
 
     #[test]
@@ -2906,11 +2889,8 @@ mod otel_config_tests {
     }
 
     #[test]
-    fn the_v0_otlp_endpoint_shim_is_gone() {
-        // Removed with the key rename: it existed to keep a **v0** YAML
-        // building, and v0 never had `plugins.bitrouter-telemetry`. An
-        // `otlp_endpoint` under the new key is therefore a config that has
-        // never worked, and it must not quietly half-work.
+    fn unsupported_flat_otlp_endpoint_does_not_enable_export() {
+        // Only the nested `otel` configuration can explicitly enable export.
         let config = config_with_telemetry(serde_json::json!({
             "otlp_endpoint": "http://legacy:4318"
         }));
@@ -2918,7 +2898,7 @@ mod otel_config_tests {
             build_otel_config(&config, || None)
                 .expect("an unknown sub-key is not an error")
                 .is_none(),
-            "otlp_endpoint must no longer wire an exporter"
+            "unknown otlp_endpoint must not wire an exporter"
         );
     }
 
@@ -3039,9 +3019,7 @@ mod otel_config_tests {
 
     #[test]
     fn a_dead_sub_key_under_the_new_id_is_reported() {
-        // The natural migration: the id-level warning says "rename", the
-        // operator renames, and their v0 `otlp_endpoint` comes along with it.
-        // Id-level checking alone sees a known id and says nothing.
+        // A recognized plugin id still requires a warning for unsupported subkeys.
         let config = config_with_telemetry(serde_json::json!({
             "otlp_endpoint": "http://legacy:4318"
         }));
@@ -3214,7 +3192,7 @@ mod trajectory_assembly_tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::{Config, build_app_with_path};
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     use bitrouter_ai::eval::EvalScope;
 
     async fn assemble_named_policy(
@@ -3271,10 +3249,10 @@ policies:
     tool_safe_tiers: [strong]
 "#,
         )?;
-        let digest = crate::policy_lock::semantic_digest(&document)?;
+        let digest = crate::policy_source::semantic_digest(&document)?;
         tokio::fs::write(
             home.path().join("policy.yaml"),
-            crate::policy_lock::deterministic_yaml(&document)?,
+            crate::policy_source::deterministic_yaml(&document)?,
         )
         .await?;
         let assembled = build_app_with_path(&config, Some(&config_path)).await?;
@@ -3306,14 +3284,14 @@ policies:
         let body: serde_json::Value = serde_json::from_slice(&requests[0].body)?;
         assert_eq!(body["model"], "economy-model");
         assert_eq!(body["messages"][0]["content"], "generic request");
-        #[cfg(feature = "core")]
+        #[cfg(feature = "eval-publication")]
         if let Some(publisher) = &assembled.trajectory_outbox_publisher {
             publisher.wait_for_idle().await;
         }
         Ok((assembled, digest))
     }
 
-    #[cfg(not(feature = "core"))]
+    #[cfg(not(feature = "eval-publication"))]
     #[tokio::test]
     async fn no_core_cleans_untracked_observation_without_eval_writes() -> anyhow::Result<()> {
         use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
@@ -3331,7 +3309,7 @@ policies:
         Ok(())
     }
 
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     #[tokio::test]
     async fn disabled_trajectory_preserves_named_policy_request_eval() -> anyhow::Result<()> {
         let (assembled, digest) = assemble_named_policy(false).await?;
@@ -3367,7 +3345,7 @@ policies:
         Ok(())
     }
 
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     #[tokio::test]
     async fn unguarded_policy_preserves_request_eval_when_trajectory_is_enabled()
     -> anyhow::Result<()> {
@@ -3378,18 +3356,28 @@ policies:
             .store()
             .list_subjects_for_owner("local")
             .await?;
-        assert_eq!(subjects.len(), 1);
-        assert_eq!(subjects[0].scope, EvalScope::Request);
+        assert_eq!(subjects.len(), 2);
+        assert_eq!(
+            subjects
+                .iter()
+                .filter(|subject| subject.scope == EvalScope::Episode)
+                .count(),
+            1
+        );
+        let subject = subjects
+            .iter()
+            .find(|subject| subject.scope == EvalScope::Request)
+            .ok_or_else(|| anyhow::anyhow!("missing model-policy request subject"))?;
         assert!(matches!(
-            subjects[0].identity,
+            subject.identity,
             bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {}
         ));
-        assert_eq!(subjects[0].decisions.len(), 1);
-        assert_eq!(subjects[0].decisions[0].policy_digest, digest);
-        assert_eq!(subjects[0].decisions[0].policy, "coding");
-        assert_eq!(subjects[0].decisions[0].selected_tier, "economy");
+        assert_eq!(subject.decisions.len(), 1);
+        assert_eq!(subject.decisions[0].policy_digest, digest);
+        assert_eq!(subject.decisions[0].policy, "coding");
+        assert_eq!(subject.decisions[0].selected_tier, "economy");
         assert_eq!(
-            subjects[0].decisions[0].baseline_tier.as_deref(),
+            subject.decisions[0].baseline_tier.as_deref(),
             Some("economy")
         );
         assert!(assembled.pending_eval_decisions.is_empty());
@@ -3407,7 +3395,7 @@ policies:
             build_app_with_path(&config, Some(&disabled_home.path().join("bitrouter.yaml")))
                 .await?;
 
-        #[cfg(feature = "core")]
+        #[cfg(feature = "eval-publication")]
         assert!(disabled.trajectory_outbox_publisher.is_none());
         drop(disabled);
         assert!(!disabled_home.path().join("correlation.key").exists());
@@ -3418,7 +3406,7 @@ policies:
         let enabled =
             build_app_with_path(&config, Some(&enabled_home.path().join("bitrouter.yaml"))).await?;
 
-        #[cfg(feature = "core")]
+        #[cfg(feature = "eval-publication")]
         assert_eq!(
             enabled
                 .trajectory_outbox_publisher
@@ -3487,10 +3475,9 @@ policies:
                 categorical: BTreeMap::from([
                     (
                         "route.projection".into(),
-                        "agent_trace/v2|opening|normal".into(),
+                        "code:generation|implement|normal".into(),
                     ),
                     ("route.selected_tier".into(), "economy".into()),
-                    ("route.workflow_state".into(), "opening".into()),
                 ]),
                 digests: BTreeMap::new(),
                 route_measurement: None,
@@ -3551,23 +3538,4 @@ policies:
         );
         Ok(())
     }
-}
-
-#[cfg(all(feature = "core", feature = "harness"))]
-fn validate_local_harness_listeners(config: &Config) -> Result<()> {
-    for address in std::iter::once(config.server.listen.as_str()).chain(
-        config
-            .control
-            .enabled
-            .then_some(config.control.listen.as_str()),
-    ) {
-        let address: std::net::SocketAddr = address
-            .parse()
-            .context("local BRO harness requires explicit loopback listener addresses")?;
-        anyhow::ensure!(
-            address.ip().is_loopback(),
-            "local BRO harness requires loopback listeners"
-        );
-    }
-    Ok(())
 }

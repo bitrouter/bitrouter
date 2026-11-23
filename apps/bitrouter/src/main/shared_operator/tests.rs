@@ -1,5 +1,5 @@
 use super::*;
-use bitrouter::output::{Format, error::envelope_from_anyhow};
+use crate::output::{Format, error::envelope_from_anyhow};
 use serde_json::json;
 use std::{
     pin::Pin,

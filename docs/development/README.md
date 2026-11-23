@@ -18,7 +18,7 @@ They do not create independently versioned format specifications. Follow the
 - [CLI and workflow skills](cli-and-skills.md)
 - [Compiled extensions, host integration and request checks](extensions.md)
 - [Tenancy OAuth and input-counting boundaries](tenancy-auxiliary.md)
-- [Daemon upgrades](local-daemon-upgrade.md),
+- [Gateway updates](../DISTRIBUTION.md#updates-and-profile-transitions),
   [remote administration](remote-administration.md),
   and [ACP launch](spawn.md)
 

@@ -143,7 +143,7 @@ async fn ordered_queue_expiry_before_begin_retains_cancelled_cleanup_without_fen
     )
     .await?
     .context("expired terminal")?;
-    let Terminal::V2(saved) = saved else {
+    let Terminal::Ordered(saved) = saved else {
         anyhow::bail!("wrong receipt format");
     };
     ensure!(saved.receipt.attempts.is_empty() && saved.receipt.outcome == Outcome::Cancelled);
@@ -260,7 +260,7 @@ async fn abandoned_ordered_admission_waits_for_queued_intent_without_fencing() -
         )
         .await?
         .context("cancelled terminal")?;
-        let Terminal::V2(saved) = saved else {
+        let Terminal::Ordered(saved) = saved else {
             anyhow::bail!("wrong receipt format");
         };
         ensure!(saved.receipt.attempts.is_empty());

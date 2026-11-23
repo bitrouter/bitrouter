@@ -4,6 +4,21 @@ use bitrouter_ai::artifact::ArtifactIdentity;
 
 use crate::output::{CliReport, human::Human};
 
+/// Local CLI identity, including the package that owns the executable.
+#[derive(serde::Serialize)]
+pub struct BuildInfo {
+    pub product: &'static str,
+    #[serde(flatten)]
+    pub artifact: ArtifactIdentity,
+}
+
+impl CliReport for BuildInfo {
+    fn render(&self, h: &mut Human<'_>) -> std::io::Result<()> {
+        h.field("product", self.product)?;
+        self.artifact.render(h)
+    }
+}
+
 impl CliReport for ArtifactIdentity {
     fn render(&self, h: &mut Human<'_>) -> std::io::Result<()> {
         h.field("version", &self.version)?;

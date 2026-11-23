@@ -1,26 +1,4 @@
-//! User-facing CLI diagnostics — replaces anyhow's default
-//! `Debug` rendering (`"Error: …\n\nCaused by:\n    …"`) with a tighter,
-//! actionable presentation.
-//!
-//! Shape of an error report:
-//!
-//! ```text
-//! error: <root-cause message, with HTTP-taxonomy prefix stripped>
-//!   while: <first context layer>            (one line per layer, oldest-to-newest)
-//!   while: …
-//!
-//!   hint: <how to fix, if we recognise the failure mode>
-//!        <…wrapped to subsequent lines>
-//! ```
-//!
-//! Shape of a non-error notice (e.g. the first-run scaffold message):
-//!
-//! ```text
-//! info: <one-liner>
-//! ```
-//!
-//! Colours: red for `error:`, cyan for `info:`, dim for `while:` / `hint:`,
-//! emitted only when stderr is a TTY (so piping to a log file stays clean).
+//! CLI notices and shared error classification hints.
 
 use std::io::Write;
 
@@ -28,73 +6,11 @@ use crate::commands::invocation;
 
 use crate::style::Palette;
 
-/// Print an anyhow error chain to stderr in the documented CLI shape.
-/// Caller decides whether to `std::process::exit(1)` afterwards.
-pub fn report(err: &anyhow::Error) {
-    let palette = Palette::for_stderr();
-    let mut stderr = std::io::stderr().lock();
-    // I/O failure writing to stderr is unrecoverable; ignore.
-    let _ = write_report(&mut stderr, &palette, err);
-}
-
-/// Print an informational notice in the same visual family as
-/// [`report`]. Used by paths.rs's first-run scaffold message and any
-/// future "we did a thing on your behalf" surface.
+/// Print an informational notice for CLI setup and startup.
 pub fn info(message: impl std::fmt::Display) {
     let palette = Palette::for_stderr();
     let mut stderr = std::io::stderr().lock();
     let _ = write_info(&mut stderr, &palette, message);
-}
-
-/// Render the report to an arbitrary writer with an explicit palette.
-/// Pulled out from [`report`] so tests can capture and assert on the
-/// rendered bytes without touching stderr.
-fn write_report(out: &mut dyn Write, p: &Palette, err: &anyhow::Error) -> std::io::Result<()> {
-    let chain: Vec<String> = err.chain().map(|e| e.to_string()).collect();
-    // The root cause is the most actionable part — surface it as the
-    // headline. Anyhow's chain runs head→root; we want the tail.
-    // `chain()` is documented as non-empty (the head is the error itself),
-    // but fall back rather than panic if that ever changes upstream.
-    let root_raw = chain
-        .last()
-        .map(String::as_str)
-        .unwrap_or("(unknown error)");
-    let root = strip_status_prefix(root_raw);
-    writeln!(
-        out,
-        "{red}{bold}error:{reset} {root}",
-        red = p.red,
-        bold = p.bold,
-        reset = p.reset
-    )?;
-
-    // Intermediate context layers, oldest to newest, skipping the root.
-    // Anyhow's chain is head→root; the head is usually the outermost
-    // `.context("loading X")`, which is the most user-facing locator.
-    if chain.len() > 1 {
-        for layer in chain[..chain.len() - 1].iter() {
-            let stripped = strip_status_prefix(layer);
-            writeln!(
-                out,
-                "  {dim}while:{reset} {stripped}",
-                dim = p.dim,
-                reset = p.reset
-            )?;
-        }
-    }
-
-    if let Some(hint) = hint_for(root) {
-        writeln!(out)?;
-        for line in hint.lines() {
-            writeln!(
-                out,
-                "  {cyan}hint:{reset} {line}",
-                cyan = p.cyan,
-                reset = p.reset
-            )?;
-        }
-    }
-    Ok(())
 }
 
 fn write_info(
@@ -202,13 +118,6 @@ pub(crate) fn hint_for(root: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    fn render(err: &anyhow::Error) -> String {
-        let palette = Palette::none();
-        let mut buf: Vec<u8> = Vec::new();
-        write_report(&mut buf, &palette, err).unwrap();
-        String::from_utf8(buf).unwrap()
-    }
-
     #[test]
     fn strip_known_status_prefixes() {
         assert_eq!(strip_status_prefix("bad request: foo"), "foo");
@@ -260,52 +169,6 @@ mod tests {
     #[test]
     fn hint_returns_none_for_unknown_messages() {
         assert!(hint_for("something we have no opinion on").is_none());
-    }
-
-    #[test]
-    fn report_renders_chain_head_to_root_in_order() {
-        let err: anyhow::Error = anyhow::anyhow!("bad request: config thing exploded")
-            .context("loading /tmp/bitrouter.yaml")
-            .context("preparing models command");
-        let out = render(&err);
-        // Root cause becomes the `error:` headline with prefix stripped.
-        assert!(
-            out.contains("error: config thing exploded"),
-            "missing root headline: {out}"
-        );
-        // Outer contexts render as `while:` lines, prefix-stripped if applicable.
-        assert!(
-            out.contains("while: preparing models command"),
-            "missing outer context: {out}"
-        );
-        assert!(
-            out.contains("while: loading /tmp/bitrouter.yaml"),
-            "missing inner context: {out}"
-        );
-        // Order: head → root (so outer command appears before the
-        // inner `loading …` context).
-        let outer = out.find("preparing models command").unwrap();
-        let inner = out.find("loading /tmp/bitrouter.yaml").unwrap();
-        assert!(outer < inner, "context order wrong:\n{out}");
-    }
-
-    #[test]
-    fn report_appends_hint_block_when_pattern_matches() {
-        let err: anyhow::Error =
-            anyhow::anyhow!("config references undefined environment variable 'FOO_KEY'")
-                .context("loading /tmp/bitrouter.yaml");
-        let out = render(&err);
-        assert!(
-            out.contains("hint: Set `FOO_KEY`"),
-            "no hint emitted:\n{out}"
-        );
-    }
-
-    #[test]
-    fn report_omits_hint_block_when_no_pattern_matches() {
-        let err: anyhow::Error = anyhow::anyhow!("something obscure happened");
-        let out = render(&err);
-        assert!(!out.contains("hint:"), "spurious hint emitted:\n{out}");
     }
 
     #[test]

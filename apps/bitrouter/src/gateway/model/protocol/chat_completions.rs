@@ -497,10 +497,6 @@ fn ingress_admission(
 }
 
 impl InboundAdapter for ChatCompletionsAdapter {
-    fn protocol(&self) -> ApiProtocol {
-        ApiProtocol::ChatCompletions
-    }
-
     fn parse_request(&self, body: serde_json::Value) -> Result<Prompt> {
         let req: ChatRequest = serde_json::from_value(body.clone())
             .map_err(|e| describe_deser_error("ChatRequest", &e, &body))?;
@@ -805,19 +801,6 @@ impl InboundAdapter for ChatCompletionsAdapter {
 }
 
 impl OutboundAdapter for ChatCompletionsAdapter {
-    fn validate_managed_prompt(&self, prompt: &Prompt) -> std::result::Result<(), &'static str> {
-        super::managed::validate_prompt(&ApiProtocol::ChatCompletions, prompt)
-    }
-
-    fn validate_managed_body(
-        &self,
-        expected: &serde_json::Value,
-        actual: &serde_json::Value,
-        _target: &ModelTarget,
-    ) -> std::result::Result<(), &'static str> {
-        super::managed::validate_body(&ApiProtocol::ChatCompletions, expected, actual)
-    }
-
     fn protocol(&self) -> ApiProtocol {
         ApiProtocol::ChatCompletions
     }

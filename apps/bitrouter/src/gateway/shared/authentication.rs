@@ -204,11 +204,6 @@ impl AuthApplier for SharedApplier {
         self.target(target)
             .is_ok_and(|target| self.inner.requires_streaming(&target))
     }
-    fn output_token_limit_support(&self, target: &ModelTarget) -> Option<bool> {
-        self.target(target)
-            .ok()
-            .and_then(|target| self.inner.output_token_limit_support(&target))
-    }
     fn normalize_managed_body(
         &self,
         body: &mut serde_json::Value,

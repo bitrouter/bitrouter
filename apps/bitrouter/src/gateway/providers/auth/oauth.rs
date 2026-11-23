@@ -31,7 +31,7 @@ pub enum OAuthError {
     /// (RFC 6749 §5.2). Surface the error code so the CLI can suggest a
     /// fix (e.g. `invalid_grant` → re-run the flow).
     #[error("OAuth token endpoint returned error '{error}'{}", description.as_deref().map(|d| format!(" ({d})")).unwrap_or_default())]
-    OAuthError {
+    Rejected {
         /// The RFC 6749 §5.2 error code.
         error: String,
         /// Optional human-readable description.
@@ -76,7 +76,7 @@ pub async fn parse_token_reply(
         message: "token response is not valid OAuth JSON".into(),
     })?;
     if let Some(error) = parsed.error {
-        return Err(OAuthError::OAuthError {
+        return Err(OAuthError::Rejected {
             error: safe_error_code(&error).into(),
             description: None,
         });
@@ -183,7 +183,7 @@ impl crate::gateway::providers::auth::store::OAuthRefresher for RefreshGrant {
     ) -> crate::gateway::model::error::Result<OAuthToken> {
         refresh(&self.client, &self.endpoint, &self.client_id, current).await.map_err(|error| {
             crate::gateway::model::error::ModelError::Provider {
-                status: if matches!(error, OAuthError::OAuthError { .. } | OAuthError::MissingRefreshToken) { 401 } else { 502 },
+                status: if matches!(error, OAuthError::Rejected { .. } | OAuthError::MissingRefreshToken) { 401 } else { 502 },
                 message: "selected OAuth credential could not refresh; explicitly reauthenticate this account".into(),
             }
         })
@@ -209,28 +209,6 @@ pub async fn refresh(
     current: &OAuthToken,
 ) -> Result<OAuthToken, OAuthError> {
     refresh_inner(client, token_endpoint, client_id, None, current).await
-}
-
-/// Like [`refresh`], but for a **confidential** OAuth client — includes
-/// `client_secret` in the grant. Google installed-app clients (e.g. the
-/// Antigravity `agy` CLI) require the secret even though it ships inside the
-/// binary; the application Antigravity integration extracts it from the local `agy` at runtime
-/// rather than embedding Google's secret here.
-pub async fn refresh_with_client_secret(
-    client: &reqwest::Client,
-    token_endpoint: &str,
-    client_id: &str,
-    client_secret: &str,
-    current: &OAuthToken,
-) -> Result<OAuthToken, OAuthError> {
-    refresh_inner(
-        client,
-        token_endpoint,
-        client_id,
-        Some(client_secret),
-        current,
-    )
-    .await
 }
 
 async fn refresh_inner(
@@ -369,7 +347,7 @@ mod tests {
     -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // OAuthToken with no refresh_token → refresh() bails before any
         // network call with a `Malformed` containing the user-facing
-        // "re-run `bro providers login <provider>`" hint.
+        // "re-run `bitrouter providers login <provider>`" hint.
         let client = reqwest::Client::new();
         let token = OAuthToken {
             access_token: "stale".into(),

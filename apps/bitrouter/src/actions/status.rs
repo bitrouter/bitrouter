@@ -1,11 +1,10 @@
 //! The `status` action: *is BitRouter up, and am I OK to spend?*
 //!
-//! One report type is shared by `bro status`, Code sessions, and typed remote
+//! One report type is shared by `bitrouter status`, Code sessions, and typed remote
 //! control so all retained surfaces preserve the same JSON shape. AI owns the
 //! report contract; the app owns the port and implementation over the daemon
 //! control socket and local metering database.
 
-use super::ToolError;
 use {
     bitrouter_ai::control::status::Spend, bitrouter_ai::control::status::Spent,
     bitrouter_ai::control::status::StatusReport,
@@ -37,15 +36,6 @@ impl StatusReportRuntime for StatusReport {
     }
 }
 
-/// The `status` port shared by local consumers.
-#[async_trait::async_trait]
-pub trait StatusQuery: Send + Sync {
-    /// Report BitRouter's state, or a `ToolError` when the probe itself failed
-    /// (a permission-denied socket, a malformed response). A stopped daemon is
-    /// `Ok` with `running: false`.
-    async fn status(&self) -> Result<StatusReport, ToolError>;
-}
-
 use std::path::{Path, PathBuf};
 
 use crate::daemon::{self, DaemonCommand, DaemonResponse};
@@ -53,7 +43,7 @@ use crate::metering::store::TimeWindow;
 use crate::paths::ConfigSource;
 
 /// The window `status` reports spend over, and the label it carries in the
-/// report. `bro status --requests` rolls up the same day, so the
+/// report. `bitrouter status --requests` rolls up the same day, so the
 /// agent-facing spend surfaces agree.
 const SPEND_WINDOW: TimeWindow = TimeWindow::Today;
 
@@ -187,21 +177,6 @@ async fn local_spend(source: Option<&ConfigSource>) -> Option<Spend> {
     })
 }
 
-#[async_trait::async_trait]
-impl StatusQuery for DaemonStatus {
-    /// `caller` is ignored, and that is a documented limitation rather than an
-    /// oversight: the control socket is a single-machine channel that reaches
-    /// no upstream, and the local spend rollup is machine-wide (see
-    /// `local_spend`). The parameter stays on the port because the cloud
-    /// implementation of the same action does forward it, and because per-
-    /// caller local attribution is where this implementation goes next.
-    async fn status(&self) -> Result<StatusReport, ToolError> {
-        self.report()
-            .await
-            .map_err(|e| ToolError::new(e.to_string()))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -237,43 +212,29 @@ providers:
         (dir, source)
     }
 
-    /// Direct calls and the injected port both fill `spend` from the same
-    /// action. Same struct, same numbers.
     #[tokio::test]
-    async fn both_surfaces_report_spend_on_a_local_deployment() {
+    async fn report_includes_spend_on_a_local_deployment() -> anyhow::Result<()> {
         let (dir, source) = metered_home().await;
         let socket = dir.path().join("nothing-listening.sock");
-        let probe = DaemonStatus::new(&socket, Some(source));
-
-        let cli = probe.report().await.expect("cli surface");
-        let port = StatusQuery::status(&probe).await.expect("port surface");
-
-        for (surface, report) in [("cli", &cli), ("port", &port)] {
-            let spend = report
-                .spend
-                .as_ref()
-                .unwrap_or_else(|| panic!("{surface} surface reported no spend"));
-            let spent = spend
-                .spent
-                .as_ref()
-                .unwrap_or_else(|| panic!("{surface} surface reported no spent half"));
-            assert_eq!(spent.window, "today");
-            // An empty window is `0`, not absence: "nothing spent today" and
-            // "no spend record readable" are different answers.
-            assert_eq!(spent.estimated_micro_usd, 0);
-            assert_eq!(spent.requests, 0);
-            assert_eq!(spent.unpriced, 0);
-            // A BYOK deployment caps nothing, so the other half stays empty
-            // rather than being fabricated as an unlimited allowance.
-            assert!(spend.limit.is_none(), "{surface} invented a spend cap");
-        }
-        assert_eq!(
-            serde_json::to_value(&cli).expect("cli json"),
-            serde_json::to_value(&port).expect("port json"),
-            "the two surfaces of one action must be the same bytes"
+        let report = DaemonStatus::new(&socket, Some(source)).report().await?;
+        let spend = report
+            .spend
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("missing spend"))?;
+        let spent = spend
+            .spent
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("missing spent half"))?;
+        assert_eq!(spent.window, "today");
+        assert_eq!(spent.estimated_micro_usd, 0);
+        assert_eq!(spent.requests, 0);
+        assert_eq!(spent.unpriced, 0);
+        assert!(
+            spend.limit.is_none(),
+            "local deployment invented a spend cap"
         );
-        // …and none of that depended on a daemon being up.
-        assert!(!cli.running);
+        assert!(!report.running);
+        Ok(())
     }
 
     /// Best-effort, never fatal: no config source means no spend, not a failed

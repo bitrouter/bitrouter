@@ -224,6 +224,7 @@ pub(in crate::tenancy) async fn binding_page_in(
 }
 
 /// Page all credential history; expired and revoked rows must also be validated.
+#[cfg(test)]
 pub(in crate::tenancy) async fn credential_page_in(
     db: &impl ConnectionTrait,
     after: Option<&CredentialId>,

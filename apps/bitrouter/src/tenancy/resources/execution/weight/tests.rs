@@ -22,25 +22,6 @@ fn weight(value: &RetainedExecutionRevision) -> TestResult<usize> {
     retained_heap_bytes(value).map_err(|code| anyhow::anyhow!("weight failed: {code:?}"))
 }
 
-#[test]
-fn optional_assessment_reference_is_charged_without_selecting_the_route() -> TestResult<()> {
-    let mut value = revision()?;
-    insert(&mut value, "subject", route("subject", "private")?);
-    let before = weight(&value)?;
-    let assessment = reference(
-        ResourceKind::Route,
-        "judge-with-distinct-immutable-revision",
-    )?;
-    let expected = assessment.owner_id.as_str().len()
-        + assessment.resource_id.as_str().len()
-        + assessment.revision_id.as_str().len();
-    Arc::get_mut(value.routes.get_mut("subject").context("subject")?)
-        .context("unique route")?
-        .assessment = Some(assessment);
-    ensure!(weight(&value)? >= before + expected);
-    Ok(())
-}
-
 fn reference(kind: ResourceKind, name: &str) -> TestResult<ResourceRef> {
     Ok(ResourceRef {
         owner_kind: OwnerKind::Tenant,
@@ -53,7 +34,6 @@ fn reference(kind: ResourceKind, name: &str) -> TestResult<ResourceRef> {
 
 fn revision() -> TestResult<RetainedExecutionRevision> {
     Ok(RetainedExecutionRevision {
-        bro_capture: false,
         installation: "installation".try_into()?,
         tenant: "tenant".try_into()?,
         revision: "r1".try_into()?,
@@ -80,26 +60,17 @@ fn route(name: &str, header: &str) -> TestResult<RouteData> {
     let reference = reference(ResourceKind::Route, name)?;
     Ok(RouteData {
         admission: None,
-        assessment: None,
-        block: None,
-        block_pricing: Vec::new(),
         dependencies: vec![reference.clone()],
         reference,
         selector: "fixture:model".into(),
         overrides: PromptOverrides::default(),
         policy: None,
-        choice: None,
         chains: vec![Chain {
             sort: bitrouter_ai::routing::SortOrder::default(),
             selector: "fixture:model".into(),
             inbound: ApiProtocol::ChatCompletions,
             candidates: vec![0],
         }],
-        native: NativeChains::Ready(vec![NativeChain {
-            selector: "fixture:model".into(),
-            operation: bitrouter_ai::types::ModelOperation::Generation,
-            candidates: vec![0],
-        }]),
         candidates: vec![Candidate {
             routing: Default::default(),
             target,
@@ -137,15 +108,10 @@ fn selection_does_not_hide_unselected_routes_or_their_long_fixed_headers() -> Te
 
 #[tokio::test]
 async fn exported_target_detaches_header_buffers_and_survives_root_eviction() -> TestResult<()> {
-    assert_exported_target_detaches(false).await
+    assert_exported_target_detaches().await
 }
 
-#[tokio::test]
-async fn native_target_detaches_headers_and_keeps_the_entire_revision_charged() -> TestResult<()> {
-    assert_exported_target_detaches(true).await
-}
-
-async fn assert_exported_target_detaches(native: bool) -> TestResult<()> {
+async fn assert_exported_target_detaches() -> TestResult<()> {
     let long_name = format!("x-{}", "retained-header-".repeat(96));
     let long_value = "private-retained-value-".repeat(4096);
     let mut data = route("chosen", &long_value)?;
@@ -164,7 +130,6 @@ async fn assert_exported_target_detaches(native: bool) -> TestResult<()> {
         first.revision,
         first.authority_revision,
         super::super::ValidatedEnvelope {
-            bro_capture: false,
             document: first.document,
             routes: first.routes,
         },
@@ -174,12 +139,9 @@ async fn assert_exported_target_detaches(native: bool) -> TestResult<()> {
     let cache = Cache::<u8, RetainedExecutionRevision>::new(1, 128 * 1024 * 1024)?;
     let root = cache.insert(1, first, first_weight, 0)?;
     // Select through the actual cache Pin, not the uncached decoder-test method.
-    let selected = if native {
-        root.select_native("chosen", bitrouter_ai::types::ModelOperation::Generation)
-    } else {
-        root.select("chosen", &ApiProtocol::ChatCompletions)
-    }
-    .map_err(|code| anyhow::anyhow!("selection failed: {code:?}"))?;
+    let selected = root
+        .select("chosen", &ApiProtocol::ChatCompletions)
+        .map_err(|code| anyhow::anyhow!("selection failed: {code:?}"))?;
     let target = selected
         .route_chain(
             "chosen",
@@ -249,7 +211,6 @@ async fn assert_exported_target_detaches(native: bool) -> TestResult<()> {
         second.revision,
         second.authority_revision,
         super::super::ValidatedEnvelope {
-            bro_capture: false,
             document: second.document,
             routes: second.routes,
         },
@@ -397,7 +358,6 @@ fn constructor_compacts_actual_root_and_every_retained_reference_allocation() ->
     document.routes = vec![over_reserved_reference(ResourceKind::Route, "route")?];
     document.policy = Some(over_reserved_reference(ResourceKind::Policy, "policy")?);
     let mut data = route("route", "short")?;
-    data.assessment = Some(over_reserved_reference(ResourceKind::Route, "judge")?);
     data.reference = over_reserved_reference(ResourceKind::Route, "route")?;
     data.dependencies = vec![
         over_reserved_reference(ResourceKind::Route, "route")?,
@@ -422,14 +382,12 @@ fn constructor_compacts_actual_root_and_every_retained_reference_allocation() ->
         over_reserved_id("r1")?,
         1.try_into()?,
         super::super::ValidatedEnvelope {
-            bro_capture: false,
             document,
             routes: HashMap::from([("route".into(), Arc::new(data))]),
         },
     )
     .map_err(|code| anyhow::anyhow!("constructor failed: {code:?}"))?;
     let RetainedExecutionRevision {
-        bro_capture: _,
         installation,
         tenant,
         revision,
@@ -453,25 +411,15 @@ fn constructor_compacts_actual_root_and_every_retained_reference_allocation() ->
         .map_err(|_| anyhow::anyhow!("unexpected shared route"))?;
     let RouteData {
         admission: _,
-        assessment,
-        block_pricing: _,
-        block: _,
         reference,
         dependencies,
         selector: _,
         overrides: _,
         policy,
         chains: _,
-        native: _,
         candidates,
-        choice: _,
     } = data;
     assert_compact_reference(reference, ResourceKind::Route, "route")?;
-    assert_compact_reference(
-        assessment.context("assessment ref")?,
-        ResourceKind::Route,
-        "judge",
-    )?;
     ensure!(dependencies.len() == 3);
     for (dependency, (kind, name)) in dependencies.into_iter().zip([
         (ResourceKind::Route, "route"),
@@ -542,34 +490,5 @@ fn accounting_overflow_and_excessive_traversal_fail_closed() -> TestResult<()> {
         Weight::new().json(&nested, 0),
         Err(ErrorCode::CapacityExceeded)
     ));
-    Ok(())
-}
-
-#[test]
-fn unselected_native_selectors_and_index_spare_capacity_are_charged() -> TestResult<()> {
-    let mut value = revision()?;
-    insert(&mut value, "chosen", route("chosen", "short")?);
-    insert(&mut value, "other", route("other", "short")?);
-    let chosen = value
-        .select("chosen", &ApiProtocol::ChatCompletions)
-        .map_err(|code| anyhow::anyhow!("selection failed: {code:?}"))?;
-    let before = weight(&value)?;
-    let other =
-        Arc::get_mut(value.routes.get_mut("other").context("other")?).context("unique route")?;
-    let NativeChains::Ready(chains) = &mut other.native else {
-        anyhow::bail!("ready native chain");
-    };
-    let mut selector = String::with_capacity(4096);
-    selector.push_str("tier");
-    let mut indices = Vec::with_capacity(2048);
-    indices.push(0);
-    let additional = selector.capacity() + indices.capacity() * size_of::<usize>();
-    chains.push(NativeChain {
-        selector,
-        operation: bitrouter_ai::types::ModelOperation::Generation,
-        candidates: indices,
-    });
-    ensure!(weight(&value)? >= before + additional);
-    ensure!(chosen.reference().resource_id.as_str() == "chosen");
     Ok(())
 }

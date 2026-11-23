@@ -2,7 +2,7 @@
 //!
 //! Distinct from the `openai` provider: this targets
 //! `chatgpt.com/backend-api/codex` (Responses-only) using an OAuth access
-//! token minted by the `bro providers login openai-codex` flow against
+//! token minted by the `bitrouter providers login openai-codex` flow against
 //! `auth.openai.com`. The ChatGPT subscription credential does **not**
 //! authenticate to `api.openai.com`, so a separate provider id is the
 //! cleanest model.
@@ -180,10 +180,6 @@ impl AuthApplier for OpenAiCodexAuthApplier {
     ) -> Result<Option<CredentialAuthority>> {
         let token = self.resolve_token(target).await?;
         Ok(Self::continuation_authority(&token))
-    }
-
-    fn output_token_limit_support(&self, _target: &ModelTarget) -> Option<bool> {
-        Some(false)
     }
 
     fn normalize_managed_body(

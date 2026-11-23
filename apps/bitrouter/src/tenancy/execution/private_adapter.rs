@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::managed_contract::private_adapter::{
+use crate::inference_contract::private_adapter::{
     ATTEMPT_DOMAIN, ATTEMPT_HEADER, Attempt, Disposition, MAX_ATTEMPT_LIFETIME_MS,
     MAX_HEADER_BYTES, OUTCOME_DOMAIN, OUTCOME_HEADER, Outcome,
 };

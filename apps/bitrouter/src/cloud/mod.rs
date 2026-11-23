@@ -1,11 +1,11 @@
-//! Cloud authentication glue and the `bro cloud …` CLI entry points.
+//! Cloud authentication glue and the `bitrouter cloud …` CLI entry points.
 //!
 //! Two daemon-side responsibilities, both keyed on the `"bitrouter"`
 //! provider id:
 //!
 //! - [`enable_in_zero_config`] — auto-add the `bitrouter` provider to the in-memory
 //!   zero-config `providers:` map when the user has signed in via
-//!   `bro cloud login` (an `account-credentials.json` file is present
+//!   `bitrouter cloud login` (an `account-credentials.json` file is present
 //!   at the default path). The env-var path (`$BITROUTER_API_KEY`) is
 //!   already covered by [`crate::providers::apply::zero_config`].
 //! - [`register_if_configured`] — register the hosted provider applier.
@@ -13,7 +13,7 @@
 //! The account module owns product persistence/settings and assembles the AI
 //! hosted session shared by model, Cloud management and telemetry consumers.
 //!
-//! The [`cli`] sub-module owns the `bro cloud` subcommand surface
+//! The [`cli`] sub-module owns the `bitrouter cloud` subcommand surface
 //! — typed wrappers around the application-owned management client.
 
 pub mod account;
@@ -22,7 +22,6 @@ pub mod api_client;
 pub mod auth;
 pub mod cli;
 pub mod management;
-pub mod settlement;
 
 use std::sync::Arc;
 
@@ -32,23 +31,23 @@ use crate::config::{Config, ProviderConfig};
 use crate::gateway::providers::auth::AuthAppliers;
 use crate::gateway::providers::hosted::PROVIDER_ID;
 use crate::gateway::providers::hosted::applier::BitrouterAuthApplier;
-#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+#[cfg(feature = "otel-http")]
 use crate::telemetry::bearer::TelemetryBearer;
 use anyhow::{Context, Result};
 
-#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+#[cfg(feature = "otel-http")]
 const FIRST_PARTY_TELEMETRY_ORIGIN: &str = "https://telemetry.bitrouter.ai";
-#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+#[cfg(feature = "otel-http")]
 const DEFAULT_ACCOUNT_ORIGIN: &str = "https://api.bitrouter.ai";
 
 /// Insert the `bitrouter` provider into `config.providers` when the user
-/// has run `bro cloud login` (i.e. the credentials file exists at the
+/// has run `bitrouter cloud login` (i.e. the credentials file exists at the
 /// default path) and the entry is not already present.
 ///
 /// No-op when the credentials file is absent — `crate::providers::apply::zero_config`
 /// already handles the `$BITROUTER_API_KEY` env-var path. Together the two
 /// paths give a signed-in user the cloud provider on every fresh
-/// `bro serve` regardless of which credential source they chose.
+/// `bitrouter serve` regardless of which credential source they chose.
 pub fn enable_in_zero_config(config: &mut Config) {
     let Ok(path) = default_credentials_path() else {
         return;
@@ -82,49 +81,6 @@ pub fn default_manager() -> Result<Arc<CredentialManager>> {
     Ok(Arc::new(manager))
 }
 
-/// One lazily constructed account manager shared by the Cloud consumers of a
-/// standalone ACP invocation. Construction does not read the credential store;
-/// resolution remains best-effort at each consumer boundary.
-#[cfg(feature = "harness")]
-#[derive(Clone)]
-pub(crate) struct StandaloneCloudCredentials {
-    manager: Option<Arc<CredentialManager>>,
-}
-
-#[cfg(feature = "harness")]
-impl StandaloneCloudCredentials {
-    /// Construct the invocation-scoped manager once. A path-construction
-    /// failure preserves the existing best-effort fallback behavior.
-    pub(crate) fn new() -> Self {
-        Self {
-            manager: default_manager().ok(),
-        }
-    }
-
-    #[cfg(all(test, any(feature = "otel-http", feature = "otel-grpc")))]
-    pub(crate) fn with_manager(manager: Arc<CredentialManager>) -> Self {
-        Self {
-            manager: Some(manager),
-        }
-    }
-
-    /// Resolve the stored account bearer for ACP routing, when available.
-    pub(crate) async fn routing_fallback(&self, target_base_url: &str) -> Option<String> {
-        let manager = self.manager.as_ref()?.clone();
-        cloud_bearer_for_base_url_with_manager(manager, target_base_url).await
-    }
-
-    /// Build the account telemetry source from the same invocation manager.
-    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
-    pub(crate) async fn telemetry_bearer(
-        &self,
-        endpoint: &str,
-    ) -> Option<Arc<dyn TelemetryBearer>> {
-        let manager = self.manager.as_ref()?.clone();
-        cloud_bearer_source(manager, endpoint).await
-    }
-}
-
 /// Register the BitRouter Cloud applier on `appliers` when the `bitrouter`
 /// provider appears in `config.providers`. No-op otherwise.
 pub fn register_if_configured(
@@ -156,13 +112,13 @@ pub fn register_if_configured(
 ///
 /// Best-effort: any resolution failure maps to `None`, so the export degrades to
 /// anonymous rather than being dropped.
-#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+#[cfg(feature = "otel-http")]
 pub struct CloudBearer {
     manager: Arc<CredentialManager>,
     expected_origin: String,
 }
 
-#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+#[cfg(feature = "otel-http")]
 impl std::fmt::Debug for CloudBearer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CloudBearer")
@@ -172,7 +128,7 @@ impl std::fmt::Debug for CloudBearer {
     }
 }
 
-#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+#[cfg(feature = "otel-http")]
 #[async_trait::async_trait]
 impl TelemetryBearer for CloudBearer {
     async fn bearer(&self) -> Option<String> {
@@ -193,7 +149,7 @@ impl TelemetryBearer for CloudBearer {
 /// daemon startup is never broken. The caller decides whether to build a source
 /// at all — `attribution: anonymous` must never call this (it would read the
 /// credential store).
-#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+#[cfg(feature = "otel-http")]
 pub async fn cloud_bearer_source(
     manager: Arc<CredentialManager>,
     expected_origin: impl Into<String>,
@@ -211,7 +167,7 @@ pub async fn cloud_bearer_source(
 /// Account credentials are normally confined to the exporter's origin. The
 /// sole exception is the first-party telemetry service, which accepts the
 /// account credential registered at the hosted inference origin.
-#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+#[cfg(feature = "otel-http")]
 fn credential_origin_for_exporter(exporter: &str) -> String {
     let exporter_origin = reqwest::Url::parse(exporter)
         .ok()
@@ -220,41 +176,6 @@ fn credential_origin_for_exporter(exporter: &str) -> String {
         Some(FIRST_PARTY_TELEMETRY_ORIGIN) => DEFAULT_ACCOUNT_ORIGIN.to_owned(),
         _ => exporter.to_owned(),
     }
-}
-
-/// Resolve the signed-in Cloud bearer only when `target_base_url` has the
-/// exact origin recorded at login. This permits headless gateway clients to
-/// reuse `bro cloud login` without ever forwarding that credential to
-/// an arbitrary remote host.
-pub async fn cloud_bearer_for_base_url(target_base_url: &str) -> Option<String> {
-    let manager = default_manager().ok()?;
-    cloud_bearer_for_base_url_with_manager(manager, target_base_url).await
-}
-
-/// Resolve a hosted bearer for `target_base_url` using the supplied manager.
-pub async fn cloud_bearer_for_base_url_with_manager(
-    manager: Arc<CredentialManager>,
-    target_base_url: &str,
-) -> Option<String> {
-    manager
-        .session()
-        .resolve_bearer(None, Some(target_base_url))
-        .await
-        .map(|credential| credential.secret().to_owned())
-        .ok()
-}
-
-/// Resolve only a static inference API key for an exact Cloud origin. OAuth
-/// access tokens use `Authorization: Bearer`; settlement receipts are scoped
-/// by `x-api-key`, so silently coercing OAuth into that header is invalid.
-pub async fn cloud_api_key_for_base_url(target_base_url: &str) -> Option<String> {
-    let manager = default_manager().ok()?;
-    manager
-        .session()
-        .resolve_api_key(None, Some(target_base_url))
-        .await
-        .map(|credential| credential.secret().to_owned())
-        .ok()
 }
 
 fn onboarding_hint() -> String {
@@ -273,12 +194,12 @@ mod tests {
     use crate::gateway::providers::hosted::credentials::{Credentials, StoredCredential};
     use bitrouter_ai::types::ApiProtocol;
     use chrono::{Duration, Utc};
-    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    #[cfg(feature = "otel-http")]
     use serde_json::json;
     use wiremock::MockServer;
-    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    #[cfg(feature = "otel-http")]
     use wiremock::matchers::{body_string_contains, method, path as wm_path};
-    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    #[cfg(feature = "otel-http")]
     use wiremock::{Mock, ResponseTemplate};
 
     fn fresh_tmp_creds_path(
@@ -369,7 +290,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    #[cfg(feature = "otel-http")]
     #[tokio::test]
     async fn shared_manager_single_flights_refresh_for_model_management_and_telemetry()
     -> anyhow::Result<()> {
@@ -520,7 +441,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    #[cfg(feature = "otel-http")]
     #[tokio::test]
     async fn cloud_bearer_source_none_when_not_signed_in() -> anyhow::Result<()> {
         let (_directory, path) = fresh_tmp_creds_path("absent")?;
@@ -533,7 +454,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    #[cfg(feature = "otel-http")]
     #[tokio::test]
     async fn cloud_bearer_source_uses_custom_exporter_same_origin_api_key() -> anyhow::Result<()> {
         let (_directory, path) = fresh_tmp_creds_path("api-key-bearer")?;
@@ -556,7 +477,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    #[cfg(feature = "otel-http")]
     #[tokio::test]
     async fn default_first_party_exporter_uses_default_account_credential() -> anyhow::Result<()> {
         let (_directory, path) = fresh_tmp_creds_path("default-telemetry-origin")?;
@@ -580,7 +501,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    #[cfg(feature = "otel-http")]
     #[tokio::test]
     async fn custom_exporter_cannot_receive_default_account_credential() -> anyhow::Result<()> {
         let (_directory, path) = fresh_tmp_creds_path("custom-telemetry-origin")?;
@@ -600,83 +521,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn cloud_gateway_bearer_is_scoped_to_the_login_origin() -> anyhow::Result<()> {
-        let (_directory, path) = fresh_tmp_creds_path("gateway-origin")?;
-        let manager = Arc::new(CredentialManager::with_client(path, reqwest::Client::new()));
-        manager
-            .save(StoredCredential::api_key(
-                "brk_gateway.secret".to_owned(),
-                "https://api.bitrouter.ai".to_owned(),
-            ))
-            .await?;
-
-        assert_eq!(
-            cloud_bearer_for_base_url_with_manager(
-                Arc::clone(&manager),
-                "https://api.bitrouter.ai/v1/responses",
-            )
-            .await
-            .as_deref(),
-            Some("brk_gateway.secret")
-        );
-        assert!(
-            cloud_bearer_for_base_url_with_manager(manager, "https://api.bitrouter.ai.evil/v1")
-                .await
-                .is_none()
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn settlement_resolver_rejects_oauth_but_accepts_same_origin_api_key()
-    -> anyhow::Result<()> {
-        let (_oauth_directory, oauth_path) = fresh_tmp_creds_path("settlement-oauth")?;
-        let oauth = Arc::new(CredentialManager::with_client(
-            oauth_path,
-            reqwest::Client::new(),
-        ));
-        oauth
-            .save(StoredCredential::from(Credentials {
-                access_token: "oauth-access-token".to_owned(),
-                refresh_token: Some("oauth-refresh-token".to_owned()),
-                expires_at: Utc::now() + Duration::minutes(10),
-                refresh_token_expires_at: None,
-                token_type: "Bearer".to_owned(),
-                scope: "inference:invoke".to_owned(),
-                client_id: "bitrouter-cli".to_owned(),
-                authorization_server: "https://api.bitrouter.ai".to_owned(),
-                namespace_id: Some("ns-test".to_owned()),
-                subject: None,
-            }))
-            .await?;
-        assert!(
-            oauth
-                .session()
-                .resolve_api_key(None, Some("https://api.bitrouter.ai"))
-                .await
-                .is_err()
-        );
-        let (_api_key_directory, api_key_path) = fresh_tmp_creds_path("settlement-api-key")?;
-        let api_key = Arc::new(CredentialManager::with_client(
-            api_key_path,
-            reqwest::Client::new(),
-        ));
-        api_key
-            .save(StoredCredential::api_key(
-                "brk_gateway.secret".to_owned(),
-                "https://api.bitrouter.ai".to_owned(),
-            ))
-            .await?;
-        let resolved = api_key
-            .session()
-            .resolve_api_key(None, Some("https://api.bitrouter.ai/v1"))
-            .await?;
-        assert_eq!(resolved.secret(), "brk_gateway.secret");
-        Ok(())
-    }
-
-    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    #[cfg(feature = "otel-http")]
     #[test]
     fn cloud_bearer_debug_redacts_manager() -> anyhow::Result<()> {
         let (_directory, path) = fresh_tmp_creds_path("dbg")?;
@@ -690,7 +535,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    #[cfg(feature = "otel-http")]
     #[tokio::test]
     async fn malformed_credentials_file_is_swallowed_as_anonymous() -> anyhow::Result<()> {
         let (_directory, path) = fresh_tmp_creds_path("malformed")?;

@@ -24,7 +24,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Build and package a distinct gateway or full artifact for manual use.
+    /// Build and package a minimal or shared service archive for manual use.
     Package(distribution::PackageOptions),
     /// Generate the config JSON Schema.
     GenerateSchema {

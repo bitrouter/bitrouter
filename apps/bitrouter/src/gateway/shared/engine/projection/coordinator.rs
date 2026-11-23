@@ -63,7 +63,7 @@ impl Receipt {
     fn validate(&self, status: &str) -> Result<()> {
         ensure!(
             self.projection.format == 1 && self.projection.binding.is_none(),
-            "retired or unsupported projection receipt"
+            "unsupported projection receipt"
         );
         ensure!(
             matches!(
@@ -153,7 +153,7 @@ impl Engine {
             .context("original projection requirements are missing")?;
         ensure!(
             execution.value.trajectory.is_none(),
-            "retired guarded execution binding"
+            "unsupported guarded execution binding"
         );
         inputs.evaluation(&record, false)?;
         Ok(Terminal { record, inputs })

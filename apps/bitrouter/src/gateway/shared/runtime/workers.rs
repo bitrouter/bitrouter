@@ -352,7 +352,7 @@ async fn heartbeat_loop(
                     })
                 {
                     health.withdraw();
-                    anyhow::bail!("shared owner lease is no longer authoritative");
+                    anyhow::bail!("shared owner lease has lost authority");
                 }
                 tracing::warn!("shared heartbeat acknowledgement unavailable");
             }

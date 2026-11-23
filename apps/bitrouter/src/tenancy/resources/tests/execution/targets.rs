@@ -1,5 +1,5 @@
 use super::*;
-use crate::gateway::model::capabilities::ReasoningEffortConfig;
+use crate::config::model::ReasoningEffortConfig;
 use crate::gateway::{model::target::AuthScheme, pipeline::types::OutboundHeaderRule};
 use bitrouter_ai::types::ChatTokenLimitField;
 
@@ -44,7 +44,6 @@ async fn every_target_field_and_optional_or_header_distinction_is_bound() -> Res
             canonical_id: None,
         },
     ));
-    assert!(compiler::target_value(&registry_target).is_err());
     assert!(matches!(
         route.match_candidate(&registry_target),
         Err(ErrorCode::Forbidden)
@@ -346,49 +345,5 @@ async fn equal_concrete_targets_in_different_routes_keep_their_own_credential_re
     );
     assert_eq!(checked(b.match_candidate(&target))?, second_ref);
     assert!(!a.dependencies().contains(&second_ref));
-    Ok(())
-}
-
-#[cfg(all(feature = "core", feature = "harness"))]
-#[tokio::test]
-async fn canonical_defaults_allow_token_tariffs_but_unknown_overrides_do_not() -> Result<()> {
-    use crate::gateway::model::protocol::{
-        InboundAdapter, chat_completions::ChatCompletionsAdapter,
-    };
-
-    for extra_default in [false, true] {
-        let (db, resources) = fixture().await?;
-        let mut input = route("tenant", "visible", "model")?;
-        if extra_default {
-            input["definition"]["selector"] = json!("bitrouter/with-extra");
-            input["definition"]["routing"]["routers"] = json!({"with-extra": {
-                "selection":{"kind":"model","model":"fixture:model"},
-                "defaults":{"params":{"vendor_billable_option":true}}
-            }});
-        }
-        import(&resources, &db, vec![credential("tenant")?, input]).await?;
-        let row = retained(
-            &resources,
-            &db,
-            "tenant",
-            "config-v1",
-            document(
-                vec![reference("tenant", ResourceKind::Route, "visible")?],
-                None,
-            )?,
-        )
-        .await?;
-        let view = checked(resources.open_execution(&row))?;
-        let selected = selected(&view, "visible", ApiProtocol::ChatCompletions)?;
-        let mut prompt = ChatCompletionsAdapter.parse_request(json!({
-            "model":"visible", "messages":[{"role":"user","content":"fixture turn"}], "stream":false
-        }))?;
-        assert_eq!(selected.block_token_pricing_input(&prompt), !extra_default);
-        prompt
-            .params
-            .extra
-            .insert("vendor_billable_option".into(), json!(true));
-        assert!(!selected.block_token_pricing_input(&prompt));
-    }
     Ok(())
 }

@@ -16,7 +16,7 @@ fn fixture() -> (Arc<Admission>, Arc<AtomicBool>, Arc<Proof>, Budget) {
     (admission, live, proof, budget)
 }
 
-#[cfg(feature = "core")]
+#[cfg(feature = "eval-publication")]
 #[tokio::test]
 async fn statement_refusal_requires_typed_constraint_without_integrity_or_health_failure()
 -> Result<()> {
@@ -171,37 +171,6 @@ fn dropping_started_sql_fences_and_cannot_refund_its_reservation() -> Result<()>
     ensure!(proof.disposition() == Disposition::Ambiguous);
     admission.receipt_probe(u64::MAX);
     ensure!(budget.reserve(0, true).is_err());
-    Ok(())
-}
-
-#[cfg(feature = "harness")]
-#[test]
-fn aggregate_growth_preserves_class_and_holds_prior_reservations_on_refusal() -> Result<()> {
-    let (admission, live, proof, budget) = fixture();
-    let mut charge = budget.reserve(10, false).map_err(error)?;
-    charge.start();
-    charge.grow(20).map_err(error)?;
-    ensure!(charge.bytes == estimate(30).map_err(error)?);
-    let held = (charge.encoded_bytes, charge.bytes);
-    // Enough physical space for a small maintenance delta, below ordinary's
-    // floor. Growing must not silently reclassify this existing ordinary owner.
-    admission.receipt_probe(charge.bytes + 8);
-    ensure!(charge.grow(1) == Err(ErrorCode::CapacityExceeded));
-    ensure!(charge.grow(usize::MAX) == Err(ErrorCode::CapacityExceeded));
-    ensure!((charge.encoded_bytes, charge.bytes) == held);
-    ensure!(live.load(Ordering::Acquire));
-    ensure!(proof.disposition() != Disposition::Ambiguous);
-    ensure!(budget.reserve(0, true).is_err());
-    charge.complete().map_err(error)?;
-    admission.receipt_probe(BASE_BYTES + 8);
-    let mut maintenance = budget.reserve(0, true).map_err(error)?;
-    maintenance.start();
-    maintenance.grow(1).map_err(error)?;
-    ensure!(maintenance.bytes == BASE_BYTES + 8);
-    ensure!(maintenance.grow(1) == Err(ErrorCode::CapacityExceeded));
-    drop(maintenance);
-    ensure!(proof.disposition() == Disposition::Ambiguous);
-    ensure!(!live.load(Ordering::Acquire));
     Ok(())
 }
 

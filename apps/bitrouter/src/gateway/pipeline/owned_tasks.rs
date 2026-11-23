@@ -195,6 +195,7 @@ impl OwnedTasks {
     }
 
     fn spawn(&self, work: impl Future<Output = ()> + Send + 'static, execution: bool) {
+        let work = super::tasks::with_telemetry_context(work);
         let mut completed = Vec::new();
         let wake = {
             let mut state = self.lock();

@@ -9,9 +9,8 @@
 //!   exchanges newline-delimited JSON-RPC over its stdio pipes. Spec:
 //!   <https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#stdio>.
 //!
-//! These types are always available (no `mcp` feature required) so a consumer
-//! can implement a custom [`crate::gateway::mcp::Executor`] against them without pulling in
-//! the bundled rmcp-backed executor.
+//! These configuration types are available without the `mcp` feature. Dialing
+//! upstream servers requires the feature and its bundled transport runtime.
 
 use std::collections::HashMap;
 
@@ -50,8 +49,8 @@ pub enum McpTransport {
 /// One configured upstream MCP server, as written in `bitrouter.yaml`.
 ///
 /// The same `name` becomes the URL segment in `POST /mcp/{name}` and the
-/// identifier the [`crate::gateway::mcp::RoutingTable`] resolves against. Restrictions
-/// chosen to match the v0 config schema for paste-compatibility:
+/// identifier used for upstream routing. Server names must satisfy these
+/// restrictions:
 ///
 /// - non-empty
 /// - no `/` (collides with the URL path segment)

@@ -2,21 +2,7 @@
 
 #[cfg(feature = "server-tools")]
 use crate::gateway::pipeline::server_tools;
-use crate::gateway::pipeline::{context, executor, native, request_checks, settlement, timing};
-use crate::gateway::providers::auth;
-#[path = "tests_reconstruction.rs"]
-mod reconstruction;
-
-#[path = "tests_managed_protocol.rs"]
-mod managed_protocol;
-
-#[path = "tests_provider_body.rs"]
-mod provider_body;
-
-#[path = "tests_native_output.rs"]
-mod native_output;
-#[path = "tests_native_stream.rs"]
-mod native_stream;
+use crate::gateway::pipeline::{request_checks, settlement, timing};
 
 #[cfg(feature = "multi-instance")]
 #[path = "tests_owned_drain.rs"]
@@ -34,13 +20,12 @@ use crate::gateway::caller::CallerContext;
 use crate::gateway::error::{BitrouterError, Result};
 use crate::gateway::extensions::request_check::{ContentRole, Decision, Input};
 use crate::gateway::model::error::ModelError;
-use crate::gateway::model::target::AuthScheme;
 use crate::gateway::observability::event::PipelineEvent;
 use crate::gateway::pipeline::builder::PipelineBuilder;
 use crate::gateway::pipeline::context::{PipelineContext, StreamContext};
 use crate::gateway::pipeline::execution::Pipeline;
 use crate::gateway::pipeline::executor::{
-    DispatchExecutor, Executor, HttpExecutor, MockExecutor, MockResponse, StreamPartStream,
+    Executor, HttpExecutor, MockExecutor, MockResponse, StreamPartStream,
 };
 use crate::gateway::pipeline::hooks::{
     DenyReason, ExecutionHook, FallbackDecision, HookDecision, HopOutcome, ObserveHook, Phase,
@@ -51,7 +36,6 @@ use crate::gateway::pipeline::stream::{StreamAction, StreamInterest, StreamOutco
 use crate::gateway::pipeline::types::{ExecutionResult, PipelineRequest, RoutingTarget};
 use crate::gateway::providers::auth::{AuthApplier, AuthAppliers};
 use bitrouter_ai::types::*;
-use bitrouter_ai::types::{ReasoningEffort, ReasoningEffortSource};
 use {
     crate::gateway::pipeline::routing::FallbackPolicy,
     crate::gateway::pipeline::routing::ModelResolution,
@@ -511,10 +495,6 @@ impl RoutingTable for NamedRoutingTable {
     fn model_info(&self, _model: &str) -> Option<ModelInfo> {
         None
     }
-
-    async fn reload(&self) -> Result<()> {
-        Ok(())
-    }
 }
 
 struct ConvergenceRoutingTable;
@@ -593,10 +573,6 @@ impl RoutingTable for ConvergenceRoutingTable {
 
     fn model_info(&self, _model: &str) -> Option<ModelInfo> {
         None
-    }
-
-    async fn reload(&self) -> Result<()> {
-        Ok(())
     }
 }
 
@@ -839,475 +815,6 @@ impl ModelSelector for CountingModelSelector {
 
 struct FailingModelSelector;
 
-struct AdmittedRoutes(Vec<u32>);
-
-#[async_trait]
-impl native::NativeExecutionControl for AdmittedRoutes {
-    async fn plan(&self, _: native::NativePlan) -> Result<native::NativePlanAdmission> {
-        Ok(native::NativePlanAdmission {
-            route_indices: self.0.clone(),
-        })
-    }
-
-    async fn before_attempt(&self, _: &str, _: u32) -> Result<()> {
-        Ok(())
-    }
-
-    async fn after_attempt(&self, _: crate::managed_contract::evidence::NativeAttemptReport) {}
-}
-
-#[tokio::test]
-async fn managed_admission_cannot_add_duplicate_or_reorder_frozen_routes() -> Result<()> {
-    for indices in [vec![], vec![2], vec![0, 0], vec![1, 0]] {
-        let calls = Arc::new(AtomicUsize::new(0));
-        let mut builder = PipelineBuilder::new();
-        builder
-            .routing_table(routing_table(&["first", "second"]))
-            .executor(Arc::new(NeverCalledExecutor(calls.clone())));
-        let result = Arc::new(builder.build()?)
-            .execute_native_controlled(request(), Arc::new(AdmittedRoutes(indices.clone())))
-            .await;
-        assert!(
-            result
-                .err()
-                .is_some_and(|error| error.to_string().contains("ordered nonempty route subset")),
-            "indices={indices:?}"
-        );
-        assert_eq!(calls.load(Ordering::SeqCst), 0);
-    }
-    Ok(())
-}
-
-struct ManagedSelectionControl {
-    selection: native::NativeModelSelection,
-    plans: tokio::sync::Mutex<Vec<native::NativePlan>>,
-    reports: tokio::sync::Mutex<Vec<crate::managed_contract::evidence::NativeAttemptReport>>,
-}
-
-#[async_trait]
-impl native::NativeExecutionControl for ManagedSelectionControl {
-    fn model_selection(&self) -> native::NativeModelSelection {
-        self.selection
-    }
-
-    async fn plan(&self, plan: native::NativePlan) -> Result<native::NativePlanAdmission> {
-        let route_indices = (0..plan.routes.len()).map(|index| index as u32).collect();
-        self.plans.lock().await.push(plan);
-        Ok(native::NativePlanAdmission { route_indices })
-    }
-
-    async fn before_attempt(&self, _: &str, _: u32) -> Result<()> {
-        Ok(())
-    }
-
-    async fn after_attempt(&self, report: crate::managed_contract::evidence::NativeAttemptReport) {
-        self.reports.lock().await.push(report);
-    }
-}
-
-struct ModelAndEffortSelector(Arc<AtomicUsize>);
-
-struct FailedCounter(Arc<AtomicUsize>);
-
-#[async_trait]
-impl Executor for FailedCounter {
-    async fn count_input_tokens(
-        &self,
-        _: &RoutingTarget,
-        _: &Prompt,
-        _: &PipelineContext,
-    ) -> Result<crate::managed_contract::evidence::NativeInputCount> {
-        Err(BitrouterError::bad_request(
-            "SECRET_RAW_CREDENTIAL and NATIVE_CONTINUATION_ID",
-        ))
-    }
-
-    async fn execute(
-        &self,
-        _: &RoutingTarget,
-        _: &Prompt,
-        _: &PipelineContext,
-    ) -> Result<ExecutionResult> {
-        self.0.fetch_add(1, Ordering::SeqCst);
-        Err(BitrouterError::internal("must not generate"))
-    }
-
-    async fn execute_stream(
-        &self,
-        _: &RoutingTarget,
-        _: &Prompt,
-        _: &PipelineContext,
-    ) -> Result<StreamPartStream> {
-        Err(BitrouterError::internal("must not stream"))
-    }
-}
-
-#[tokio::test]
-async fn count_errors_are_redacted_and_cannot_be_admitted_as_unknown() -> Result<()> {
-    let calls = Arc::new(AtomicUsize::new(0));
-    let table = Arc::new(StaticRoutingTable::new());
-    let mut route = target("first");
-    route.model_constraints.input_token_counting =
-        Some(crate::managed_contract::evidence::InputTokenCounting::Responses);
-    table.insert("test-model", vec![route]);
-    let mut builder = PipelineBuilder::new();
-    builder
-        .routing_table(table)
-        .executor(Arc::new(FailedCounter(calls.clone())));
-    let control = Arc::new(ManagedSelectionControl {
-        selection: native::NativeModelSelection::Fixed,
-        plans: tokio::sync::Mutex::new(Vec::new()),
-        reports: tokio::sync::Mutex::new(Vec::new()),
-    });
-    let pipeline = Arc::new(builder.build()?);
-    assert!(
-        pipeline
-            .clone()
-            .execute_native_controlled(request(), control.clone())
-            .await
-            .is_err()
-    );
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
-    let plans = control.plans.lock().await;
-    assert_eq!(plans.len(), 1);
-    let serialized = serde_json::to_string(&plans[0])
-        .map_err(|_| BitrouterError::internal("fixture serialization failed"))?;
-    assert!(!serialized.contains("SECRET_RAW_CREDENTIAL"));
-    assert!(!serialized.contains("NATIVE_CONTINUATION_ID"));
-    assert!(serialized.contains("input_count_failed:invalid_request:400"));
-    Ok(())
-}
-
-struct ReloadAfterRoute {
-    table: Arc<crate::config::routing_table::ConfigRoutingTable>,
-    replacement: crate::config::Config,
-}
-
-#[async_trait]
-impl ObserveHook for ReloadAfterRoute {
-    async fn after_phase(&self, phase: Phase, _: &PipelineContext) {
-        if phase == Phase::Route {
-            let result = self.table.replace_config(self.replacement.clone()).await;
-            assert!(result.is_ok());
-        }
-    }
-    async fn on_stream_part(&self, _: &StreamContext, _: &StreamPart) {}
-    async fn on_request_end(&self, _: &PipelineContext, _: &RequestOutcome) {}
-}
-
-#[tokio::test]
-async fn managed_route_facts_share_the_resolved_targets_config_snapshot() -> Result<()> {
-    let config = |base: &str, output: u64| -> Result<crate::config::Config> {
-        serde_json::from_value(serde_json::json!({"providers":{"fixture":{
-            "api_base":base,"api_key":"fixture-secret","models":[{
-                "id":"test-model","token_limits":{"max_output_tokens":output}
-            }]
-        }}}))
-        .map_err(|error| BitrouterError::internal(error.to_string()))
-    };
-    let table = Arc::new(
-        crate::config::routing_table::ConfigRoutingTable::from_config(config(
-            "https://old.invalid",
-            128,
-        )?),
-    );
-    let mut builder = PipelineBuilder::new();
-    let answer = GenerateResult {
-        content: Vec::new(),
-        usage: None,
-        finish_reason: Some(FinishReason::Stop),
-        response_id: None,
-        stop_details: None,
-        provider_metadata: Default::default(),
-    };
-    builder
-        .routing_table(table.clone())
-        .executor(Arc::new(MockExecutor::new(vec![
-            MockResponse::Generate(answer.clone()),
-            MockResponse::Generate(answer),
-        ])))
-        .observe_hook(ReloadAfterRoute {
-            table,
-            replacement: config("https://new.invalid", 8192)?,
-        });
-    let pipeline = Arc::new(builder.build()?);
-    let control = Arc::new(ManagedSelectionControl {
-        selection: native::NativeModelSelection::Fixed,
-        plans: Default::default(),
-        reports: Default::default(),
-    });
-    pipeline
-        .clone()
-        .execute_native_controlled(request(), control.clone())
-        .await?;
-    pipeline
-        .clone()
-        .execute_native_controlled(request(), control.clone())
-        .await?;
-    let plans = control.plans.lock().await;
-    let reports = control.reports.lock().await;
-    assert_eq!(
-        plans[0].routes[0]
-            .constraints
-            .token_limits
-            .max_output_tokens,
-        Some(128)
-    );
-    assert_eq!(
-        plans[1].routes[0]
-            .constraints
-            .token_limits
-            .max_output_tokens,
-        Some(8192)
-    );
-    for (plan, report) in plans.iter().zip(reports.iter()) {
-        assert_eq!(plan.routes[0], report.route);
-    }
-    Ok(())
-}
-
-#[tokio::test]
-async fn managed_fixed_continuation_requires_a_known_matching_effort() -> Result<()> {
-    for pinned in [None, Some(None), Some(Some(ReasoningEffort::High))] {
-        for requested in [
-            None,
-            Some(ReasoningEffort::Low),
-            Some(ReasoningEffort::High),
-        ] {
-            let mut builder = PipelineBuilder::new();
-            builder
-                .routing_table(Arc::new(NamedRoutingTable))
-                .executor(Arc::new(MockExecutor::always_text(
-                    "compatible continuation",
-                )))
-                .route_hook(ManagedConstraintHook {
-                    change_model: false,
-                    pinned_effort: pinned,
-                });
-            let pipeline = Arc::new(builder.build()?);
-            let control = Arc::new(ManagedSelectionControl {
-                selection: native::NativeModelSelection::Fixed,
-                plans: Default::default(),
-                reports: Default::default(),
-            });
-            let mut request = request_for_model("bitrouter/adaptive");
-            request
-                .input
-                .generation_prompt_mut()
-                .ok_or_else(|| BitrouterError::internal("generation fixture"))?
-                .params
-                .reasoning_effort = requested;
-            let result = pipeline
-                .clone()
-                .execute_native_controlled(request, control.clone())
-                .await;
-            let compatible = pinned == Some(requested);
-            assert_eq!(
-                result.is_ok(),
-                compatible,
-                "pinned={pinned:?}, requested={requested:?}"
-            );
-            assert_eq!(control.plans.lock().await.len(), usize::from(compatible));
-            assert_eq!(control.reports.lock().await.len(), usize::from(compatible));
-        }
-    }
-    Ok(())
-}
-
-struct ManagedConstraintHook {
-    change_model: bool,
-    pinned_effort: Option<Option<ReasoningEffort>>,
-}
-
-#[async_trait]
-impl RouteHook for ManagedConstraintHook {
-    async fn resolve(
-        &self,
-        chain: &mut Vec<RoutingTarget>,
-        ctx: &mut PipelineContext,
-    ) -> Result<()> {
-        if self.change_model {
-            ctx.set_model("wrong-attribution");
-        } else {
-            let route = chain
-                .first()
-                .ok_or_else(|| BitrouterError::internal("missing test route"))?;
-            let continuation = context::ProviderContinuation::new(
-                "opaque-continuation".into(),
-                route,
-                auth::ContinuationAuthority::new(
-                    auth::CredentialAuthority::derive("test/static", "fixture"),
-                    AuthScheme::Bearer,
-                ),
-            );
-            ctx.insert_extension(Arc::new(match self.pinned_effort {
-                Some(effort) => continuation.with_effort_constraint(effort),
-                None => continuation,
-            }));
-        }
-        Ok(())
-    }
-}
-
-#[tokio::test]
-async fn managed_constraints_reject_policy_provenance_and_continuation_conflicts() -> Result<()> {
-    for case in 0..4 {
-        let calls = Arc::new(AtomicUsize::new(0));
-        let mut builder = PipelineBuilder::new();
-        builder
-            .routing_table(Arc::new(NamedRoutingTable))
-            .executor(Arc::new(NeverCalledExecutor(calls.clone())));
-        if case == 1 {
-            builder.model_selector(Arc::new(ModelAndEffortSelector(Arc::new(
-                AtomicUsize::new(0),
-            ))));
-        }
-        if case != 0 {
-            builder.route_hook(ManagedConstraintHook {
-                change_model: case == 2,
-                pinned_effort: Some(None),
-            });
-        }
-        let pipeline = Arc::new(builder.build()?);
-        let control = Arc::new(ManagedSelectionControl {
-            selection: if case >= 2 {
-                native::NativeModelSelection::Fixed
-            } else {
-                native::NativeModelSelection::Policy
-            },
-            plans: Default::default(),
-            reports: Default::default(),
-        });
-        let mut request = request_for_model("bitrouter/adaptive");
-        request
-            .input
-            .generation_prompt_mut()
-            .ok_or_else(|| BitrouterError::internal("generation fixture"))?
-            .params
-            .reasoning_effort = Some(ReasoningEffort::High);
-        if case == 0 {
-            // Policy-produced effort has to prove target support even before
-            // the controlled pipeline starts. It is not a manual override.
-            request
-                .input
-                .generation_prompt_mut()
-                .ok_or_else(|| BitrouterError::internal("generation fixture"))?
-                .params
-                .reasoning_effort_source = ReasoningEffortSource::Policy;
-        }
-        assert!(
-            pipeline
-                .clone()
-                .execute_native_controlled(request, control.clone())
-                .await
-                .is_err()
-        );
-        assert_eq!(calls.load(Ordering::SeqCst), 0);
-        assert!(control.plans.lock().await.is_empty());
-    }
-    Ok(())
-}
-
-#[async_trait]
-impl ModelSelector for ModelAndEffortSelector {
-    async fn select_policy(&self, _: &str, ctx: &mut PipelineContext) -> Result<()> {
-        self.0.fetch_add(1, Ordering::SeqCst);
-        ctx.set_model("economy-model");
-        ctx.set_policy_reasoning_effort(ReasoningEffort::Low)?;
-        Ok(())
-    }
-}
-
-#[tokio::test]
-async fn managed_fixed_model_skips_policy_and_manual_effort_survives_policy() -> Result<()> {
-    for selection in [
-        native::NativeModelSelection::Fixed,
-        native::NativeModelSelection::Policy,
-    ] {
-        let calls = Arc::new(AtomicUsize::new(0));
-        let mut builder = PipelineBuilder::new();
-        builder
-            .routing_table(Arc::new(NamedRoutingTable))
-            .executor(Arc::new(MockExecutor::always_text("ok")))
-            .model_selector(Arc::new(ModelAndEffortSelector(calls.clone())));
-        let pipeline = Arc::new(builder.build()?);
-        let control = Arc::new(ManagedSelectionControl {
-            selection,
-            plans: Default::default(),
-            reports: Default::default(),
-        });
-        let mut request = request_for_model("bitrouter/adaptive");
-        request
-            .input
-            .generation_prompt_mut()
-            .ok_or_else(|| BitrouterError::internal("generation fixture"))?
-            .params
-            .reasoning_effort = Some(ReasoningEffort::High);
-        pipeline
-            .clone()
-            .execute_native_controlled(request, control.clone())
-            .await?;
-        let plans = control.plans.lock().await;
-        let reports = control.reports.lock().await;
-        assert_eq!(plans.len(), 1);
-        assert_eq!(reports.len(), 1);
-        assert_eq!(
-            plans[0].prompt.params.reasoning_effort,
-            Some(ReasoningEffort::High)
-        );
-        assert_eq!(
-            plans[0].prompt.params.reasoning_effort_source,
-            ReasoningEffortSource::Caller
-        );
-        let selected_model = if selection == native::NativeModelSelection::Fixed {
-            assert_eq!(calls.load(Ordering::SeqCst), 0);
-            "strong-model"
-        } else {
-            assert_eq!(calls.load(Ordering::SeqCst), 1);
-            "economy-model"
-        };
-        assert_eq!(plans[0].effective_model, selected_model);
-        assert_eq!(plans[0].routes[0].model, selected_model);
-        assert_eq!(plans[0].routes[0], reports[0].route);
-        assert_eq!(
-            plans[0]
-                .router
-                .as_ref()
-                .map(|router| router.router_id.as_str()),
-            Some("adaptive")
-        );
-    }
-    Ok(())
-}
-
-#[tokio::test]
-async fn managed_fixed_model_rejects_hook_rewrite_before_dispatch() -> Result<()> {
-    let calls = Arc::new(AtomicUsize::new(0));
-    let mut builder = PipelineBuilder::new();
-    builder
-        .routing_table(Arc::new(NamedRoutingTable))
-        .executor(Arc::new(NeverCalledExecutor(calls.clone())))
-        .pre_request_hook(RewriteSelector {
-            selector: "other-model",
-            outcome: RewriteOutcome::Allow,
-        });
-    let pipeline = Arc::new(builder.build()?);
-    let control = Arc::new(ManagedSelectionControl {
-        selection: native::NativeModelSelection::Fixed,
-        plans: Default::default(),
-        reports: Default::default(),
-    });
-    assert!(
-        pipeline
-            .execute_native_controlled(request(), control.clone())
-            .await
-            .is_err()
-    );
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
-    assert!(control.plans.lock().await.is_empty());
-    Ok(())
-}
-
 #[async_trait]
 impl ModelSelector for FailingModelSelector {
     async fn select_policy(&self, _policy: &str, _ctx: &mut PipelineContext) -> Result<()> {
@@ -1331,23 +838,41 @@ struct TimingSnapshot {
     has_error: bool,
 }
 
-struct TimingSnapshotRecorder(Arc<std::sync::Mutex<Vec<TimingSnapshot>>>);
+struct TimingSnapshotObserver(Arc<std::sync::Mutex<Vec<TimingSnapshot>>>);
 
 #[async_trait]
-impl SettlementRecorder for TimingSnapshotRecorder {
-    async fn record(&self, ctx: &mut SettlementContext) -> Result<()> {
-        self.0.lock().unwrap().push(TimingSnapshot {
-            provider_id: ctx.provider_id.clone(),
-            model_id: ctx.model_id.clone(),
-            request_duration_ms: ctx.request_duration_ms,
-            upstream_duration_ms: ctx.upstream_duration_ms,
-            ttft_ms: ctx.ttft_ms,
-            generation_duration_ms: ctx.generation_duration_ms,
-            first_token_kind: ctx.first_token_kind,
-            finish_reason: ctx.finish_reason.clone(),
-            has_error: ctx.error.is_some(),
-        });
-        Ok(())
+impl ObserveHook for TimingSnapshotObserver {
+    async fn after_phase(&self, _: Phase, _: &PipelineContext) {}
+
+    async fn on_stream_part(&self, _: &StreamContext, _: &StreamPart) {}
+
+    async fn on_request_end(&self, ctx: &PipelineContext, outcome: &RequestOutcome) {
+        let target = ctx.serving_target();
+        let execution = ctx.execution_result.as_ref();
+        let first_token = ctx.first_token_timing();
+        let snapshot = TimingSnapshot {
+            provider_id: target
+                .as_ref()
+                .map(|target| target.provider_name.clone())
+                .unwrap_or_default(),
+            model_id: target
+                .as_ref()
+                .map(|target| target.service_id.clone())
+                .unwrap_or_default(),
+            request_duration_ms: ctx.request_duration_ms(),
+            upstream_duration_ms: execution.and_then(|execution| execution.upstream_duration_ms),
+            ttft_ms: first_token.map(|timing| timing.ttft_ms),
+            generation_duration_ms: ctx.generation_duration_ms(),
+            first_token_kind: first_token.map(|timing| timing.kind),
+            finish_reason: execution
+                .and_then(|execution| execution.result.generation())
+                .and_then(|result| result.finish_reason.clone()),
+            has_error: matches!(outcome, RequestOutcome::Failed(_)),
+        };
+        match self.0.lock() {
+            Ok(mut snapshots) => snapshots.push(snapshot),
+            Err(poisoned) => poisoned.into_inner().push(snapshot),
+        }
     }
 }
 
@@ -3076,7 +2601,7 @@ async fn collect_stream(
 }
 
 #[tokio::test]
-async fn streamed_settlement_has_positive_canonical_timing() {
+async fn streamed_request_has_positive_canonical_timing() {
     let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
     let pipeline = pipeline_with(
         routing_table(&["openai"]),
@@ -3089,7 +2614,7 @@ async fn streamed_settlement_has_positive_canonical_timing() {
             },
         ])])),
         |builder| {
-            builder.settlement_recorder(TimingSnapshotRecorder(captured.clone()));
+            builder.observe_hook(TimingSnapshotObserver(captured.clone()));
         },
     );
 
@@ -3123,7 +2648,7 @@ async fn streamed_settlement_has_positive_canonical_timing() {
 }
 
 #[tokio::test]
-async fn nonstream_settlement_carries_finish_reason() {
+async fn nonstream_observation_carries_finish_reason() {
     let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
     let pipeline = pipeline_with(
         routing_table(&["openai"]),
@@ -3138,11 +2663,12 @@ async fn nonstream_settlement_carries_finish_reason() {
             },
         )])),
         |builder| {
-            builder.settlement_recorder(TimingSnapshotRecorder(captured.clone()));
+            builder.observe_hook(TimingSnapshotObserver(captured.clone()));
         },
     );
 
     pipeline.execute(request()).await.expect("request succeeds");
+    pipeline.drain_pending_settlements().await;
 
     let snapshots = captured.lock().unwrap();
     let snapshot = snapshots.first().expect("settlement snapshot");
@@ -3168,7 +2694,7 @@ async fn streamed_settlement_carries_finish_reason() {
             },
         ])])),
         |builder| {
-            builder.settlement_recorder(TimingSnapshotRecorder(captured.clone()));
+            builder.observe_hook(TimingSnapshotObserver(captured.clone()));
         },
     );
 
@@ -3203,7 +2729,7 @@ async fn streamed_fallback_attributes_timing_to_successful_target() {
             ]),
         ])),
         |builder| {
-            builder.settlement_recorder(TimingSnapshotRecorder(captured.clone()));
+            builder.observe_hook(TimingSnapshotObserver(captured.clone()));
         },
     );
 
@@ -3231,7 +2757,7 @@ async fn streamed_fallback_attributes_timing_to_successful_target() {
 }
 
 #[tokio::test]
-async fn streamed_upstream_error_finalizes_timing_before_settlement() {
+async fn streamed_upstream_error_preserves_final_timing() {
     let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
     let pipeline = pipeline_with(
         routing_table(&["openai"]),
@@ -3239,7 +2765,7 @@ async fn streamed_upstream_error_finalizes_timing_before_settlement() {
             error: BitrouterError::UpstreamUnavailable,
         }),
         |builder| {
-            builder.settlement_recorder(TimingSnapshotRecorder(captured.clone()));
+            builder.observe_hook(TimingSnapshotObserver(captured.clone()));
         },
     );
 
@@ -3263,7 +2789,7 @@ async fn streamed_upstream_error_finalizes_timing_before_settlement() {
 }
 
 #[tokio::test]
-async fn streamed_hook_abort_finalizes_timing_before_settlement() {
+async fn streamed_hook_abort_preserves_final_timing() {
     let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
     let ended = Arc::new(std::sync::Mutex::new(Vec::new()));
     let pipeline = pipeline_with(
@@ -3286,7 +2812,7 @@ async fn streamed_hook_abort_finalizes_timing_before_settlement() {
                     mode: StreamMode::AbortOnText,
                     ended_with: ended.clone(),
                 })
-                .settlement_recorder(TimingSnapshotRecorder(captured.clone()));
+                .observe_hook(TimingSnapshotObserver(captured.clone()));
         },
     );
 
@@ -3314,7 +2840,7 @@ async fn streamed_hook_abort_finalizes_timing_before_settlement() {
 }
 
 #[tokio::test]
-async fn dropped_stream_finalizes_timing_before_detached_settlement() {
+async fn dropped_stream_observes_timing_after_detached_settlement() {
     let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
     let pipeline = pipeline_with(
         routing_table(&["openai"]),
@@ -3325,7 +2851,7 @@ async fn dropped_stream_finalizes_timing_before_detached_settlement() {
             },
         ])])),
         |builder| {
-            builder.settlement_recorder(TimingSnapshotRecorder(captured.clone()));
+            builder.observe_hook(TimingSnapshotObserver(captured.clone()));
         },
     );
 
@@ -3357,11 +2883,12 @@ async fn non_stream_request_duration_includes_pre_request_pipeline_time() {
         |builder| {
             builder
                 .pre_request_hook(DelayPreHook(std::time::Duration::from_millis(20)))
-                .settlement_recorder(TimingSnapshotRecorder(captured.clone()));
+                .observe_hook(TimingSnapshotObserver(captured.clone()));
         },
     );
 
     pipeline.execute(request()).await.expect("request succeeds");
+    pipeline.drain_pending_settlements().await;
 
     let snapshots = captured.lock().unwrap();
     let snapshot = snapshots.first().expect("settlement snapshot");
@@ -3471,7 +2998,7 @@ async fn early_stream_drop_runs_every_settlement_recorder() {
         |builder| {
             builder
                 .settlement_recorder(LabelledRecorder {
-                    label: "adequacy",
+                    label: "policy",
                     recorded: recorded.clone(),
                 })
                 .settlement_recorder(LabelledRecorder {
@@ -3491,10 +3018,7 @@ async fn early_stream_drop_runs_every_settlement_recorder() {
     drop(stream);
 
     pipeline.drain_pending_settlements().await;
-    assert_eq!(
-        recorded.lock().unwrap().as_slice(),
-        &["adequacy", "metering"]
-    );
+    assert_eq!(recorded.lock().unwrap().as_slice(), &["policy", "metering"]);
 }
 
 #[tokio::test]
@@ -4934,6 +4458,7 @@ impl Executor for GatedExecutor {
             .into(),
             request_duration_ms: 1,
             upstream_duration_ms: Some(1),
+            #[cfg(feature = "server-tools")]
             server_tool_calls: Vec::new(),
         })
     }
@@ -5069,94 +4594,6 @@ fn search_server_tool_loop() -> Arc<server_tools::loop_controller::ServerToolLoo
         server_tools::config::ServerToolLoopConfig::default(),
         Arc::new(server_tools::approval::AllowAll),
     ))
-}
-
-#[tokio::test]
-async fn native_turn_leaves_client_tool_calls_for_the_agent() -> Result<()> {
-    let pipeline = pipeline_with(
-        routing_table(&["openai"]),
-        Arc::new(MockExecutor::new(vec![MockResponse::Generate(gen_result(
-            vec![router_tool_call()],
-        ))])),
-        |_builder| {
-            #[cfg(feature = "server-tools")]
-            _builder.server_tool_loop(search_server_tool_loop());
-        },
-    );
-    let mut req = request();
-    req.input
-        .generation_prompt_mut()
-        .ok_or_else(|| BitrouterError::internal("expected generation"))?
-        .tools = vec![Tool::Function {
-        name: "search".into(),
-        description: None,
-        parameters: serde_json::json!({"type": "object"}),
-        strict: None,
-        provider_metadata: Default::default(),
-    }];
-    let response = pipeline.execute_without_server_tools(req).await?;
-    assert!(matches!(
-        response
-            .result
-            .generation()
-            .ok_or_else(|| BitrouterError::internal("expected generation"))?
-            .content
-            .first(),
-        Some(Content::ToolCall { .. })
-    ));
-    Ok(())
-}
-
-#[tokio::test]
-async fn native_stream_leaves_client_tool_calls_for_the_agent() -> Result<()> {
-    let pipeline = pipeline_with(
-        routing_table(&["openai"]),
-        Arc::new(MockExecutor::new(vec![MockResponse::Stream(vec![
-            StreamPart::ToolCallDelta {
-                id: "c1".into(),
-                name: Some("search".into()),
-                arguments: "{}".into(),
-                provider_metadata: Default::default(),
-            },
-            StreamPart::Finish {
-                reason: FinishReason::ToolCalls,
-            },
-        ])])),
-        |_builder| {
-            #[cfg(feature = "server-tools")]
-            _builder.server_tool_loop(search_server_tool_loop());
-        },
-    );
-    let mut req = request();
-    req.input
-        .generation_prompt_mut()
-        .ok_or_else(|| BitrouterError::internal("expected generation"))?
-        .stream = true;
-    req.input
-        .generation_prompt_mut()
-        .ok_or_else(|| BitrouterError::internal("expected generation"))?
-        .tools = vec![Tool::Function {
-        name: "search".into(),
-        description: None,
-        parameters: serde_json::json!({"type": "object"}),
-        strict: None,
-        provider_metadata: Default::default(),
-    }];
-    let parts = collect_stream(pipeline.execute_stream_without_server_tools(req).await?)
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>>>()?;
-    assert!(
-        parts
-            .iter()
-            .any(|part| matches!(part, StreamPart::ToolCallDelta { .. }))
-    );
-    assert!(
-        parts
-            .iter()
-            .all(|part| !matches!(part, StreamPart::ServerToolResult { .. }))
-    );
-    Ok(())
 }
 
 #[tokio::test]
@@ -5444,7 +4881,7 @@ async fn server_tool_loop_resolves_a_router_tool_call()
     let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
     let pipeline = pipeline_with(routing_table(&["openai"]), executor, |b| {
         b.server_tool_loop(server_loop)
-            .settlement_recorder(TimingSnapshotRecorder(captured.clone()));
+            .observe_hook(TimingSnapshotObserver(captured.clone()));
     });
 
     let resp = pipeline.execute(request()).await.expect("request succeeds");
@@ -5467,6 +4904,7 @@ async fn server_tool_loop_resolves_a_router_tool_call()
             .prompt_tokens,
         6
     );
+    pipeline.drain_pending_settlements().await;
     let snapshots = captured.lock().unwrap();
     assert_eq!(
         snapshots
@@ -5694,7 +5132,7 @@ async fn server_tool_loop_streams_router_tool_activity() {
     let hops = Arc::new(std::sync::Mutex::new(Vec::new()));
     let pipeline = pipeline_with(routing_table(&["first", "second"]), executor, |b| {
         b.server_tool_loop(server_loop)
-            .settlement_recorder(TimingSnapshotRecorder(timings.clone()))
+            .observe_hook(TimingSnapshotObserver(timings.clone()))
             .observe_hook(HopEventRecorder(hops.clone()));
     });
 
@@ -5793,7 +5231,7 @@ async fn server_tool_stream_handshake_failure_still_settles_and_observes_end() {
             #[cfg(feature = "server-tools")]
             builder.server_tool_loop(server_loop);
             builder
-                .settlement_recorder(TimingSnapshotRecorder(timings.clone()))
+                .observe_hook(TimingSnapshotObserver(timings.clone()))
                 .observe_hook(HopEventRecorder(hops.clone()));
         },
     );
@@ -5914,7 +5352,7 @@ async fn conversion_admission_skips_http_candidate_for_json_and_stream_without_f
             .1
             .clone();
         dispatch.register(Arc::new(NoStructuredAdapter), transport);
-        let direct = ModelClient::with_dispatch(
+        let direct = ModelClient::with_http_client(
             HttpTimeouts::default(),
             Arc::new({
                 let mut direct_dispatch = OutboundDispatch::builtin();
@@ -5926,7 +5364,10 @@ async fn conversion_admission_skips_http_candidate_for_json_and_stream_without_f
                 direct_dispatch.register(Arc::new(NoStructuredAdapter), transport);
                 direct_dispatch
             }),
-        )?;
+            reqwest::Client::builder()
+                .build()
+                .map_err(BitrouterError::internal)?,
+        );
         let executor = HttpExecutor::with_dispatch(HttpTimeouts::default(), dispatch)?;
         let mut rejected = target("a-unsupported");
         rejected.api_base = server.uri();
@@ -5958,7 +5399,11 @@ async fn conversion_admission_skips_http_candidate_for_json_and_stream_without_f
                 crate::gateway::error::BitrouterError::internal("expected generation fixture")
             })?
             .clone();
-        let report = match direct.render_request(&rejected.model_target(), &original, streamed) {
+        let report = match direct.render_request_with_report(
+            &rejected.model_target(),
+            &original,
+            streamed,
+        ) {
             Err(ModelError::Incompatible { report }) => report,
             _ => return Err(BitrouterError::internal("direct admission disagrees")),
         };
@@ -5972,7 +5417,7 @@ async fn conversion_admission_skips_http_candidate_for_json_and_stream_without_f
         let mut builder = PipelineBuilder::new();
         builder
             .routing_table(table)
-            .executor(Arc::new(DispatchExecutor::new(Arc::new(executor))))
+            .executor(Arc::new(executor))
             .observe_hook(observer.clone());
         let pipeline = Arc::new(builder.build()?);
         if streamed {
@@ -6121,9 +5566,15 @@ async fn projection_admission_routes_file_results_without_asset_loss_or_failure_
                 crate::gateway::error::BitrouterError::internal("expected generation fixture")
             })?
             .clone();
-        let direct = ModelClient::new(HttpTimeouts::default())?;
+        let direct = ModelClient::with_http_client(
+            HttpTimeouts::default(),
+            Arc::new(crate::gateway::model::protocol::OutboundDispatch::builtin()),
+            reqwest::Client::builder()
+                .build()
+                .map_err(BitrouterError::internal)?,
+        );
         let error = direct
-            .render_request(&rejected.model_target(), &original, streamed)
+            .render_request_with_report(&rejected.model_target(), &original, streamed)
             .err()
             .ok_or_else(|| BitrouterError::internal("direct lossy projection admitted"))?;
         let ModelError::Incompatible { report } = error else {
@@ -6360,9 +5811,15 @@ async fn projection_admission_preserves_tool_constraints_during_http_fallback() 
                 crate::gateway::error::BitrouterError::internal("expected generation fixture")
             })?
             .clone();
-        let direct = ModelClient::new(HttpTimeouts::default())?;
+        let direct = ModelClient::with_http_client(
+            HttpTimeouts::default(),
+            Arc::new(crate::gateway::model::protocol::OutboundDispatch::builtin()),
+            reqwest::Client::builder()
+                .build()
+                .map_err(BitrouterError::internal)?,
+        );
         let error = direct
-            .render_request(&rejected.model_target(), &original, streamed)
+            .render_request_with_report(&rejected.model_target(), &original, streamed)
             .err()
             .ok_or_else(|| BitrouterError::internal("lossy schema admitted"))?;
         let ModelError::Incompatible { report } = error else {
@@ -6464,11 +5921,10 @@ async fn equivalent_conversion_observation_preserves_retry_content_and_attempt_a
         table.insert("test-model", vec![excluded, retry, final_target]);
         let events = Arc::new(ConversionEvents::default());
         let http = Arc::new(HttpExecutor::with_defaults()?);
-        let dispatch = DispatchExecutor::new(http);
         let mut builder = PipelineBuilder::new();
         builder
             .routing_table(table)
-            .executor(Arc::new(dispatch))
+            .executor(http)
             .observe_hook(events.clone());
         let pipeline = Arc::new(builder.build()?);
         let req = json_observation_request(streamed)?;

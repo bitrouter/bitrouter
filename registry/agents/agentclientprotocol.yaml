@@ -1,8 +1,4 @@
 # Maintained ACP adapters published by the Agent Client Protocol project.
-#
-# These two are the only catalog entries with a pinned, provider-configurable
-# adapter contract (`Harness::endpoint_plan`), recorded under
-# `apps/bitrouter/tests/fixtures/acp_adapters/`.
 - id: claude-acp
   name: Claude Agent ACP
   description: Anthropic Claude via the maintained Claude Agent ACP adapter

@@ -2,8 +2,6 @@
 //!
 //! Assembly layer: turns a [`crate::config::Config`] into a running
 //! [`crate::gateway::assembly::App`], and carries the management-command logic.
-//! The external-agent ACP controller, client and process transport live in
-//! `crate::harness::acp`; this app assembles their product adapters.
 //!
 //! Foreground custom hosts register typed capabilities through
 //! [`crate::gateway::extensions::registry::ExtensionApi`] and [`host::serve_with_extensions`],
@@ -15,109 +13,77 @@
 //! never depends back on this product host; `main.rs` is the CLI entry point.
 
 #![forbid(unsafe_code)]
-// Owned sessions retain MCP resources through Core's continuation owners. The
-// complete Send/Sync proof exceeds rustc's default trait-query recursion depth.
 #![recursion_limit = "256"]
 
-#[cfg(feature = "harness")]
-pub mod acp_cli;
-pub mod acp_trajectory;
-pub mod actions;
-pub mod administration_target;
-#[cfg(feature = "harness")]
-pub mod agent_api;
-#[cfg(feature = "harness")]
-pub mod agent_registry;
-#[cfg(feature = "harness")]
-pub mod agent_sessions;
-#[cfg(feature = "harness")]
-pub mod agent_store;
-#[cfg(feature = "harness")]
-pub mod agents;
-pub mod artifact;
+pub(crate) mod actions;
+pub(crate) mod administration_target;
+pub(crate) mod artifact;
 pub mod assemble;
-pub mod auth;
-pub mod claude_code;
-pub mod client;
-pub mod cloud;
+pub(crate) mod auth;
+pub(crate) mod claude_code;
+pub(crate) mod client;
+pub(crate) mod cloud;
 mod codex_router;
-pub mod commands;
+pub(crate) mod commands;
 pub mod config;
-#[cfg(feature = "harness")]
-pub mod config_synthesis;
-#[cfg(feature = "harness")]
-pub mod conformance;
-pub mod connected_agents;
-pub mod contexts;
-pub mod continuation;
-pub mod control_output;
-#[cfg(feature = "core")]
-pub mod core;
-pub mod daemon;
-pub mod daemon_handoff;
-pub mod daemon_locator;
-pub mod db;
-pub mod error_report;
-#[path = "core/eval/mod.rs"]
-pub mod eval;
+pub(crate) mod contexts;
+pub(crate) mod continuation;
+pub(crate) mod daemon;
+pub(crate) mod daemon_locator;
+pub(crate) mod db;
+pub(crate) mod error_report;
+pub(crate) mod eval;
 pub mod gateway;
-#[cfg(feature = "harness")]
-pub mod gateways;
-#[cfg(feature = "harness")]
-pub mod harness;
 pub mod host;
-#[cfg(feature = "harness")]
-mod local_cli;
-pub mod managed_contract;
-#[cfg(feature = "harness")]
-pub mod managed_store;
-pub mod managed_task;
-pub mod mcp_config;
-pub mod mcp_registry;
-pub mod metering;
+pub(crate) mod inference_contract;
+pub(crate) mod mcp_config;
+pub(crate) mod mcp_registry;
+pub(crate) mod metering;
 mod model_policy;
-#[cfg(feature = "harness")]
-pub mod native_acp;
-pub mod thread_cli;
 
-pub mod offline;
-pub mod onboarding;
-#[cfg(feature = "core")]
-pub mod orchestrator_api;
-pub mod output;
-pub mod paths;
-pub mod policy;
-pub mod policy_lock;
-pub mod policy_table_router;
+pub(crate) mod offline;
+pub(crate) mod onboarding;
+pub(crate) mod output;
+pub(crate) mod paths;
+pub(crate) mod policy;
+pub(crate) mod policy_source;
+pub(crate) mod policy_table_router;
 mod prompt;
 mod provider_credentials;
-pub mod providers;
-pub mod reload;
-pub mod remote_control;
-pub mod request_checks;
+pub(crate) mod providers;
+pub(crate) mod reload;
+pub(crate) mod remote_control;
+pub(crate) mod request_checks;
 mod runtime_crypto;
-pub mod session_diagnostics;
-pub mod session_identity;
-pub mod skills;
-#[cfg(feature = "harness")]
-pub mod spawn;
-pub mod storage;
-pub mod style;
+pub(crate) mod session_identity;
+pub(crate) mod skills;
+pub(crate) mod storage;
+pub(crate) mod style;
 mod tenancy;
 #[cfg(feature = "mcp")]
-pub mod tools;
+pub(crate) mod tools;
 mod tracing_filter;
-pub mod trajectory;
-pub mod update;
-pub mod upgrade;
-pub mod upgrade_preflight;
+pub(crate) mod trajectory;
+pub(crate) mod update;
 
-pub use assemble::{Assembled, build_app, build_app_with_path, merge_registry_into};
-
-/// Crate version string, surfaced by `bro --version`.
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-/// Build fingerprint of the local handoff and migration contract.
-pub const HANDOFF_BUILD_ID: &str = env!("BITROUTER_HANDOFF_BUILD_ID");
+/// Crate version string, surfaced by `bitrouter --version`.
+pub(crate) const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Optional application telemetry transports.
-pub mod telemetry;
+pub(crate) mod telemetry;
+
+#[path = "main/cli.rs"]
+mod cli;
+
+/// Run the bundled operator CLI using this process’s arguments and environment.
+///
+/// This owns the runtime, standard streams and process exit status. Embedding
+/// hosts should use [`host::serve_with_extensions`] instead.
+/// The bundled executable prepares Windows standard-handle inheritance before
+/// calling this entry point.
+pub fn run_cli() {
+    cli::entry();
+}
+
+#[cfg(test)]
+mod tests;

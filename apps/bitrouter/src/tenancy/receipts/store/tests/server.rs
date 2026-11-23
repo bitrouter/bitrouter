@@ -17,7 +17,8 @@ async fn connect(url: &str) -> Result<DatabaseConnection> {
 }
 #[tokio::test]
 #[ignore = "requires BITROUTER_TEST_DATABASE_URL with PG/MySQL CREATE/DROP DATABASE privileges"]
-async fn server_receipts_commit_rollback_reconnect_scope_and_immutable_conflict() -> Result<()> {
+async fn db_server_both_receipts_commit_rollback_reconnect_scope_and_immutable_conflict()
+-> Result<()> {
     let source = std::env::var("BITROUTER_TEST_DATABASE_URL")
         .context("dedicated PG/MySQL test URL required")?;
     let mut target = url::Url::parse(&source)?;

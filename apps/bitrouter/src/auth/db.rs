@@ -23,12 +23,6 @@ pub struct ApiKeyRecord {
     pub id: String,
     /// Owning user id.
     pub user_id: String,
-    /// Monthly spend ceiling in micro-USD, if any. Surfaced for the
-    /// `policy` module via the per-policy `max_spend_micro_usd`; the auth
-    /// module doesn't enforce it itself.
-    pub spend_limit_micro_usd: Option<i64>,
-    /// Requests-per-minute ceiling, if any.
-    pub rpm_limit: Option<i64>,
     /// The policy id this key is bound to, if any.
     pub policy_id: Option<String>,
     /// Expiry timestamp, if any.
@@ -52,20 +46,45 @@ pub async fn find_key_by_hash(
     let Some(row) = row else {
         return Ok(None);
     };
-    let expires_at = row.expires_at.as_deref().and_then(|s| {
-        DateTime::parse_from_rfc3339(s)
-            .ok()
-            .map(|d| d.with_timezone(&Utc))
-    });
+    let expires_at = key_limits(
+        row.active,
+        row.expires_at.as_deref(),
+        row.spend_limit_micro_usd,
+        row.rpm_limit,
+    )?;
+    if is_reserved_user_id(&row.user_id) {
+        return Err(BitrouterError::internal(
+            "invalid virtual-key owner".to_owned(),
+        ));
+    }
     Ok(Some(ApiKeyRecord {
         id: row.id,
         user_id: row.user_id,
-        spend_limit_micro_usd: row.spend_limit_micro_usd,
-        rpm_limit: row.rpm_limit,
         policy_id: row.policy_id,
         expires_at,
         active: row.active != 0,
     }))
+}
+
+/// Interpret persisted restrictions identically during activation and authentication.
+pub(crate) fn key_limits(
+    active: i32,
+    expiry: Option<&str>,
+    spend: Option<i64>,
+    rpm: Option<i64>,
+) -> Result<Option<DateTime<Utc>>> {
+    if !matches!(active, 0 | 1) || spend.is_some_and(|n| n < 0) || rpm.is_some_and(|n| n < 0) {
+        return Err(BitrouterError::internal(
+            "invalid virtual-key restrictions".to_owned(),
+        ));
+    }
+    expiry
+        .map(|value| {
+            DateTime::parse_from_rfc3339(value)
+                .map(|t| t.with_timezone(&Utc))
+                .map_err(|_| BitrouterError::internal("invalid virtual-key expiration".to_owned()))
+        })
+        .transpose()
 }
 
 /// Reserved user ids — `CallerContext::local()` / `::anonymous()` synthesise

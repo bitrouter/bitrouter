@@ -1,4 +1,4 @@
-//! CLI discovery and installation shared by provider login and harness launch.
+//! CLI discovery and installation for provider login.
 //! Installer facts and confirmation behavior live here without depending on
 //! harness resolution or terminal UI features.
 
@@ -11,9 +11,7 @@ use clap::ValueEnum;
 
 use crate::style::Palette;
 
-/// The two CLIs BitRouter ships a native installer for. This enum is used by
-/// the onboarding wizard's `--harness`, `providers login claude-code`, and the
-/// deprecated `spawn --agent` alias.
+/// The two CLIs supported by provider login and onboarding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum SpawnAgent {
     /// Anthropic's Claude Code CLI (`claude`).
@@ -27,24 +25,17 @@ impl SpawnAgent {
     pub fn spec(self) -> AgentSpec {
         match self {
             SpawnAgent::Claude => AgentSpec {
-                // The display id matches the `--agent` value.
-                id: "claude",
                 // The executable name looked up on `PATH`.
                 binary: "claude",
             },
-            SpawnAgent::Codex => AgentSpec {
-                id: "codex",
-                binary: "codex",
-            },
+            SpawnAgent::Codex => AgentSpec { binary: "codex" },
         }
     }
 }
 
-/// Static identity and executable name for a CLI with a bundled installer.
+/// Executable name for a CLI with a bundled installer.
 #[derive(Debug, Clone, Copy)]
 pub struct AgentSpec {
-    /// CLI id / `--agent` value.
-    pub id: &'static str,
     /// Executable name searched for on `PATH`.
     pub binary: &'static str,
 }
@@ -353,7 +344,6 @@ mod tests {
     fn codex_spec_uses_codex_binary() {
         let spec = SpawnAgent::Codex.spec();
         assert_eq!(spec.binary, "codex");
-        assert_eq!(spec.id, "codex");
     }
 
     #[test]

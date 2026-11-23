@@ -14,7 +14,6 @@ pub mod keys;
 #[cfg(test)]
 mod tests;
 
-pub use db::{ApiKeyRecord, NewApiKey};
-pub use events::Authenticated;
+pub use db::NewApiKey;
 pub use hook::AuthHook;
-pub use keys::{GeneratedKey, KEY_PREFIX, generate, hash_key, looks_like_virtual_key};
+pub use keys::generate;

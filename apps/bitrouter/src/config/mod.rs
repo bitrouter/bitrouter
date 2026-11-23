@@ -3,8 +3,7 @@
 //! The [`Config`] type is the parsed shape of a `bitrouter.yaml` file. Top
 //! level keys: `server`, `database`, `providers`, `models`, `routers`,
 //! `checkers`; per-plugin config lives under `plugins`. Load a file with
-//! [`load`]; build a [`RoutingTable`](crate::gateway::pipeline::routing::RoutingTable) over
-//! it with [`ConfigRoutingTable`](routing_table::ConfigRoutingTable).
+//! [`load`], then pass the configuration to [`crate::assemble::build_app_with_extensions`].
 //!
 //! The `providers` schema is **registry-style**: `api_protocol` and
 //! `rate_limits` are glob-prefix [`pattern::PatternMap`] lists, so a local
@@ -13,24 +12,21 @@
 //! ```no_run
 //! # async fn run() -> bitrouter::gateway::error::Result<()> {
 //! use bitrouter::config::load;
-//! use bitrouter::config::routing_table::ConfigRoutingTable;
 //! let config = load("./bitrouter.yaml").await?;
-//! let routing = ConfigRoutingTable::from_config(config);
-//! # let _ = routing; Ok(()) }
+//! # let _ = config; Ok(()) }
 //! ```
 
 /// Opt-in path for core workflow trace capture.
 pub(crate) const WORKFLOW_TRACE_JSONL_ENV: &str = "BITROUTER_WORKFLOW_TRACE_JSONL";
 
 use bitrouter_ai::control::ControlScope;
-use bitrouter_ai::policy::Target;
 #[cfg(doc)]
 use bitrouter_ai::routing::SortOrder;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 
 use crate::gateway::error::{BitrouterError, Result};
 use crate::gateway::model::client::HttpTimeouts;
@@ -42,56 +38,21 @@ pub mod checker;
 pub mod decision;
 pub mod gateway_state;
 pub mod mcp;
+pub mod model;
 pub mod pattern;
 pub mod resolution;
 pub mod router;
-pub mod routing_table;
+pub(crate) mod routing_table;
 pub mod server_tools;
 pub(crate) mod shared_process;
 pub mod skills;
 pub mod tenancy;
-pub(crate) mod yaml;
 
 #[cfg(test)]
 mod tests;
 
 use pattern::PatternMap;
 use resolution::RouterResolution;
-
-/// Retained native-model, onboarding-launch and headless prompt defaults.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
-#[serde(default)]
-pub struct ChatConfig {
-    /// Saved harness for an explicit onboarding native launch; bare `bro` starts the daemon.
-    pub agent: Option<String>,
-    /// Default daemon-routable model for native tasks and Threads.
-    pub model: Option<String>,
-    /// Prompt-expansion commands.
-    ///
-    /// `/name args` in a `bro run` or `bro acp prompt` input
-    /// sends `prompt` with `$ARGUMENTS` replaced by everything typed after the
-    /// name.
-    ///
-    /// There is deliberately no key that *runs* anything. A command here
-    /// produces a prompt and nothing else, which is what lets the registry be
-    /// open — user-authored, unreviewed — while the registry of commands that
-    /// reach BitRouter's own ports stays closed and guarded.
-    pub commands: Vec<PromptCommandConfig>,
-}
-
-/// One user-authored command that expands to a prompt.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
-pub struct PromptCommandConfig {
-    /// What to type after the slash. May not be a name BitRouter answers —
-    /// that is rejected when the config is loaded, not resolved at runtime.
-    pub name: String,
-    /// One line for `/commands`.
-    #[serde(default)]
-    pub description: String,
-    /// The prompt to send. `$ARGUMENTS` is replaced by whatever was typed
-    /// after the name; a template that uses it twice gets it twice.
-    pub prompt: String,
-}
 
 /// The top-level configuration.
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
@@ -108,13 +69,9 @@ pub struct Config {
     pub control: ControlConfig,
     /// Opt-in local resource-tenancy authority.
     pub tenancy: tenancy::TenancyConfig,
-    /// Opt-in privileged BRO coding task API, separate from inference and control.
-    pub agent_api: AgentApiConfig,
-    /// Typed decision backend for native context routing. Absent means the
-    /// conservative compiler runs without remote semantic judgments.
+    /// Decision backend for model-routing classification. If omitted, model
+    /// selection uses the available local classification.
     pub decision_model: Option<decision::DecisionModelConfig>,
-    /// The interactive session's own configuration.
-    pub chat: ChatConfig,
     /// Outbound / upstream HTTP settings (the client that calls providers).
     pub upstream: UpstreamConfig,
     /// Database connection settings.
@@ -125,8 +82,6 @@ pub struct Config {
     pub eval: EvalConfig,
     /// Durable trajectory progress-control and local operations settings.
     pub trajectory: TrajectoryConfig,
-    /// Opt-in local storage of observable ACP conversation content.
-    pub acp_recording: AcpRecordingConfig,
     /// Durable provider continuation mapping lifecycle.
     pub continuation: ContinuationConfig,
     /// Upstream providers, keyed by provider id.
@@ -177,15 +132,12 @@ impl Default for Config {
             server: ServerConfig::default(),
             control: ControlConfig::default(),
             tenancy: tenancy::TenancyConfig::default(),
-            agent_api: AgentApiConfig::default(),
             decision_model: None,
-            chat: ChatConfig::default(),
             upstream: UpstreamConfig::default(),
             database: DatabaseConfig::default(),
             gateway_state: gateway_state::GatewayStateConfig::default(),
             eval: EvalConfig::default(),
             trajectory: TrajectoryConfig::default(),
-            acp_recording: AcpRecordingConfig::default(),
             continuation: ContinuationConfig::default(),
             providers: HashMap::new(),
             models: HashMap::new(),
@@ -205,7 +157,7 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Validate named router ids, selection boundaries, and legacy conflicts.
+    /// Validate named router IDs and selection boundaries.
     ///
     /// Callers that construct or mutate [`Config`] directly must run this
     /// before activation. Config-backed routing also runs it at first
@@ -270,7 +222,7 @@ impl Config {
     }
 
     /// Resolve a raw model selector through explicit named routers.
-    pub fn resolve_router(&self, raw_model: &str) -> Result<RouterResolution> {
+    pub(crate) fn resolve_router(&self, raw_model: &str) -> Result<RouterResolution> {
         self.validate_router_config()?;
         if let Some((provider, _)) = raw_model.split_once(':')
             && let Some(message) = crate::gateway::providers::retired::provider_message(provider)
@@ -310,7 +262,7 @@ pub struct ControlConfig {
     pub enabled: bool,
     /// Loopback `host:port` to listen on.
     pub listen: String,
-    /// Explicit operator credentials. Empty keeps the legacy read-only token.
+    /// Explicit operator credentials. Empty uses the configured read-only token.
     pub credentials: Vec<ControlCredentialConfig>,
 }
 
@@ -332,33 +284,6 @@ impl Default for ControlConfig {
             enabled: false,
             listen: "127.0.0.1:4358".to_string(),
             credentials: Vec::new(),
-        }
-    }
-}
-
-/// Privileged HTTP access to the BRO task service. The app validates a
-/// loopback listener, nonempty token environment variable, and workspace
-/// allowlist before binding; `server.skip_auth` never grants this authority.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
-#[serde(default, deny_unknown_fields)]
-pub struct AgentApiConfig {
-    /// Whether to bind the task HTTP listener.
-    pub enabled: bool,
-    /// Loopback host and port, distinct from inference and control.
-    pub listen: String,
-    /// Environment variable containing the dedicated task bearer token.
-    pub token_env: String,
-    /// Exact server-owned workspace paths admitted for task submission.
-    pub workspaces: Vec<std::path::PathBuf>,
-}
-
-impl Default for AgentApiConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            listen: "127.0.0.1:4359".into(),
-            token_env: String::new(),
-            workspaces: Vec::new(),
         }
     }
 }
@@ -386,15 +311,6 @@ impl Default for ContinuationConfig {
             prune_batch_size: 1_000,
         }
     }
-}
-
-/// Local ACP conversation content recording, independent of routing evidence.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(default)]
-pub struct AcpRecordingConfig {
-    /// Store observable session messages and tool results until explicitly deleted.
-    /// No content is recorded or sent to an evaluator by default.
-    pub enabled: bool,
 }
 
 /// Durable trajectory progress-control settings.
@@ -516,218 +432,6 @@ impl RegistryConfig {
     }
 }
 
-/// Frozen named-policy inputs consumed by the shared semantic action selector.
-/// This is an internal routing projection, not a top-level
-/// configuration entry or an ingress transform.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(default, deny_unknown_fields)]
-pub struct PolicyTableConfig {
-    /// The predictor strategy used for `fingerprints`. Active policy routing
-    /// uses only canonical model route classes.
-    pub key_strategy: PolicyKeyStrategy,
-    /// Tier name → the model id every request on that tier is routed to. The
-    /// value is fed straight into the routing table, so it may be a bare
-    /// canonical id (resolved via the cascade/registry) or an explicit
-    /// `provider:model` id (a Strategy-1 direct route). The section is inert
-    /// while this map is empty.
-    pub tiers: HashMap<String, Target>,
-    /// Canonical `<task-family>|<role>|<risk>` key → tier name.
-    /// Lookup first tries the exact key, then the same role/risk under the
-    /// `unknown` task-family baseline, then [`default_tier`](Self::default_tier).
-    pub fingerprints: HashMap<String, String>,
-    /// Tier applied to any fingerprint not listed in
-    /// [`fingerprints`](Self::fingerprints). When unset, an unmapped fingerprint
-    /// is left on the model the caller requested (the transform no-ops).
-    pub default_tier: Option<String>,
-    /// Tool-use guardrail target: the tier a request carrying tools is clamped
-    /// up to when the tier it would otherwise get is not in
-    /// [`tool_safe_tiers`](Self::tool_safe_tiers). When unset, the guardrail is
-    /// disabled and tool requests route by fingerprint like any other.
-    pub tool_use_tier: Option<String>,
-    /// Tiers known to handle tool calls reliably. A tool-carrying request whose
-    /// chosen tier is in this list is left as-is; one whose tier is absent is
-    /// clamped to [`tool_use_tier`](Self::tool_use_tier).
-    pub tool_safe_tiers: Vec<String>,
-    /// Offline compiler thresholds. Serving always disables request-time
-    /// adequacy mutation; publication replaces the complete signed policy.
-    pub adequacy: AdequacyConfig,
-}
-
-/// Request-key family used by `policy_table.fingerprints`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum PolicyKeyStrategy {
-    /// The canonical source-independent predictive route strategy.
-    #[default]
-    AgentTrace,
-}
-
-impl Serialize for PolicyKeyStrategy {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str("agent_trace")
-    }
-}
-
-impl<'de> Deserialize<'de> for PolicyKeyStrategy {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        match value.as_str() {
-            "agent_trace" => Ok(Self::AgentTrace),
-            "workflow_state" | "legacy_fingerprint" => Err(serde::de::Error::custom(format!(
-                "policy_table.key_strategy: '{value}' is no longer supported; use 'agent_trace' with model route classes"
-            ))),
-            _ => Err(serde::de::Error::unknown_variant(&value, &["agent_trace"])),
-        }
-    }
-}
-
-impl schemars::JsonSchema for PolicyKeyStrategy {
-    fn schema_name() -> std::borrow::Cow<'static, str> {
-        std::borrow::Cow::Borrowed("PolicyKeyStrategy")
-    }
-
-    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        schemars::json_schema!({
-            "type": "string",
-            "description": "Active policy routing uses canonical model route classes.",
-            "enum": ["agent_trace"],
-        })
-    }
-}
-
-/// Online adequacy-learning settings — the `policy_table.adequacy` block.
-///
-/// In adaptive process mode, the daemon watches every request a downgrade
-/// produced and counts the ones that hard-fail (an upstream error or a stream
-/// error). Once a fingerprint accumulates
-/// [`escalation_threshold`](Self::escalation_threshold) such failures it is
-/// *pinned*: subsequent requests with that fingerprint route to
-/// [`escalation_tier`](Self::escalation_tier) instead of the cheap tier the
-/// static table would pick. A pin decays after
-/// [`pin_cooldown_secs`](Self::pin_cooldown_secs) so the downgrade is re-tried
-/// later. This is a safety net layered on the static table — it never downgrades
-/// on its own, only escalates a downgrade that is failing.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(default)]
-pub struct AdequacyConfig {
-    /// Explicit in-memory BRO adequacy switch. Mature model Policy compilation
-    /// leaves it disabled; it is not part of the public Policy source.
-    #[serde(skip_serializing)]
-    #[schemars(skip)]
-    pub enabled: bool,
-    /// Tier a pinned fingerprint escalates to. When unset, falls back to
-    /// [`PolicyTableConfig::default_tier`]. Must resolve to a defined tier when
-    /// [`enabled`](Self::enabled).
-    pub escalation_tier: Option<String>,
-    /// Number of *consecutive* hard failures on a downgraded fingerprint before
-    /// it is pinned to the escalation tier (a clean outcome resets the tally).
-    /// Default `1` — escalate on the first failure (conservative / sticky).
-    pub escalation_threshold: u32,
-    /// How long, in seconds, a pin lasts before the downgrade is re-attempted.
-    /// `0` means the pin never decays (until the process restarts or the row is
-    /// cleared). Default `1800` (30 minutes).
-    pub pin_cooldown_secs: u64,
-    /// Number of recent endpoint outcomes retained for provider reliability.
-    /// Default `23`, a prime-sized window that avoids aligning with short
-    /// benchmark batch cadences.
-    pub reliability_window_size: u32,
-    /// Consecutive transient provider failures that immediately open the
-    /// endpoint circuit. Default `2`.
-    pub reliability_consecutive_failures: u32,
-    /// Rolling transient-failure percentage that opens the circuit once the
-    /// reliability window is full. Default `35`.
-    pub reliability_error_rate_percent: u32,
-    /// Seconds an open provider circuit waits before admitting exactly one
-    /// half-open probe. Default `300`.
-    pub reliability_cooldown_secs: u64,
-    /// Aggressive downgrade *discovery*: in adaptive process mode, the daemon
-    /// periodically trials [`explore_tier`](Self::explore_tier)
-    /// on fingerprints the static table routes to the escalation tier (i.e. ones
-    /// the operator did *not* downgrade), and locks a fingerprint to the cheap
-    /// tier once it survives [`explore_threshold`](Self::explore_threshold)
-    /// trials — so safe downgrades are found automatically rather than only
-    /// hand-configured. A trial that fails escalates and stops (the same pin as
-    /// the safety path). This is the *aggressive* half — it routes traffic the
-    /// operator left at the capable tier to a cheaper one on a fraction of
-    /// requests. Legacy input is accepted, but process mode is authoritative
-    /// and this field is omitted from new output.
-    #[serde(skip_serializing)]
-    #[schemars(skip)]
-    pub explore_enabled: bool,
-    /// The cheap tier exploration trials toward. Must resolve to a defined tier
-    /// when [`explore_enabled`](Self::explore_enabled). Required to explore.
-    pub explore_tier: Option<String>,
-    /// Trial cadence: roughly one in `explore_interval` eligible requests is a
-    /// trial (the rest stay on the escalation tier). Default `5`.
-    pub explore_interval: u32,
-    /// Consecutive adequate trials before a fingerprint is locked to the cheap
-    /// tier (the learned downgrade). Default `3`.
-    pub explore_threshold: u32,
-    /// Deprecated compatibility field. Session identity is diagnostic-only and
-    /// cannot participate in policy routing; explicit YAML configuration is
-    /// rejected rather than accepted as a no-op.
-    #[serde(
-        skip_serializing_if = "session_downgrade_budget_is_zero",
-        deserialize_with = "reject_session_downgrade_budget"
-    )]
-    #[schemars(skip)]
-    pub max_downgraded_requests_per_session: u32,
-    /// Distinct benchmark tasks that must finish successfully after using a
-    /// cheap replacement before a request-level lock becomes active. `0` keeps
-    /// the legacy request-only behavior. Default `0`.
-    pub min_semantic_successes_for_lock: u32,
-    /// Whether the opening turn is eligible for aggressive exploration. Default
-    /// `false`, because opening/planning errors tend to propagate through the
-    /// whole task and make this state high leverage.
-    pub explore_opening: bool,
-    /// Minimum distinct benchmark-task successes required before an opening
-    /// request-level lock becomes active. This is combined with
-    /// [`min_semantic_successes_for_lock`](Self::min_semantic_successes_for_lock)
-    /// by taking the stricter threshold. Default `1`.
-    pub min_semantic_successes_for_opening: u32,
-}
-
-fn reject_session_downgrade_budget<'de, D>(_: D) -> std::result::Result<u32, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    Err(serde::de::Error::custom(
-        "policy_table.adequacy.max_downgraded_requests_per_session is no longer supported: session identity is diagnostic-only; remove this setting",
-    ))
-}
-
-fn session_downgrade_budget_is_zero(value: &u32) -> bool {
-    *value == 0
-}
-
-impl Default for AdequacyConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            escalation_tier: None,
-            escalation_threshold: 1,
-            pin_cooldown_secs: 1800,
-            reliability_window_size: 23,
-            reliability_consecutive_failures: 2,
-            reliability_error_rate_percent: 35,
-            reliability_cooldown_secs: 300,
-            explore_enabled: false,
-            explore_tier: None,
-            explore_interval: 5,
-            explore_threshold: 3,
-            max_downgraded_requests_per_session: 0,
-            min_semantic_successes_for_lock: 0,
-            explore_opening: false,
-            min_semantic_successes_for_opening: 1,
-        }
-    }
-}
-
 /// A provider's routing-preference class. Its position in
 /// [`RegistryConfig::provider_priority`] is its rank (earlier = preferred); the
 /// default ladder, highest first, is: first-party subscription ▸ gateway
@@ -777,22 +481,21 @@ pub struct McpConfig {
 /// `mcp.upstream_protocol` — the startup lifecycle and protocol version the
 /// gateway uses when dialing upstream MCP servers.
 ///
-/// `auto` (the default) starts with modern `server/discover` and uses rmcp's
-/// classified legacy fallback. `latest` forces the legacy `initialize` path;
-/// `2026-07-28` is the explicit spelling of the modern preference.
+/// `auto` (the default) starts with `server/discover` and uses rmcp's classified
+/// fallback to `initialize`. `latest` starts with `initialize`;
+/// `2026-07-28` explicitly selects the discovery preference.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum McpUpstreamProtocol {
-    /// Prefer `server/discover` and `2026-07-28`, falling back through rmcp's
-    /// compatibility path when the upstream identifies itself as legacy.
+    /// Prefer `server/discover` and `2026-07-28`, falling back to `initialize`
+    /// when rmcp classifies the upstream as requiring that lifecycle.
     #[default]
     Auto,
-    /// Use the legacy `initialize` lifecycle with the latest version the MCP
-    /// SDK treats as current — today `2025-11-25`.
+    /// Use `initialize` with the MCP SDK's default negotiated protocol version.
     Latest,
-    /// Use `server/discover` and the modern `2026-07-28` lifecycle. rmcp falls
+    /// Use `server/discover` and the `2026-07-28` lifecycle. rmcp falls
     /// back after its discovery timeout or a correlated JSON-RPC error it
-    /// classifies as legacy; transport failures, malformed or uncorrelated
+    /// classifies as requiring `initialize`; transport failures, malformed or uncorrelated
     /// responses, and modern rejection codes fail the connection. Opting in
     /// also lets upstreams answer `tools/call` with MRTR `input_required` or a
     /// Tasks `task` handle; neither is a shape this gateway can carry, so both
@@ -868,7 +571,7 @@ pub struct ServerConfig {
     ///
     /// `RUST_LOG` overrides this when set, following the Rust convention. The
     /// filter is resolved once at startup, so changing it needs a restart —
-    /// `bro reload` will not pick it up. Applies to `bro serve`
+    /// `bitrouter reload` will not pick it up. Applies to `bitrouter serve`
     /// (and therefore `start`); other subcommands install their subscriber
     /// before any config is read and honour `RUST_LOG` only.
     pub log_level: String,
@@ -913,8 +616,8 @@ pub struct UpstreamConfig {
 
 /// Upstream HTTP timeout knobs, in seconds. Every field is optional; an unset
 /// field inherits the level above — a provider override inherits the resolved
-/// global value, and an unset global inherits the built-in default
-/// ([`HttpTimeouts::default`]). `total_secs` is opt-in at every level: unset ⇒
+/// global value, and an unset global inherits the built-in default.
+/// `total_secs` is opt-in at every level: unset ⇒
 /// no overall wall-clock cap (the right default for long agentic streams).
 ///
 /// Used both as the top-level `upstream.timeouts` block and as the per-provider
@@ -942,7 +645,7 @@ pub struct TimeoutConfig {
 impl TimeoutConfig {
     /// Resolve this (partial) config over a base [`HttpTimeouts`]: every set
     /// field overrides the base, every unset field inherits it.
-    pub fn apply_to(&self, base: HttpTimeouts) -> HttpTimeouts {
+    pub(crate) fn apply_to(&self, base: HttpTimeouts) -> HttpTimeouts {
         HttpTimeouts {
             connect: self
                 .connect_secs
@@ -991,6 +694,32 @@ pub struct RateLimit {
     pub tokens_per_minute: Option<u32>,
 }
 
+/// Published processing-profile provenance; application pricing validates the
+/// effective endpoint rather than inferring premiums from this declaration.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum PricingEndpointProfile {
+    /// OpenAI global processing.
+    OpenaiGlobal,
+    /// OpenAI US regional processing.
+    OpenaiUs,
+    /// OpenAI European regional processing.
+    OpenaiEurope,
+}
+
+impl PricingEndpointProfile {
+    /// Stable source/config vocabulary for frozen applicability evidence.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OpenaiGlobal => "openai_global",
+            Self::OpenaiUs => "openai_us",
+            Self::OpenaiEurope => "openai_europe",
+        }
+    }
+}
+
 /// Per-model pricing as written in config: micro-USD per token.
 ///
 /// The top-level rates are the **base bracket**. [`context_tiers`] optionally
@@ -1004,7 +733,7 @@ pub struct PricingConfig {
     /// Published tariff's processing profile. A mismatch with the effective
     /// endpoint makes application price evidence unavailable.
     #[serde(default)]
-    pub endpoint_profile: Option<crate::gateway::catalog::types::PricingEndpointProfile>,
+    pub endpoint_profile: Option<crate::config::PricingEndpointProfile>,
     /// Micro-USD per uncached prompt token (base bracket). `None` means the
     /// provider did not publish a rate; explicit `0` remains free.
     #[serde(default)]
@@ -1305,8 +1034,7 @@ impl ProviderConfig {
 
     /// Whether a concrete model positively advertises `capability`.
     ///
-    /// This intentionally distinguishes an explicit declaration from legacy
-    /// model entries whose capability list is empty/unknown. Callers that
+    /// An empty capability list does not establish support. Callers that
     /// grant a policy exception (for example, a tool-safe economy tier) must
     /// use positive evidence rather than treating unknown as supported.
     pub fn model_supports_capability(
@@ -1430,23 +1158,23 @@ pub struct ProviderModel {
 
     /// Features this concrete provider/model route explicitly advertises.
     /// An empty list means unknown, not unsupported. Runtime routing preserves
-    /// legacy unknown entries; policy code that grants a capability-specific
+    /// entries with unknown support; policy code that grants a capability-specific
     /// exception requires a positive declaration.
     #[serde(default)]
     pub capabilities: Vec<bitrouter_ai::types::Capability>,
     /// Concrete route token limits. Missing fields remain unknown. In
     /// particular, an input limit does not imply a combined context window.
     #[serde(default)]
-    pub token_limits: crate::managed_contract::evidence::ModelTokenLimits,
+    pub token_limits: crate::config::model::ModelTokenLimits,
     /// Explicit support for a provider input-token counting endpoint. Managed
     /// requests require a successful count when enabled; ordinary calls do not
     /// invoke it. API wire compatibility alone does not enable counting.
     #[serde(default)]
-    pub input_token_counting: Option<crate::managed_contract::evidence::InputTokenCounting>,
+    pub input_token_counting: Option<crate::config::model::InputTokenCounting>,
     /// Positively verified qualitative effort levels for this exact route.
     /// Absence means unknown, not unsupported.
     #[serde(default)]
-    pub reasoning_effort: Option<crate::gateway::model::capabilities::ReasoningEffortConfig>,
+    pub reasoning_effort: Option<crate::config::model::ReasoningEffortConfig>,
     /// Provider/model request-shape quirks that do not change model semantics.
     #[serde(default)]
     pub compatibility: ModelCompatibility,
@@ -1500,7 +1228,7 @@ pub enum VirtualModelStrategy {
     /// preceding one fails with a retryable error. Routing preferences
     /// (`sort` / `only` / `ignore`) do **not** reorder or filter the chain:
     /// the operator's declared priority is authoritative. This is the
-    /// default and matches the historical (pre-typed-`strategy`) behaviour.
+    /// default strategy.
     #[default]
     Priority,
     /// Endpoints are treated as an unordered candidate set and **re-ordered by
@@ -1624,8 +1352,7 @@ where
                 }
                 None => {
                     // No closing brace anywhere — emit `$` literally and keep
-                    // scanning (the `{` and following chars copy normally),
-                    // matching the historical passthrough of a dangling `${`.
+                    // scanning; the `{` and following chars copy normally.
                     out.push('$');
                     after_ws = false;
                     continue;
@@ -1654,7 +1381,7 @@ where
 /// Replace every `${VAR}` occurrence with the value of environment variable
 /// `VAR`. An undefined variable is an error. Used by the config loader.
 /// Reads via [`env_lookup`] so daemon-side overrides (installed by the
-/// CLI's `bro reload`) take precedence over the live process env.
+/// CLI's `bitrouter reload`) take precedence over the live process env.
 pub fn substitute_env(input: &str) -> Result<String> {
     substitute_with(input, env_lookup)
 }
@@ -1816,102 +1543,6 @@ fn validate_continuation_config(config: &ContinuationConfig) -> Result<()> {
     Ok(())
 }
 
-/// Validate one policy-table definition independently of the top-level config.
-/// This private experiment projection is not a public model-policy document.
-/// Model-only source compilation has its own strict validator.
-pub fn validate_policy_table_config(policy: &PolicyTableConfig) -> Result<()> {
-    for fingerprint in policy.fingerprints.keys() {
-        if bitrouter_ai::policy::RouteClass::parse_key(fingerprint).is_none() {
-            return Err(BitrouterError::bad_request(format!(
-                "policy_table fingerprint '{fingerprint}' is not a canonical <task-family>|<role>|<risk> key"
-            )));
-        }
-    }
-    if policy.tiers.is_empty() {
-        return Ok(());
-    }
-    let check = |role: &str, tier: &str| -> Result<()> {
-        if policy.tiers.contains_key(tier) {
-            Ok(())
-        } else {
-            Err(BitrouterError::bad_request(format!(
-                "policy_table {role} references unknown tier '{tier}'"
-            )))
-        }
-    };
-    for (fingerprint, tier) in &policy.fingerprints {
-        check(&format!("fingerprint '{fingerprint}'"), tier)?;
-    }
-    if let Some(tier) = &policy.default_tier {
-        check("default_tier", tier)?;
-    }
-    if let Some(tier) = &policy.tool_use_tier {
-        check("tool_use_tier", tier)?;
-    }
-    for tier in &policy.tool_safe_tiers {
-        check("tool_safe_tiers entry", tier)?;
-    }
-    // The guardrail clamps a non-tool-safe tier *up* to `tool_use_tier`, so that
-    // target must itself be declared tool-safe — otherwise the floor it clamps
-    // to is not actually safe for tool-carrying requests.
-    if let Some(tier) = &policy.tool_use_tier
-        && !policy.tool_safe_tiers.iter().any(|t| t == tier)
-    {
-        return Err(BitrouterError::bad_request(format!(
-            "policy_table tool_use_tier '{tier}' must also be listed in tool_safe_tiers"
-        )));
-    }
-    // Adequacy learning escalates a pinned fingerprint to its escalation tier
-    // (or the default tier), so that target must exist and resolve to a defined
-    // tier when learning is enabled.
-    let adequacy = &policy.adequacy;
-    if adequacy.reliability_window_size == 0 {
-        return Err(BitrouterError::bad_request(
-            "policy_table.adequacy.reliability_window_size must be positive".to_string(),
-        ));
-    }
-    if adequacy.reliability_consecutive_failures == 0 {
-        return Err(BitrouterError::bad_request(
-            "policy_table.adequacy.reliability_consecutive_failures must be positive".to_string(),
-        ));
-    }
-    if !(1..=100).contains(&adequacy.reliability_error_rate_percent) {
-        return Err(BitrouterError::bad_request(
-            "policy_table.adequacy.reliability_error_rate_percent must be between 1 and 100"
-                .to_string(),
-        ));
-    }
-    if let Some(tier) = &adequacy.escalation_tier {
-        check("adequacy.escalation_tier", tier)?;
-    }
-    if adequacy.enabled && adequacy.escalation_tier.is_none() && policy.default_tier.is_none() {
-        return Err(BitrouterError::bad_request(
-            "policy_table.adequacy is enabled but no escalation target is set: \
-             set adequacy.escalation_tier or default_tier"
-                .to_string(),
-        ));
-    }
-    // Exploration trials toward `explore_tier`, which must exist and be a defined
-    // tier when exploration is enabled.
-    if let Some(tier) = &adequacy.explore_tier {
-        check("adequacy.explore_tier", tier)?;
-    }
-    if adequacy.explore_enabled && adequacy.explore_tier.is_none() {
-        return Err(BitrouterError::bad_request(
-            "policy_table.adequacy.explore_enabled is set but adequacy.explore_tier is not"
-                .to_string(),
-        ));
-    }
-    // Exploration rides on the adequacy ledger, which is only wired when learning
-    // is enabled — so `explore_enabled` without `enabled` would be silently inert.
-    if adequacy.explore_enabled && !adequacy.enabled {
-        return Err(BitrouterError::bad_request(
-            "policy_table.adequacy.explore_enabled requires adequacy.enabled".to_string(),
-        ));
-    }
-    Ok(())
-}
-
 /// Resolve every provider's `derives` chain: any field this provider left
 /// empty / default flows from the named ancestor. Cycles are a 400.
 /// Resolution walks the chain depth-first; multi-level inheritance works.
@@ -1998,7 +1629,7 @@ pub async fn load(path: impl AsRef<std::path::Path>) -> Result<Config> {
 /// of generic discovery, including when a provider is withheld or unsupported.
 ///
 /// The HTTP client is built with bounded `connect_timeout` + `timeout` so an
-/// unreachable provider can't stall a `bro reload` for the OS-level
+/// unreachable provider can't stall a `bitrouter reload` for the OS-level
 /// connect window (minutes). Discovery is best-effort; a 5s overall cap is
 /// well above any healthy `/models` round-trip and far below the default.
 pub async fn discover_models(config: &mut Config) {

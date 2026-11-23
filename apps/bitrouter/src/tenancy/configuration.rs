@@ -85,7 +85,7 @@ pub(super) async fn prepare(
 
 /// A retained document cannot enable facilities omitted from this binary.
 pub(super) fn validate_profile(document: &Configuration) -> Result<(), ErrorCode> {
-    if document.eval_publication && !cfg!(feature = "core") {
+    if document.eval_publication && !cfg!(feature = "eval-publication") {
         return Err(ErrorCode::InvalidRequest);
     }
     Ok(())

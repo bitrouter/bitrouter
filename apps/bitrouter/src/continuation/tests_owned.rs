@@ -144,7 +144,7 @@ async fn joined_panic_payload_cannot_restart_worker() -> Result<()> {
 async fn expired_deadline_is_not_refreshed_for_another_batch() -> Result<()> {
     let registry = registry().await?.with_owned_lifecycle()?;
     let release = gated_worker(&registry)?;
-    let runtime = ContinuationRuntime::new(registry.clone());
+    let runtime = ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
     for index in 0..48 {
         runtime
             .finalize(&finalization_context(
@@ -184,7 +184,7 @@ async fn expired_deadline_is_not_refreshed_for_another_batch() -> Result<()> {
 async fn cancelled_database_wait_retains_markers_for_retry() -> Result<()> {
     let registry = registry().await?.with_owned_lifecycle()?;
     let release = gated_worker(&registry)?;
-    let runtime = ContinuationRuntime::new(registry.clone());
+    let runtime = ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
     let attempt = finalization_context("owned-cancel-db", 1_100, "provider-owned-cancel");
     runtime.finalize(&attempt).await?;
     let marker = registry
@@ -218,7 +218,7 @@ async fn cancelled_database_wait_retains_markers_for_retry() -> Result<()> {
 #[tokio::test]
 async fn reserved_unknown_marker_is_never_reported_drained() -> Result<()> {
     let registry = registry().await?.with_owned_lifecycle()?;
-    let runtime = ContinuationRuntime::new(registry.clone());
+    let runtime = ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
     let attempt = finalization_context("owned-reserved", 1_200, "provider-owned-reserved");
     let (committed, release) = registry.inject_ambiguous_insert_after_commit();
     let finalizing = tokio::spawn({
@@ -249,7 +249,7 @@ async fn backend_failure_retains_markers_and_stopped_worker_for_retry() -> Resul
 
     let registry = registry().await?.with_owned_lifecycle()?;
     let release = gated_worker(&registry)?;
-    let runtime = ContinuationRuntime::new(registry.clone());
+    let runtime = ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
     let attempt = finalization_context("owned-backend", 1_300, "provider-owned-backend");
     runtime.finalize(&attempt).await?;
     registry

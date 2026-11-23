@@ -1,6 +1,6 @@
 use super::super::{
     read,
-    store::{self, Candidate, Disposition},
+    store::{self, Candidate, Disposition, format::Format},
 };
 use super::*;
 use anyhow::{Context, Result, ensure};
@@ -231,7 +231,7 @@ async fn atomic_failure_replay_deletion_and_inventory_corruption() -> Result<()>
     ensure!(write(&db, &candidate).await? && !write(&db, &candidate).await?);
     let saved = load(&db).await?;
     ensure!(saved.digest == candidate.digest);
-    let evidence = saved.usage_evidence.context("evidence")?;
+    let evidence = saved.usage_evidence;
     evidence.document.validate()?;
     ensure!(
         storage::inventory(&db, &receipt()?.installation_id).await?
@@ -264,28 +264,62 @@ async fn atomic_failure_replay_deletion_and_inventory_corruption() -> Result<()>
     Ok(())
 }
 #[tokio::test]
-async fn missing_evidence_read_and_corrupt_orphan_fail_closed() -> Result<()> {
-    let db = open().await?;
-    let r = receipt()?;
-    let without_evidence = Candidate::new(
-        r.clone(),
-        Disposition {
-            dispatch: DispatchState::NotStarted,
-            statuses: vec![],
-            auxiliary_digest: None,
-        },
-    )?;
-    write(&db, &without_evidence).await?;
-    ensure!(load(&db).await?.usage_evidence.is_none());
-    let request = read::Request::UsageEvidence(r.execution_id.clone());
-    let result = read::body(&db, &r.installation_id, &r.tenant_id, &request, || {
-        ErrorCode::StorageUnavailable.into()
-    })
-    .await;
-    ensure!(matches!(result, Err(failure) if failure.0.code == ErrorCode::StorageUnavailable));
-    sql(&db,"INSERT INTO tenancy_usage_evidence (installation_id,tenant_id,execution_id,schema_version,receipt_digest,evidence_digest,evidence_json,byte_count) VALUES('installation','tenant','orphan',1,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','{}',2)").await?;
-    ensure!(storage::inventory(&db, &r.installation_id).await.is_err());
-    db.close().await?;
+async fn strict_writer_stores_capture_and_restart_refuses_missing_evidence() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let candidate = candidate()?;
+    let receipt = &candidate.receipt;
+    let request = read::Request::UsageEvidence(receipt.execution_id.clone());
+    for strip_binding in [false, true] {
+        let url = format!(
+            "sqlite://{}?mode=rwc",
+            dir.path()
+                .join(format!("missing-{strip_binding}.db"))
+                .display()
+        );
+        let db = crate::db::connect(&url).await?;
+        crate::db::run_migrations(&db).await?;
+        ensure!(write(&db, &candidate).await?);
+        let captured = load(&db).await?.usage_evidence;
+        ensure!(captured.document.capture == Capture::Captured);
+        ensure!(captured.json == candidate.usage_evidence.json);
+        sql(&db, "DELETE FROM tenancy_usage_evidence").await?;
+        if strip_binding {
+            let json = serde_json::to_string(receipt)?;
+            let private = serde_json::to_string(&Disposition {
+                dispatch: DispatchState::NotStarted,
+                statuses: vec![],
+                auxiliary_digest: None,
+            })?;
+            let digest = store::digest_for(Format::Strict, &json, &private);
+            let bytes = i64::try_from(json.len() + private.len())?;
+            db.execute(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "UPDATE tenancy_execution_receipts SET disposition_json=?,content_digest=?,byte_count=?",
+                [private.into(), digest.into(), bytes.into()],
+            ))
+            .await?;
+        }
+        db.close().await?;
+
+        let db = crate::db::connect(&url).await?;
+        ensure!(load(&db).await.is_err());
+        ensure!(
+            storage::inventory(&db, &receipt.installation_id)
+                .await
+                .is_err()
+        );
+        let read = read::body(
+            &db,
+            &receipt.installation_id,
+            &receipt.tenant_id,
+            &request,
+            || ErrorCode::StorageUnavailable.into(),
+        )
+        .await;
+        ensure!(matches!(read, Err(failure) if failure.0.code == ErrorCode::StorageUnavailable));
+        ensure!(write(&db, &candidate).await.is_err());
+        db.close().await?;
+    }
     Ok(())
 }
 #[tokio::test]
@@ -371,53 +405,6 @@ async fn missing_table_extra_index_and_oversized_cells_are_refused() -> Result<(
         storage::inventory(&db, &receipt()?.installation_id)
             .await
             .is_err()
-    );
-    db.close().await?;
-    Ok(())
-}
-
-#[cfg(all(feature = "core", feature = "harness"))]
-#[tokio::test]
-async fn recovery_verifies_evidence_and_charges_the_shared_budget() -> Result<()> {
-    let db = open().await?;
-    let candidate = candidate()?;
-    write(&db, &candidate).await?;
-    let r = receipt()?;
-    let budget = crate::tenancy::session::recovery::Budget::default();
-    let recovered = store::recovery_lookup(
-        &db,
-        &r.installation_id,
-        &r.tenant_id,
-        &r.execution_id,
-        &budget,
-    )
-    .await?
-    .context("recovery receipt")?;
-    ensure!(recovered.usage_evidence.is_some());
-    let exhausted = crate::tenancy::session::recovery::Budget::default();
-    exhausted.charge(0, crate::tenancy::session::recovery::MAX_BYTES)?;
-    ensure!(
-        store::recovery_lookup(
-            &db,
-            &r.installation_id,
-            &r.tenant_id,
-            &r.execution_id,
-            &exhausted
-        )
-        .await
-        .is_err()
-    );
-    sql(&db,"UPDATE tenancy_usage_evidence SET receipt_digest='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'").await?;
-    ensure!(
-        store::recovery_lookup(
-            &db,
-            &r.installation_id,
-            &r.tenant_id,
-            &r.execution_id,
-            &crate::tenancy::session::recovery::Budget::default()
-        )
-        .await
-        .is_err()
     );
     db.close().await?;
     Ok(())

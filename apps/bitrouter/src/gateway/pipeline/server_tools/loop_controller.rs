@@ -36,10 +36,8 @@ pub struct ServerToolLoop {
     approval: Arc<dyn ApprovalPolicy>,
 }
 
-/// Pipeline-internal provenance for the response exposed by a non-streaming
-/// server-tool loop. The public loop API remains the historical
-/// `ExecutionResult`; the pipeline additionally needs to know whether that
-/// result is a provider terminal or a router-synthetic truncation.
+/// Response and provenance from a non-streaming server-tool loop. The pipeline
+/// distinguishes a provider terminal from a router-synthetic truncation.
 pub(crate) struct ServerToolLoopOutcome {
     pub(crate) result: ExecutionResult,
     pub(crate) provider_terminal_exposed: bool,
@@ -123,23 +121,8 @@ impl ServerToolLoop {
         Ok((working, owned))
     }
 
-    /// Run the loop. `upstream` performs one upstream turn (with fallback) for a
-    /// working prompt; the loop owns the working prompt, injects router tools
-    /// into it, appends assistant + tool-result turns between iterations, and
-    /// accumulates usage across iterations.
-    ///
-    /// Returns the final upstream [`ExecutionResult`] (its `usage` replaced by
-    /// the accumulated total). On reaching a bound, the result carries a
-    /// truncation finish reason.
-    pub async fn run(
-        &self,
-        base: &Prompt,
-        ctx: &ToolContext,
-        upstream: &dyn UpstreamTurn,
-    ) -> Result<ExecutionResult> {
-        Ok(self.run_with_provenance(base, ctx, upstream).await?.result)
-    }
-
+    /// Execute router tools across bounded upstream turns, accumulating usage
+    /// and identifying whether the final result is a provider terminal.
     pub(crate) async fn run_with_provenance(
         &self,
         base: &Prompt,
@@ -640,7 +623,11 @@ mod tests {
         let mut base = base_prompt();
         base.tool_choice = Some(ToolChoice::None);
         let upstream = ScriptedUpstream::new(vec![exec(vec![tool_call("search")])]);
-        let result = loop_.run(&base, &tool_ctx(), &upstream).await?;
+        let outcome = loop_
+            .run_with_provenance(&base, &tool_ctx(), &upstream)
+            .await?;
+        assert!(outcome.provider_terminal_exposed);
+        let result = outcome.result;
         let seen = upstream.seen();
         assert_eq!(seen.len(), 1);
         assert!(seen.iter().all(|prompt| prompt.tools.is_empty()));
@@ -799,10 +786,11 @@ mod tests {
             exec(vec![tool_call("search")]),
             exec(vec![text("the answer")]),
         ]);
-        let result = loop_
-            .run(&base_prompt(), &tool_ctx(), &upstream)
-            .await
-            .unwrap();
+        let outcome = loop_
+            .run_with_provenance(&base_prompt(), &tool_ctx(), &upstream)
+            .await?;
+        assert!(outcome.provider_terminal_exposed);
+        let result = outcome.result;
         let seen = upstream.seen();
         assert_eq!(seen.len(), 2);
         // The injected router tool is on the outbound prompt...
@@ -845,10 +833,11 @@ mod tests {
             tool_call("search"),
             tool_call("client_fn"),
         ])]);
-        let result = loop_
-            .run(&base_prompt(), &tool_ctx(), &upstream)
-            .await
-            .unwrap();
+        let outcome = loop_
+            .run_with_provenance(&base_prompt(), &tool_ctx(), &upstream)
+            .await?;
+        assert!(outcome.provider_terminal_exposed);
+        let result = outcome.result;
         assert_eq!(upstream.seen().len(), 1);
         assert!(matches!(
             &result
@@ -872,10 +861,11 @@ mod tests {
             exec(vec![tool_call("search")]),
             exec(vec![text("recovered")]),
         ]);
-        let result = loop_
-            .run(&base_prompt(), &tool_ctx(), &upstream)
-            .await
-            .unwrap();
+        let outcome = loop_
+            .run_with_provenance(&base_prompt(), &tool_ctx(), &upstream)
+            .await?;
+        assert!(outcome.provider_terminal_exposed);
+        let result = outcome.result;
         let seen = upstream.seen();
         assert_eq!(seen.len(), 2);
         // The fed-back tool result is an error block.
@@ -909,10 +899,11 @@ mod tests {
             exec(vec![tool_call("search")]),
             exec(vec![tool_call("search")]),
         ]);
-        let result = loop_
-            .run(&base_prompt(), &tool_ctx(), &upstream)
-            .await
-            .unwrap();
+        let outcome = loop_
+            .run_with_provenance(&base_prompt(), &tool_ctx(), &upstream)
+            .await?;
+        assert!(!outcome.provider_terminal_exposed);
+        let result = outcome.result;
         // round 0 executes (rounds 0 < 1), round 1 hits the cap.
         assert_eq!(upstream.seen().len(), 2);
         assert_eq!(
@@ -930,7 +921,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_records_executed_router_call() {
+    async fn run_records_executed_router_call() -> Result<()> {
         // Turn 1: model requests a router-owned tool ("subagent").
         // Turn 2: model returns final text — loop terminates Done.
         let loop_ = loop_with(&["subagent"], false, ServerToolLoopConfig::default());
@@ -938,19 +929,21 @@ mod tests {
             exec(vec![tool_call("subagent")]),
             exec(vec![text("done")]),
         ]);
-        let result = loop_
-            .run(&base_prompt(), &tool_ctx(), &upstream)
-            .await
-            .unwrap();
+        let outcome = loop_
+            .run_with_provenance(&base_prompt(), &tool_ctx(), &upstream)
+            .await?;
+        assert!(outcome.provider_terminal_exposed);
+        let result = outcome.result;
         let calls = &result.server_tool_calls;
         assert_eq!(calls.len(), 1, "exactly one server-tool call recorded");
         assert_eq!(calls[0].name, "subagent");
         assert_eq!(calls[0].kind, ServerToolKind::Router);
         assert_eq!(calls[0].status, ServerToolStatus::Ok);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn run_records_intermediate_provider_call() {
+    async fn run_records_intermediate_provider_call() -> Result<()> {
         // Turn 1: model issues BOTH a router-owned call ("subagent", provider_executed=false)
         // AND a provider-executed call ("web_search", provider_executed=true).
         // classify_turn skips provider_executed blocks when deciding disposition, so
@@ -972,10 +965,11 @@ mod tests {
             exec(vec![tool_call("subagent"), provider_call]),
             exec(vec![text("done")]),
         ]);
-        let result = loop_
-            .run(&base_prompt(), &tool_ctx(), &upstream)
-            .await
-            .unwrap();
+        let outcome = loop_
+            .run_with_provenance(&base_prompt(), &tool_ctx(), &upstream)
+            .await?;
+        assert!(outcome.provider_terminal_exposed);
+        let result = outcome.result;
 
         let calls = &result.server_tool_calls;
 
@@ -1000,6 +994,7 @@ mod tests {
             .expect("Provider entry for 'web_search' must be present (intermediate-turn fix)");
         assert_eq!(provider_entry.kind, ServerToolKind::Provider);
         assert_eq!(provider_entry.status, ServerToolStatus::Ok);
+        Ok(())
     }
 }
 

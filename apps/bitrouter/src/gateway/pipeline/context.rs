@@ -1,6 +1,6 @@
 //! Pipeline contexts for the `language_model` protocol: `PipelineContext` (the
-//! whole-request water-flow context) and `StreamContext` (the StreamHook-stage
-//! view borrowed from it). `SettlementContext` lives in
+//! whole-request context) and `StreamContext` (the streaming view).
+//! `SettlementContext` lives in
 //! [`crate::gateway::pipeline::settlement`].
 
 use crate::gateway::model::protocol::values::render_tool_result_output;
@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use crate::gateway::caller::CallerContext;
 use crate::gateway::error::{BitrouterError, Result};
-use crate::gateway::extensions::legacy::PluginId;
+use crate::gateway::extensions::plugin::PluginId;
 use crate::gateway::model::protocol::responses::{
     AssistantTurnCommitment, CausalPrefixPlan, StreamingAssistantTurnCommitment,
     assistant_turn_commitment, extend_causal_prefix,
@@ -27,8 +27,8 @@ use crate::gateway::pipeline::types::{
 use crate::gateway::providers::auth::ContinuationAuthority;
 use bitrouter_ai::routing::RouterRequestIdentity;
 use bitrouter_ai::types::{
-    ApiProtocol, ChatStreamOptions, Content, FinishReason, GenerationParams, Message,
-    ModelOperation, Prompt, StreamPart, Usage,
+    ApiProtocol, ChatStreamOptions, Content, FinishReason, GenerationParams, ModelOperation,
+    Prompt, StreamPart, Usage,
 };
 
 // Pure post-parse merge shared by router and request-local defaults.
@@ -97,9 +97,8 @@ static NEXT_DELIVERY_ATTEMPT_ID: AtomicU64 = AtomicU64::new(1);
 /// refcount bumps — cheap enough to copy from the [`PipelineContext`] into the
 /// per-stream [`StreamContext`]. This is the typed counterpart to the JSON
 /// `metadata` channel: it carries an *already-built* per-request value (e.g. a
-/// compiled guardrail rule set) that a Stage-1 hook resolves and a later
-/// [`StreamHook`](crate::gateway::pipeline::hooks::StreamHook) reads on the hot path
-/// without re-parsing.
+/// compiled guardrail rule set) that a request hook resolves and a later
+/// stream observer reads without re-parsing.
 #[derive(Clone, Default)]
 struct Extensions(http::Extensions);
 
@@ -116,7 +115,6 @@ pub struct ProviderContinuation {
     api_base: String,
     api_key: String,
     credential_authority: ContinuationAuthority,
-    effort_constraint: Option<Option<bitrouter_ai::types::ReasoningEffort>>,
 }
 
 /// Request-scoped marker requiring the selected native Responses target to
@@ -152,25 +150,7 @@ impl ProviderContinuation {
                 .clone()
                 .unwrap_or_else(|| target.api_key.clone()),
             credential_authority,
-            effort_constraint: None,
         }
-    }
-
-    /// Preserve an authoritative effort from the continuation record. `None`
-    /// means the recorded provider default, distinct from unknown provenance.
-    pub fn with_effort_constraint(
-        mut self,
-        effort: Option<bitrouter_ai::types::ReasoningEffort>,
-    ) -> Self {
-        self.effort_constraint = Some(effort);
-        self
-    }
-
-    pub(crate) fn admits_effort(
-        &self,
-        effort: Option<bitrouter_ai::types::ReasoningEffort>,
-    ) -> bool {
-        self.effort_constraint == Some(effort)
     }
 
     pub(crate) fn response_id(&self) -> &str {
@@ -207,16 +187,6 @@ impl Extensions {
     fn get<T: Send + Sync + 'static>(&self) -> Option<Arc<T>> {
         self.0.get::<Arc<T>>().cloned()
     }
-}
-
-/// Count media content blocks in a content stream (observability only).
-///
-/// Only `Content::File` is treated as media — it covers all non-text IANA
-/// media types (images, audio, video, documents). `Content::Text`,
-/// `Content::Reasoning`, and `Content::ToolCall`/`Content::ToolResult` are
-/// not media.
-fn count_media<'a>(blocks: impl Iterator<Item = &'a Content>) -> u64 {
-    blocks.filter(|c| matches!(c, Content::File { .. })).count() as u64
 }
 
 /// The whole-request pipeline context. Follows a water-flow model: data flows
@@ -298,6 +268,13 @@ pub struct PipelineContext {
 impl PipelineContext {
     /// Build a fresh context from an inbound request.
     pub fn new(req: PipelineRequest) -> Self {
+        let mut events = EventBus::new();
+        if let Some(claim) = req
+            .extensions
+            .get::<crate::gateway::metering::replay::ClientRequestIdClaim>()
+        {
+            events.emit(claim.clone());
+        }
         let ctx = Self {
             request_id: req.request_id,
             original_model: req.original_model,
@@ -329,7 +306,7 @@ impl PipelineContext {
             credential_authority: Arc::new(Mutex::new(None)),
             metadata: HashMap::new(),
             extensions: Extensions(req.extensions),
-            events: EventBus::new(),
+            events,
             outbound_trace_headers: Mutex::new(None),
         };
         super::provider_technical::register_context(&ctx);
@@ -506,6 +483,7 @@ impl PipelineContext {
     /// every other header is ignored. This keeps a read-only observer from
     /// mutating authentication or other transport semantics through the trace
     /// propagation seam. Replaces any previously-set trace headers.
+    #[cfg(any(test, feature = "otel-http", feature = "otel-grpc"))]
     pub fn set_outbound_trace_headers(&self, headers: http::HeaderMap) {
         let mut trace_headers = http::HeaderMap::new();
         for (name, value) in headers.iter() {
@@ -625,64 +603,6 @@ impl PipelineContext {
         self.completed_decision_failure.load(Ordering::Acquire)
     }
 
-    /// A managed runtime may explicitly rebuild visible context before any
-    /// attempt. Every other prepared request field and hook binding stays fixed.
-    pub(crate) fn replace_managed_messages(&mut self, messages: Vec<Message>) -> Result<()> {
-        let portable = self
-            .extension::<crate::gateway::routing::preparation::Prepared>()
-            .is_some_and(|prepared| {
-                prepared
-                    .capabilities
-                    .contains(&crate::gateway::routing::ContextCapability::OmitPrivateReasoning)
-            })
-            && self
-                .extension::<crate::gateway::routing::ContextTreatment>()
-                .is_none_or(|strategy| {
-                    *strategy != crate::gateway::routing::ContextTreatment::Preserve
-                });
-        let authenticated = self
-            .extension::<super::native_context::NativePrivateContextRuntime>()
-            .is_some();
-        // Validate the complete original source before any private part can be
-        // omitted, including parts after a target-mismatch diagnostic.
-        super::native_context::validate_managed_history(self)?;
-        let prompt = self
-            .input
-            .generation_prompt_mut()
-            .ok_or_else(|| BitrouterError::bad_request("managed context requires generation"))?;
-        if portable
-            && super::native_projection::responses_reasoning(&prompt.messages)?
-                .is_some_and(|projection| projection.messages == messages)
-        {
-            if !authenticated {
-                return Err(BitrouterError::bad_request(
-                    "private_context_policy_unavailable",
-                ));
-            }
-            prompt.messages = messages;
-            return Ok(());
-        }
-        if messages.len() >= prompt.messages.len() {
-            return Err(BitrouterError::bad_request(
-                "managed context rebuild must reduce history",
-            ));
-        }
-        let mut retained = messages.iter();
-        let mut next = retained.next();
-        for original in &prompt.messages {
-            if next == Some(original) {
-                next = retained.next();
-            }
-        }
-        if next.is_some() {
-            return Err(BitrouterError::bad_request(
-                "managed context rebuild rewrote or reordered prepared messages",
-            ));
-        }
-        prompt.messages = messages;
-        Ok(())
-    }
-
     /// The inbound wire protocol the request arrived on, if known. Route
     /// resolution uses it to prefer a native (same-protocol) upstream.
     pub fn inbound_protocol(&self) -> Option<ApiProtocol> {
@@ -741,15 +661,6 @@ impl PipelineContext {
         Ok(())
     }
 
-    /// Restore the embedding caller's hard effort constraint after policy.
-    pub(crate) fn preserve_caller_effort(&mut self, effort: bitrouter_ai::types::ReasoningEffort) {
-        let Some(prompt) = self.input.generation_prompt_mut() else {
-            return;
-        };
-        prompt.params.reasoning_effort = Some(effort);
-        prompt.params.reasoning_effort_source = bitrouter_ai::types::ReasoningEffortSource::Caller;
-    }
-
     /// Apply preset prompt-body overrides. `system_prompt`, when
     /// present, replaces the prompt's system; `params` is shallow-merged into
     /// the prompt's supplemental params so provider-specific knobs survive
@@ -794,6 +705,7 @@ impl PipelineContext {
     /// `ToolContext` (when the `server-tools` feature is enabled)
     /// for a server-tool execution, which may outlive this borrow (e.g. on the
     /// streaming path).
+    #[cfg(feature = "server-tools")]
     pub fn metadata(&self) -> &HashMap<PluginId, serde_json::Value> {
         &self.metadata
     }
@@ -801,7 +713,7 @@ impl PipelineContext {
     /// Insert a typed, request-scoped extension, replacing any existing value
     /// of the same type. The value is shared (`Arc`) and copied into the
     /// per-stream [`StreamContext`], so a Stage-1 hook can deposit a value that
-    /// the downstream [`StreamHook`](crate::gateway::pipeline::hooks::StreamHook) reads —
+    /// a downstream stream observer reads —
     /// the channel JSON `metadata` can't provide because it neither survives
     /// into the stream stage nor holds non-serialisable values.
     pub fn insert_extension<T: Send + Sync + 'static>(&mut self, value: Arc<T>) {
@@ -834,11 +746,6 @@ impl PipelineContext {
         self.events.get_all::<E>()
     }
 
-    /// Shared access to the event bus (e.g. for `dump_json` into a receipt).
-    pub fn events(&self) -> &EventBus {
-        &self.events
-    }
-
     /// Rough `char` count of model-visible prompt payloads — system instruction
     /// plus message text, reasoning, tool call args, and tool results. Used to
     /// seed the [`UsageAccumulator`] so a stream without an upstream usage frame
@@ -865,13 +772,11 @@ impl PipelineContext {
         chars
     }
 
-    /// Borrow a `StreamContext` for the StreamHook stage.
+    /// Borrow a `StreamContext` for stream observation.
     pub fn stream_context(&self) -> StreamContext {
-        let target = self.serving_target();
         StreamContext {
             request_id: self.request_id.clone(),
             caller: self.caller.clone(),
-            target,
             accumulated_usage: UsageAccumulator::with_prompt_chars(self.prompt_text_chars()),
             parts_emitted: 0,
             final_usage: None,
@@ -886,7 +791,6 @@ impl PipelineContext {
             terminal_assistant_turn_commitment: None,
             response_id: None,
             events: EventBus::new(),
-            metadata: HashMap::new(),
             // Refcount-bump copy: a value a pre-request hook deposited (e.g. the
             // resolved guardrail rule set) rides along into the stream stage.
             extensions: self.extensions.clone(),
@@ -967,7 +871,6 @@ impl PipelineContext {
             inbound_protocol: self.inbound_protocol.clone(),
             response_id: generation.and_then(|result| result.response_id.clone()),
             finish_reason,
-            streamed,
             successful_terminal,
             native_response_completed: if streamed {
                 self.stream_native_response_completed
@@ -1012,6 +915,7 @@ impl PipelineContext {
             caller: self.caller.clone(),
             target,
             model_id,
+            #[cfg(any(test, feature = "eval-publication"))]
             reasoning_effort: self
                 .generation_prompt()
                 .and_then(|prompt| prompt.params.reasoning_effort),
@@ -1025,34 +929,9 @@ impl PipelineContext {
             usage_origin: usage.origin,
             raw_usage: usage.raw.as_deref().cloned(),
             web_search_count: usage.web_search_count,
-            media_input_count: match &self.input {
-                PipelineInput::GenerateContent(input) => input.projection().map_or(0, |prompt| {
-                    count_media(prompt.messages.iter().flat_map(|m| &m.content))
-                }),
-                PipelineInput::Generation(prompt) => {
-                    count_media(prompt.messages.iter().flat_map(|m| &m.content))
-                }
-                PipelineInput::Decisions(request) => request.image_count(),
-            },
-            // Note: for streamed requests both fields below are 0 / empty.
-            // The streaming path only folds usage back (via `absorb_stream`);
-            // response content and server_tool_calls are not reconstructed in
-            // the IR. This is an intentional deferral, not a bug.
-            media_output_count: count_media(
-                exec.and_then(|e| e.result.generation())
-                    .map(|result| result.content.as_slice())
-                    .unwrap_or_default()
-                    .iter(),
-            ),
-            server_tool_calls: exec
-                .map(|e| e.server_tool_calls.clone())
-                .unwrap_or_default(),
             streamed: false,
             request_duration_ms: self.request_duration_ms(),
             upstream_duration_ms: exec.and_then(|e| e.upstream_duration_ms),
-            ttft_ms: self.first_token_timing.map(|timing| timing.ttft_ms),
-            generation_duration_ms: self.generation_duration_ms,
-            first_token_kind: self.first_token_timing.map(|timing| timing.kind),
             finish_reason: exec
                 .and_then(|e| e.result.generation())
                 .and_then(|result| result.finish_reason.clone()),
@@ -1079,18 +958,6 @@ impl PipelineContext {
             result,
         })
     }
-
-    /// Render the final non-streaming HTTP response.
-    pub fn into_response(self) -> Result<PipelineResponse> {
-        let result = self
-            .execution_result
-            .map(|e| e.result)
-            .ok_or_else(|| BitrouterError::internal("response requires a completed execution"))?;
-        Ok(PipelineResponse {
-            request_id: self.request_id,
-            result,
-        })
-    }
 }
 
 fn prompt_content_chars(content: &Content) -> u64 {
@@ -1114,18 +981,16 @@ fn prompt_content_chars(content: &Content) -> u64 {
     }
 }
 
-/// The StreamHook-stage view, borrowed from `PipelineContext`. Carries the
+/// The streaming view, borrowed from `PipelineContext`. Carries the
 /// mutable state that accrues while a stream is being consumed.
 pub struct StreamContext {
     /// The request id.
     pub request_id: String,
     /// The caller.
     pub caller: CallerContext,
-    /// The target actually serving the stream (chain head).
-    pub target: Option<RoutingTarget>,
     /// Per-part usage accumulator.
     pub accumulated_usage: UsageAccumulator,
-    /// Count of parts that entered the StreamHook stage.
+    /// Count of observed upstream stream parts.
     pub parts_emitted: u64,
     /// Usage finalised at `on_stream_end`, folded back into `PipelineContext`.
     pub final_usage: Option<Usage>,
@@ -1145,7 +1010,6 @@ pub struct StreamContext {
     /// but the raw value must never enter durable events or storage.
     response_id: Option<String>,
     events: EventBus,
-    metadata: HashMap<PluginId, serde_json::Value>,
     extensions: Extensions,
 }
 
@@ -1228,43 +1092,21 @@ impl StreamContext {
     }
 
     /// The first semantic output timing captured so far.
+    #[cfg(test)]
     pub fn first_token_timing(&self) -> Option<FirstTokenTiming> {
         self.first_token_timing
     }
 
     /// Time from the first to the most recent semantic stream delta.
+    #[cfg(test)]
     pub fn generation_duration_ms(&self) -> Option<u64> {
         self.generation_duration_ms
     }
 
     /// Canonical terminal reason observed from the upstream stream.
+    #[cfg(test)]
     pub fn finish_reason(&self) -> Option<&FinishReason> {
         self.finish_reason.as_ref()
-    }
-
-    /// Emit a typed event from within the StreamHook stage.
-    pub fn emit<E: PipelineEvent>(&mut self, event: E) {
-        self.events.emit(event);
-    }
-
-    /// Whether an event of type `E` was emitted in this stream context.
-    pub fn has_event<E: PipelineEvent>(&self) -> bool {
-        self.events.has::<E>()
-    }
-
-    /// The first emitted event of type `E`.
-    pub fn get_event<E: PipelineEvent>(&self) -> Option<&E> {
-        self.events.get::<E>()
-    }
-
-    /// Write this plugin's metadata blob.
-    pub fn set_metadata(&mut self, plugin_id: &PluginId, value: serde_json::Value) {
-        self.metadata.insert(plugin_id.clone(), value);
-    }
-
-    /// Read another plugin's metadata blob.
-    pub fn get_metadata(&self, plugin_id: &PluginId) -> Option<&serde_json::Value> {
-        self.metadata.get(plugin_id)
     }
 
     /// Read a typed, request-scoped extension propagated from the
@@ -1711,6 +1553,7 @@ mod tests {
             .into(),
             request_duration_ms: 1,
             upstream_duration_ms: Some(1),
+            #[cfg(feature = "server-tools")]
             server_tool_calls: Vec::new(),
         });
 
@@ -1741,6 +1584,7 @@ mod tests {
                 .into(),
                 request_duration_ms: 0,
                 upstream_duration_ms: None,
+                #[cfg(feature = "server-tools")]
                 server_tool_calls: Vec::new(),
             });
             ctx

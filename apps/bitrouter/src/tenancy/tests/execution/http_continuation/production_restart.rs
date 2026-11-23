@@ -16,9 +16,9 @@ use sea_orm::{DatabaseConnection, TransactionTrait};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-const DIRECTORY: &str = "BITROUTER_TEST_HTTP034_RESTART_DIRECTORY";
-const KEY: &str = "BITROUTER_TEST_HTTP034_RESTART_KEY";
-const ACK: &[u8] = b"http034-open-profile-auto-maintenance-v1";
+const DIRECTORY: &str = "BITROUTER_TEST_HTTP_CONTINUATION_RESTART_DIRECTORY";
+const KEY: &str = "BITROUTER_TEST_HTTP_CONTINUATION_RESTART_KEY";
+const ACK: &[u8] = b"http-continuation-open-profile-auto-maintenance-v1";
 
 #[derive(Serialize, Deserialize)]
 struct Transfer {

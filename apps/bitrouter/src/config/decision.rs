@@ -5,8 +5,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::gateway::error::BitrouterError;
 use crate::gateway::error::Result;
-use crate::gateway::model::decision::policy::DecisionPolicy;
-use crate::gateway::model::decision::policy::DecisionPricing;
 
 /// An optional `decision_model:` block enables SDK routing assessment.
 /// Native orchestrator context and skill selection do not invoke this backend.
@@ -27,7 +25,7 @@ pub struct DecisionModelConfig {
     /// Maximum response bytes; independent of context and checkpoint limits.
     #[serde(default = "default_response_bytes")]
     pub max_response_bytes: usize,
-    /// Native context planning limits, frozen into each decision intent.
+    /// Semantic classification bounds, frozen into each request.
     #[serde(default)]
     pub policy: DecisionPolicy,
     /// Optional operator-supplied token prices; estimates, never settled bills.
@@ -81,4 +79,65 @@ fn default_timeout_ms() -> u64 {
 }
 fn default_response_bytes() -> usize {
     1_048_576
+}
+
+/// Request size and confidence limits for the semantic classifier.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct DecisionPolicy {
+    /// Maximum serialized decision request, including rubrics and public text.
+    pub max_request_bytes: usize,
+    /// Minimum confidence required to accept a classification.
+    pub confidence_threshold: f64,
+}
+
+impl Default for DecisionPolicy {
+    fn default() -> Self {
+        Self {
+            max_request_bytes: 128 * 1024,
+            confidence_threshold: 0.85,
+        }
+    }
+}
+
+impl DecisionPolicy {
+    /// Reject unusable bounds before admitting semantic work.
+    ///
+    /// # Errors
+    /// Returns an error for a zero request bound or confidence outside 0.5–1.0.
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        if self.max_request_bytes == 0
+            || !self.confidence_threshold.is_finite()
+            || !(0.5..=1.0).contains(&self.confidence_threshold)
+        {
+            return Err("invalid decision_model.policy bounds or confidence threshold".into());
+        }
+        Ok(())
+    }
+}
+
+/// Optional token prices supplied by the operator, distinct from provider bills.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DecisionPricing {
+    /// USD per million input tokens.
+    pub input_usd_per_million: f64,
+    /// USD per million output tokens.
+    pub output_usd_per_million: f64,
+}
+
+impl DecisionPricing {
+    /// Reject non-finite and negative amounts.
+    ///
+    /// # Errors
+    /// Returns an error if either configured price is negative or non-finite.
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        if [self.input_usd_per_million, self.output_usd_per_million]
+            .into_iter()
+            .any(|amount| !amount.is_finite() || amount < 0.0)
+        {
+            return Err("decision_model.pricing must contain finite nonnegative prices".into());
+        }
+        Ok(())
+    }
 }

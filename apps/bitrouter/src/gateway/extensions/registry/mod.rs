@@ -13,7 +13,7 @@ use request_check::Callback;
 
 use crate::gateway::extensions::request_check;
 
-pub mod registration;
+pub(crate) mod registration;
 
 /// Collects trusted, statically linked capability implementations for a host.
 ///
@@ -95,7 +95,7 @@ impl ExtensionApi {
 
     /// Finish registration before activating the host. Any prior error prevents
     /// consumption, even when the caller ignored that registration error.
-    pub fn into_registrations(self) -> Result<HashMap<String, Registration>> {
+    pub(crate) fn into_registrations(self) -> Result<HashMap<String, Registration>> {
         match self.invalid {
             Some(message) => Err(BitrouterError::bad_request(message)),
             None => Ok(self.request_checks),

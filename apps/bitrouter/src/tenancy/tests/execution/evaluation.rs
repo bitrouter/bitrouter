@@ -14,7 +14,6 @@ use std::{sync::atomic::AtomicUsize, time::Duration};
 use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 use tower::ServiceExt;
 
-mod owned;
 #[cfg(any(feature = "db-postgres", feature = "db-mysql"))]
 mod server;
 
@@ -203,39 +202,6 @@ async fn scoped_eval_store(
     ensure!(!receipt.usage.complete && store.list_subjects().await?.is_empty());
     ensure!(fixture.service.current().is_ok());
     Ok(store)
-}
-
-// Each caller here has a fresh database and exactly one real invocation. The
-// unfiltered bounded ID query also catches an unexpected additional receipt;
-// lookup validates its immutable bytes and exact owner before assertions.
-async fn only_receipt(
-    fixture: &Fixture,
-) -> Result<bitrouter_ai::tenancy::execution::ExecutionReceipt> {
-    let rows = fixture
-        .db
-        .query_all(Statement::from_string(
-            fixture.db.get_database_backend(),
-            "SELECT execution_id FROM tenancy_execution_receipts LIMIT 2".to_owned(),
-        ))
-        .await?;
-    ensure!(
-        rows.len() == 1,
-        "expected one durable invocation receipt, got {}",
-        rows.len()
-    );
-    let id = rows
-        .first()
-        .context("receipt row")?
-        .try_get::<String>("", "execution_id")?
-        .try_into()?;
-    crate::tenancy::receipts::store::lookup(
-        &fixture.db,
-        &fixture.installation,
-        &fixture.tenant,
-        &id,
-    )
-    .await?
-    .context("receipt owner/integrity lookup")
 }
 
 #[tokio::test]

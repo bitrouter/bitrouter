@@ -7,15 +7,11 @@
 
 use std::io::IsTerminal;
 
-/// ANSI escape strings, picked once per call to [`Palette::for_stderr`]
-/// / [`Palette::for_stdout`]. When colour is suppressed (stream is not
+/// ANSI escape strings, picked once per call to [`Palette::for_stderr`].
+/// When colour is suppressed (stream is not
 /// a TTY, or `NO_COLOR` is set) every field is `""` so format strings
 /// stay valid but emit nothing.
 pub struct Palette {
-    /// Red. Used for the `error:` head and the `●` stopped indicator.
-    pub red: &'static str,
-    /// Green. Used for the `●` running indicator.
-    pub green: &'static str,
     /// Cyan. Used for the `info:` / `hint:` heads.
     pub cyan: &'static str,
     /// Bold. Used to lift the state word ("running" / "stopped") and
@@ -33,8 +29,6 @@ impl Palette {
     /// Full ANSI palette — emit on TTYs without `NO_COLOR`.
     pub fn ansi() -> Self {
         Self {
-            red: "\x1b[31m",
-            green: "\x1b[32m",
             cyan: "\x1b[36m",
             bold: "\x1b[1m",
             dim: "\x1b[2m",
@@ -46,8 +40,6 @@ impl Palette {
     /// redirected, `NO_COLOR` is set, or in unit tests.
     pub fn none() -> Self {
         Self {
-            red: "",
-            green: "",
             cyan: "",
             bold: "",
             dim: "",
@@ -59,17 +51,6 @@ impl Palette {
     /// surfaces). Honours `NO_COLOR` (<https://no-color.org/>).
     pub fn for_stderr() -> Self {
         if no_color() || !std::io::stderr().is_terminal() {
-            Self::none()
-        } else {
-            Self::ansi()
-        }
-    }
-
-    /// Pick the palette appropriate for stdout (used by status / other
-    /// structured-report surfaces). Piping `bro status > file`
-    /// strips colour automatically via [`IsTerminal`].
-    pub fn for_stdout() -> Self {
-        if no_color() || !std::io::stdout().is_terminal() {
             Self::none()
         } else {
             Self::ansi()
@@ -96,8 +77,6 @@ mod tests {
         // Every styled field has a non-empty escape under `ansi` and an
         // empty string under `none` — that asymmetry is the whole point.
         for (field_a, field_n) in [
-            (a.red, n.red),
-            (a.green, n.green),
             (a.cyan, n.cyan),
             (a.bold, n.bold),
             (a.dim, n.dim),

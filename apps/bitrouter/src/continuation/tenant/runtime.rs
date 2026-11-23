@@ -3,7 +3,7 @@
 use super::*;
 use crate::{
     gateway::{
-        pipeline::{executor::tenancy::http_continuation::Proof, native::NativeManagedRequest},
+        pipeline::executor::tenancy::http_continuation::Proof,
         providers::auth::ContinuationAuthority,
     },
     tenancy::{
@@ -60,7 +60,6 @@ impl Runtime {
     pub(crate) fn active(&self, ctx: &PipelineContext) -> bool {
         ctx.operation() == ModelOperation::Generation
             && ctx.inbound_protocol() == Some(ApiProtocol::Responses)
-            && ctx.extension::<NativeManagedRequest>().is_none()
     }
     pub(crate) fn record(&self, proof: std::result::Result<Option<Arc<Proof>>, ErrorCode>) {
         if let Ok(mut current) = self.proof.lock() {
@@ -131,10 +130,9 @@ impl Runtime {
         if !self.active(ctx) {
             // Another inbound wire can still select a Responses provider. Its
             // opaque extras must not smuggle an unowned provider continuation
-            // through cross-protocol rendering. Native owns its separate031
-            // proof path; Decisions never sends a Generation request.
+            // through cross-protocol rendering. Decisions never sends a
+            // Generation request.
             if ctx.operation() == ModelOperation::Generation
-                && ctx.extension::<NativeManagedRequest>().is_none()
                 && ["previous_response_id", "conversation"].iter().any(|name| {
                     ctx.generation_prompt().is_some_and(|prompt| {
                         prompt.params.extra.get(*name).is_some_and(|v| !v.is_null())
@@ -200,9 +198,7 @@ impl Runtime {
     ) -> PipelineResult<HookDecision> {
         self.validate(ctx)?;
         if !self.active(ctx) {
-            if ctx.operation() == ModelOperation::Generation
-                && ctx.extension::<NativeManagedRequest>().is_none()
-            {
+            if ctx.operation() == ModelOperation::Generation {
                 // Cross-wire rendering still needs the no-parent egress check.
                 // There is no continuation reservation or lookup on this branch.
                 ctx.insert_extension(self.clone());

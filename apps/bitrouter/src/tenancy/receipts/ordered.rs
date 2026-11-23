@@ -46,8 +46,7 @@ impl CandidateV2 {
             "ordered disposition status mismatch"
         );
         let evidence = super::usage_evidence::storage::Evidence::new(document, &receipt)?;
-        let mut disposition: StoredDisposition = disposition.into();
-        disposition.usage_evidence_digest = Some(evidence.digest.clone());
+        let disposition = StoredDisposition::new(disposition, evidence.digest.clone());
         let json = serde_json::to_string(&receipt)?;
         let private_json = serde_json::to_string(&disposition)?;
         ensure!(
@@ -55,7 +54,7 @@ impl CandidateV2 {
                 && private_json.len() <= super::store::MAX_DISPOSITION,
             "ordered receipt bytes"
         );
-        let digest = super::store::digest_for(Format::V2, &json, &private_json);
+        let digest = super::store::digest_for(Format::Ordered, &json, &private_json);
         Ok(Self {
             receipt,
             json,
@@ -89,12 +88,12 @@ pub(in crate::tenancy) async fn decode(
         "ordered receipt namespace"
     );
     let disposition: StoredDisposition = serde_json::from_str(&private)?;
-    let digest = super::store::digest_for(Format::V2, &json, &private);
+    let digest = super::store::digest_for(Format::Ordered, &json, &private);
     let evidence = super::usage_evidence::storage::load_v2(
         db,
         &receipt,
         &digest,
-        disposition.usage_evidence_digest.as_deref(),
+        &disposition.usage_evidence_digest,
         charge,
     )
     .await?;
@@ -111,7 +110,7 @@ pub(in crate::tenancy) async fn decode(
         candidate.json == json && candidate.private_json == private,
         "ordered canonical bytes"
     );
-    let terminal = Terminal::V2(std::sync::Arc::new(candidate));
+    let terminal = Terminal::Ordered(std::sync::Arc::new(candidate));
     super::store::validate_projection(&row, &terminal)?;
     // The ordered mode cannot silently ignore an auxiliary sidecar.
     let foreign = sea_orm::sea_query::Query::select()

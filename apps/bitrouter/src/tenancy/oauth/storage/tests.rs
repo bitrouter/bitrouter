@@ -198,7 +198,7 @@ async fn server_receipt_storage(db: &DatabaseConnection, case: &Case, row: &Row)
     for (table, expected) in [
         ("tenancy_execution_receipts", 1_i64),
         ("tenancy_receipt_auxiliary", 1),
-        ("tenancy_usage_evidence", 0),
+        ("tenancy_usage_evidence", 1),
     ] {
         let query = Query::select()
             .from(Alias::new(table))

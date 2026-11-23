@@ -340,6 +340,8 @@ fn valid_output_path(path: &Path) -> Result<()> {
     }
     if !(path.starts_with("dist/registry")
         || path.starts_with("apps/bitrouter/registry-dist")
+        || path == Path::new("apps/bro/registry-dist/agents.json")
+        || path == Path::new("apps/bro/registry-dist/runtimes.json")
         || path == Path::new("docs/specs/registry-v1/registry.schema.json"))
     {
         bail!("publication output outside registry artifacts");
@@ -454,6 +456,7 @@ fn build_outputs(root: &Path, sources: &Sources) -> Result<Vec<(PathBuf, Vec<u8>
     for directory in [
         root.join("dist/registry"),
         root.join("apps/bitrouter/registry-dist"),
+        root.join("apps/bro/registry-dist"),
     ] {
         outputs.push((directory.join("agents.json"), agents.as_bytes().to_vec()));
         outputs.push((
@@ -648,9 +651,22 @@ fn binding_report(
             }
         }
     }
-    Ok(
-        json!({"outcome":if mismatches.is_empty(){"passed"}else{"invalid_ids"},"checked_references":references,"distinct_checked_ids":distinct.len(),"unbound_offers":unbound,"mismatches":mismatches,"historical_ids":ids.iter().filter(|id|current.is_some_and(|set|!set.contains(**id))).collect::<Vec<_>>()}),
-    )
+    Ok(json!(bitrouter_registry::curation::IdentityAudit {
+        outcome: if mismatches.is_empty() {
+            "passed"
+        } else {
+            "invalid_ids"
+        },
+        checked_references: references,
+        distinct_checked_ids: distinct.len(),
+        unbound_offers: unbound,
+        mismatches,
+        unobserved_ids: ids
+            .iter()
+            .copied()
+            .filter(|id| current.is_some_and(|set| !set.contains(*id)))
+            .collect(),
+    }))
 }
 fn identity_ids(snapshot: &Value) -> Result<BTreeSet<String>> {
     Ok(bitrouter_registry::openrouter::identities(snapshot)?)

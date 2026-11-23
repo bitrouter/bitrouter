@@ -105,16 +105,6 @@ impl Inputs {
                 "observation_reason_code".into(),
                 observation.reason_code.clone(),
             );
-            if let (Some(predicted), Some(observed)) = (
-                attributes
-                    .get("predicted_action")
-                    .and_then(|value| ObservedActionClass::parse(value))
-                    .filter(|action| action.is_known()),
-                ObservedActionClass::parse(&observation.observed_action)
-                    .filter(|action| action.is_known()),
-            ) {
-                attributes.insert("action_match".into(), (predicted == observed).to_string());
-            }
         }
         attributes
     }

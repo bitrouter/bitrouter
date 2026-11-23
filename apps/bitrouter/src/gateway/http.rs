@@ -10,7 +10,6 @@
 //! pipeline, and renders the result back in the **same** inbound protocol —
 //! the outbound (provider) protocol is chosen per routing target.
 
-pub(crate) mod managed_profile;
 mod tenant_receipts;
 
 use std::convert::Infallible;
@@ -286,32 +285,11 @@ pub struct RouterOptions {
     /// convention). `None` omits the aggregate route — only per-server routes
     /// (`/mcp/{server}`) are mounted.
     pub mcp_aggregate_route: Option<String>,
-    /// Optional wrapper applied to the fully-built router. Set via
-    /// [`RouterOptions::with_router_wrapper`].
+    /// Optional wrapper applied to the fully-built router.
     pub router_wrapper: Option<RouterWrapper>,
 }
 
-impl RouterOptions {
-    /// Install a router-wrapper closure that runs after the gateway has mounted
-    /// every route. Application telemetry and custom hosts use this to add
-    /// inbound HTTP middleware without making routing depend on an exporter.
-    pub fn with_router_wrapper<F>(mut self, wrapper: F) -> Self
-    where
-        F: Fn(Router) -> Router + Send + Sync + 'static,
-    {
-        self.router_wrapper = Some(Arc::new(wrapper));
-        self
-    }
-}
-
-/// Build the axum router for the given state.
-pub fn build_router(state: AppState) -> Router {
-    build_router_with_options(state, RouterOptions::default())
-}
-
-/// Like [`build_router`], but lets the caller opt out of specific routes
-/// before they are mounted (so a host can supply its own variant without
-/// tripping `Router::merge`'s duplicate-route panic).
+/// Build the router with explicit host route and middleware options.
 pub fn build_router_with_options(state: AppState, options: RouterOptions) -> Router {
     let mut router = Router::new()
         .route("/v1/messages", post(messages))
@@ -330,8 +308,6 @@ pub fn build_router_with_options(state: AppState, options: RouterOptions) -> Rou
         .route("/health", get(health))
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(state);
-    #[cfg(not(feature = "core"))]
-    let router = managed_profile::disabled(router);
     match options.router_wrapper {
         Some(wrapper) => wrapper(router),
         None => router,
@@ -463,7 +439,7 @@ async fn mcp_invoke_inner(
     // rejects everything else as "method not found"). Without this, every
     // spec-compliant client (Claude clients, opencode, the MCP SDK) fails its
     // opening `initialize` over Streamable HTTP and never reaches a tool call;
-    // only handshake-skipping callers (curl, `bro tools`) worked before.
+    // only handshake-skipping callers (curl, `bitrouter tools`) worked before.
     // See <https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle>.
     match method.as_str() {
         "server/discover" => {
@@ -695,13 +671,14 @@ fn sse_response(
     let event_stream = terminated_stream.map(move |item| {
         let inbound_id = inbound_id.clone();
         match item {
+            #[cfg(feature = "mcp")]
             Ok(mcp::McpStreamPart::Notification { method, params }) => {
                 let payload = serde_json::json!({
                     "jsonrpc": "2.0",
                     "method": method,
                     "params": params,
                 });
-                Ok::<_, Infallible>(Event::default().data(payload.to_string()))
+                Ok(Event::default().data(payload.to_string()))
             }
             Ok(mcp::McpStreamPart::Final(mut response)) => {
                 shape_mcp_result_for_peer(&method, modern, &mut response.result);
@@ -710,7 +687,7 @@ fn sse_response(
                     "id": &*inbound_id,
                     "result": response.result,
                 });
-                Ok(Event::default().data(payload.to_string()))
+                Ok::<_, Infallible>(Event::default().data(payload.to_string()))
             }
             Err(e) => {
                 let payload = serde_json::json!({
@@ -1320,6 +1297,9 @@ async fn responses(
     headers: HeaderMap,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
+    if headers.contains_key("bitrouter-beta") {
+        return BitrouterError::bad_request("unsupported Responses header").into_response();
+    }
     handle(state, headers, ApiProtocol::Responses, body).await
 }
 
@@ -1340,6 +1320,7 @@ async fn handle(
     body: serde_json::Value,
 ) -> Response {
     add_inbound_protocol_hint(&mut headers, &inbound);
+    let client_request_id = headers.contains_key(BITROUTER_REQUEST_ID_HEADER);
     let request_id = match add_request_id_hint(&mut headers) {
         Ok(request_id) => request_id,
         Err(error) => return error.into_response(),
@@ -1359,6 +1340,7 @@ async fn handle(
         inbound,
         input,
         request_id,
+        client_request_id,
         #[cfg(feature = "multi-instance")]
         None,
     )
@@ -1368,6 +1350,11 @@ async fn handle(
 /// Validate the original protocol document before shared admission. Configurable
 /// prompt transforms and route/default expansion run only after that boundary.
 pub(crate) fn parse_input(inbound: &ApiProtocol, body: serde_json::Value) -> Result<PipelineInput> {
+    if *inbound == ApiProtocol::Responses
+        && (body.get("bitrouter").is_some() || body["multi_agent"]["enabled"] == true)
+    {
+        return Err(BitrouterError::bad_request("unsupported Responses members"));
+    }
     if body.get("bitrouter_generation_defaults").is_some() {
         return Err(BitrouterError::bad_request(
             "unknown generation request member",
@@ -1412,6 +1399,7 @@ pub(crate) async fn handle_shared(
         inbound,
         input,
         correlation_id,
+        false,
         Some(admission),
     )
     .await
@@ -1423,6 +1411,7 @@ async fn execute_input(
     inbound: ApiProtocol,
     input: PipelineInput,
     request_id: String,
+    client_request_id: bool,
     #[cfg(feature = "multi-instance")] admission: Option<
         Arc<crate::gateway::shared::admitted::SharedAdmission>,
     >,
@@ -1476,6 +1465,14 @@ async fn execute_input(
             PipelineRequest::new_decisions(request.model.clone(), caller, request.clone())
         }
     };
+    if client_request_id {
+        req.extensions
+            .insert(crate::gateway::metering::replay::ClientRequestIdClaim);
+    } else {
+        req.extensions.insert(Arc::new(
+            crate::gateway::pipeline::types::AllocatedRequestId::new(request_id.clone()),
+        ));
+    }
     req.request_id = request_id.clone();
     req.original_model = original_model;
     req.headers = headers;
@@ -1893,15 +1890,11 @@ fn add_request_id_hint(headers: &mut HeaderMap) -> Result<String> {
             .to_str()
             .map_err(|_| BitrouterError::bad_request("request id header is not valid text"))?
             .trim();
-        if request_id.is_empty() {
-            return Err(BitrouterError::bad_request(
-                "request id header must not be empty",
-            ));
-        }
+        crate::gateway::pipeline::types::validate_client_request_id(request_id)?;
         return Ok(request_id.to_string());
     }
 
-    let request_id = uuid::Uuid::new_v4().to_string();
+    let request_id = crate::gateway::pipeline::types::new_request_id();
     if let Ok(value) = HeaderValue::from_str(&request_id) {
         headers.insert(BITROUTER_REQUEST_ID_HEADER, value);
     }
@@ -2230,7 +2223,11 @@ fn apply_error_headers(response: &mut Response, error: &BitrouterError) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    pub(crate) fn build_router(state: super::AppState) -> axum::Router {
+        super::build_router_with_options(state, super::RouterOptions::default())
+    }
+
     use super::*;
     use crate::gateway::assembly::PromptTransform;
     use crate::gateway::pipeline::executor::{Executor, MockExecutor, MockResponse};
@@ -2471,10 +2468,10 @@ mod tests {
         }
     }
 
-    struct RejectNativeAndHttp;
+    struct RejectHttp;
 
     #[async_trait]
-    impl PreRequestHook for RejectNativeAndHttp {
+    impl PreRequestHook for RejectHttp {
         async fn check(&self, _ctx: &mut PipelineContext) -> Result<HookDecision> {
             Ok(HookDecision::Deny(
                 crate::gateway::pipeline::hooks::DenyReason::Unauthorized(
@@ -2691,11 +2688,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn native_and_http_turns_share_transform_policy_and_settlement()
+    async fn http_turns_preserve_transform_policy_and_settlement()
     -> std::result::Result<(), Box<dyn std::error::Error>> {
-        use bitrouter_ai::types::{
-            Content, FinishReason, GenerateResult, Message, ReasoningEffort, Role, Usage,
-        };
+        use bitrouter_ai::types::{Content, FinishReason, GenerateResult, Usage};
 
         let table = StaticRoutingTable::new();
         table.insert(
@@ -2735,7 +2730,6 @@ mod tests {
             stop_details: None,
             provider_metadata: Default::default(),
         };
-        let expected_content = result.content.clone();
         let provider_calls = Arc::new(AtomicUsize::new(0));
         let settlements = Arc::new(AtomicUsize::new(0));
         let settled_routes = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -2747,10 +2741,7 @@ mod tests {
                 lm.routing_table(Arc::new(table))
                     .executor(Arc::new(CountingExecutor {
                         calls: Arc::clone(&provider_calls),
-                        inner: MockExecutor::new(vec![
-                            MockResponse::Generate(result.clone()),
-                            MockResponse::Generate(result),
-                        ]),
+                        inner: MockExecutor::new(vec![MockResponse::Generate(result)]),
                     }))
                     .pre_request_hook(RecordModelIntent(Arc::clone(&observed)))
                     .settlement_recorder(CountSettlements(Arc::clone(&settlements)))
@@ -2783,55 +2774,24 @@ mod tests {
             .await?;
         assert_eq!(response.status(), StatusCode::OK);
 
-        let native_prompt = Prompt {
-            model: "caller-model".into(),
-            system: None,
-            system_provider_metadata: Default::default(),
-            messages: vec![Message::text(Role::User, "hello")],
-            tools: Vec::new(),
-            params: bitrouter_ai::types::GenerationParams {
-                reasoning_effort: Some(ReasoningEffort::Low),
-                ..Default::default()
-            },
-            response_format: None,
-            tool_choice: None,
-            stream: false,
-        };
-        let native = app
-            .execute_native(native_prompt, CallerContext::local())
-            .await?;
-        assert_eq!(
-            native
-                .result
-                .generation()
-                .ok_or("native result must be generation")?
-                .content,
-            expected_content
-        );
-        assert_eq!(provider_calls.load(Ordering::SeqCst), 2);
-        assert_eq!(settlements.load(Ordering::SeqCst), 2);
+        let body = to_bytes(response.into_body(), 1024 * 1024).await?;
+        let body: serde_json::Value = serde_json::from_slice(&body)?;
+        assert_eq!(body["choices"][0]["message"]["content"], "ok");
+        assert_eq!(provider_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(settlements.load(Ordering::SeqCst), 1);
         let routes = match settled_routes.lock() {
             Ok(entries) => entries.clone(),
             Err(poisoned) => poisoned.into_inner().clone(),
         };
         assert_eq!(
             routes,
-            vec![
-                (
-                    "test-provider".into(),
-                    "gpt-5.5".into(),
-                    Some("low".into()),
-                    10,
-                    5
-                ),
-                (
-                    "test-provider".into(),
-                    "gpt-5.5".into(),
-                    Some("low".into()),
-                    10,
-                    5
-                ),
-            ]
+            vec![(
+                "test-provider".into(),
+                "gpt-5.5".into(),
+                Some("low".into()),
+                10,
+                5
+            ),]
         );
         let captured = match observed.lock() {
             Ok(slot) => slot.clone(),
@@ -2845,10 +2805,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejected_native_and_http_turns_do_not_call_provider()
+    async fn rejected_http_turns_do_not_call_provider()
     -> std::result::Result<(), Box<dyn std::error::Error>> {
-        use bitrouter_ai::types::{Message, Role};
-
         let calls = Arc::new(AtomicUsize::new(0));
         let table = StaticRoutingTable::new();
         let app = App::builder()
@@ -2859,7 +2817,7 @@ mod tests {
                         calls: Arc::clone(&calls),
                         inner: MockExecutor::always_text("should not run"),
                     }))
-                    .pre_request_hook(RejectNativeAndHttp);
+                    .pre_request_hook(RejectHttp);
             })
             .build()?;
         let state = AppState {
@@ -2888,22 +2846,6 @@ mod tests {
             )
             .await?;
         assert!(!response.status().is_success());
-        let native_prompt = Prompt {
-            model: "blocked".into(),
-            system: None,
-            system_provider_metadata: Default::default(),
-            messages: vec![Message::text(Role::User, "hello")],
-            tools: Vec::new(),
-            params: Default::default(),
-            response_format: None,
-            tool_choice: None,
-            stream: false,
-        };
-        assert!(
-            app.execute_native(native_prompt, CallerContext::local())
-                .await
-                .is_err()
-        );
         assert_eq!(calls.load(Ordering::SeqCst), 0);
         Ok(())
     }
@@ -3162,7 +3104,11 @@ mod tests {
 
         let request_id = add_request_id_hint(&mut headers).unwrap();
 
-        assert!(!request_id.is_empty());
+        assert!(request_id.starts_with(crate::gateway::pipeline::types::GENERATED_REQUEST_PREFIX));
+        assert!(
+            add_request_id_hint(&mut headers).is_err(),
+            "a client cannot claim the server namespace"
+        );
         assert_eq!(
             headers
                 .get("x-bitrouter-request-id")

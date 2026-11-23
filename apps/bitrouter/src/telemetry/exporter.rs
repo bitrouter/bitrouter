@@ -66,6 +66,8 @@ use crate::gateway::pipeline::types::{ExecutionResult, RoutingTarget};
 use bitrouter_ai::types::{ApiProtocol, Content, Prompt, StreamPart};
 
 use crate::gateway::observability::span_attributes::SpanAttributes;
+#[cfg(feature = "otel-http")]
+use crate::telemetry::bearer::TelemetryBearer;
 use crate::telemetry::cardinality::CardinalityLimiter;
 use crate::telemetry::config::{ContentCaptureMode, OtelConfig, SamplerKind};
 use crate::telemetry::processor_runtime::ProcessorRuntime;
@@ -185,16 +187,15 @@ impl OtelExporter {
     /// a per-exporter `TracerProvider` (not installed globally — we hand out
     /// our own `BoxedTracer`).
     ///
-    /// `bearer` is an optional live-bearer source for account-attributed
+    /// With `otel-http`, `bearer` is an optional live source for account-attributed
     /// telemetry: when `Some`, the OTLP/HTTP transport resolves a fresh
     /// `Authorization` per export (refreshing as needed), so attribution
     /// survives access-token expiry without a daemon restart. `None` keeps the
     /// static-header behaviour (an explicit `config.bearer_token`, or anonymous).
-    /// The bearer is HTTP-only — under the gRPC transport it is ignored (see
-    /// `crate::telemetry::transport`).
+    /// The gRPC transport uses only the configured static headers and token.
     pub fn new(
         config: OtelConfig,
-        bearer: Option<Arc<dyn crate::telemetry::bearer::TelemetryBearer>>,
+        #[cfg(feature = "otel-http")] bearer: Option<Arc<dyn TelemetryBearer>>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let config = config.with_env_overrides();
 
@@ -203,7 +204,12 @@ impl OtelExporter {
         // returns a no-op and propagation is silently dropped.
         global::set_text_map_propagator(TraceContextPropagator::new());
 
-        Self::build(config, bearer, ProcessorRuntime::new)
+        Self::build(
+            config,
+            #[cfg(feature = "otel-http")]
+            bearer,
+            ProcessorRuntime::new,
+        )
     }
 
     #[cfg(feature = "multi-instance")]
@@ -211,12 +217,17 @@ impl OtelExporter {
         config: OtelConfig,
         workers: Arc<super::owned::Workers>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        Self::build(config, None, || ProcessorRuntime::owned(workers.clone()))
+        Self::build(
+            config,
+            #[cfg(feature = "otel-http")]
+            None,
+            || ProcessorRuntime::owned(workers.clone()),
+        )
     }
 
     fn build(
         config: OtelConfig,
-        bearer: Option<Arc<dyn crate::telemetry::bearer::TelemetryBearer>>,
+        #[cfg(feature = "otel-http")] bearer: Option<Arc<dyn TelemetryBearer>>,
         runtime: impl Fn() -> ProcessorRuntime,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // Tokio's bounded channel panics outside this range. Validate before
@@ -235,7 +246,11 @@ impl OtelExporter {
 
         // Transport (OTLP/HTTP vs OTLP/gRPC) is chosen at compile time by the
         // crate's feature flags — see `crate::telemetry::transport`.
-        let span_exporter = crate::telemetry::transport::span_exporter(&config, bearer)?;
+        let span_exporter = crate::telemetry::transport::span_exporter(
+            &config,
+            #[cfg(feature = "otel-http")]
+            bearer,
+        )?;
 
         // All fallible transport construction precedes the trace processor.
         // Metrics construction has no fallible steps after its reader starts.
@@ -298,9 +313,7 @@ impl OtelExporter {
 
     /// Clone the underlying OTel SDK tracer. Used by
     /// [`crate::telemetry::subscriber::tracing_subscriber_layer`] to build the
-    /// `tracing` ↔ OTel bridge, and by [`crate::telemetry::acp::AcpSpanRecorder`],
-    /// which stores it. Crate-scoped so the OTel tracer type never reaches
-    /// this crate's public API.
+    /// `tracing` ↔ OTel bridge. The SDK tracer stays internal to telemetry.
     pub(crate) fn tracer_clone(&self) -> SdkTracer {
         self.tracer.clone()
     }
@@ -1733,6 +1746,7 @@ pub(crate) mod hop_tests {
             .into(),
             request_duration_ms: 42,
             upstream_duration_ms: Some(40),
+            #[cfg(feature = "server-tools")]
             server_tool_calls: Vec::new(),
         }
     }
@@ -2094,6 +2108,7 @@ pub(crate) mod hop_tests {
             .into(),
             request_duration_ms: 0,
             upstream_duration_ms: None,
+            #[cfg(feature = "server-tools")]
             server_tool_calls: Vec::new(),
         });
 
@@ -2165,6 +2180,7 @@ pub(crate) mod hop_tests {
             .into(),
             request_duration_ms: 0,
             upstream_duration_ms: None,
+            #[cfg(feature = "server-tools")]
             server_tool_calls: Vec::new(),
         });
 
@@ -2232,6 +2248,7 @@ pub(crate) mod hop_tests {
             .into(),
             request_duration_ms: 0,
             upstream_duration_ms: None,
+            #[cfg(feature = "server-tools")]
             server_tool_calls: Vec::new(),
         });
 
@@ -3428,14 +3445,10 @@ pub(crate) mod hop_tests {
 
     #[tokio::test]
     async fn bridge_ingress_span_still_parents_chat() {
-        // The `tracing` ↔ OTel bridge is no longer how *BitRouter's* ingress
-        // span reaches the exporter, but it is still how a host that builds
-        // its own `tracing` SERVER span reaches it — `bitrouter-cloud` is
-        // exactly that host, and it would export orphaned `chat` roots if
-        // this arm of `start_request_span` were dropped as dead code.
-        //
-        // Nothing else in the tree covers this path now that
-        // `observe_hierarchy.rs` tests the native one, so it is covered here.
+        // A custom host can provide its own `tracing` SERVER span through the
+        // OTel bridge. The resulting `chat` span must retain that parent.
+        // Native BitRouter ingress is covered separately by
+        // `observe_hierarchy.rs`.
         use tracing_opentelemetry::OpenTelemetrySpanExt as _;
         use tracing_subscriber::layer::SubscriberExt as _;
 

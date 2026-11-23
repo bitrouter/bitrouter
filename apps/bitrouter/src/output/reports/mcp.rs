@@ -8,6 +8,7 @@ use crate::output::CliReport;
 use crate::output::human::{Human, Table};
 
 #[derive(Serialize)]
+#[cfg(feature = "mcp")]
 pub struct McpCheckRow {
     pub server: String,
     pub transport: String,
@@ -20,10 +21,12 @@ pub struct McpCheckRow {
 }
 
 #[derive(Serialize)]
+#[cfg(feature = "mcp")]
 pub struct McpCheckReport {
     pub servers: Vec<McpCheckRow>,
 }
 
+#[cfg(feature = "mcp")]
 impl CliReport for McpCheckReport {
     fn render(&self, h: &mut Human<'_>) -> std::io::Result<()> {
         let mut table = Table::new(["SERVER", "STATUS", "TRANSPORT", "LATENCY", "TOOLS"]);
@@ -60,7 +63,7 @@ pub struct McpRegistryRow {
     pub description: String,
 }
 
-/// Result of legacy `bro mcp search <query>`.
+/// Result of legacy `bitrouter mcp search <query>`.
 #[derive(Serialize)]
 pub struct McpRegistryReport {
     pub servers: Vec<McpRegistryRow>,

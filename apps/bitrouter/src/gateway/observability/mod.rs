@@ -13,6 +13,7 @@ pub mod requests;
 pub(crate) mod binding;
 
 /// Gateway observation vocabulary and exporter invariants.
+#[cfg(any(test, feature = "otel-http", feature = "otel-grpc"))]
 pub mod schema;
 /// Application and extension observation attributes.
 pub mod span_attributes;

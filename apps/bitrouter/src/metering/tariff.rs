@@ -126,37 +126,6 @@ fn complete_rates(pricing: &ModelPricing) -> bool {
     .all(|rate| rate.is_some_and(|rate| rate.is_finite() && rate >= 0.0))
 }
 
-/// Explicit offline prices retain the admission evidence and cannot resolve
-/// the native cache billing basis. The source and effective rates distinguish
-/// the override calculation from the original frozen tariff.
-pub(crate) fn override_charge_evidence(
-    usage: &Usage,
-    pricing: &ModelPricing,
-    admitted: Option<&FrozenTariff>,
-) -> ChargeEvidence {
-    let mut evidence = if admitted.is_some_and(|tariff| tariff.protocol == ApiProtocol::Decisions)
-        && (usage.cache_read_tokens != 0 || usage.cache_write_tokens != 0)
-    {
-        unavailable_charge_evidence(usage, "decisions_cache_billing_unverified")
-    } else {
-        calculate_charge_evidence(usage, pricing, PricingSource::Override)
-    };
-    if let Some(admitted) = admitted {
-        evidence.pricing_version = format!(
-            "sha256:{}",
-            hex::encode(Sha256::digest(
-                format!(
-                    "override-v1|{}|{}",
-                    admitted.pricing_version, evidence.pricing_version
-                )
-                .as_bytes()
-            ))
-        );
-        evidence.tariff_snapshot = Some(admitted.clone());
-    }
-    evidence
-}
-
 /// Typed evidence linking a tariff to the exact admitted endpoint.
 #[derive(Debug, Clone, Serialize)]
 pub struct TargetTariffSnapshot {

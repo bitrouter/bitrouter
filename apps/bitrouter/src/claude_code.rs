@@ -54,15 +54,6 @@ const PROVIDER_ID: &str = "claude-code";
 pub struct ClaudeCodeRouter;
 
 impl PromptTransform for ClaudeCodeRouter {
-    fn validate_context_rebuild(
-        &self,
-        _original: &Prompt,
-        _rebuilt: &Prompt,
-    ) -> crate::gateway::error::Result<()> {
-        // Only model qualification changes here; managed reconstruction freezes it.
-        Ok(())
-    }
-
     fn apply(&self, _prompt: &mut Prompt) {
         // Detection needs the inbound `anthropic-beta` header, so all the work
         // is in `apply_with_headers` (which the HTTP server always calls). With
@@ -414,11 +405,8 @@ mod tests {
         assert!(!migrate_legacy_anthropic_marker(path.clone()));
 
         let reloaded = CredentialStore::load(&path).unwrap();
-        assert_eq!(
-            reloaded
-                .get_any(LEGACY_PROVIDER_ID, DEFAULT_ACCOUNT)
-                .and_then(Credential::as_api_key),
-            Some("sk-ant-api03-platform"),
+        assert!(
+            matches!(reloaded.get_any(LEGACY_PROVIDER_ID, DEFAULT_ACCOUNT), Some(Credential::ApiKey { value }) if value == "sk-ant-api03-platform"),
             "the anthropic platform API key must be left in place"
         );
         assert!(
@@ -460,11 +448,8 @@ mod tests {
             ),
             "the anthropic marker must be left as-is when claude-code already has a credential"
         );
-        assert_eq!(
-            reloaded
-                .get_any(PROVIDER_ID, DEFAULT_ACCOUNT)
-                .and_then(Credential::as_api_key),
-            Some("sk-ant-oat-existing"),
+        assert!(
+            matches!(reloaded.get_any(PROVIDER_ID, DEFAULT_ACCOUNT), Some(Credential::ApiKey { value }) if value == "sk-ant-oat-existing"),
             "the pre-existing claude-code credential must not be clobbered"
         );
     }

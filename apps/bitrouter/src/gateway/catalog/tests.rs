@@ -46,7 +46,7 @@ async fn single_document_refresh_is_isolated_and_failed_candidates_keep_the_prio
         .default_headers(headers)
         .build()?;
     assert_eq!(
-        catalog.refresh(&contaminated, allowed()).await?,
+        refresh(&mut catalog, &contaminated).await?,
         Durability::Memory
     );
     let prior = catalog
@@ -65,7 +65,7 @@ async fn single_document_refresh_is_isolated_and_failed_candidates_keep_the_prio
             .respond_with(ResponseTemplate::new(status).exact_json(document("bad")))
             .mount(&server)
             .await;
-        assert!(catalog.refresh(&contaminated, allowed()).await.is_err());
+        assert!(refresh(&mut catalog, &contaminated).await.is_err());
         assert_eq!(
             catalog.snapshot().map(|s| s.fetched_at),
             Some(prior.fetched_at)
@@ -86,7 +86,7 @@ async fn single_document_refresh_is_isolated_and_failed_candidates_keep_the_prio
             .respond_with(ResponseTemplate::new(200).exact_json(value))
             .mount(&server)
             .await;
-        assert!(catalog.refresh(&contaminated, allowed()).await.is_err());
+        assert!(refresh(&mut catalog, &contaminated).await.is_err());
         assert_eq!(
             catalog.snapshot().and_then(|s| s.data.document.as_ref()),
             prior.data.document.as_ref()
@@ -113,7 +113,7 @@ async fn persistence_failure_keeps_admitted_memory_and_future_check_is_due() -> 
         .await;
     let mut catalog = Catalog::with_store(server.uri(), Arc::new(BrokenStore));
     assert_eq!(
-        catalog.refresh(&reqwest::Client::new(), allowed()).await?,
+        refresh(&mut catalog, &reqwest::Client::new()).await?,
         Durability::Memory
     );
     assert!(catalog.is_fresh(Duration::from_secs(86400)));
@@ -124,12 +124,6 @@ async fn persistence_failure_keeps_admitted_memory_and_future_check_is_due() -> 
     snapshot.fetched_at = u64::MAX;
     catalog.seed(snapshot);
     assert!(!catalog.is_fresh(Duration::from_secs(86400)));
-    assert!(
-        catalog
-            .refresh(&reqwest::Client::new(), NetworkPolicy::Offline)
-            .await
-            .is_err()
-    );
     Ok(())
 }
 
@@ -182,4 +176,9 @@ async fn default_bundle_is_a_whole_alternative_and_local_loading_never_waits_for
             .is_some_and(|r| r.is_empty())
     );
     Ok(())
+}
+
+async fn refresh(catalog: &mut Catalog, client: &reqwest::Client) -> anyhow::Result<Durability> {
+    let snapshot = catalog.download(client, allowed()).await?;
+    Ok(catalog.admit(snapshot))
 }

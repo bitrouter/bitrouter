@@ -1,5 +1,6 @@
 //! Secured, bounded bundle I/O. Source database descriptors belong only to SQLite.
-use super::format::{MAX_EVIDENCE, MAX_FILE};
+#[cfg(all(test, unix))]
+use super::format::MAX_FILE;
 use anyhow::{Result, ensure};
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
@@ -133,6 +134,7 @@ pub(super) fn sync_directory(path: &Path) -> Result<()> {
     File::open(path)?.sync_all()?;
     Ok(())
 }
+#[cfg(all(test, unix))]
 pub(super) fn snapshot_digest(path: &Path, key: &[u8; 32]) -> Result<(u64, String)> {
     // Only called after all SQLite handles to the copied database are closed.
     let mut file = private_file(path, MAX_FILE)?;
@@ -155,12 +157,4 @@ pub(super) fn snapshot_digest(path: &Path, key: &[u8; 32]) -> Result<(u64, Strin
     }
     ensure!(total == length, "snapshot changed while hashing");
     Ok((length, hex::encode(digest.finish())))
-}
-pub(super) fn evidence_bytes(value: &super::format::Evidence) -> Result<Vec<u8>> {
-    let bytes = serde_json::to_vec_pretty(value)?;
-    ensure!(
-        bytes.len() as u64 <= MAX_EVIDENCE,
-        "evidence exceeds profile"
-    );
-    Ok(bytes)
 }

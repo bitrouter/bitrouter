@@ -1,4 +1,3 @@
-//! Section C only: real slow uploads, unchanged application limits/deadline.
 //! Declared/reserved bytes are not allocations or an RSS bound. No fault writer.
 use super::*;
 #[cfg(feature = "http2")]

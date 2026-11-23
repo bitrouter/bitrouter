@@ -34,6 +34,7 @@ pub enum FirstTokenKind {
 
 impl FirstTokenKind {
     /// Stable snake-case storage representation.
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Reasoning => "reasoning",

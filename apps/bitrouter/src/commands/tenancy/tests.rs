@@ -1,6 +1,6 @@
 use super::*;
+use crate::output::{Format, error::envelope_from_anyhow};
 use anyhow::ensure;
-use bitrouter::output::{Format, error::envelope_from_anyhow};
 use clap::Parser as _;
 use serde_json::{Value, json};
 
@@ -37,8 +37,8 @@ fn activation() -> Value {
 }
 
 fn parsed(args: &[&str]) -> Result<(Action, Option<String>)> {
-    let cli = crate::Cli::try_parse_from(args)?;
-    let Some(crate::Command::Tenancy { action }) = cli.command else {
+    let cli = crate::cli::Cli::try_parse_from(args)?;
+    let Some(crate::cli::Command::Tenancy { action }) = cli.command else {
         anyhow::bail!("missing tenancy command");
     };
     Ok((action, cli.context))
@@ -213,7 +213,7 @@ fn tenancy_cli_rejects_ambiguous_targets_secret_flags_and_missing_read_ids() {
         ],
     ] {
         assert!(
-            crate::Cli::try_parse_from(&args).is_err(),
+            crate::cli::Cli::try_parse_from(&args).is_err(),
             "accepted conflicting arguments: {args:?}"
         );
     }

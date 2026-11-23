@@ -19,7 +19,6 @@ use crate::{
 };
 
 pub(crate) mod http_continuation;
-pub(crate) mod native;
 
 #[cfg(test)]
 mod tests;
@@ -183,12 +182,6 @@ pub(super) fn cancellation(ctx: &PipelineContext) -> Result<tokio_util::sync::Ca
     let Some(execution) = execution(ctx) else {
         return Ok(tokio_util::sync::CancellationToken::new());
     };
-    #[cfg(all(feature = "core", feature = "harness"))]
-    if let Some(gate) = execution.choice_gate()? {
-        // Owner cancellation also cancels this gate; the Choice driver can
-        // independently cancel it while retaining the child's receipt/ACK work.
-        return Ok(gate.cancellation());
-    }
     Ok(execution.receipt_owner()?.cancelled.clone())
 }
 
@@ -375,22 +368,8 @@ pub(super) fn admit_send(
             let permit = permit
                 .as_mut()
                 .ok_or_else(|| execution.reject(ErrorCode::Forbidden))?;
-            let counted = if execution
-                .count_required()
-                .map_err(|code| execution.reject(code))?
-            {
-                Some(super::input_count::request_digest(request, target)?)
-            } else {
-                None
-            };
             let attempt_id = execution
-                .arm_attempt_with_oauth(
-                    target,
-                    permit,
-                    &binding.stamp,
-                    binding.oauth.as_ref(),
-                    counted.as_deref(),
-                )
+                .arm_attempt_with_oauth(target, permit, &binding.stamp, binding.oauth.as_ref())
                 .map_err(|code| execution.reject(code))?;
             super::super::provider_technical::armed(ctx, &attempt_id);
             let adapter = adapter
@@ -434,7 +413,7 @@ impl SendAdmission {
     ) -> Result<reqwest::Response> {
         let cancellation = cancellation(ctx)?;
         if let Some(adapter) = &self.adapter {
-            use crate::managed_contract::private_adapter::{ATTEMPT_HEADER, OUTCOME_HEADER};
+            use crate::inference_contract::private_adapter::{ATTEMPT_HEADER, OUTCOME_HEADER};
 
             capture_adapter_envelope(scrubber, request.headers().get(ATTEMPT_HEADER));
             let response = adapter.send(request, &cancellation).await?;

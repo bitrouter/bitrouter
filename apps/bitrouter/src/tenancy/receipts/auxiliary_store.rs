@@ -145,11 +145,12 @@ fn scope(receipt: &ExecutionReceipt) -> sea_orm::sea_query::SelectStatement {
 }
 pub(super) async fn validate(
     db: &impl ConnectionTrait,
-    candidate: &mut Candidate,
+    receipt: &ExecutionReceipt,
+    receipt_digest: &str,
     expected: Option<&str>,
-) -> Result<()> {
+) -> Result<Option<Evidence>> {
     let backend = db.get_database_backend();
-    let mut query = scope(&candidate.receipt);
+    let mut query = scope(receipt);
     for (name, max) in [
         ("evidence_json", MAX_BYTES as u64),
         ("evidence_digest", 64),
@@ -169,20 +170,19 @@ pub(super) async fn validate(
     }
     query.column(Alias::new("unknown_outcome"));
     match (expected, db.query_one(backend.build(&query)).await?) {
-        (None, None) => Ok(()),
+        (None, None) => Ok(None),
         (Some(expected), Some(row)) => {
             let json: String = row.try_get("", "evidence_json")?;
-            let evidence = Evidence::new(&candidate.receipt, serde_json::from_str(&json)?)?;
+            let evidence = Evidence::new(receipt, serde_json::from_str(&json)?)?;
             ensure!(
                 evidence.json == json
                     && evidence.digest == expected
                     && row.try_get::<String>("", "evidence_digest")? == expected
-                    && row.try_get::<String>("", "receipt_digest")? == candidate.digest
+                    && row.try_get::<String>("", "receipt_digest")? == receipt_digest
                     && row.try_get::<bool>("", "unknown_outcome")? == evidence.unknown(),
                 "immutable OAuth receipt evidence mismatch"
             );
-            candidate.auxiliary = Some(evidence);
-            Ok(())
+            Ok(Some(evidence))
         }
         _ => anyhow::bail!("OAuth receipt evidence presence mismatch"),
     }

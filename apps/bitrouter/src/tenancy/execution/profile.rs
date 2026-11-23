@@ -21,29 +21,29 @@ struct Entry(Arc<TenantExecution>);
 
 struct PolicyCompletion {
     pending: crate::gateway::observability::decision::PendingEvalDecisionStore,
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     observation: Option<Arc<crate::tenancy::eval::observation::RequiredObservation>>,
 }
 
 #[async_trait]
 impl ObserveHook for PolicyCompletion {
     async fn after_phase(&self, phase: Phase, _ctx: &PipelineContext) {
-        #[cfg(feature = "core")]
+        #[cfg(feature = "eval-publication")]
         if matches!(phase, Phase::Route)
             && let Some(observation) = &self.observation
         {
             observation.route_completed();
         }
-        #[cfg(not(feature = "core"))]
+        #[cfg(not(feature = "eval-publication"))]
         let _ = phase;
     }
     async fn on_stream_part(&self, _ctx: &StreamContext, _part: &StreamPart) {}
     async fn on_request_end(&self, ctx: &PipelineContext, outcome: &RequestOutcome) {
-        #[cfg(feature = "core")]
+        #[cfg(feature = "eval-publication")]
         if let Some(observation) = &self.observation {
             observation.before_decision_end(ctx, outcome);
         }
-        #[cfg(not(feature = "core"))]
+        #[cfg(not(feature = "eval-publication"))]
         let _ = outcome;
         if let Some(invocation) =
             ctx.extension::<crate::gateway::observability::decision::EvalInvocation>()
@@ -79,12 +79,8 @@ impl PreRequestHook for Entry {
                 .0
                 .reject(bitrouter_ai::tenancy::operation::ErrorCode::Forbidden));
         }
-        #[cfg(all(feature = "core", feature = "harness"))]
-        self.0.choice_gate()?;
-        #[cfg(all(feature = "core", feature = "harness"))]
-        self.0.select_block(ctx).await?;
         ctx.set_caller(self.0.caller());
-        #[cfg(feature = "core")]
+        #[cfg(feature = "eval-publication")]
         if let Some(observation) = self.0.observation.get() {
             observation.entered()?;
         }
@@ -134,7 +130,7 @@ impl TenantExecution {
                 .map_err(|code| self.reject(code))?;
             }
         }
-        #[cfg(feature = "core")]
+        #[cfg(feature = "eval-publication")]
         let registration = match self.observation.get() {
             Some(observation) => self.service.pipelines.register_observed(
                 self.id(),
@@ -143,7 +139,7 @@ impl TenantExecution {
             )?,
             None => self.service.pipelines.register(self.id(), pipeline)?,
         };
-        #[cfg(not(feature = "core"))]
+        #[cfg(not(feature = "eval-publication"))]
         let registration = self.service.pipelines.register(self.id(), pipeline)?;
         registration.attach(request)?;
         request.extensions.insert(self.clone());
@@ -165,10 +161,6 @@ impl TenantExecution {
                 exporter.clone(),
             ));
         }
-        #[cfg(all(feature = "core", feature = "harness"))]
-        if self.route.block_profile().is_some() {
-            builder.routing_table(self.block_table());
-        }
         let http_continuation = if self.route.is_ordered() {
             None
         } else {
@@ -185,9 +177,6 @@ impl TenantExecution {
         if let Some(continuation) = &http_continuation {
             builder.pre_resolution_hook(continuation.clone());
         }
-        if let Some(policy) = &self.continuation {
-            builder.native_private_context(policy.clone());
-        }
         if let Some(policy) = self.route.policy() {
             if !self.route.dependencies().contains(policy.reference()) || policy.name().is_empty() {
                 return Err(self.reject(bitrouter_ai::tenancy::operation::ErrorCode::Forbidden));
@@ -195,7 +184,7 @@ impl TenantExecution {
             let config = policy.configuration().map_err(|code| self.reject(code))?;
             let pending =
                 crate::gateway::observability::decision::PendingEvalDecisionStore::default();
-            #[cfg(feature = "core")]
+            #[cfg(feature = "eval-publication")]
             let observation = if self.eval_publication {
                 let observation = crate::tenancy::eval::observation::RequiredObservation::new(
                     self.service.eval.clone(),
@@ -208,7 +197,7 @@ impl TenantExecution {
             } else {
                 None
             };
-            let runtime = crate::policy_lock::PolicyRuntime::from_retained_document(
+            let runtime = crate::policy_source::PolicyRuntime::from_retained_document(
                 &config,
                 policy.document().clone(),
                 pending.clone(),
@@ -219,16 +208,14 @@ impl TenantExecution {
             })?;
             builder
                 .model_selector(runtime)
-                .route_hook(crate::policy_lock::PredictiveSingleTargetRouteHook);
-            #[cfg(feature = "core")]
+                .route_hook(crate::policy_source::PredictiveSingleTargetRouteHook);
+            #[cfg(feature = "eval-publication")]
             if let Some(observation) = observation {
-                if self.eval_publication {
-                    builder.observe_hook(
-                        crate::gateway::observability::prediction::PredictiveResponseObserver::new(
-                            pending.clone(),
-                        ),
-                    );
-                }
+                builder.observe_hook(
+                    crate::gateway::observability::prediction::PredictiveResponseObserver::new(
+                        pending.clone(),
+                    ),
+                );
                 builder.settlement_recorder_for(
                     crate::eval::settlement::EvalSettlementRecorder::for_execution(
                         self,
@@ -240,7 +227,7 @@ impl TenantExecution {
             }
             builder.observe_hook(PolicyCompletion {
                 pending,
-                #[cfg(feature = "core")]
+                #[cfg(feature = "eval-publication")]
                 observation: self.observation.get().cloned(),
             });
         }

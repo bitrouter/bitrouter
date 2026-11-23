@@ -1,6 +1,6 @@
 //! Exercises the paired adapter at the actual profiled JSON and SSE send gates.
 
-use crate::managed_contract::private_adapter::{
+use crate::inference_contract::private_adapter::{
     ATTEMPT_DOMAIN, ATTEMPT_HEADER, Attempt, Disposition, OUTCOME_DOMAIN, OUTCOME_HEADER,
     Outcome as AdapterOutcome,
 };

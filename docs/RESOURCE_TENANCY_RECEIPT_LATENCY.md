@@ -1,10 +1,8 @@
 # Optional receipt latency observation
 
 This implementation records existing receipt custody through the application's
-existing OpenTelemetry meter/provider/reader. It is opt-in instrumentation, not
-an M5 performance result, a dispatch capability, or a stronger durability claim.
-It introduces no receipt field, management endpoint, worker, database schema,
-authority, or public SDK type.
+OpenTelemetry meter. Enable it to observe the timing of existing receipt
+settlement and process capacity.
 
 ## Configuration and export
 
@@ -15,9 +13,9 @@ plugins:
   bitrouter-telemetry:
     otel:
       endpoint: http://127.0.0.1:4318
-      service_name: bitrouter-m5
+      service_name: bitrouter
       resource_attributes:
-        service.instance.id: one-fresh-measurement-arm
+        service.instance.id: gateway-instance-1
       sampler: always_off
       content_capture: off
       metrics:
@@ -67,7 +65,7 @@ sample-completeness or p99 report.
 ## Recorded boundaries
 
 - First Open-to-Queued transition saves the monotonic std::time::Instant once,
-  before enqueue. Reconciliation retains this historical T0.
+  before enqueue. Reconciliation retains that timestamp.
 - First dequeue includes the actual completion lane wait, even if H refuses an
   already expired queued job before first polling its work.
 - prepare includes the real journal settlement/candidate preparation await.
@@ -164,14 +162,9 @@ values are preserved, including escalated Unknown obligations. They are not
 zeroed merely because ordinary producers stopped. Gauges cannot retain a file
 lease after the actual Service owners exit.
 
-completion_reserved combines 4MiB per unfinished execution receipt with exact
-stopped-native repair candidate bytes plus16KiB per missing row. Repair consumes
-possible-Unknown room and the same shared byte limits without an active execution
-slot. Under Admission's existing mutex the source checks execution/repair counts,
-checked multiplication/addition and exact agreement with the aggregate reservation;
-it does not infer repair charges from active slots. potential_unknown includes
-both execution and repair obligations. No repair charge is omitted or reset for
-observation, including unacknowledged consuming-COMMIT custody.
+`completion_reserved` accounts for bytes reserved for unfinished execution
+receipts. `potential_unknown` includes unresolved obligations reserved at
+admission. The capacity snapshot reads these aggregates from admission.
 live_unknown includes escalated durable obligations. accounted includes the
 existing durable primary, auxiliary and OAuth policy charges. It is neither
 heap, physical DB/WAL usage, unknown-only bytes nor a per-tenant quota.
@@ -193,16 +186,3 @@ The static reference compares all actual warmup/measurement receipt encodings,
 started/HTTP200 disposition bytes and16KiB row charges against observed accounted
 delta. Other accounting profiles require their own exact projection; absence is
 never zero. A complete capacity vector alone is not performance acceptance.
-
-## Qualification
-
-The source includes bounded real HTTP/gRPC OTLP receiver tests plus authenticated
-Service/provider/SQLite receipt lifecycle tests, arithmetic and schema checks.
-They are functional checks; their artificial gate durations are not benchmarks.
-M5 requires independent review and actual feature/OS qualification, five paired
-workload distributions, receipt/cohort/export reconciliation, and observer-on/off
-CPU/allocation/RSS/latency evidence at ordinary and saturated concurrency. Include
-first-series and final-export peaks. Fixed cardinality alone is not measured RSS.
-The off arm has no receipt p99 and cannot substitute for an instrumented arm.
-No performance, cross-instance, strict-receipt, physical-fsync or completion claim
-is made by this document.

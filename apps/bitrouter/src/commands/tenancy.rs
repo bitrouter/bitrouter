@@ -5,10 +5,10 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::contexts::RemoteContext;
+use crate::gateway::error::BitrouterError;
+use crate::output::{CliReport, Output};
 use anyhow::{Context, Result};
-use bitrouter::contexts::RemoteContext;
-use bitrouter::gateway::error::BitrouterError;
-use bitrouter::output::{CliReport, Output};
 use bitrouter_ai::tenancy::{
     configuration::{Activation, ConfigurationPut},
     identity::{InstallationId, OperationId, RevisionId, TenantId},
@@ -52,7 +52,7 @@ pub(super) struct TenantRead {
 
 #[derive(Subcommand)]
 pub(super) enum Action {
-    /// Inspect a stopped local SQLite DB; no external state or cutover qualification.
+    /// Inspect a stopped local SQLite database and its snapshot artifacts.
     Offline {
         #[command(subcommand)]
         action: offline::Action,
@@ -204,7 +204,7 @@ fn resolve_target(target: &Target, context: Option<&str>) -> Result<RemoteContex
             )
             .into());
         }
-        (Some(name), None, None) => bitrouter::contexts::resolve(name)?
+        (Some(name), None, None) => crate::contexts::resolve(name)?
             .context("tenancy HTTP commands require an explicit remote target")?,
         (None, Some(endpoint), Some(token_env)) => RemoteContext {
             endpoint: endpoint.clone(),

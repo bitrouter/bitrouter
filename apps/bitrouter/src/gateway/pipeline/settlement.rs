@@ -15,7 +15,6 @@ use crate::gateway::error::{BitrouterError, Result};
 use crate::gateway::model::protocol::responses::CausalPrefixCommitment;
 use crate::gateway::observability::event::EventBus;
 use crate::gateway::observability::event::PipelineEvent;
-use crate::gateway::pipeline::timing::FirstTokenKind;
 use crate::gateway::pipeline::types::RoutingTarget;
 use crate::gateway::providers::auth::ContinuationAuthority;
 use bitrouter_ai::types::{
@@ -52,8 +51,6 @@ pub struct RequiredFinalizationContext {
     pub response_id: Option<String>,
     /// Canonical terminal reason.
     pub finish_reason: Option<FinishReason>,
-    /// Whether this was the streaming pipeline.
-    pub streamed: bool,
     /// True only when the pipeline observed a clean successful terminal.
     pub successful_terminal: bool,
     /// True only when a streamed native Responses provider supplied the clean
@@ -118,6 +115,7 @@ pub enum DeliveryAcknowledgement {
 
 impl RequiredDeliveryHandshake {
     /// Construct the two ends of a required-delivery rendezvous.
+    #[cfg(test)]
     pub fn new(
         ready: tokio::sync::oneshot::Sender<Result<()>>,
         acknowledged: tokio::sync::oneshot::Receiver<DeliveryAcknowledgement>,
@@ -134,6 +132,7 @@ impl RequiredDeliveryHandshake {
 
     /// Construct a drop-aware rendezvous whose delivery side waits for durable
     /// activation and commits to return the terminal in the same final poll.
+    #[cfg(any(test, not(feature = "multi-instance")))]
     pub fn new_with_completion(
         ready: tokio::sync::oneshot::Sender<Result<()>>,
         acknowledged: tokio::sync::oneshot::Receiver<DeliveryAcknowledgement>,
@@ -344,6 +343,7 @@ pub struct SettlementContext {
     /// Resolved model id, including the attempted model on execution failure.
     pub model_id: String,
     /// Canonical effort applied to the settled request, when present.
+    #[cfg(any(test, feature = "eval-publication"))]
     pub reasoning_effort: Option<ReasoningEffort>,
     /// Resolved provider id, including the attempted provider on execution
     /// failure.
@@ -372,25 +372,12 @@ pub struct SettlementContext {
     pub raw_usage: Option<serde_json::Value>,
     /// Provider-executed web searches (from `Usage::web_search_count`).
     pub web_search_count: u64,
-    /// Media content blocks in the request prompt.
-    pub media_input_count: u64,
-    /// Media content blocks in the response.
-    pub media_output_count: u64,
-    /// Server-tool calls observed (router + provider). Observability only.
-    pub server_tool_calls: Vec<bitrouter_ai::types::ServerToolCall>,
     /// Whether the request was streamed.
     pub streamed: bool,
     /// End-to-end request duration in milliseconds.
     pub request_duration_ms: u64,
     /// Time spent in the final provider-facing operation.
     pub upstream_duration_ms: Option<u64>,
-    /// Time from the successful provider attempt start to the first semantic
-    /// stream delta.
-    pub ttft_ms: Option<u64>,
-    /// Time from the first to the last semantic stream delta.
-    pub generation_duration_ms: Option<u64>,
-    /// Kind of the first semantic stream delta.
-    pub first_token_kind: Option<FirstTokenKind>,
     /// Canonical reason a successful generation ended.
     pub finish_reason: Option<FinishReason>,
     /// The error, if the request failed (Settlement still runs).
@@ -446,9 +433,6 @@ pub trait SettlementRecorder: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gateway::caller::CallerContext;
-    use crate::gateway::observability::event::EventBus;
-    use bitrouter_ai::types::{ServerToolCall, ServerToolKind, ServerToolStatus};
 
     fn assert_send_sync<T: Send + Sync>() {}
 
@@ -460,55 +444,5 @@ mod tests {
         let second = RequiredFinalizationReceipt::new();
         assert!(first.same_invocation(&first_clone));
         assert!(!first.same_invocation(&second));
-    }
-
-    fn make_settlement_context() -> SettlementContext {
-        SettlementContext {
-            operation: bitrouter_ai::types::ModelOperation::Generation,
-            request_id: "test-req".into(),
-            caller: CallerContext::local(),
-            target: None,
-            model_id: "test-model".into(),
-            reasoning_effort: None,
-            provider_id: "test-provider".into(),
-            account_label: None,
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            reasoning_tokens: 0,
-            cache_read_tokens: 0,
-            cache_write_tokens: 0,
-            usage_origin: UsageOrigin::Unknown,
-            raw_usage: None,
-            web_search_count: 0,
-            media_input_count: 0,
-            media_output_count: 0,
-            server_tool_calls: Vec::new(),
-            streamed: false,
-            request_duration_ms: 0,
-            upstream_duration_ms: None,
-            ttft_ms: None,
-            generation_duration_ms: None,
-            first_token_kind: None,
-            finish_reason: None,
-            error: None,
-            events: EventBus::default(),
-        }
-    }
-
-    #[test]
-    fn settlement_context_carries_server_tool_signals() {
-        let mut c = make_settlement_context();
-        c.web_search_count = 3;
-        c.media_output_count = 1;
-        c.server_tool_calls = vec![ServerToolCall {
-            name: "web_search".into(),
-            kind: ServerToolKind::Provider,
-            call_id: None,
-            status: ServerToolStatus::Ok,
-            result_count: 3,
-        }];
-        assert_eq!(c.web_search_count, 3);
-        assert_eq!(c.media_output_count, 1);
-        assert_eq!(c.server_tool_calls.len(), 1);
     }
 }

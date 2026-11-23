@@ -1,197 +1,69 @@
 # Workspace architecture
 
+The workspace builds two independent applications. The gateway owns inference,
+protocol adaptation, tenant resource revisions, model Policy, Eval and usage
+receipts. BRO owns its workspace, agent lifecycle, thread checkpoints, approvals
+and tool effects. BRO uses the public SDK with an endpoint and a client
+credential for local and hosted gateways.
 
-The application owns gateway execution, Core scheduling, Harness execution and
-storage, CLI orchestration, and optional telemetry. The former standalone
-implementation crates have been consolidated into the application; the
-first-party terminal UI has been retired. The SDK provides gateway, control,
-evaluation, operator and tenancy transport clients. Implementation ownership follows the module layout below.
+| Component | Responsibility |
+| --- | --- |
+| `apps/bitrouter` | `bitrouter` executable, service configuration, gateway, server-side MCP, tenant storage, telemetry and operator CLI |
+| `apps/bro` | `bro` executable, local harness, external ACP adapters and local data |
+| `crates/bitrouter-ai` | Shared public model, routing, Policy, Eval, control and tenancy DTOs |
+| `crates/bitrouter-sdk` | HTTP/SSE clients for inference, control, tenancy and Eval |
+| `crates/bitrouter-registry` | Registry types and source-bound catalog handling |
+| `extensions/regex-checker` | Separately selectable request-check implementation |
+| `helpers/bitrouter-build`, `helpers/bitrouter-update` | Build provenance and product-owned release updates |
+| `helpers/bitrouter-skills` | Shared Agent Skills frontmatter and bounded inspection used by gateway MCP and local BRO |
+| `helpers/dist-helper` | Contributor registry, schema and distribution tools |
 
-BitRouter is a Cargo workspace organized into `crates/` for shared libraries and contracts, `apps/` for product hosts, and `extensions/` for independently delivered capabilities. Each extension groups its related Cargo packages in one directory; `helpers/` contains contributor tooling.
-
-| Crate                            | Tier    | Responsibility                                                                                                          |
-| -------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `crates/bitrouter-ai`            | crate   | Shared model/protocol, artifact, control, Policy, Eval and tenancy data; optional schema derives; no service runtime or transport |
-| `crates/bitrouter-sdk` | crate | Gateway HTTP/SSE, control, evaluation, operator and tenancy clients using AI wire contracts |
-| `extensions/regex-checker/matcher` | extension library | Compiled regex rules and configuration; request-check callback and hook adapters live in the application |
-| `apps/bitrouter`                 | app     | Assembly library + the `bro` CLI binary (package/lib stay `bitrouter`) — turns a `Config` into a running `App`, owns core scheduling, harness execution/storage, CLI orchestration, optional OTLP and management commands |
-| `helpers/dist-helper` | helper | Unpublished registry/chart tooling; configuration schema delegates to the application-owned generator |
-
-The `extensions/` directory expresses ownership and delivery boundaries; it does not create a loader or force a transport. Cargo packages remain ordinary Rust libraries or binaries. Custom hosts register native request checks through `bitrouter::gateway::extensions::registry::ExtensionApi` inside `assemble::build_app_with_extensions`; the application also retains legacy `Plugin`/hook interfaces for trusted host assembly. See [the extension directory guide](../../extensions/README.md) and [guardrails](../../extensions/regex-checker/README.md).
+The `extensions/` directory expresses ownership and delivery boundaries; it does not create a loader or force a transport. Cargo packages remain ordinary Rust libraries or binaries. Custom hosts register native request checks through `bitrouter::gateway::extensions::registry::ExtensionApi` inside `assemble::build_app_with_extensions`. See [the extension directory guide](../../extensions/README.md) and [guardrails](../../extensions/regex-checker/README.md).
 
 For the native runtime module map, execution reading order and test layout, see
-the [core and harness source guide](../../apps/bitrouter/HARNESS.md).
+the [BRO source guide](../../apps/bro/HARNESS.md).
 
-### Accepted M0 product boundary
+### Gateway and harness boundary
 
-The [canonical specs](../specs/README.md) define the M0 cutover and the product
-boundary below. CI and the implementation PR carry conformance evidence.
+BitRouter owns model and effort selection, tenant resource and configuration
+revisions, explicit Policy publication, Eval evidence exchange and usage.
+`bitrouter-ai` defines the shared Policy contract, and the gateway builds a
+private execution view while retaining the original source. Semantic
+classification yields a `policy::RouteClass`. Routing preserves the admitted
+request context.
 
-BitRouter owns gateway execution, automatic model/effort selection, tenant
-isolation, immutable source/revisions, explicit Policy updates and Eval fact
-exchange. AI owns lightweight typed contracts; application model_policy owns
-validation and private compiled selection; SDK owns service transport. Source
-is retained directly. Files/defaults/CLI/SDK/API/export share that source, with
-no PolicyLock bridge, compiler marker or inferred source reconstruction.
+The minimum gateway profile includes model Policy and tenant Eval. An external
+evaluator runs against an exact configuration and submits results. For tenant
+model-policy evidence, the service verifies installation, tenant, configuration
+revision, immutable Policy resource and literal selected name. Publishing or
+activating routing requires an authorized operation with explicit CAS.
 
-Context rewriting, orchestration, exploration, learning and paid assessment have
-an explicit BRO local harness owner or are removed. Mature tenant/shared product
-entry points reject those routes/dependencies even without Policy and in
-all-feature builds. Feature compilation is not product authority. Necessary
-runtime entry isolation is part of M0; large crate/binary splits are deferred.
-Current BRO producers require explicit ownership and matching current recovery;
-historical session formats are not automatically included in this cutover.
-
-Mature Policy and tenant Eval exchange are available in the minimum gateway
-profile independently of core/harness. External evaluators run revision-bound
-inference and submit facts. Service validation binds their installation, tenant,
-configuration, Policy ResourceRef and literal name; generic profiles have their
-own scope. Freeze and drafting never activate a revision. Publication/activation
-remain explicit authenticated CAS operations. No server Eval job runner or
-implicit learning backend is introduced.
-
-Affected service stores use current-only baseline/content validation before
-ready, registration or recovery writes. Old data stays with its old binary;
-new data locations/installation identities are explicit. Current receipt,
-stream-cancellation, unknown usage, cumulative budgets and recovery obligations
-remain required. See [tenant service](tenant-service.md) for ownership and the
-[store contract](../specs/service-api/README.md#resource-and-evidence-migration-and-rollback)
-for actual format selection/refusal. A Policy-free active head is no exception.
+BRO owns local agent scheduling, workspace context, permissions and checkpoints.
+It submits model requests over the public HTTP/SSE interface. Its local home is
+independent of gateway state. A tenant credential authorizes gateway operations
+within its scope. A BRO workspace grant comes from its local operator.
 
 ### External interfaces
 
-Clients reach BitRouter through its external **interfaces** — the ways *in*. These are distinct from the gateway's internal *wire-protocol adapters* (Chat Completions / Responses / Messages, described below): an interface is an entry point, an adapter is a dialect the `language_model` pipeline parses and speaks.
+The gateway accepts the same HTTP/JSON and SSE contracts for local and remote
+clients. The default service supports HTTP/1.1 and HTTP/2, including cleartext
+HTTP/2 on a trusted internal listener. Provider credentials stay in the service.
+The default BRO client can connect without reading its configuration or database.
 
-| Interface                 | Where it lives                                                                                            | Entry point              |
-| ------------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------ |
-| **API** (HTTP LLM router) | application `gateway::http` over `gateway::pipeline` | `bro serve`        |
-| **MCP gateway**           | application `mcp` feature and gateway assembly: downstream `/mcp` aggregation, configured upstream clients, Skills-over-MCP relay, and server-side tool execution | `POST /mcp`; `bro mcp check` |
-| **ACP**                   | application `harness` feature (`apps/bitrouter/src/harness/acp/`): `controller` is the ACP-client-facing server, `client` the transport-generic ACP client, `up` the agent-process transport, and `translate` the typed view of `session/update` used by `run`. The client-facing stdio bridge, one-shot runner and supervised CLI operations consume the same controller/client stack. Subcommand glue lives in `apps/bitrouter/src/acp_cli.rs`. | `bro acp serve <agent>`; `bro run` |
-| **Native ACP** | `bitrouter::harness::acp::native`: negotiated v1/v2 handlers, projectors, approval delivery and native controls over the host's single ThreadService. `apps/bitrouter/src/native_acp.rs` owns the OS-local endpoint and stdio bridge; EOF detaches. | bare `bro acp serve` |
-| **BRO native agent** | `bitrouter::harness::service::ThreadService` owns one Thread/Turn execution path, durable context, FIFO/steering, owner/workspace fencing and bounded observation. App owns the database and transport adapters. Safe hot unload/reload and cold public queries share the same authority. | `bro threads`; daemon-owned `bro task run`; versioned local native and managed sockets; opt-in `/agent/v2` HTTP API |
-| **CLI**                   | `apps/bitrouter` — the composition-root binary                                                            | `bro <subcommand>` |
-
-The CLI issues individual commands and renders ordinary JSON, human reports or
-NDJSON observation streams. ACP permission policy and protocol translation live
-in `harness::acp`; command vocabulary and negotiated capability values live in
-`commands`. Public skill constraints, consent and source descriptions live in
-`bitrouter-ai`; checkpoint validation and historical projections live in
-application storage. Local directory reads and MCP verification remain in the
-host. Metadata or cached bytes never grant consent or workspace execution.
-
-Core, Harness and MCP capabilities remain independently selectable. Pure
-configuration and protocol-value validation does not activate an MCP transport.
-The bounded MCP connection implementation is shared by gateway and Harness
-consumers; each execution owner retains a separate principal and source policy.
-
-BRO native tools are `read`, `glob`, `grep`, `write`, `edit`, and `shell`.
-`read` dispatches known workspace paths to file lines or direct directory
-entries. The three inspection tools form the read-only profile. The server
-resolves one interpreter before a coding execution; model commands and
-verification share it. See [the six-tool contract](native-tools.md).
-
-The host constructs `ThreadService` and binds task/native ACP endpoints only
-with `harness`. The supervisor and its recovery ledger, and the in-memory ACP
-route-lease runtime, also require harness. A reduced gateway leaves those
-endpoint paths, supervisor records and workspace resources untouched. Request
-identity normalization, accounting and existing session-spend reads remain
-available without that runtime. Configured MCP upstreams require `mcp`; enabled agent HTTP
-ingress requires `harness`. Startup, reload and profile preflight reject missing
-capabilities before activating the service. ACP/controller dependencies and agent
-catalog generation require harness; shared MCP transport requires `mcp`. The
-minimum profile retains provider-login helpers and historical record decoding
-without either execution stack.
-
-SQLite is available in every application build. PostgreSQL and MySQL drivers
-require `db-postgres` and `db-mysql`, both enabled by the default distribution.
-Reduced builds preserve configuration parsing and reject an unavailable selected
-backend before connecting, including reload and profile preflight. Driver
-selection does not provide multi-instance coordination.
-
-Server-tool deployment configuration lives under `config::server_tools` and is
-always readable. The tool loop, nested inference runner, Fusion alias and search/
-fetch backends require `server-tools`, which enables `mcp` and is part of the
-default product. Selecting any server tool without that feature fails before
-service activation, consistently on startup, reload and profile preflight.
-Loop tuning alone is dormant. This request-local loop is independent of the
-durable harness and core scheduler.
-
-The native BRO runtime has one `ThreadService` per harness-enabled serving instance. App-owned
-SQLite stores Thread/Turn facts, acceptance keys, public events and owner/version
-fences. Clients only project state; detaching does not cancel, approve or resume.
-Bounded tool workers, ordered exclusive effects, FIFO/steering, joined shutdown,
-workspace locks/markers and bounded startup discovery preserve execution barriers.
-Cold queries do not execute. Safe same-owner reload and explicit stopped-owner
-checkpoint recovery preserve identities and budgets without replaying completed
-effects; lost owners, unknown effects and uncertain accounting remain blocked.
-
-Managed attempt evidence used by the core's existing `model.evidence` command
-now lives in `bitrouter::managed_contract::evidence`. Import `NativeAttemptReport`, its
-route/usage evidence and private-context/continuation observations there.
-These data structures confer no ownership or execution authority. The gateway
-still validates provider provenance, projects raw usage, computes commitments
-and enforces report limits; the core still decides whether evidence may be
-admitted.
-
-Existing managed wire commands, responses, limits and HTTP error envelopes live
-in `bitrouter::managed_contract::protocol`; durable checkpoint envelopes and ACK data live
-in `bitrouter::managed_contract::checkpoint`. The application retains exact-byte encoding,
-digest verification, append admission and the commit barrier. Trusted host
-consumers import `CheckpointBatchExt` from `bitrouter::storage::checkpoint` for
-the existing codec/admission methods, and `HarnessManifestExt` and
-`ToolResultLimitsExt` from `bitrouter::storage::checkpoint::validation` for
-shared manifest and frozen tool-result validation. `ClientMessageExt` remains
-in `bitrouter::core::protocol` for live connection-grant checks; `CommitGate`
-remains in `bitrouter::core::checkpoint`. These traits add methods to the shared
-data; they do not provide a plugin interface or transfer persistence authority.
-The shared codecs do not depend on core execution. Private persisted session
-records now live in `bitrouter::storage::checkpoint::snapshot`, including
-`SessionSnapshot`, its routing/collaboration/accounting records and context
-evidence. Offline immutable-history validation and bounded observation projection
-live below `snapshot::context`. These remain application storage types;
-Application checkpoint envelopes carry the state opaquely. Public observation DTOs
-must not expose the complete private snapshot. Core retains live context
-selection, collaboration, accounting transitions and session execution.
-The scheduler and its local native drivers are gated by `core`. Without core,
-native session inspection and observation validate stored records, but execution
-mutations fail before workspace discovery or execution-owner acquisition. HTTP,
-local IPC and native ACP report this distinction. The host skips native execution
-initialization in that profile, and offline shutdown leaves queued work intact.
-Harness-only checks use `--no-default-features --features harness`; the live
-scheduler and terminal dependencies remain absent. The complete final feature
-matrix, packaged artifacts and profile transitions remain separate P0 gates.
-
-Harness contracts, including tool permissions, effect outcomes, turn events,
-thread observations, agent configuration, resources, skill inventories and
-recovery records, live in `bitrouter::managed_contract::harness`. The application owns
-execution, storage and local IPC. The SDK exposes no harness or managed-core
-client; application transports retain their instance and recovery checks.
-
-Trusted application hosts that previously called
-`NativeEvidenceCommitment::capture` use
-`bitrouter::gateway::pipeline::native_report::commitment`.
-`NativeCacheObservation::capture` becomes
-`bitrouter::gateway::pipeline::native_accounting::capture_cache`.
-Those algorithms are application APIs, not AI helpers or SDK transport code.
-
-The [native Thread HTTP profile](../specs/service-api/README.md#thread-api),
-[native ACP profile](../specs/service-api/README.md#native-acp-extensions), and
-[managed Core profile](../specs/service-api/README.md#managed-core-api) document the external
-boundaries. [Conversation UI](../ux/bro-conversation-ui.md) and
-[six tools](native-tools.md) describe the corresponding user experience
-and tool behavior. Router metering and external ACP session ownership retain
-their own boundaries.
-
-The CLI is the **host** interface: it owns `main()` and mounts the other
-interfaces as subcommands. The gateway owns model/MCP interop; the harness
-owns ACP execution. The application also owns local actions and presentation.
+`bitrouter serve` starts a gateway. `bitrouter policy`, `bitrouter eval` and
+`bitrouter tenancy` expose service management. `bitrouter mcp check` inspects
+configured upstreams when that feature is enabled. `bro task run` submits a
+local headless task and `bro thread` operates on persisted local checkpoints.
+`bro acp` drives external adapters in a selected workspace. See the
+[CLI](../CLI.md), [service API](../specs/service-api/README.md) and
+[installation profiles](../DISTRIBUTION.md).
 
 ### Dependency Logic
 
-**`bitrouter-ai`** owns public model/protocol data, lifecycle and capability
-contracts, observation vocabulary and catalog artifact types. Its default
-production graph contains serde, serde_json and thiserror; `schema` adds
-schemars. Neither default nor all-public-features builds include transport,
+**`bitrouter-ai`** owns shared public model/protocol, artifact, control, routing,
+Policy, Eval and tenancy DTOs with intrinsic validation. Its direct production
+dependencies are serde, serde_json, thiserror and sha2; `schema` adds schemars.
+Neither default nor all-public-features builds include transport,
 provider authentication, an async runtime, a database, terminal UI or OTel.
 
 Application **`gateway::model`** owns protocol codecs, conversion admission,
@@ -268,10 +140,8 @@ string-only tool slots remains eligible; error/denial status is checked separate
 Selected-target preparation can return
 the report through `ModelClient::render_request_with_report`; executor preflight returns
 that assessment. The gateway rechecks refusals and invokes `on_conversion_admitted` for
-eligible detected effects before hop start, without counting a candidate as an HTTP
-attempt. Empty assessments emit no conversion callback. Remaining ingress attributes,
-media/options/boundary effects, schema/model validation, other admitted classifications,
-Core/durable recording, output effects and degradation authorization remain open.
+eligible detected effects before hop start. An admitted conversion records no
+HTTP attempt until dispatch. Empty assessments emit no conversion callback.
 
 `bitrouter-ai::catalog` owns the published provider/model artifact types.
 Application `gateway::catalog` owns explicit bounded refresh, source-keyed stores
@@ -321,27 +191,25 @@ management and telemetry calls. Hosted device login, refresh and revocation use
 the same metadata/token definitions; account settings, scopes, paths and storage
 policy remain with application assembly.
 
-Metered Google uses the official Chat endpoint; the retired native Gemini and
-Antigravity transports are not restored. Tool signatures retain canonical
+Metered Google uses the official Chat endpoint. Tool signatures retain canonical
 metadata and a selected-credential replay proof. Clients echo the entire
 `extra_content`; the gateway removes its proof before upstream dispatch.
 
 
-The matcher depends only on AI capability contracts. The repurposed SDK is a
-service-client package and never owns gateway assembly, configuration discovery
-or provider authentication. Its gateway/control/evaluation methods use explicit endpoints and
-credentials, bounded reads and no automatic replay. See the
+The matcher owns regex configuration and matching without a gateway or SDK
+dependency. The SDK uses explicit endpoints and credentials, bounds reads and
+leaves replay to the caller. See the
 [SDK guide](../../crates/bitrouter-sdk/README.md) for the available methods.
 
-The span names, attribute vocabulary and lifecycle invariants belong to the AI
-observation contract. The committed schema and conformance tests preserve those
-semantics independently of their optional OTLP rendering.
+The gateway owns span names, attribute vocabulary and lifecycle invariants.
+Its committed observation schema and conformance tests preserve those semantics
+independently of their optional OTLP rendering.
 
 Application `telemetry` owns OTLP transport, bearer resolution, batching,
 endpoint configuration, cardinality limiting, span construction and the tracing
-bridge. It consumes AI's observation schema and implements the pipeline's
+bridge. It consumes the gateway's observation schema and implements the pipeline's
 `ObserveHook`. Other observers continue to record essential request facts and
-usage even when OTLP is absent. The contract carries no OTel types. See the committed observation schema for wire behavior.
+usage even when OTLP is absent. Shared AI DTOs carry no telemetry runtime types.
 
 The application declares its spans, attributes, events, metrics and failure invariants in `apps/bitrouter/src/gateway/observability/schema.rs`. It renders the committed `apps/bitrouter/span-schema.json`; regenerate with `UPDATE_SPAN_SCHEMA=1 cargo test -p bitrouter committed_artifact`. An ordinary unit test rejects stale output. Application telemetry conformance tests drive real lifecycles against that declaration, using helpers compiled only for tests. Lifecycle events and span attributes live alongside the schema in `gateway::observability`.
 
@@ -353,93 +221,40 @@ The generation pipeline retains its hooks, request checks, execution, stream
 processing and settlement; MCP has its own routing contract. ACP belongs to
 harness execution, not a gateway protocol pipeline.
 
-Serving-time model classification and decision capture belong to gateway
-routing. Classifier contract identity is separate from source digest, compiled
-cache identity and immutable resource/configuration revisions. Experimental
-assignment, certificates and predictor/learner state have BRO ownership and
-cannot qualify a mature model Policy or become service publication authority.
-Retained experiment consumers must be moved together or retired; they do not
-justify keeping a second Policy format.
+Gateway routing owns semantic classification and model selection.
+`observability::decision` owns bounded decision capture. Settlement associates
+the routing decision with the execution before any asynchronous observation
+lookup. Gateway request tracking owns request identities, duplicate rejection,
+admission and terminal observations. Durable service evidence records the
+authorized request, upstream outcome and settlement. A receipt with unknown
+upstream effects retains that status during recovery.
 
-Gateway `observability::decision` owns bounded pending policy observations and
-routing receipts; `observability::prediction` owns the response observer.
-`observability::settlement` captures the owner-bound decision once, before any
-awaited trajectory lookup, and delegates ordinary request evaluation only when
-that consumer is assembled. Cache expiry or eviction during the lookup cannot
-silently replace or erase the captured decision. Shared durable evaluation
-validation/digests live in application `storage::evaluation`, without publishing
-service algorithms through AI.
-
-Trajectory settlement follows authoritative metering and retains its terminal
-fact and outbox ownership. Experimental publishers, optimization, adequacy and
-workflow research remain BRO concerns when retained. Their feature gates do not
-own mature Policy file loading/publication or tenant Eval transport. Policy
-loading/init/show/publish/reload/rollback use the public source and preserve
-atomicity/conflict semantics without core learning. Legacy compile/evolve/
-evidence-verification entry points leave mature Policy commands. Unavailable
-experimental work is refused before input files or execution stores are opened.
-
-Retained BRO checkpoint learning, scoring, block experiments and background
-workers require explicit local harness assembly. Tenant/shared endpoints never
-inherit their execution authority from core/harness features. Current codecs,
-obligation writers and recovery move together under that owner. No historical
-paid-recovery decoder is retained as an exception to the current-store fence.
-
-Reserved judge request admission and attempt bookkeeping now belong to
-`gateway::metering::judge::JudgeCosts`. They retain their pre-authentication
-ordering and existing dispatch/replay checks. Always-run accounting and
-evaluation consume the replay markers from `gateway::metering::replay` instead
-of depending on a learning runtime. Job reservation construction and cost-report
-operations remain in `core::evolution::costs`; their implementation extends the
-gateway-owned handle without changing its admission behavior.
-
-The supporting record store and digest live in `storage::evolution`. Persisted
-execution, settlement and route-intent data live in `storage::execution`, the
-native `SessionIdentity` index in `storage::session_identity`, and shared
-capture ORM definitions in `storage::capture`. Capture, gateway and learning
-consumers use the same definitions. Storage table names, digest domains,
-serialized fields and validation follow their own current discriminators. M0
-changes affected Policy-bearing records explicitly; other current consumers
-retain their identities. Internal records grant no authority to execute a session.
-
-`gateway::observability::requests::GatewayRequestTracker` owns canonical request
-identification, duplicate rejection and admission inventory, plus hop, terminal
-and settlement observation. The host gives its inventory handle directly to
-capture-registration consumers so they share the serving epoch. The tracker runs
-before learning selection. `CanonicalRequestBinding` then creates the bound
-execution record and validates routing/policy generations and the recorded
-session before dispatch or context revalidation. `EvolutionRuntime` supplies an
-optional selection for explicitly assembled BRO experiments and retains their
-live validation. Gateway bookkeeping does not construct a learner or mutate
-canonical conversation content. Mature Policy selection neither enables this
-runtime nor obtains context treatment from it. Minimum-gateway dependency and
-all-feature product isolation must both be verified for the M0 cutover.
-
-`bitrouter-ai` contains no model execution or authentication implementation.
-Optional guardrails adapters and telemetry remain application modules; enabling
-a Cargo feature alone does not register a checker or opt into export.
+Local Policy operators use the same source for loading, inspection, publication,
+reload and rollback. An authorized tenant operator publishes an immutable
+revision and activates it through a configuration operation. A report or frozen
+Eval snapshot records evidence without changing the selected revision.
 
 ### Extension authors and host assembly
 
-Capability implementation libraries use AI's `Input`, `Decision` and `Callback`
-contracts. Custom hosts install those callbacks through a function accepting
-`bitrouter::gateway::extensions::registry::ExtensionApi` and call
-`request_check(id, revision, callback)`. Business inputs and decisions live in
-`bitrouter::gateway::extensions::request_check`, without a wire envelope. The custom host passes the
-registration function to `host::serve_with_extensions` for the shared foreground
-daemon lifecycle, or `assemble::build_app_with_extensions` for low-level embedding.
+Capability implementation libraries use `Input`, `Decision` and `Callback` from
+`bitrouter::gateway::extensions::request_check`. Custom hosts register callbacks
+through `bitrouter::gateway::extensions::registry::ExtensionApi::request_check(id, revision, callback)`.
+The foreground entry point `bitrouter::host::serve_with_extensions` accepts a
+configuration file path as `&Path` and a registration function, and owns the
+product's service and management lifecycle. Hosts that own their listeners call
+`bitrouter::assemble::build_app_with_extensions` with `bitrouter::config::Config`
+and the registration function, then serve the returned `Assembled.app`.
 Fragment and coverage types also live in `bitrouter::gateway::extensions::request_check`.
-Concrete callback registrations live in application
-`gateway::extensions::registry::registration`, alongside the host collection.
-Router bindings
-control execution scope and order; registration is not global activation.
+Concrete registrations and pipeline builders remain private to the application.
+Router bindings control execution scope and order; registration is not global
+activation.
 Beta supports compiled extensions only: no HTTP checker service, wire crate,
 probe command, runtime installation or extra extension API crate.
 
 Valid unconfigured registrations are inactive with sorted startup diagnostics;
 configured instances require a matching registration even without bindings.
 The regex example uses the same inference, local/remote management, reload and
-shutdown path as `bro serve`. Restart custom hosts with their own executable;
+shutdown path as `bitrouter serve`. Restart custom hosts with their own executable;
 the example does not implement the default CLI's background-launch protocol.
 
 The restricted registrar does not expose host builders, migrations, credentials or mutable
@@ -447,19 +262,11 @@ pipeline context. The host retains resource bounds, fixed binding identity and
 bounded content-free tracing. Synchronous callbacks cannot be forcibly
 terminated by deadlines; they are trusted in-process code.
 
-Legacy `Plugin` / `AppBuilder::plugin` and optional `GuardrailsPlugin` retain
-custom-host global, stream/output and migration semantics. Input-only checks do
-not replace those capabilities. The registrar and legacy host assembly now live in the application. `PluginId`, existing
-`Config::plugins` consumers, Context extensions and external agent-plugin
-manifests retain their separate meanings. See [migration](../GUARDRAILS_EXTENSION.md).
-
 ### Service and client feature ownership
 
-The old SDK `server`, `config_file` and `mcp` flags are retired. Gateway HTTP
-and configuration parsing always belong to the application; concrete MCP
-transports use application `mcp`. ACP uses application `harness`. Existing
-`agents:` configuration and its schema remain compatible. The SDK currently has
-no server API; its gateway/control/evaluation methods do not enable service features.
+The gateway owns its HTTP server, configuration and optional MCP transport.
+The SDK enables client transport features independently. BRO owns ACP
+adapters and their local process supervision.
 
 The application enables `http2` by default, forwarding `axum/http2`,
 `reqwest/http2`, `bitrouter-sdk/http2` and `dep:h2`. The SDK independently enables
@@ -475,45 +282,23 @@ profiles:
 
 ```sh
 # Local gateway with HTTP/2.
-cargo build --locked -p bitrouter --bin bro --no-default-features --features http2
+cargo build --locked -p bitrouter --bin bitrouter --no-default-features --features http2
 # Shared gateway and operator transport with HTTP/2.
-cargo build --locked -p bitrouter --bin bro --no-default-features --features multi-instance,http2
+cargo build --locked -p bitrouter --bin bitrouter --no-default-features --features multi-instance,http2
 ```
 
-Both report `profile: "custom"` in `bro --json build-info`; the default build
+Both report `profile: "custom"` in `bitrouter --json build-info`; the default build
 remains `full` and includes `http2`. Enabling `multi-instance` still requires
 explicit shared-mode configuration before it changes the runtime mode.
 
-AI observation declarations are ungated. Its pure conformance helpers use the
-default-off `testing` feature. The workspace manifests define the feature graph.
+Application observation declarations remain available without OTLP. Conformance
+helpers compile only in application tests. The workspace manifests define the
+feature graph.
 
-Application-local task transport and envelopes live in
-`client::agent_local`; its decoded rejection type is `ReplyError` rather than
-the harness's internal `ServiceError`. The listener/dispatch belongs to
-`harness::local`. Local directory DTOs stay application-owned because they are
-not part of the supported HTTP SDK surface. Result-schema execution and its
-`jsonschema` dependency belong to `harness::result_contract`; offline trajectory
-replay requires `core`, while request-time health reduction remains available
-to gateway routing in every profile.
-
-The application build script derives one normalized artifact identity from its
-manifest and Cargo's effective features. `bro build-info`, local daemon status
-and HTTP control capabilities expose that identity using AI data contracts.
-Build-time revision lookup prefers an explicit release revision, then packaged
-VCS metadata, then the enclosing tracked checkout; unknown remains `null`.
-The SDK carries these values without discovering a client-local installation.
-Handoff protocol 2 binds this identity to the daemon version/build fingerprint;
-automatic replacement requires the same distribution selection. Explicit profile
-transitions use the existing ownership, idle and SQLite preflight checks. Package
-artifacts and cross-profile execution evidence remain separate delivery gates.
-
-Every build with `core` conservatively holds handoff admission for the managed
-runtime's lifetime, including core-only service sessions executed by an external
-harness. An upgraded WebSocket or pending checkpoint is not represented by the
-ordinary HTTP body count. Automatic and cross-profile replacement therefore
-defer even when that core resident appears idle; same-capability explicit restart
-retains its existing behavior. Gateway and harness-only profiles continue to use
-tracked idle admission. Control shutdown errors do not bypass HTTP/harness drain.
+BRO uses its own local worker, workspace lock and checkpoint journal. Record
+model or tool dispatch intent before starting an effect, and confirmation before
+releasing that work. An unknown outcome blocks automatic repetition. The
+service preserves usage and dispatch obligations in its own ledger.
 
 ### Application telemetry feature flags
 
@@ -524,16 +309,20 @@ tracked idle admission. Control shutdown errors do not bypass HTTP/harness drain
 | `otel-grpc` | OTLP/gRPC transport with configured static metadata |
 
 Common exporter code is compiled whenever either transport is selected. Ingress
-spans use the application's existing HTTP server; there is no separate `server`
-feature or transport-less exporter flag. ACP spans additionally require harness.
+spans use the application's HTTP server.
 Default installations retain HTTP export capability; endpoints remain opt-in.
 Without either transport, export configuration still parses, basic tracing logs
-and request accounting remain active, and harness-local ACP records remain
-available. Explicit export opt-in fails before installation-ID or export-bearer
-resolution at startup, reload and handoff preflight; dormant configuration stays
-readable. Standalone ACP preparation applies the same availability check.
+and request accounting remain active. Explicit export opt-in fails before
+installation-ID or export-bearer resolution at startup and reload.
 Keep `plugins.bitrouter-telemetry`, `BITROUTER_TELEMETRY_*`, `io.bitrouter.observe`,
 the `bitrouter` meter and `bitrouter::observe::*` log targets unchanged.
+
+### Service restart
+
+`bitrouter update` changes the installed executable. Run `bitrouter restart`
+to close admission, drain in-flight HTTP requests and start the replacement.
+For foreground and shared serving, the owning supervisor controls the stop
+and start. See [distribution updates](../DISTRIBUTION.md#updates-and-profile-transitions).
 
 ## Request Flow
 
@@ -562,13 +351,13 @@ When a subcommand doesn't pass `-c <path>`, the binary walks a fixed order (see 
 2. **`./bitrouter.yaml`** in the current directory.
 3. **`$BITROUTER_HOME/bitrouter.yaml`** — if the env var is set, that file must exist.
 4. **`~/.bitrouter/bitrouter.yaml`** — used if present.
-5. **Zero-config in-memory defaults** — when nothing above exists. No file is written; `bro init` is the explicit way to scaffold one.
+5. **Zero-config in-memory defaults** — when nothing above exists. No file is written; `bitrouter init` is the explicit way to scaffold one.
 
 The daemon `chdir`s into the bitrouter home (the config file's directory, or `~/.bitrouter` for zero-config) on startup, so relative paths in the config — `database.url`, `server.control_socket` — and the socket / pid / log all resolve against one stable location.
 
 ### Zero-config and the provider catalog
 
-In zero-config mode `bitrouter::providers::apply::zero_config()` builds a `Config` with `skip_auth: true`, `listen: 127.0.0.1:4356`, and the compiled-in hosted gateway auto-enabled when its API key is set in the environment. Every other public provider comes from the fetched-or-cached registry merge: an env-keyed registry provider becomes active when its credential is available, and a local-OAuth provider becomes active after `bro providers login <provider>`.
+In zero-config mode `bitrouter::providers::apply::zero_config()` builds a `Config` with `skip_auth: true`, `listen: 127.0.0.1:4356`, and the compiled-in hosted gateway auto-enabled when its API key is set in the environment. Every other public provider comes from the fetched-or-cached registry merge: an env-keyed registry provider becomes active when its credential is available, and a local-OAuth provider becomes active after `bitrouter providers login <provider>`.
 
 ## Local tenant authority
 
@@ -641,8 +430,7 @@ For cleartext HTTP/2, SDK callers explicitly set
 uses HTTP/1.1 on cleartext HTTP and negotiates HTTP/2 over HTTPS when supported.
 With SDK defaults disabled and no `http2` feature, `Auto` uses HTTP/1.1 and the
 prior-knowledge option is unavailable. Protocol selection does not probe or
-retry a request with another HTTP version. Core WebSocket upgrades retain their
-separate HTTP/1.1 client. See the [SDK transport options](../../crates/bitrouter-sdk/README.md).
+retry a request with another HTTP version. See the [SDK transport options](../../crates/bitrouter-sdk/README.md).
 
 `GET /metrics` is retained for endpoint compatibility only. Prometheus accumulation was removed: metrics are now *pushed* over OTLP by application telemetry, and the endpoint serves a short banner pointing at `plugins.bitrouter-telemetry.otel` (`EmptyMetricsRenderer` in `apps/bitrouter/src/assemble.rs`). The gateway `observability::metrics::MetricsRenderer` trait and its `text/plain; version=0.0.4` content-type default still exist — a deployment that wants a real pull-based endpoint implements the trait itself.
 
@@ -652,33 +440,18 @@ typed operator reads and reload operations behind its own bearer gate and
 loopback exposure policy. It does not mount an MCP origin endpoint. See
 `apps/bitrouter/src/{daemon,remote_control}.rs`. Portable control transport,
 capability discovery and reload recovery live in `bitrouter_sdk::control`.
-The accepted M0 contract requires protocol2 and exact action descriptor checks
-on every SDK path, without legacy name discovery or local-file fallback;
+Control clients check protocol 2 and the exact action descriptor before dispatch;
 `apps/bitrouter/src/client/control.rs` retains profile/environment integration
 and CLI error classification.
 
 ## CLI Surface
 
-Bare `bro` runs line-based first-run onboarding when needed, then ensures a ready
-background daemon and returns. It uses the normal configuration precedence,
-startup lock, pending-process record and status probe. It never implicitly
-reloads an existing runtime. Prompts and secrets use canonical terminal lines
-with independent echo control.
+Run `bitrouter --help` or `bro --help` to inspect the installed product. The
+[command reference](../CLI.md) documents service management, local BRO
+operations, and snapshot, verify and restore for stopped current-format SQLite
+gateway datasets.
 
-`bro threads` controls native sessions; `bro task run` submits daemon-owned
-managed work; `bro run <agent>` submits one ACP prompt, optionally supervised in
-the background. `bro agents show/events/pending/answer` performs individual
-inspection or control operations. `bro launch <agent>` opens the harness's own
-native interface. `bro acp serve` exposes the native agent, while an explicit
-agent argument exposes the external controller. `bro build-info` reports the
-executable's immutable capabilities and artifact identity.
-
-`code`, `tui`, `chat` and `agents attach` return migration guidance before
-configuration or logging side effects. Native execution, MCP diagnostics and
-Core-only operations reject unavailable capabilities before reading input or
-opening execution stores. See [`CLI.md`](../CLI.md) and `apps/bitrouter/src/main.rs`.
-
-### Observability surface (`bro requests`)
+### Observability surface (`bitrouter requests`)
 
 One surface, and no module of its own. `RequestsReport`
 (`apps/bitrouter/src/output/reports/requests.rs`) is an ordinary `CliReport`:
@@ -686,12 +459,8 @@ the builder in `main.rs` polls the metering store and the control socket, and
 `Human::table` / `Human::status_block` render it. There is no second table
 implementation and no terminal-only path.
 
-First-party drawn interfaces, reducers and terminal emulation have been removed.
-Observation is a bounded report or append-only stream; it does not own the
-background driver's lifetime. Interactive native launch still hands the terminal
-to the selected external harness.
-
-`spawn::prepare` still builds the child once and `exec_inherited` runs it; the `Prepared` seam is kept independent of hosting.
+BRO's task and ACP commands own headless execution and external adapter
+supervision. The gateway's request reports cover inference and settlement.
 
 ## Where To Extend The System
 
@@ -712,23 +481,29 @@ Protocol adapters live in `apps/bitrouter/src/gateway/model/protocol/`. A new pr
 
 ### Add a provider whose wire isn't HTTP+JSON+SSE
 
-Rare — no current registry provider needs this. The big clouds (Bedrock, Azure) speak one of BitRouter's built-in protocols over SSE and are ordinary Bearer registry providers. Only if an upstream uses a wire an existing outbound adapter can't decode (e.g. a vendor SDK's binary event-stream) do you add an `ApiProtocol::Custom` outbound adapter + `Transport` in a standalone crate, registered on the dispatch executor at startup. See the `Custom` escape-hatch docs in `apps/bitrouter/src/gateway/model/protocol/mod.rs`.
+Protocol adapters, transports and outbound dispatch are private gateway
+implementation details in `apps/bitrouter/src/gateway/model/protocol` and
+`gateway::pipeline::executor`. Supporting an additional upstream wire requires a
+gateway implementation change; the public embedding API registers request
+checks, not protocol adapters or replacement executors.
 
 ### Add a hook or compiled capability
 
-Trusted custom hosts use application `gateway::pipeline::hooks` and
-`gateway::pipeline::settlement` when they need global pipeline integration.
-New request-check implementations consume the AI capability contract and register
-through `gateway::extensions::registry::ExtensionApi`. The optional legacy regex
-adapter is in application `gateway::extensions::guardrails`; it preserves global
-input/output behavior and requires explicit installation.
+Global pipeline hooks and settlement recorders are private gateway
+implementation details. Custom hosts register typed request checks through
+`bitrouter::gateway::extensions::registry::ExtensionApi`. The optional
+`bitrouter::gateway::extensions::guardrails::checker` adapts regex rules to an
+input-block callback. It runs only where a router binds the registered checker;
+it does not install global hooks, redact content or check output.
 
 ### Run the official gateway or assemble an advanced host
 
-Ordinary service consumers run `bro serve` with configuration and use its HTTP
-interfaces. The SDK provides typed gateway, control and evaluation clients. Advanced trusted Rust
-hosts can use `gateway::assembly::App` and the shared `host::serve_with_extensions`
-lifecycle; adding compiled extension code requires rebuilding that custom host.
+Ordinary service consumers run `bitrouter serve` with configuration and use its
+HTTP interfaces. The SDK provides typed gateway, control and evaluation clients.
+Custom Rust hosts use `bitrouter::host::serve_with_extensions` for the foreground
+service lifecycle, or `bitrouter::assemble::build_app_with_extensions` to obtain
+an `Assembled.app` and own its HTTP listener. Both accept typed extension
+registrations; adding compiled extension code requires rebuilding that host.
 
 ## Validation
 
@@ -752,8 +527,8 @@ The all-features gateway integration shard also runs `http2_ingress`.
 The PostgreSQL backend job builds the lean HTTP/2 executable and exercises
 tenant/account concurrency enforcement across two official gateway processes.
 
-`feature-isolation` checks the SDK without default features, including its
-independent `core` option, and runs the feature-off `transport_protocol` tests.
+`feature-isolation` checks the SDK without default features and runs the
+feature-off `transport_protocol` tests.
 Production dependency guards use `cargo tree -e normal,build` and require `h2`
 to be absent only from the application's minimal `''` and `multi-instance`
 feature selections. Test dependencies and other combinations such as
@@ -768,11 +543,12 @@ See [build and validation instructions](../SHARED_GATEWAY_DISTRIBUTION.md).
 
 ### Database backend regression
 
-`database_backends` exercises migrations and gateway persistence through the
-application's store APIs. Its ordinary SQLite case uses a temporary database.
+`database_backends` exercises current schema initialization and gateway
+persistence through the application's store APIs. Its ordinary SQLite case
+uses a temporary database.
 The ignored server-backend case requires `BITROUTER_TEST_DATABASE_URL` pointing
-to a dedicated test database; it applies migrations and writes uniquely scoped
-fixture records. It never drops or truncates the database, and repeated runs
+to a dedicated test database; it initializes the current schema and writes
+uniquely scoped fixture records. It never drops or truncates the database, and repeated runs
 retain earlier fixture records. Do not point it at a service database.
 
 ```sh
@@ -788,56 +564,15 @@ BITROUTER_TEST_DATABASE_URL='mysql://fixture:fixture-password@127.0.0.1:3306/bit
 CI provisions PostgreSQL 17 and MySQL 8.4 independently and runs each with its
 own driver feature. This validates actual schema and store operations; a driver
 compilation or SQL-string assertion is not evidence of backend execution.
-Historical session formats and cross-profile compatibility have separate P0
-acceptance gates.
-
-The same target also checks owner-scoped shared record initialization and stale
-revision rejection. With `core`, it checks that concurrent reliability appends
-report one insertion and one duplicate, retain the original observation, and
-reject conflicting reuse. `database_capture` requires `harness` and exercises
-the actual recorder's new/fork/update path, first-writer metadata, owner/source
-isolation and reconnect readback. Run both targets against the dedicated server:
-
-```sh
-BITROUTER_TEST_DATABASE_URL='mysql://fixture:fixture-password@127.0.0.1:3306/bitrouter_test' \
-  cargo test -p bitrouter --no-default-features --features db-mysql,core,harness \
-  --test database_backends --test database_capture -- --include-ignored --test-threads=1
-```
-
-Select `db-postgres` and a PostgreSQL test URL for the other backend. CI runs both
-the gateway-only and core/harness selections; these checks do not promise
-distributed execution or a complete historical session-format audit.
-
-With `db-mysql`, `database_capture` also runs three ignored REPEATABLE READ races:
-concurrent session creation, append after deletion, and native-ID reuse. A
-connection-specific pending INSERT barrier fixes the interleaving; the test
-checks persisted content as well as the returned result. Those cases require a
-MySQL URL, so use the backend-specific profiles above rather than all features
-when running against PostgreSQL.
-
-The ignored library `mysql_tests` cases exercise shared-state revisions,
-connection/coverage fences, checkpoint freezes and human assessment corrections.
-They establish an old snapshot before a separate connection commits, then check
-the mutation's current authority. The core profile also checks publication
-against a concurrent human correction. Run them explicitly on the dedicated
-MySQL test database:
-
-```sh
-BITROUTER_TEST_DATABASE_URL='mysql://fixture:fixture-password@127.0.0.1:3306/bitrouter_test' \
-  cargo test -p bitrouter --no-default-features --features db-mysql,core,harness \
-  --lib mysql_tests -- --ignored --test-threads=1
-```
-
-These tests retain MySQL's REPEATABLE READ behavior and the application's SQLite
-write fences; they do not change the service's global isolation setting. Fixtures
-use unique scopes, with only explicitly scoped cleanup/deletion. CI serializes
-the cases so independent modules do not race initial migration setup.
+The gateway initializes and verifies each supported backend against the current
+schema definition. BRO's standalone tests exercise local checkpoints and tool
+ownership with a separate home.
 
 ### Public API dependency guards
 
 Public API guards must track both AI contracts and the new SDK client surface.
-AI must not expose service handles, credentials, database or OTel types, including
-through trait bounds. The SDK must not expose the retired server framework.
+AI exposes shared contracts without service handles, credentials, database or
+OTel types. The SDK's public surface is for HTTP clients.
 The `sdk-public-api` job renders each package independently using the shared
 renderer pins and compares its committed public-dependency manifest. Positive
 contract/client sentinels precede checks for forbidden runtime types and public
@@ -847,39 +582,35 @@ Do not regenerate an API baseline merely to conceal an unwanted dependency.
 
 ### Named-router request checks
 
-Named-router entry checks use AI capability types and the application
-`gateway::pipeline::request_checks` runner. The app assembles startup-owned compiled registrations in
-`request_checks`; a custom host supplies callbacks through
-`extension::ExtensionApi`. The official `bro` binary has no custom
-registrations, and there is no request-check inventory or receipt store.
+Named-router entry checks use application-owned callback types and the
+`gateway::pipeline::request_checks` runner. The app assembles compiled registrations
+at startup in `request_checks`; a custom host supplies callbacks through
+`gateway::extensions::registry::ExtensionApi`. The official `bitrouter` binary has
+no custom registrations, and there is no request-check inventory or receipt store.
 
 Authentication and session/continuation normalization precede router binding.
 The logical router/check binding remains fixed through candidate preparation,
 model selection and fallback. One preparation path serves both response modes.
 Checked routers apply effective defaults before content checks; ordinary local
-hooks cannot change their selector afterward. Unguarded requests preserve the
-legacy pre-request rewrite/defaults timing. The existing model selector and
-executor run after required checks allow. Local policy rejection never invokes
+hooks cannot change their selector afterward. Unguarded requests apply their
+configured preprocessing and defaults. The model selector and executor run
+after required checks allow. Local policy rejection never invokes
 a registered checker. The runtime emits bounded, content-free tracing for
 registration and invocation outcomes; it does not expose checker inventory,
 progress reporting or durable workflow state. Registration readiness and a
 real invocation remain separate evidence.
 
 See [Router request checks](extensions.md#request-entry-and-checking) for coverage, resource limits,
-activation and the acceptance ledger. The default host no longer links
-the matcher and rejects legacy `plugins.bitrouter-guardrails` configuration. See
+activation and ownership. Custom hosts register the matcher explicitly. See
 [GUARDRAILS_EXTENSION.md](../GUARDRAILS_EXTENSION.md) for custom-host assembly,
-input-only scope, explicit migration blockers, and process-level verification.
+input-only scope and process-level verification.
 
 ### Native harness resources
 
-`bitrouter::harness::resources` owns workspace MCP adaptation and local skill
-materialization. Bounded MCP discovery/transport/process cleanup is shared under
-`gateway::mcp`; offline skill parsing remains available to base management.
-The app supplies daemon-owned transport configuration and global roots;
-active ThreadService Turns freeze inventories and execute MCP through existing
-durable approval/tool barriers. Gateway interop and routed provider generation
-retain their existing responsibilities. See [BRO harness resources](harness-resources.md).
+Local workspace grants, file tools, ACP subprocesses and approval checkpoints
+belong to BRO. Operator-configured server tools and upstream MCP connections
+belong to BitRouter. A gateway bearer grants only the server-side operations
+authorized to that caller.
 
 ## Shared actions
 
@@ -893,5 +624,4 @@ Not every CLI command needs a remote action. Passive reads, explicit mutations,
 provider calls and process diagnostics have different authority and effects.
 An action's capability and scope are checked at execution; table membership or
 a UI affordance does not grant access. Wire exposure is maintained in the
-[service API](../specs/service-api/README.md), rather than in a second actions
-specification or historical acceptance ledger.
+[service API](../specs/service-api/README.md).

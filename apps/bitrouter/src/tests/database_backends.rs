@@ -1,0 +1,682 @@
+//! Real database regressions shared by SQLite, PostgreSQL, and MySQL.
+//!
+//! SQLite always runs against a temporary file. The ignored server test requires
+//! an explicit BITROUTER_TEST_DATABASE_URL pointing to a DEDICATED TEST DATABASE.
+//! It initializes or validates the current schema and writes fixtures: never use
+//! a production database. Old and partially initialized stores are refused.
+//! No database is dropped, no table is truncated, and existing fixtures are not
+//! deleted. Each invocation uses UUID-scoped identities and leaves server fixtures
+//! intact, so repeated runs do not depend on an empty database.
+//!
+//! Run this target with --no-default-features, adding db-postgres or db-mysql for
+//! the matching server URL. Select db_server_both_database_behaviors with --ignored to
+//! opt in. Each backend exercise has a two-minute deadline and a fixed fixture
+//! count; no core, harness, TUI, external process, or network model is required.
+
+use std::collections::BTreeMap;
+use std::time::Duration;
+
+use crate::auth::db::{self as auth_db, NewApiKey};
+use crate::auth::entities::users;
+use crate::auth::keys::hash_key;
+use crate::db::{self, migration::Migrator};
+use crate::metering::db::{MeteringSessionIdentity, ReconciliationStatus, RequestMetric};
+use crate::metering::entities::requests;
+use crate::metering::pricing::{
+    ChargeStatus, ModelPricing, PricingSource, calculate_charge_evidence,
+};
+use crate::metering::store::{MeteringStore, TimeWindow};
+use crate::trajectory::store::TrajectoryStore;
+use crate::trajectory::types::{
+    BeginRequest, EpisodeStart, HistoryCompleteness, KeyedDigest, OutboxPayload, OutboxWrite,
+    PendingOutbox, RequestStatus, Settlement, StoredEpisode, StoredRequest,
+    TRAJECTORY_SCHEMA_VERSION, TrajectoryEvent, TrajectoryEventKind, TrajectoryEvidence,
+    canonical_digest,
+};
+use anyhow::{Context, Result, ensure};
+use bitrouter_ai::types::{Usage, UsageOrigin};
+use chrono::Utc;
+use sea_orm::{
+    ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection, EntityTrait, QueryFilter,
+    Statement,
+};
+use sea_orm_migration::MigratorTrait;
+use uuid::Uuid;
+
+#[path = "database_backends/tenancy.rs"]
+mod tenancy;
+
+#[tokio::test]
+async fn sqlite_database_behaviors() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("database-backends.sqlite");
+    exercise_bounded(&format!("sqlite://{}", path.display())).await?;
+    ensure!(path.is_file(), "SQLite regression must use a real file");
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires BITROUTER_TEST_DATABASE_URL for a dedicated PostgreSQL or MySQL test database"]
+async fn db_server_both_database_behaviors() -> Result<()> {
+    let database_url = std::env::var("BITROUTER_TEST_DATABASE_URL").context(
+        "set BITROUTER_TEST_DATABASE_URL to a dedicated test database; no fallback is used",
+    )?;
+    let parsed = url::Url::parse(&database_url)
+        .context("BITROUTER_TEST_DATABASE_URL must be a valid server database URL")?;
+    match parsed.scheme() {
+        "postgres" | "postgresql" => {
+            ensure!(
+                cfg!(feature = "db-postgres"),
+                "enable the db-postgres feature"
+            );
+        }
+        "mysql" => ensure!(cfg!(feature = "db-mysql"), "enable the db-mysql feature"),
+        _ => anyhow::bail!("BITROUTER_TEST_DATABASE_URL must select PostgreSQL or MySQL"),
+    }
+    ensure!(
+        !parsed.path().trim_matches('/').is_empty(),
+        "BITROUTER_TEST_DATABASE_URL must explicitly name a dedicated test database"
+    );
+    exercise_bounded(&database_url).await
+}
+
+async fn exercise_bounded(database_url: &str) -> Result<()> {
+    tokio::time::timeout(Duration::from_secs(120), exercise(database_url))
+        .await
+        .context("database backend regression exceeded its two-minute deadline")?
+}
+
+async fn existing_ledger(db: &DatabaseConnection) -> Result<Option<Vec<(String, i64)>>> {
+    let backend = db.get_database_backend();
+    let exists = match backend {
+        DatabaseBackend::Sqlite => {
+            "SELECT 1 FROM main.sqlite_schema WHERE type='table' AND name='seaql_migrations'"
+        }
+        DatabaseBackend::Postgres => {
+            "SELECT 1 FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='seaql_migrations' AND table_type='BASE TABLE'"
+        }
+        DatabaseBackend::MySql => {
+            "SELECT 1 FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='seaql_migrations' AND table_type='BASE TABLE'"
+        }
+    };
+    if db
+        .query_one(Statement::from_string(backend, exists))
+        .await?
+        .is_none()
+    {
+        return Ok(None);
+    }
+    // Migrator::get_migration_models installs a ledger as a side effect. The
+    // pre-initialization observation must leave a genuinely empty store empty.
+    let rows = db
+        .query_all(Statement::from_string(
+            backend,
+            "SELECT version,applied_at FROM seaql_migrations ORDER BY version LIMIT 2",
+        ))
+        .await?;
+    Ok(Some(
+        rows.into_iter()
+            .map(|row| Ok((row.try_get("", "version")?, row.try_get("", "applied_at")?)))
+            .collect::<Result<_>>()?,
+    ))
+}
+
+async fn exercise(database_url: &str) -> Result<()> {
+    let connection = db::connect(database_url).await?;
+    let fixture = Fixture::new();
+    let result = async {
+        let previous_ledger = existing_ledger(&connection).await?;
+        db::run_migrations(&connection).await?;
+        let ledger = Migrator::get_migration_models(&connection).await?;
+        let expected = match connection.get_database_backend() {
+            DatabaseBackend::Sqlite => "m20261118_000006_gateway_sqlite",
+            DatabaseBackend::Postgres | DatabaseBackend::MySql => "m20261118_000007_gateway_server",
+        };
+        ensure!(
+            ledger.len() == 1 && ledger[0].version == expected,
+            "unexpected gateway format ledger"
+        );
+        if let Some(previous) = previous_ledger {
+            let current = ledger
+                .iter()
+                .map(|row| (row.version.clone(), row.applied_at))
+                .collect::<Vec<_>>();
+            ensure!(
+                previous == current,
+                "current baseline validation changed an existing ledger entry"
+            );
+        }
+        write_auth(&connection, &fixture).await?;
+        write_metering(&connection, &fixture).await?;
+        write_trajectory(&connection, &fixture).await?;
+        check_auth(&connection, &fixture).await?;
+        check_metering(&connection, &fixture).await?;
+        let trajectory = read_trajectory(&connection, &fixture).await?;
+        check_trajectory(&trajectory, &fixture)?;
+        tenancy::exercise(&connection).await?;
+
+        db::run_migrations(&connection).await?;
+        ensure!(
+            Migrator::get_migration_models(&connection).await? == ledger,
+            "second migrator run changed ledger versions or applied timestamps"
+        );
+        ensure!(
+            read_trajectory(&connection, &fixture).await? == trajectory,
+            "second migrator run changed trajectory records"
+        );
+        check_auth(&connection, &fixture).await?;
+        check_metering(&connection, &fixture).await?;
+        Ok::<_, anyhow::Error>(trajectory)
+    }
+    .await;
+    let closed = connection.close().await;
+    let trajectory = result?;
+    closed?;
+
+    // A new pool proves the fixtures survived connection teardown, including
+    // SQLite's file-backed persistence and the settlement's transactional outbox.
+    let reopened = db::connect(database_url).await?;
+    let result = async {
+        check_auth(&reopened, &fixture).await?;
+        check_metering(&reopened, &fixture).await?;
+        ensure!(
+            read_trajectory(&reopened, &fixture).await? == trajectory,
+            "trajectory records did not survive reconnecting"
+        );
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+    let closed = reopened.close().await;
+    result?;
+    closed?;
+    Ok(())
+}
+
+struct Fixture {
+    scope: String,
+    captured_at: String,
+    window: TimeWindow,
+}
+
+impl Fixture {
+    fn new() -> Self {
+        let now = Utc::now();
+        Self {
+            scope: Uuid::new_v4().to_string(),
+            captured_at: now.to_rfc3339(),
+            window: TimeWindow::Custom {
+                start: now - chrono::Duration::minutes(1),
+                end: now + chrono::Duration::minutes(5),
+            },
+        }
+    }
+
+    fn id(&self, suffix: &str) -> String {
+        format!("db-{}-{suffix}", self.scope)
+    }
+
+    fn key(&self, owner: &str) -> NewApiKey {
+        NewApiKey {
+            id: self.id(&format!("key-{owner}")),
+            key_hash: hash_key(&self.id(&format!("secret-{owner}"))),
+            user_id: self.id(&format!("owner-{owner}")),
+            spend_limit_micro_usd: Some(1_000_000),
+            rpm_limit: Some(60),
+            policy_id: Some(self.id(&format!("policy-{owner}"))),
+        }
+    }
+
+    fn metric(
+        &self,
+        owner: &str,
+        request: &str,
+        prompt: u64,
+        completion: u64,
+    ) -> Result<RequestMetric> {
+        let key = self.key(owner);
+        let usage = Usage {
+            prompt_tokens: prompt,
+            completion_tokens: completion,
+            origin: UsageOrigin::ProviderReported,
+            ..Default::default()
+        };
+        let evidence = calculate_charge_evidence(
+            &usage,
+            &ModelPricing::new(2.0, 10.0),
+            PricingSource::Configured,
+        );
+        Ok(RequestMetric {
+            request_id: self.id(request),
+            user_id: key.user_id,
+            api_key_id: key.id.clone(),
+            launch_id: Some(self.id("launch")),
+            session_identity: Some(MeteringSessionIdentity {
+                route_scope_id: key.id,
+                agent_harness: None,
+                controller_instance_id: Some(self.id("controller")),
+                acp_session_id: Some(self.id("session")),
+                native_root_session_id: None,
+                native_agent_thread_id: None,
+                native_parent_agent_thread_id: None,
+                native_turn_id: None,
+                route_lease_id: None,
+                serialized: serde_json::json!({
+                    "controller_instance_id": self.id("controller"),
+                    "acp_session_id": self.id("session"),
+                })
+                .to_string(),
+            }),
+            router_id: Some(self.id("router")),
+            binding_digest: Some(canonical_digest(&self.id("binding"))?),
+            original_selector: Some(self.id("selector")),
+            model_id: self.id("model"),
+            provider_id: self.id("provider"),
+            prompt_tokens: prompt,
+            completion_tokens: completion,
+            reasoning_tokens: 0,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            uncached_input_tokens: prompt,
+            output_tokens: completion,
+            usage_origin: usage.origin,
+            raw_usage: Some(
+                serde_json::json!({"input_tokens": prompt, "output_tokens": completion}),
+            ),
+            charge_status: evidence.status,
+            estimated_charge_micro_usd: evidence
+                .charge_micro_usd
+                .context("fixture charge missing")?,
+            charge_evidence: evidence,
+            reconciliation_status: ReconciliationStatus::NotApplicable,
+            latency_ms: 12,
+            generation_time_ms: 8,
+            streamed: false,
+            error: None,
+        })
+    }
+
+    fn event(&self, sequence: u64, kind: TrajectoryEventKind) -> Result<TrajectoryEvent> {
+        let categorical = match kind {
+            TrajectoryEventKind::RequestStarted => BTreeMap::from([
+                ("correlation.source".into(), "explicit_root".into()),
+                ("history.completeness".into(), "complete".into()),
+            ]),
+            TrajectoryEventKind::RouteIntentRecorded => BTreeMap::from([
+                (
+                    "route.projection".into(),
+                    "code:generation|implement|normal".into(),
+                ),
+                ("route.selected_tier".into(), "economy".into()),
+            ]),
+            _ => BTreeMap::new(),
+        };
+        let mut event = TrajectoryEvent {
+            schema_version: TRAJECTORY_SCHEMA_VERSION,
+            event_id: self.id(&format!("event-{sequence}")),
+            owner_user_id: self.key("a").user_id,
+            episode_id: self.id("episode"),
+            request_id: Some(self.id("request-a1")),
+            sequence,
+            kind,
+            evidence: TrajectoryEvidence {
+                structural: BTreeMap::new(),
+                categorical,
+                digests: BTreeMap::new(),
+                route_measurement: None,
+                routing_evidence: Vec::new(),
+            },
+            captured_at: self.captured_at.clone(),
+            content_digest: String::new(),
+        };
+        event.content_digest = event.semantic_digest()?;
+        Ok(event)
+    }
+}
+
+async fn write_auth(connection: &DatabaseConnection, fixture: &Fixture) -> Result<()> {
+    for owner in ["a", "b"] {
+        let key = fixture.key(owner);
+        auth_db::upsert_user(connection, &key.user_id).await?;
+        let before = users::Entity::find_by_id(&key.user_id)
+            .one(connection)
+            .await?
+            .context("upsert did not persist a user")?;
+        auth_db::upsert_user(connection, &key.user_id).await?;
+        ensure!(
+            users::Entity::find_by_id(&key.user_id)
+                .one(connection)
+                .await?
+                == Some(before),
+            "user upsert changed the existing row"
+        );
+        auth_db::insert_api_key(connection, &key).await?;
+    }
+    Ok(())
+}
+
+async fn check_auth(connection: &DatabaseConnection, fixture: &Fixture) -> Result<()> {
+    for owner in ["a", "b"] {
+        let key = fixture.key(owner);
+        let stored = auth_db::find_key_by_hash(connection, &key.key_hash)
+            .await?
+            .context("inserted API key missing")?;
+        ensure!(
+            stored.id == key.id && stored.user_id == key.user_id,
+            "API key lookup returned another key or owner"
+        );
+        let row = crate::auth::entities::api_keys::Entity::find_by_id(&key.id)
+            .one(connection)
+            .await?
+            .context("API key row missing")?;
+        ensure!(row.spend_limit_micro_usd == key.spend_limit_micro_usd);
+        ensure!(row.rpm_limit == key.rpm_limit && stored.policy_id == key.policy_id);
+        ensure!(stored.active && stored.expires_at.is_none());
+    }
+    ensure!(
+        auth_db::find_key_by_hash(connection, &hash_key(&fixture.id("missing-secret")))
+            .await?
+            .is_none(),
+        "unknown key hash must not resolve"
+    );
+    Ok(())
+}
+
+async fn write_metering(connection: &DatabaseConnection, fixture: &Fixture) -> Result<()> {
+    let store = MeteringStore::new(connection.clone());
+    store
+        .record_request(fixture.metric("a", "request-a1", 10, 5)?)
+        .await?;
+    let initial = requests::Entity::find_by_id(fixture.id("request-a1"))
+        .one(connection)
+        .await?
+        .context("metering insert missing")?;
+    store
+        .record_request(fixture.metric("a", "request-a1", 15, 5)?)
+        .await?;
+    let updated = requests::Entity::find_by_id(fixture.id("request-a1"))
+        .one(connection)
+        .await?
+        .context("metering upsert missing")?;
+    ensure!(
+        updated.created_at == initial.created_at,
+        "metering upsert reset created_at"
+    );
+    // These IDs differ from the first settlement only by case or accent.
+    store
+        .record_request(fixture.metric("a", "REQUEST-a1", 20, 0)?)
+        .await?;
+    store
+        .record_request(fixture.metric("b", "réquest-a1", 50, 5)?)
+        .await?;
+    Ok(())
+}
+
+async fn check_metering(connection: &DatabaseConnection, fixture: &Fixture) -> Result<()> {
+    let store = MeteringStore::new(connection.clone());
+    for (owner, count, spend, prompt, completion) in [("a", 2, 120, 35, 5), ("b", 1, 150, 50, 5)] {
+        let key = fixture.key(owner);
+        ensure!(store.get_enforceable_spend(&key.id, fixture.window).await? == Some(spend));
+        ensure!(
+            store
+                .get_enforceable_spend(&key.id.to_ascii_uppercase(), fixture.window)
+                .await?
+                == Some(0)
+        );
+        let rows = requests::Entity::find()
+            .filter(requests::Column::ApiKeyId.eq(&key.id))
+            .all(connection)
+            .await?;
+        ensure!(rows.len() as u64 == count);
+        ensure!(rows.iter().map(|row| row.prompt_tokens).sum::<i64>() == prompt);
+        ensure!(rows.iter().map(|row| row.completion_tokens).sum::<i64>() == completion);
+        // The two owners deliberately declare the same controller and session.
+        let summary = store
+            .spend_summary_for_acp_session(
+                &key.id,
+                &fixture.id("controller"),
+                &fixture.id("session"),
+                fixture.window,
+            )
+            .await?;
+        ensure!(
+            summary.requests == count && summary.spend_micro_usd == spend && summary.unpriced == 0,
+            "principal-scoped spend included another owner's requests"
+        );
+    }
+    let unknown = store
+        .spend_summary_for_acp_session(
+            &fixture.key("a").id.to_ascii_uppercase(),
+            &fixture.id("controller"),
+            &fixture.id("session"),
+            fixture.window,
+        )
+        .await?;
+    ensure!(unknown.requests == 0 && unknown.spend_micro_usd == 0);
+    let recent = store
+        .recent_requests_filtered(fixture.window, Some(&fixture.id("model")), None, 4)
+        .await?
+        .rows;
+    ensure!(
+        recent.len() == 3,
+        "metering upsert inserted a duplicate request"
+    );
+    for (owner, request, prompt, completion) in [
+        ("a", "request-a1", 15, 5),
+        ("a", "REQUEST-a1", 20, 0),
+        ("b", "réquest-a1", 50, 5),
+    ] {
+        let metric = fixture.metric(owner, request, prompt, completion)?;
+        let row = requests::Entity::find_by_id(&metric.request_id)
+            .one(connection)
+            .await?
+            .context("persisted metering request missing")?;
+        ensure!(row.request_id == metric.request_id);
+        ensure!(row.user_id == metric.user_id && row.api_key_id == metric.api_key_id);
+        ensure!(
+            row.prompt_tokens == i64::try_from(prompt)?
+                && row.completion_tokens == i64::try_from(completion)?
+        );
+        ensure!(row.estimated_charge_micro_usd == metric.estimated_charge_micro_usd);
+        ensure!(row.charge_status == ChargeStatus::Computed.as_str());
+        ensure!(
+            row.router_id == metric.router_id
+                && row.binding_digest == metric.binding_digest
+                && row.original_selector == metric.original_selector
+        );
+        let evidence: crate::metering::pricing::ChargeEvidence = serde_json::from_str(
+            row.charge_evidence_json
+                .as_deref()
+                .context("charge evidence missing")?,
+        )?;
+        ensure!(
+            evidence == metric.charge_evidence,
+            "charge evidence did not round-trip"
+        );
+        let raw: serde_json::Value =
+            serde_json::from_str(row.raw_usage_json.as_deref().context("raw usage missing")?)?;
+        ensure!(
+            Some(raw) == metric.raw_usage,
+            "raw usage did not round-trip"
+        );
+    }
+    Ok(())
+}
+
+async fn write_trajectory(connection: &DatabaseConnection, fixture: &Fixture) -> Result<()> {
+    let store = TrajectoryStore::new(connection.clone());
+    let owner = fixture.key("a").user_id;
+    let other_owner = fixture.key("b").user_id;
+    let digest = KeyedDigest::parse(format!(
+        "hmac-sha256:test-key:{}",
+        hash_key(&fixture.id("input"))
+    ))?;
+    let begin = BeginRequest {
+        episode: EpisodeStart {
+            episode_id: fixture.id("episode"),
+            correlation_digest: digest.clone(),
+            correlation_key_id: "test-key".into(),
+            correlation_source: "explicit_root".into(),
+            completeness: HistoryCompleteness::Complete,
+        },
+        event: fixture.event(1, TrajectoryEventKind::RequestStarted)?,
+        full_input_digest: digest,
+        native_parent_id: None,
+        protocol: "responses".into(),
+    };
+    store.begin_request(&owner, begin.clone()).await?;
+    store.begin_request(&owner, begin).await?;
+    let started = store
+        .request(&owner, &fixture.id("request-a1"))
+        .await?
+        .context("trajectory start missing")?;
+    ensure!(started.status == RequestStatus::Started && started.settlement_event_id.is_none());
+    ensure!(
+        store
+            .events_for_episode(&owner, &fixture.id("episode"))
+            .await?
+            .len()
+            == 1
+    );
+    ensure!(store.pending_outbox(&owner).await?.is_empty());
+    let route = fixture.event(2, TrajectoryEventKind::RouteIntentRecorded)?;
+    store.append_route_intent(&owner, route.clone()).await?;
+    store.append_route_intent(&owner, route).await?;
+    ensure!(
+        store
+            .events_for_episode(&owner, &fixture.id("episode"))
+            .await?
+            .len()
+            == 2
+    );
+    let event = fixture.event(3, TrajectoryEventKind::RequestSettled)?;
+    let settlement = Settlement {
+        outbox: Some(OutboxWrite {
+            outbox_id: fixture.id("outbox"),
+            topic: "trajectory.settled".into(),
+            payload: OutboxPayload {
+                structural: BTreeMap::from([("trajectory.event_count".into(), 3)]),
+                digests: BTreeMap::from([(
+                    "trajectory.event".into(),
+                    event.content_digest.clone(),
+                )]),
+                evaluation: None,
+            },
+            created_at: fixture.captured_at.clone(),
+        }),
+        event,
+        status: RequestStatus::Settled,
+    };
+    store.settle_request(&owner, settlement.clone()).await?;
+    store.settle_request(&owner, settlement.clone()).await?;
+    let before_conflict = read_trajectory(connection, fixture).await?;
+    let mut conflict = settlement;
+    conflict.status = RequestStatus::Failed;
+    ensure!(
+        store.settle_request(&owner, conflict).await.is_err(),
+        "different settlement must not overwrite a settled request"
+    );
+    ensure!(
+        store
+            .request(&other_owner, &fixture.id("request-a1"))
+            .await?
+            .is_none()
+    );
+    ensure!(
+        store
+            .episode(&other_owner, &fixture.id("episode"))
+            .await?
+            .is_none()
+    );
+    ensure!(
+        store
+            .events_for_episode(&other_owner, &fixture.id("episode"))
+            .await?
+            .is_empty()
+    );
+    ensure!(store.pending_outbox(&other_owner).await?.is_empty());
+    ensure!(
+        store
+            .mark_outbox_delivered(&other_owner, &fixture.id("outbox"), &fixture.captured_at)
+            .await
+            .is_err(),
+        "another owner must not acknowledge the outbox"
+    );
+    ensure!(
+        read_trajectory(connection, fixture).await? == before_conflict,
+        "rejected settlement or cross-owner acknowledgement changed persisted records"
+    );
+    Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct TrajectoryRows {
+    request: StoredRequest,
+    episode: StoredEpisode,
+    events: Vec<TrajectoryEvent>,
+    outbox: Vec<PendingOutbox>,
+}
+
+async fn read_trajectory(
+    connection: &DatabaseConnection,
+    fixture: &Fixture,
+) -> Result<TrajectoryRows> {
+    let store = TrajectoryStore::new(connection.clone());
+    let owner = fixture.key("a").user_id;
+    Ok(TrajectoryRows {
+        request: store
+            .request(&owner, &fixture.id("request-a1"))
+            .await?
+            .context("trajectory request missing")?,
+        episode: store
+            .episode(&owner, &fixture.id("episode"))
+            .await?
+            .context("trajectory episode missing")?,
+        events: store
+            .events_for_episode(&owner, &fixture.id("episode"))
+            .await?,
+        outbox: store.pending_outbox(&owner).await?,
+    })
+}
+
+fn check_trajectory(rows: &TrajectoryRows, fixture: &Fixture) -> Result<()> {
+    ensure!(rows.request.status == RequestStatus::Settled);
+    ensure!(rows.request.start_event_id == fixture.id("event-1"));
+    ensure!(rows.request.settlement_event_id == Some(fixture.id("event-3")));
+    ensure!(
+        rows.episode.next_sequence == 4
+            && rows.episode.completeness == HistoryCompleteness::Complete
+    );
+    ensure!(rows.episode.latest_request_id == Some(fixture.id("request-a1")));
+    let expected = vec![
+        fixture.event(1, TrajectoryEventKind::RequestStarted)?,
+        fixture.event(2, TrajectoryEventKind::RouteIntentRecorded)?,
+        fixture.event(3, TrajectoryEventKind::RequestSettled)?,
+    ];
+    ensure!(
+        rows.events == expected,
+        "trajectory event order or content changed"
+    );
+    ensure!(
+        rows.outbox.len() == 1,
+        "settlement must persist exactly one pending outbox"
+    );
+    let pending = rows.outbox.first().context("pending outbox missing")?;
+    ensure!(
+        pending.outbox_id == fixture.id("outbox")
+            && pending.owner_user_id == fixture.key("a").user_id
+    );
+    ensure!(pending.topic == "trajectory.settled" && pending.attempts == 0);
+    ensure!(pending.created_at == fixture.captured_at);
+    ensure!(pending.payload.structural.get("trajectory.event_count") == Some(&3));
+    ensure!(
+        pending.payload.digests.get("trajectory.event")
+            == Some(
+                &fixture
+                    .event(3, TrajectoryEventKind::RequestSettled)?
+                    .content_digest
+            )
+    );
+    ensure!(serde_json::from_str::<OutboxPayload>(&pending.payload_json)? == pending.payload);
+    ensure!(canonical_digest(&pending.payload)? == pending.payload_digest);
+    Ok(())
+}

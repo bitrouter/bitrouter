@@ -65,6 +65,26 @@ impl GatewayClient {
         .await
     }
 
+    /// Send a caller-owned correlation ID on a single Chat request.
+    ///
+    /// # Errors
+    /// A missing or inconsistent successful response identity, transport failure,
+    /// or interrupted stream leaves execution uncertain. This call never retries.
+    pub async fn chat_reply_with_correlation(
+        &self,
+        request: &ChatRequest,
+        correlation_id: uuid::Uuid,
+    ) -> Result<Reply<ChatResponse, ChatChunk>> {
+        let id = correlation_id.to_string();
+        let http = self
+            .http
+            .post(self.url("v1/chat/completions")?)
+            .header("x-bitrouter-request-id", &id)
+            .json(request);
+        self.relay_request(http, request.stream, Protocol::Chat, Some(&id))
+            .await
+    }
+
     /// Relay native Chat JSON without filling absent request fields or decoding event payloads.
     ///
     /// # Errors
@@ -129,6 +149,7 @@ impl GatewayClient {
             self.responses_resume(response_id, starting_after)?,
             true,
             Protocol::Responses,
+            None,
         )
         .await
     }
@@ -146,6 +167,7 @@ impl GatewayClient {
             self.responses_resume(response_id, starting_after)?,
             true,
             Protocol::Responses,
+            None,
         )
         .await
     }
@@ -183,6 +205,7 @@ impl GatewayClient {
             self.background_replay(request_id, after)?,
             true,
             Protocol::Chat,
+            None,
         )
         .await
     }
@@ -200,6 +223,7 @@ impl GatewayClient {
             self.background_replay(request_id, after)?,
             true,
             Protocol::Messages,
+            None,
         )
         .await
     }
@@ -230,6 +254,7 @@ impl GatewayClient {
             self.http.post(self.url(path)?).json(request),
             streaming,
             protocol,
+            None,
         )
         .await
     }
@@ -239,6 +264,7 @@ impl GatewayClient {
         request: reqwest::RequestBuilder,
         streaming: bool,
         protocol: Protocol,
+        correlation_id: Option<&str>,
     ) -> Result<Reply<T, E>> {
         let accept = if streaming {
             "text/event-stream"
@@ -263,6 +289,11 @@ impl GatewayClient {
             }))
         };
         let metadata = metadata(status, &headers).map_err(failure)?;
+        if correlation_id.is_some() && metadata.request_id.as_deref() != correlation_id {
+            return Err(failure(Error::Response(
+                "gateway did not confirm the caller correlation ID",
+            )));
+        }
         if !transport::has_content_type(&response, accept) {
             return Err(failure(Error::Response("unexpected relay content type")));
         }

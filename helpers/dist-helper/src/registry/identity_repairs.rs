@@ -3,7 +3,7 @@
 use super::*;
 
 /// Remove only missing references from an otherwise valid source candidate.
-/// Native inventory and the historical identity ledger remain available for review.
+/// Native inventory and the identity ledger remain available for review.
 pub(super) fn stage(sources: &mut Sources, snapshot: &Value) -> Result<Vec<Value>> {
     let ids = identity_ids(snapshot)?;
     let document = sources.document()?;

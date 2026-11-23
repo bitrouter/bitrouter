@@ -237,11 +237,6 @@ impl ControlServer {
         self
     }
 
-    /// Address the control listener will bind.
-    pub fn listen(&self) -> SocketAddr {
-        self.listen
-    }
-
     /// Bind before the daemon publishes its pid/readiness.
     pub async fn bind(self) -> Result<BoundControlServer> {
         let listener = tokio::net::TcpListener::bind(self.listen)
@@ -755,6 +750,7 @@ mod tests {
     use super::*;
     use crate::client::control::{HttpControlClient, normalize_endpoint};
     use axum::body::Body;
+    use bitrouter_sdk::control::ControlClient;
     use http::Request;
     use tower::ServiceExt;
 
@@ -1109,7 +1105,13 @@ providers:
         let router = test_router(source, PathBuf::from("missing.sock"))?;
         let routes = inventory::ACTIONS
             .iter()
-            .map(|row| (row.method, row.path))
+            .map(|row| {
+                let method = match row.action {
+                    Action::Route | Action::Reload => "POST",
+                    _ => "GET",
+                };
+                (method, row.path)
+            })
             .chain(inventory::RESOURCES.iter().map(|row| ("GET", row.path)));
         for (method, path) in routes {
             let path = path.replace("{request_id}", "00000000-0000-0000-0000-000000000000");
@@ -1250,7 +1252,7 @@ providers:
             )
             .await
         });
-        let client = HttpControlClient::from_token(&endpoint, TOKEN.into(), "fixture")?;
+        let client = ControlClient::new(&endpoint, TOKEN)?;
         assert!(client.capabilities().await.is_err());
         assert_eq!(hits.load(Ordering::SeqCst), 0);
         origin_task.abort();
@@ -1277,11 +1279,10 @@ providers:
                 })
                 .await
         });
-        let client =
-            HttpControlClient::from_token(&format!("http://{address}"), TOKEN.into(), "test")?;
-        assert!(client.can_action("list_models").await.is_err());
-        assert!(client.can_action("route").await.is_err());
-        assert!(client.can_action("providers_list").await.is_err());
+        let client = ControlClient::new(&format!("http://{address}"), TOKEN)?;
+        assert!(client.can_action(Action::Models).await.is_err());
+        assert!(client.can_action(Action::Route).await.is_err());
+        assert!(client.can_action(Action::Providers).await.is_err());
         let _ = stop_tx.send(());
         task.await??;
         Ok(())
@@ -1467,7 +1468,9 @@ providers:
             .await?;
         assert_eq!(route.effective_model, "test-model");
         assert_eq!(route.provider_chain.len(), 1);
-        let requests = client.requests(Some(1)).await?;
+        let requests = client
+            .requests_filtered(&bitrouter_ai::control::requests::RequestFilters::with_limit(1))
+            .await?;
         assert!(requests.rows.is_empty());
 
         let denied = HttpControlClient::from_token(

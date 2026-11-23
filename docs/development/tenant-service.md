@@ -10,53 +10,27 @@ and generated schema define host settings. This guide evolves with the runtime.
 Tenancy is an explicit opt-in to a single Unix process holding an exclusive
 lease on a file-backed SQLite database. It requires authenticated inference, an
 enabled control listener and an explicit `control:tenancy` operator credential.
-Shared gateway mode and the host coding-task HTTP API are rejected in this
-profile. Startup validates the configuration and obtains ownership before
+[Shared gateway](../SHARED_GATEWAY_DISTRIBUTION.md) uses a separate PostgreSQL
+authority profile. Startup validates the configuration and obtains ownership before
 opening listeners; decoding public types does not enable these capabilities.
 The [configuration validator](../../apps/bitrouter/src/config/tenancy.rs) and
 [file owner](../../apps/bitrouter/src/tenancy/ownership.rs) enforce eligibility.
 This profile does not establish distributed tenant authority or hosted capacity.
 
-## Model-only policy boundary and cutover
+## Model-only policy boundary
 
-The accepted M0 ownership and cutover rules in this section are pending
-implementation and qualification. The
-[Policy contract](../specs/policy/README.md) and
-[current-store contract](../specs/service-api/README.md#resource-and-evidence-migration-and-rollback)
-are authoritative; this guide does not claim the cutover has passed.
+The [Policy specification](../specs/policy/README.md) defines the shared source.
+The gateway retains that source and derives a private model selection view.
+Source digest, classifier digest, resource revision and configuration revision
+identify different inputs to selection. Imports and configuration activation
+validate the reachable dependency closure and bind an exact resource revision
+and literal policy name.
 
-AI owns the lightweight public source. Application model_policy validates it
-and builds a private model-selection execution view; storage retains the typed
-source and separate management metadata. There is no PolicyLock bridge, compiler
-marker authorization, certificate lowering or reverse compilation. Targets select
-only model/effort while preserving complete admitted context. Source digest,
-compiled cache identity, immutable resource revision, configuration revision and
-classifier digest have distinct purposes.
-
-Qualification checks the complete reachable closure at import, configuration
-creation, activation, restart and execution reopening, including hidden and
-unselected dependencies. Bind the exact ResourceRef and literal name; request
-variants cannot choose another name or fall back to a base. Tenant/shared entry
-points reject core_choice, paid assessment and ACP block, including Policy-free
-routes with all features enabled. Retained experiments have an explicit BRO
-harness owner and do not gain tenant-service authority. Mature Policy and tenant
-Eval exchange belong to the minimum gateway build, independent of core/harness.
-
-Eval is client-driven: infer/evaluate against an exact revision, submit/freeze
-facts under its verified identity, author a replacement source, then separately
-create and authorize/CAS activation. The service adds no Eval job runner or
-implicit learning. Generic tenant and gateway Eval profiles keep independent
-scope; neither can impersonate model-policy evidence.
-
-A Policy-free active head does not make an old dataset eligible. Stop old ingress
-and complete resolvable work with the old binary. Keep its binary/data outside
-the new dataset; the new binary neither resumes old paid work nor converts rows.
-Provision new resources explicitly in a new location with new installation
-identity. Refuse old/unmarked/nonempty/partial/foreign/future datasets and forged
-markers before listeners or authority/recovery writes, without deleting or
-rewriting files. Current-format restart/recovery, immutable references, unknown
-usage, CAS, revocation and idempotency remain required. Deployment rollback uses
-the old binary and its own consistent database/configuration/key copy.
+External evaluators run against a verified configuration and submit facts
+through the tenant Eval exchange. Generic tenant, model-policy and local
+gateway evidence have separate scopes. Publishing a new source and activating
+its configuration require explicit authorization and compare-and-swap. BRO
+retains workspace context and agent state in its local home.
 
 | Component | Responsibility |
 | --- | --- |
@@ -72,26 +46,14 @@ Consumers compose their own handlers and middleware with application-owned
 shows that composition. A framework adapter's protocol end does not itself prove
 that the service committed an execution receipt.
 
-## Current-format recovery checks
+## Recovery
 
-Use current writers and real retained execution/configuration/source objects to
-verify restart, streaming cancellation, no-send/observed/unknown dispatch,
-receipt/evidence publication and original-operation replay. Reduced builds must
-refuse readiness when they cannot service current obligations. Only proved
-exclusion/cleanup/stop-set permits missing-terminal recovery to Unknown; usage
-stays unknown. Do not replay providers or select an assessment head. Custody and
-capacity remain held through settlement/cleanup acknowledgement, including
-transaction faults and lost acknowledgements. Per-revision cumulative accepted-job
-counts never refund/reset on any terminal outcome or repeated restart.
-
-Old-format tests are small raw rejection fixtures. The old executable producer,
-patch, revision sidecar, checkout/cache and cross-version campaigns are retired
-with their consumers. Preserve general invariants by rebuilding fixtures with
-current producers; do not disable failing tests or remove readers while leaving
-an unsupported current writer active. Compare logical records, authority, user
-file bytes and provider calls on refusal; incidental lock-file changes are not
-data migration. Historical BRO-session fixtures are a separate boundary and
-cannot be retired solely because their names contain old version numbers.
+Recovery checks retained execution and authority before resuming service.
+Proven producer exclusion and cleanup allow a missing terminal outcome to be
+recorded as Unknown. Capacity and custody stay held through durable settlement
+and cleanup acknowledgement, including after a lost transaction response.
+Clients look up the original operation identity. An uncertain provider effect
+does not authorize another send.
 
 ## Runtime budgets and indexed authority
 
@@ -171,14 +133,14 @@ reserves space for head updates per selected key.
 
 The profiled configuration envelope uses format 4 independently of the authority
 header. Each profiled projection stays in its original immutable artifact. The
-service reconstructs the visible execution route once from that artifact and
+gateway reconstructs the visible execution route once from that artifact and
 the bound configuration defaults. The stored ordinary route sequence
 must match the corresponding original artifacts exactly. Reconstruction uses the
 existing cumulative byte bounds and charges the shared operation budget before
 copying. Immutable resource artifacts and hidden ordinary child projections keep
 their representation; the complete persisted plaintext still has a 1 MiB limit.
 
-Effect eligibility is checked separately from grant-only reads. Historical
+Effect eligibility is checked separately from grant-only reads. Revision
 activation, queued admission, cached execution, provider arm, continuation,
 counting and OAuth effects consult current route-key protection. The authority
 guard spans the final check and arm, so publication acknowledgement prevents new
@@ -191,9 +153,9 @@ and before constructing or authenticating the provider request. A successful
 entry charges its shared window once and supplies a private single-use arm
 token. Cancellation, construction failure or a later authority refusal does not
 refund that timestamp; arming rechecks authority without charging again. Exact
-60-second timestamps remain counted. Windows have a 16 MiB timestamp-allocation
-budget, independent of the profile's RPM ceiling; pressure refuses locally and
-never evicts live history. Retained-resource limits also bound group/health keys.
+60-second timestamps remain counted. Rate windows have a 16 MiB allocation
+budget independent of the profile's RPM ceiling. When that budget is full, the
+gateway refuses new charges and preserves the live window.
 
 Manifest observation takes one synchronous read snapshot for all candidates.
 Its optional read-only group association shares the same counter namespace but
@@ -281,11 +243,8 @@ limits are not a claim about total process RSS.
 Submission bounds upload, queueing and initial admission. After admission,
 `tenancy.execution_timeout_secs` optionally bounds the whole execution; omission
 or `null` means no total deadline. A configured total starts when capacity is
-admitted, and Choice children inherit their parent's remaining ceiling. A new
-native host/session operation gets a fresh submission budget, never renewed
-authority for an existing execution. Unattached admissions still expire within
-the submission budget. Preparation callbacks can own paid provider work and
-therefore follow execution cancellation and its optional total. Per-stream-part
+admitted. Unattached admissions expire within the submission budget. Provider
+preparation follows execution cancellation and its optional total. Per-stream-part
 callbacks use the idle budget; storage operations retain their shorter bounds.
 
 `tenancy.stream_idle_timeout_secs` defaults to 120 seconds. It independently
@@ -316,7 +275,7 @@ storage allowance. `tenancy.capacity.receipts` defaults to a 768 MiB admission
 free-space floor, an 8 GiB live-receipt high-water budget and a 256 MiB maintenance
 reserve. Accounting includes a conservative 16 KiB row allowance. Each grant
 batch refreshes free space under the accounting mutex and includes outstanding
-physical charges for management, receipt and repair writes. Physical write
+physical charges for management and receipt writes. Physical write
 amplification and filesystem exhaustion still require measurement and fault
 qualification. Terminal archived history is accounted separately from live
 receipt bytes; neither operation IDs nor retained history has a lifetime quota.
@@ -343,12 +302,11 @@ without pruning or reclassifying it. The 30-second cleanup window is not
 permission to forget an uncertain transaction or an unjoined producer.
 
 Startup and offline restore require the current dataset baseline and format-6
-tenant authority header. Recovery applies to the validated installation. Use
-current APIs to provision a fresh installation and keep incompatible data with
-its original deployment. See the
+tenant authority header. Validation preserves authority, receipt history and
+existing cleanup obligations. See the
 [offline evidence and restore commands](../CLI.md#offline-db-evidence-unix-sqlite-only)
-for current-format backup procedures. Strict-dispatch request, attempt and
-evidence limits and offline bundle limits remain independent of host capacity.
+for current-format backup procedures. Public request, attempt and evidence
+limits and offline bundle limits remain independent of host capacity.
 
 ## Receipt archive and physical storage
 
@@ -451,10 +409,9 @@ The [usage evidence contract](../specs/service-api/README.md#execution-usage-evi
 defines the wire interpretation and compatibility cases.
 
 The terminal receipt and its evidence sidecar share one durable publication
-gate and are bound by integrity digests. The existing strict receipt shape is
-unchanged. Current recovery seeds preserve capture ownership; missing provider
-observations produce Unavailable where proved, never zero usage. Missing required
-seeds cannot become historical no-capture records.
+gate and are bound by integrity digests. Recovery preserves capture ownership. Missing
+provider observations produce Unavailable where proved, and required recovery
+seeds must be present.
 No read or recovery path repeats inference to repair missing evidence.
 
 The [evidence reader](../../apps/bitrouter/src/tenancy/receipts/usage_evidence/storage.rs)
@@ -464,9 +421,10 @@ measured-length guards against intervening growth and receipt/evidence integrity
 checks. Stored byte-count metadata is not trusted to authorize allocation.
 
 The current SQLite schema and baseline ledger initialize atomically only in
-an empty location. Startup and restore authenticate the entire current dataset,
-including non-head history and affected encrypted source and envelopes. Rollback
-uses the previous binary with its own consistent database, configuration and key.
+an empty location. Startup validates the entire current dataset before ready,
+including non-head revisions and encrypted source/envelopes. Restore validates
+the database contents and requires the matching installation identity and wrapping
+key.
 
 ## Routing and diagnostics
 
@@ -481,5 +439,5 @@ selection identity. Ingress validates and removes the object before protocol
 parsing; immutable route-cache entries never hold per-call defaults. Merge the
 nine fields into canonical parameters before retained fallback defaults and
 policy validation. Typed null and empty stop preserve default filling, while
-opaque source extras block canonical promotion. Dispatch requires a retained
-binding with a valid enforcement mode.
+opaque source extras block canonical promotion. Send authority requires the exact
+execution binding and its declared enforcement mode.

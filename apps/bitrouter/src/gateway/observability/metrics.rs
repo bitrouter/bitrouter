@@ -2,7 +2,7 @@
 //!
 //! This is a *pull*-shaped seam: the HTTP server needs to render Prometheus
 //! text without knowing where the counters come from. The accumulator side is
-//! deployment-specific, and the OSS binary no longer has one: it pushes
+//! deployment-specific; the OSS binary pushes
 //! metrics over OTLP through `bitrouter-telemetry` and mounts a stub renderer
 //! that serves a migration banner. A deployment that still wants a pull-based
 //! endpoint registers its own

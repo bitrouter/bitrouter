@@ -8,7 +8,7 @@ use bitrouter_ai::{
 use sea_orm::ConnectionTrait;
 
 /// Derive producer identity from admitted immutable facts, never from caller metadata.
-#[cfg(feature = "core")]
+#[cfg(feature = "eval-publication")]
 pub(crate) fn for_execution(
     execution: &super::super::execution::TenantExecution,
 ) -> anyhow::Result<EvalSubjectIdentity> {
@@ -168,8 +168,12 @@ impl EvalIdentity {
         .map_err(|_| Failure::from(ErrorCode::StorageUnavailable))?
         .ok_or(ErrorCode::InvalidRequest)?;
         let receipt = match &receipt {
-            super::super::receipts::store::format::Terminal::V1(candidate) => &candidate.receipt,
-            super::super::receipts::store::format::Terminal::V2(candidate) => &candidate.receipt,
+            super::super::receipts::store::format::Terminal::Strict(candidate) => {
+                &candidate.receipt
+            }
+            super::super::receipts::store::format::Terminal::Ordered(candidate) => {
+                &candidate.receipt
+            }
         };
         let revision = &receipt.execution_revision;
         let route = match &receipt.dispatch {

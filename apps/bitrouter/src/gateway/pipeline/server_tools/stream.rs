@@ -93,7 +93,7 @@ fn merge_error_usage(
 
 impl ServerToolLoop {
     /// Run the loop over streaming upstream turns, returning one merged stream.
-    /// Mirrors [`ServerToolLoop::run`] but for the streaming path.
+    /// Mirrors [`ServerToolLoop::run_with_provenance`] but for the streaming path.
     pub async fn run_stream(
         self: Arc<Self>,
         base: &Prompt,

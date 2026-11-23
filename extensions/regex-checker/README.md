@@ -85,7 +85,7 @@ cargo run -p bitrouter --features guardrails --example native_regex_checker -- b
 Set `server.listen: 127.0.0.1:4356` (or another free loopback port) in the
 example config. The shared host serves inference, the local daemon control socket,
 and the optional authenticated remote control listener. It reuses configuration
-baselines, reload, signals and shutdown from `bro serve`.
+baselines, reload, signals and shutdown from `bitrouter serve`.
 In a
 separate project, explicitly depend on `bitrouter`, `bitrouter-guardrails`,
 `tokio`, `serde-saphyr` and `anyhow` as used by the example.

@@ -85,7 +85,7 @@ fn operator_recovery_hints_parse_even_for_leading_hyphen_handles() -> Result<()>
             operation_id: id.into(),
             source: Box::new(bitrouter_sdk::error::Error::Response("unavailable")),
         });
-        let envelope = bitrouter::output::error::envelope_from_anyhow(&error);
+        let envelope = crate::output::error::envelope_from_anyhow(&error);
         let argument = format!("--operation-id={id}");
         anyhow::ensure!(
             envelope
@@ -135,11 +135,8 @@ async fn invalid_token_env_uses_redacted_runtime_errors_after_real_cli_parsing()
         .err()
         .context("accepted invalid reference")?;
     anyhow::ensure!(error.to_string() == "invalid operator token environment reference");
-    let envelope = bitrouter::output::error::envelope_from_anyhow(&error);
-    for format in [
-        bitrouter::output::Format::Json,
-        bitrouter::output::Format::Human,
-    ] {
+    let envelope = crate::output::error::envelope_from_anyhow(&error);
+    for format in [crate::output::Format::Json, crate::output::Format::Human] {
         let text = String::from_utf8(Output::new(format).render_to_vec(&envelope))?;
         anyhow::ensure!(!text.contains("PRIVATE_ARGUMENT_SENTINEL"));
     }

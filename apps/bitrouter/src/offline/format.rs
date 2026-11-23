@@ -1,8 +1,7 @@
-//! Private, versioned SQLite snapshot evidence.
+//! Bounded database snapshot evidence; it grants no serving authority.
 use serde::{Deserialize, Serialize};
 
 pub(super) const FORMAT_V2: &str = "bitrouter.offline.sqlite-evidence.v2";
-pub(super) const FORMAT: &str = "bitrouter.offline.sqlite-evidence.v1";
 pub(super) const EXCLUSIONS: [&str; 5] = [
     "external_oauth_not_fenced_or_included",
     "workspace_state_not_fenced_or_included",
@@ -10,9 +9,11 @@ pub(super) const EXCLUSIONS: [&str; 5] = [
     "producer_build_and_commit_unknown",
     "ownership_fence_covers_participating_binaries_only",
 ];
+#[cfg(all(test, unix))]
 pub(super) const MAX_FILE: u64 = 512 * 1024 * 1024;
-pub(super) const MAX_EVIDENCE: u64 = 2 * 1024 * 1024;
+#[cfg(all(test, unix))]
 pub(super) const MAX_ROWS: u64 = 1_000_000;
+#[cfg(all(test, unix))]
 pub(super) const MAX_BYTES: u64 = 256 * 1024 * 1024;
 pub(super) const MAX_CELL: u64 = 16 * 1024 * 1024;
 pub(super) const MAX_ROW: u64 = 32 * 1024 * 1024;
@@ -56,7 +57,6 @@ pub(super) struct Evidence {
     pub format: String,
     pub scope: String,
     pub complete: bool,
-    pub cutover_ready: bool,
     pub exclusions: Vec<String>,
     pub inspector: bitrouter_ai::artifact::ArtifactIdentity,
     pub source_commit: Option<String>,
@@ -68,89 +68,6 @@ pub(super) struct Evidence {
     pub inventory: Inventory,
 }
 impl Evidence {
-    /// Charge an already verified report across subsequent borrowed phases.
-    /// Parsing has its own preflight; this counts retained allocation capacities.
-    pub(super) fn retained_bytes(&self) -> anyhow::Result<usize> {
-        let mut total = std::mem::size_of::<Self>();
-        let mut add = |bytes: usize| -> anyhow::Result<()> {
-            total = total
-                .checked_add(bytes)
-                .and_then(|n| n.checked_add(64))
-                .ok_or(super::large::CapacityExceeded)?;
-            Ok(())
-        };
-        for value in [
-            &self.format,
-            &self.scope,
-            &self.selected_path_digest,
-            &self.key_id,
-            &self.snapshot_digest,
-            &self.inspector.version,
-            &self.inspector.target,
-            &self.inventory.encoding,
-            &self.inventory.schema_digest,
-        ] {
-            add(value.capacity())?;
-        }
-        for value in [
-            &self.source_commit,
-            &self.source_build,
-            &self.inspector.source_revision,
-            &self.inventory.installation_id,
-        ]
-        .into_iter()
-        .flatten()
-        {
-            add(value.capacity())?;
-        }
-        for values in [&self.exclusions, &self.inspector.features] {
-            add(values
-                .capacity()
-                .checked_mul(std::mem::size_of::<String>())
-                .ok_or(super::large::CapacityExceeded)?)?;
-            for value in values {
-                add(value.capacity())?;
-            }
-        }
-        add(self
-            .inventory
-            .tables
-            .capacity()
-            .checked_mul(std::mem::size_of::<Table>())
-            .ok_or(super::large::CapacityExceeded)?)?;
-        for table in &self.inventory.tables {
-            add(table.name.capacity())?;
-            add(table.digest.capacity())?;
-            add(table
-                .columns
-                .capacity()
-                .checked_mul(std::mem::size_of::<Column>())
-                .ok_or(super::large::CapacityExceeded)?)?;
-            for column in &table.columns {
-                add(column.name.capacity())?;
-            }
-        }
-        if let Some(ledger) = &self.inventory.ledger {
-            add(ledger
-                .capacity()
-                .checked_mul(std::mem::size_of::<LedgerEntry>())
-                .ok_or(super::large::CapacityExceeded)?)?;
-            for entry in ledger {
-                add(entry.version.capacity())?;
-            }
-        }
-        total
-            .checked_mul(2)
-            .and_then(|n| n.checked_add(8192))
-            .ok_or_else(|| super::large::CapacityExceeded.into())
-    }
-    pub fn validate_profile(&self) -> anyhow::Result<()> {
-        anyhow::ensure!(
-            self.format == FORMAT && self.snapshot_bytes <= MAX_FILE,
-            "unsupported offline evidence profile"
-        );
-        self.validate_metadata()
-    }
     pub fn validate_large_profile(&self) -> anyhow::Result<()> {
         anyhow::ensure!(
             self.format == FORMAT_V2,
@@ -162,7 +79,6 @@ impl Evidence {
         anyhow::ensure!(
             self.scope == "sqlite_database_only"
                 && !self.complete
-                && !self.cutover_ready
                 && self.source_commit.is_none()
                 && self.source_build.is_none()
                 && self.exclusions == EXCLUSIONS
@@ -203,7 +119,7 @@ pub(super) struct Report {
 }
 impl crate::output::CliReport for Report {
     fn render(&self, human: &mut crate::output::human::Human<'_>) -> std::io::Result<()> {
-        human.line("DB-only offline evidence verified; INCOMPLETE for recovery/cutover.")?;
+        human.line("Database snapshot verified; external state requires separate validation.")?;
         human.line(&format!(
             "Tables: {}; rows: {}; typed bytes: {}",
             self.evidence.inventory.tables.len(),
@@ -212,5 +128,18 @@ impl crate::output::CliReport for Report {
         ))?;
         human.line(&format!("Evidence SHA256: {}", self.evidence_digest))?;
         human.line("External OAuth/workspace state is not included or fenced. Not a full backup.")
+    }
+}
+
+impl Inventory {
+    pub(crate) fn archive_marker(&self) -> anyhow::Result<&str> {
+        let Some([entry]) = self.ledger.as_deref() else {
+            anyhow::bail!("unsupported archive schema ledger");
+        };
+        anyhow::ensure!(
+            entry.version == crate::db::store_format::GATEWAY_SQLITE,
+            "unsupported archive schema ledger"
+        );
+        Ok(&entry.version)
     }
 }

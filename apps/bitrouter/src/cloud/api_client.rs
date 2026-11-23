@@ -57,21 +57,6 @@ impl ApiRequest {
         self.body = Some(body.into());
         self
     }
-
-    /// Return the configured HTTP method.
-    pub fn method(&self) -> &Method {
-        &self.method
-    }
-
-    /// Return the relative endpoint supplied by the caller.
-    pub fn endpoint(&self) -> &str {
-        &self.endpoint
-    }
-
-    /// Return the custom request headers.
-    pub fn headers(&self) -> &HeaderMap {
-        &self.headers
-    }
 }
 
 /// A raw HTTP response whose body remains available as a reqwest stream.
@@ -106,12 +91,6 @@ impl ApiResponse {
     /// Return the response headers.
     pub fn headers(&self) -> &HeaderMap {
         self.response.headers()
-    }
-
-    /// Return the final response URL. Redirect following is disabled, so this
-    /// is always the confined request URL.
-    pub fn url(&self) -> &Url {
-        self.response.url()
     }
 
     /// Consume the wrapper and return the streaming reqwest response.
@@ -166,11 +145,6 @@ impl CloudApiClient {
             http,
             manager,
         })
-    }
-
-    /// Return the stored login URL used as the request origin.
-    pub fn base_url(&self) -> &Url {
-        &self.base_url
     }
 
     /// Resolve a relative endpoint against the stored login origin.

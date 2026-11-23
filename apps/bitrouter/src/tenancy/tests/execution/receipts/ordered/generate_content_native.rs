@@ -1,7 +1,7 @@
 //! Actual private ingress, current resource publication and paired mixed sends.
 //! Loopback peers implement the operator contract; this is not a provider-cloud test.
 use super::*;
-use crate::managed_contract::private_adapter::{
+use crate::inference_contract::private_adapter::{
     ATTEMPT_DOMAIN, ATTEMPT_HEADER, Attempt, Disposition, OUTCOME_DOMAIN, OUTCOME_HEADER,
     Outcome as AdapterOutcome,
 };

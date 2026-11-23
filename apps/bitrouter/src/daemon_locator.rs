@@ -100,6 +100,29 @@ pub(crate) fn config_identity_digest(source: &ConfigSource) -> Result<String> {
     Ok(ConfigIdentity::for_source(source)?.digest)
 }
 
+/// Serialize restart operations for the same logical configuration source.
+/// # Errors
+/// Returns an error if the configuration cannot be identified or the lock cannot be acquired.
+pub async fn lock_restart(source: &ConfigSource) -> Result<std::fs::File> {
+    let identity = ConfigIdentity::for_source(source)?;
+    let path = identity
+        .home
+        .join(format!(".bitrouter-restart-{}.lock", identity.digest));
+    tokio::task::spawn_blocking(move || -> Result<std::fs::File> {
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).truncate(false).read(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let file = options.open(path)?;
+        file.lock()?;
+        Ok(file)
+    })
+    .await?
+}
+
 /// A verified running daemon found through its source-specific locator.
 #[derive(Debug, Clone)]
 pub struct LocatedDaemon {
@@ -513,9 +536,6 @@ mod tests {
             pid,
             daemon_version: None,
             artifact: None,
-            handoff_protocol: None,
-            handoff_build_id: None,
-            handoff_activity: None,
             cli_owned: None,
             listen: "127.0.0.1:4356".to_string(),
             models: 0,

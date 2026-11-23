@@ -303,7 +303,7 @@ mod tests {
             .err()
             .ok_or("expected failure")?;
         match err {
-            OAuthError::OAuthError { error, description } => {
+            OAuthError::Rejected { error, description } => {
                 assert_eq!(error, "invalid_grant");
                 assert!(description.is_none());
             }

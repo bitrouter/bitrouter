@@ -158,7 +158,7 @@ impl Fixture {
 /// UT for the exact current shared schema and its read-only ledger validation.
 #[tokio::test]
 #[ignore = "requires PostgreSQL CREATEDB privilege"]
-async fn ut_postgres_shared_schema_accepts_current_fixture() -> Result<()> {
+async fn db_server_postgres_shared_schema_accepts_current_fixture() -> Result<()> {
     let mut database = EmptyDatabase::create().await?;
     let result = tokio::time::timeout(Duration::from_secs(45), async {
         let fixture = Fixture::new(&mut database).await?;
@@ -199,7 +199,7 @@ async fn ut_postgres_shared_schema_accepts_current_fixture() -> Result<()> {
 /// UT for rejection of lost replay uniqueness before Engine::join writes.
 #[tokio::test]
 #[ignore = "requires PostgreSQL CREATEDB privilege"]
-async fn ut_postgres_shared_schema_refuses_corrupt_uniqueness() -> Result<()> {
+async fn db_server_postgres_shared_schema_refuses_corrupt_uniqueness() -> Result<()> {
     let mut database = EmptyDatabase::create().await?;
     let result = tokio::time::timeout(Duration::from_secs(45), async {
         let fixture = Fixture::new(&mut database).await?;
@@ -216,7 +216,7 @@ async fn ut_postgres_shared_schema_refuses_corrupt_uniqueness() -> Result<()> {
 /// UT for rejection of incompatible native continuation column types and nullability.
 #[tokio::test]
 #[ignore = "requires PostgreSQL CREATEDB privilege"]
-async fn ut_postgres_shared_schema_refuses_native_continuation_columns() -> Result<()> {
+async fn db_server_postgres_shared_schema_refuses_native_continuation_columns() -> Result<()> {
     let mut database = EmptyDatabase::create().await?;
     let result = tokio::time::timeout(Duration::from_secs(45), async {
         let fixture = Fixture::new(&mut database).await?;
@@ -235,7 +235,7 @@ async fn ut_postgres_shared_schema_refuses_native_continuation_columns() -> Resu
 /// UT for rejection of row filters, rewrite triggers, changed checks and index semantics.
 #[tokio::test]
 #[ignore = "requires PostgreSQL CREATEDB privilege"]
-async fn ut_postgres_shared_schema_refuses_filters_constraints_and_indexes() -> Result<()> {
+async fn db_server_postgres_shared_schema_refuses_filters_constraints_and_indexes() -> Result<()> {
     let mut database = EmptyDatabase::create().await?;
     let result = tokio::time::timeout(Duration::from_secs(60), async {
         let fixture = Fixture::new(&mut database).await?;
@@ -260,7 +260,7 @@ async fn ut_postgres_shared_schema_refuses_filters_constraints_and_indexes() -> 
 /// UT for initialization and restart of the composed ordinary/shared baseline.
 #[tokio::test]
 #[ignore = "requires PostgreSQL CREATEDB privilege"]
-async fn ut_postgres_shared_schema_composition_restarts_ordinary_baseline() -> Result<()> {
+async fn db_server_postgres_shared_schema_composition_restarts_ordinary_baseline() -> Result<()> {
     let mut database = EmptyDatabase::create().await?;
     let result = tokio::time::timeout(Duration::from_secs(60), async {
         let fixture = Fixture::new_composed(&mut database).await?;
@@ -291,7 +291,7 @@ async fn ut_postgres_shared_schema_composition_restarts_ordinary_baseline() -> R
 /// UT for exact composition exclusions, including unreviewed prefixed sequences.
 #[tokio::test]
 #[ignore = "requires PostgreSQL CREATEDB privilege"]
-async fn ut_postgres_shared_schema_composition_refuses_foreign_objects() -> Result<()> {
+async fn db_server_postgres_shared_schema_composition_refuses_foreign_objects() -> Result<()> {
     let mut database = EmptyDatabase::create().await?;
     let result = tokio::time::timeout(Duration::from_secs(60), async {
         let fixture = Fixture::new_composed(&mut database).await?;
@@ -318,7 +318,8 @@ async fn ut_postgres_shared_schema_composition_refuses_foreign_objects() -> Resu
 /// UT for ordinary baseline refusal of mutated shared uniqueness and native storage.
 #[tokio::test]
 #[ignore = "requires PostgreSQL CREATEDB privilege"]
-async fn ut_postgres_shared_schema_composition_refuses_mutated_shared_layout() -> Result<()> {
+async fn db_server_postgres_shared_schema_composition_refuses_mutated_shared_layout() -> Result<()>
+{
     let mut database = EmptyDatabase::create().await?;
     let result = tokio::time::timeout(Duration::from_secs(60), async {
         let fixture = Fixture::new_composed(&mut database).await?;
@@ -338,5 +339,43 @@ async fn ut_postgres_shared_schema_composition_refuses_mutated_shared_layout() -
         }
         Ok(())
     }).await.context("mutated shared composition refusal deadline exceeded").and_then(|result| result);
+    database.finish(result).await
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL CREATEDB privilege"]
+async fn ut_postgres_shared_refuses_mixed_ordinary_role_before_registration() -> Result<()> {
+    use sea_orm_migration::MigratorTrait;
+    let mut database = EmptyDatabase::create().await?;
+    let result = async {
+        let timeout = Duration::from_secs(5);
+        let db = database.connect(2, timeout).await?;
+        crate::db::migration::Migrator::install(&db).await?;
+        db.execute_unprepared(
+            "INSERT INTO seaql_migrations VALUES ('m20240101_000001_unrecognized_store',1)",
+        )
+        .await?;
+        schema::SharedMigrator::up(&db, None).await?;
+        let authority = Authority::new(
+            Store::new(db, "mixed", timeout)?,
+            DeploymentKey::from_bytes(rand::random())?,
+        );
+        authority.initialize().await?;
+        let fixture = Fixture { authority };
+        let before = fixture.composed_snapshot().await?;
+        let err = Engine::join(fixture.authority.clone(), 30_000)
+            .await
+            .err()
+            .context("mixed store joined")?;
+        ensure!(format!("{err:#}").contains("new empty database"), "{err:#}");
+        let err = schema::initialize_all(fixture.authority.store())
+            .await
+            .err()
+            .context("mixed store bootstrapped")?;
+        ensure!(format!("{err:#}").contains("new empty database"), "{err:#}");
+        ensure!(fixture.composed_snapshot().await? == before);
+        Ok(())
+    }
+    .await;
     database.finish(result).await
 }

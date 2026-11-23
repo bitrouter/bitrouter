@@ -5,16 +5,15 @@
 
 use crate::gateway::error::BitrouterError;
 use anyhow::Result;
-use bitrouter_ai::control::action::Action;
+use bitrouter_ai::control::MIN_TOKEN_BYTES;
 use bitrouter_ai::control::administration::{
     AgentsReport, ObserveReport, PolicyInput, PolicyReport, ProvidersReport,
 };
 use bitrouter_ai::control::models::ModelsReport;
-use bitrouter_ai::control::reload::{OperationReport, ReloadInput, ReloadState};
+use bitrouter_ai::control::reload::OperationReport;
 use bitrouter_ai::control::requests::{RequestFilters, RequestsReport};
 use bitrouter_ai::control::route::{RouteInput, RouteReport};
 use bitrouter_ai::control::status::StatusReport;
-use bitrouter_ai::control::{CapabilitiesReport, MIN_TOKEN_BYTES, StateReport};
 use bitrouter_sdk::control::{ControlClient, ControlOptions};
 use bitrouter_sdk::error::Error as ClientError;
 
@@ -49,34 +48,6 @@ impl HttpControlClient {
         let client = ControlClient::with_options(&endpoint, &token, options)
             .map_err(|error| map_error(error, &endpoint))?;
         Ok(Self { endpoint, client })
-    }
-
-    pub async fn capabilities(&self) -> Result<CapabilitiesReport> {
-        self.client
-            .capabilities()
-            .await
-            .map_err(|error| map_error(error, &self.endpoint))
-    }
-
-    pub async fn state_report(&self) -> Result<StateReport> {
-        self.client
-            .state_report()
-            .await
-            .map_err(|error| map_error(error, &self.endpoint))
-    }
-
-    pub async fn state(&self) -> Result<ReloadState> {
-        self.client
-            .state()
-            .await
-            .map_err(|error| map_error(error, &self.endpoint))
-    }
-
-    pub async fn submit_reload(&self, input: &ReloadInput) -> Result<OperationReport> {
-        self.client
-            .submit_reload(input)
-            .await
-            .map_err(|error| map_error(error, &self.endpoint))
     }
 
     pub async fn operation(&self, request_id: &str, instance: &str) -> Result<OperationReport> {
@@ -142,25 +113,9 @@ impl HttpControlClient {
             .map_err(|error| map_error(error, &self.endpoint))
     }
 
-    pub async fn requests(&self, limit: Option<u64>) -> Result<RequestsReport> {
-        self.client
-            .requests(limit)
-            .await
-            .map_err(|error| map_error(error, &self.endpoint))
-    }
-
     pub async fn requests_filtered(&self, filters: &RequestFilters) -> Result<RequestsReport> {
         self.client
             .requests_filtered(filters)
-            .await
-            .map_err(|error| map_error(error, &self.endpoint))
-    }
-
-    pub async fn can_action(&self, action: &str) -> Result<bool> {
-        let action = Action::from_id(action)
-            .ok_or_else(|| BitrouterError::bad_request("unknown control action"))?;
-        self.client
-            .can_action(action)
             .await
             .map_err(|error| map_error(error, &self.endpoint))
     }

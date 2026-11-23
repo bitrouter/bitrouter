@@ -14,12 +14,12 @@ use thiserror::Error;
 ///
 /// Variants 1:1 with the server's wire error codes, plus the local
 /// failure modes (no credentials, network, JSON decode). The CLI maps
-/// each onto a user-facing message; [`Error::missing_scope`] gives the
-/// scope-suggestion path a structured hook to react to a 403.
+/// each onto a user-facing message; [`Error::Forbidden`] retains the
+/// missing scope for the CLI's re-login guidance.
 #[derive(Debug, Error)]
 pub enum Error {
     /// No credentials on disk — the user has not yet run
-    /// `bro cloud login`.
+    /// `bitrouter cloud login`.
     #[error(
         "not signed in — run `{} cloud login` first",
         crate::commands::invocation::name()
@@ -29,7 +29,7 @@ pub enum Error {
     /// The stored credential carries no namespace, but the requested
     /// operation is namespace-scoped. The CLI's device-flow tokens are
     /// always namespace-baked, so in practice this means the credential
-    /// file predates namespace-scoping — re-running `bro cloud
+    /// file predates namespace-scoping — re-running `bitrouter cloud
     /// login` mints a namespace-bound token.
     #[error(
         "credential is not scoped to a namespace — run `{} cloud login` to get a \
@@ -40,7 +40,7 @@ pub enum Error {
 
     /// OAuth token resolution or refresh failed (e.g. refresh token
     /// expired, AS metadata unreachable). The user should re-run
-    /// `bro cloud login`.
+    /// `bitrouter cloud login`.
     #[error("failed to resolve a BitRouter Cloud access token: {0:#}")]
     Auth(#[source] anyhow::Error),
 
@@ -111,18 +111,6 @@ pub enum Error {
     Decode(#[from] serde_json::Error),
 }
 
-impl Error {
-    /// When this is a 403 carrying a `missing required scope: <name>`
-    /// description, return the scope name. Used by the CLI to print
-    /// the `bro cloud login --scope …` hint.
-    pub fn missing_scope(&self) -> Option<&str> {
-        match self {
-            Error::Forbidden { missing_scope, .. } => missing_scope.as_deref(),
-            _ => None,
-        }
-    }
-}
-
 /// Server-side error envelope returned by management endpoints.
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct ErrorBody {
@@ -183,8 +171,9 @@ mod tests {
             error_description: "missing required scope: keys:write".into(),
         };
         let err = body.into_error(403);
-        assert_eq!(err.missing_scope(), Some("keys:write"));
-        assert!(matches!(err, Error::Forbidden { .. }));
+        assert!(
+            matches!(err, Error::Forbidden { missing_scope: Some(scope), .. } if scope == "keys:write")
+        );
     }
 
     #[test]
@@ -211,6 +200,12 @@ mod tests {
             error_description: "calling principal has no account_id".into(),
         };
         let err = body.into_error(403);
-        assert_eq!(err.missing_scope(), None);
+        assert!(matches!(
+            err,
+            Error::Forbidden {
+                missing_scope: None,
+                ..
+            }
+        ));
     }
 }

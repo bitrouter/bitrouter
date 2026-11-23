@@ -3,7 +3,8 @@ use futures::FutureExt;
 mod database;
 #[tokio::test]
 #[ignore = "requires BITROUTER_TEST_DATABASE_URL and narrow bitrouter_eval_ CREATE/DROP grant"]
-async fn owned_oauth_slot_and_auxiliary_receipt_real_commit_rollback_reconnect() -> Result<()> {
+async fn db_server_both_owned_oauth_slot_and_auxiliary_receipt_real_commit_rollback_reconnect()
+-> Result<()> {
     let mut fixture = database::Fixture::create().await?;
     let result = tokio::time::timeout(
         Duration::from_secs(90),

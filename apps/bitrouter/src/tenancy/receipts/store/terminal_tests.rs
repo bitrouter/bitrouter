@@ -297,7 +297,7 @@ async fn final_proof_rejects_sidecar_and_index_corruption_before_projection() ->
 }
 
 #[tokio::test]
-async fn final_proof_checks_absence_when_no_sidecar_was_intended() -> Result<()> {
+async fn final_proof_requires_usage_and_rejects_unintended_auxiliary() -> Result<()> {
     for auxiliary in [false, true] {
         let db = open().await?;
         let expected = tests::candidate("installation", "tenant", "execution", "creator")?;
@@ -305,15 +305,31 @@ async fn final_proof_checks_absence_when_no_sidecar_was_intended() -> Result<()>
         let result: Result<()> = async {
             let staged = stage_terminal(&tx, &expected).await?;
             ensure!(staged.inserted());
+            same_completion(&saved(&tx, &expected).await?, &expected)?;
             if auxiliary {
                 let row = pending(&expected, "refresh")?;
                 let extra = tests::candidate("installation", "tenant", "execution", "creator")?
                     .with_auxiliary(vec![fact(&row, auxiliary::Outcome::Unknown)?])?;
                 auxiliary_store::insert(&tx, &extra).await?;
             } else {
-                usage_evidence::storage::insert_fresh(&tx, &value()?).await?;
+                ensure!(
+                    tx.execute_unprepared("DELETE FROM tenancy_usage_evidence")
+                        .await?
+                        .rows_affected()
+                        == 1
+                );
             }
-            ensure!(staged.reconcile(FREE).await.is_err());
+            let error = staged
+                .reconcile(FREE)
+                .await
+                .err()
+                .context("final proof accepted invalid sidecar state")?;
+            let expected_error = if auxiliary {
+                "unexpected auxiliary receipt evidence"
+            } else {
+                "missing usage evidence"
+            };
+            ensure!(error.to_string() == expected_error, "{error:#}");
             ensure!(count(&tx, "tenancy_unknown_obligations").await? == 0);
             Ok(())
         }
@@ -423,13 +439,24 @@ async fn fresh_terminal_preserves_old_schedule_and_refuses_immutable_source_loss
     tx.commit().await?;
     let known = value()?;
     let tx = db.begin().await?;
-    tx.execute_unprepared("DELETE FROM tenancy_execution_receipts")
-        .await?;
+    for table in ["tenancy_usage_evidence", "tenancy_execution_receipts"] {
+        ensure!(
+            tx.execute_unprepared(&format!("DELETE FROM {table}"))
+                .await?
+                .rows_affected()
+                == 1
+        );
+    }
     let staged = stage_terminal(&tx, &known).await?;
     ensure!(staged.inserted());
-    let refused = staged.reconcile(FREE).await.is_err();
+    same_completion(&saved(&tx, &known).await?, &known)?;
+    let refused = staged.reconcile(FREE).await.err();
     tx.rollback().await?;
-    ensure!(refused, "fresh INSERT cleared an immutable old source");
+    let error = refused.context("fresh INSERT cleared an immutable old source")?;
+    ensure!(
+        error.to_string() == "immutable unknown source disappeared",
+        "{error:#}"
+    );
     ensure!(
         obligations::lookup(&db, &unknown.receipt.installation_id, &key(&unknown), FREE).await?
             == Some(after)
@@ -691,7 +718,15 @@ async fn charged_receipt_scalar_distinguishes_absence_invalid_storage_and_bounda
             let reader = Transfer::new(&tx, None);
             let loaded = charged(&reader, &value, FREE).await;
             let seen = reader.counts()?;
-            ensure!(seen[0].0 == body_queries && seen[1] == (0, 0));
+            let expected_usage = if mutation.is_none() {
+                (1, value.usage_evidence.json.len())
+            } else {
+                (0, 0)
+            };
+            ensure!(
+                seen[0].0 == body_queries && seen[1] == expected_usage,
+                "unexpected receipt or evidence transfer: {seen:?}"
+            );
             if mutation.is_none() {
                 same_completion(&loaded?.context("boundary candidate missing")?, &value)?;
                 ensure!(seen[0].1 == value.json.len());
@@ -725,14 +760,10 @@ async fn charged_receipt_scalar_distinguishes_absence_invalid_storage_and_bounda
 #[tokio::test]
 async fn charged_usage_metadata_covers_presence_and_corruption_before_body() -> Result<()> {
     let db = open().await?;
-    let mut cases = vec![
-        (false, false, None),
-        (false, true, None),
-        (true, false, None),
-        (true, true, None),
-    ];
+    let mut cases = vec![None];
     cases.extend(
         [
+            "DELETE FROM tenancy_usage_evidence",
             "UPDATE tenancy_usage_evidence SET evidence_json=CAST(evidence_json AS BLOB)",
             "UPDATE tenancy_usage_evidence SET receipt_digest=printf('%064d',0)",
             "UPDATE tenancy_usage_evidence SET evidence_digest=printf('%064d',0)",
@@ -743,19 +774,13 @@ async fn charged_usage_metadata_covers_presence_and_corruption_before_body() -> 
             "UPDATE tenancy_usage_evidence SET byte_count=CAST(byte_count AS BLOB)",
             "duplicate",
         ]
-        .map(|sql| (true, true, Some(sql))),
+        .map(Some),
     );
-    for (expected, actual, mutation) in cases {
-        let value = if expected {
-            value()?
-        } else {
-            tests::candidate("installation", "tenant", "execution", "creator")?
-        };
+    for mutation in cases {
+        let value = value()?;
         let tx = db.begin().await?;
         let result: Result<()> = async {
             ensure!(insert(&tx, &value).await?);
-            if expected && !actual { tx.execute_unprepared("DELETE FROM tenancy_usage_evidence").await?; }
-            if !expected && actual { usage_evidence::storage::insert_fresh(&tx, &self::value()?).await?; }
             if matches!(mutation, Some("duplicate" | "UPDATE tenancy_usage_evidence SET storage_kind=0.5")) {
                 // One real row without the marker CHECK, so the type case reaches
                 // the reader. Only duplication adds a second row; rollback removes the relation.
@@ -772,10 +797,9 @@ async fn charged_usage_metadata_covers_presence_and_corruption_before_body() -> 
             let loaded = charged(&reader, &value, FREE).await;
             let seen = reader.counts()?;
             ensure!(seen[0] == (1, value.json.len()));
-            if expected == actual && mutation.is_none() {
+            if mutation.is_none() {
                 same_completion(&loaded?.context("valid usage candidate missing")?, &value)?;
-                let bytes = value.usage_evidence.as_ref().map_or(0, |e| e.json.len());
-                ensure!(seen[1] == (usize::from(actual), bytes));
+                ensure!(seen[1] == (1, value.usage_evidence.json.len()));
             } else {
                 let error = loaded.err().context("invalid usage metadata accepted")?;
                 ensure!(seen[1] == (0, 0), "metadata refusal transferred a usage body");
@@ -841,15 +865,7 @@ async fn charged_body_rechecks_between_scalar_and_payload_reads() -> Result<()> 
             let index = usize::from(usage);
             ensure!(seen[index].0 == 1, "body guard was not exercised");
             if body_survives {
-                ensure!(
-                    seen[index].1
-                        == value
-                            .usage_evidence
-                            .as_ref()
-                            .context("captured usage")?
-                            .json
-                            .len()
-                );
+                ensure!(seen[index].1 == value.usage_evidence.json.len());
             } else {
                 ensure!(
                     seen[index].1 == 0,
@@ -875,123 +891,109 @@ async fn charged_lookup_preserves_logical_callbacks_and_refusal() -> Result<()> 
     use crate::storage::operation_budget::Error;
     use bitrouter_ai::tenancy::operation::ErrorCode;
     let db = open().await?;
-    for captured in [false, true] {
-        let value = if captured {
-            value()?
-        } else {
-            tests::candidate("installation", "tenant", "execution", "creator")?
-        };
-        let r = &value.receipt;
-        let bytes = value.json.len()
-            + value.private_json.len()
-            + 256
-            + [
-                r.installation_id.as_str(),
-                r.tenant_id.as_str(),
-                r.execution_id.as_str(),
-                r.principal_id.as_str(),
-                r.correlation_id.as_str(),
-                value.digest.as_str(),
-                r.recorded_at.as_str(),
-            ]
-            .iter()
-            .map(|s| s.len())
-            .sum::<usize>();
-        let mut expected = vec![
-            (0, 0),
-            (1, 256),
-            (1, bytes * 3),
-            (0, 0),
-            (1, 1024),
-            (2, 2048),
-            (0, 0),
-            (2, 1024),
-            (0, 0),
-        ];
-        if let Some(e) = &value.usage_evidence {
-            expected.extend([(2, (e.json.len() + 128) * 3 + 4096), (0, 0)]);
-        }
-        expected.push((0, 0));
-        for refuse in std::iter::once(None).chain((0..expected.len()).map(Some)) {
-            let tx = db.begin().await?;
-            let result: Result<()> = async {
-                ensure!(insert(&tx, &value).await?);
-                let calls = Mutex::new(Vec::new());
-                let reader = Transfer::new(&tx, None);
-                let loaded = charged(&reader, &value, &|rows, bytes| {
-                    let mut seen = calls
-                        .lock()
-                        .map_err(|_| anyhow::anyhow!("callback trace poisoned"))?;
-                    let index = seen.len();
-                    seen.push((rows, bytes));
-                    if refuse == Some(index) {
-                        return Err(if rows == 0 {
-                            Error::Rejected(ErrorCode::AuthorityUnavailable)
-                        } else {
-                            Error::Capacity
-                        }
-                        .into());
-                    }
-                    Ok(())
-                })
-                .await;
-                let seen = calls
-                    .into_inner()
+    let value = value()?;
+    let r = &value.receipt;
+    let bytes = value.json.len()
+        + value.private_json.len()
+        + 256
+        + [
+            r.installation_id.as_str(),
+            r.tenant_id.as_str(),
+            r.execution_id.as_str(),
+            r.principal_id.as_str(),
+            r.correlation_id.as_str(),
+            value.digest.as_str(),
+            r.recorded_at.as_str(),
+        ]
+        .iter()
+        .map(|s| s.len())
+        .sum::<usize>();
+    let expected = [
+        (0, 0),
+        (1, 256),
+        (1, bytes * 3),
+        (0, 0),
+        (1, 1024),
+        (2, 2048),
+        (0, 0),
+        (2, 1024),
+        (0, 0),
+        (2, (value.usage_evidence.json.len() + 128) * 3 + 4096),
+        (0, 0),
+        (0, 0),
+    ];
+    for refuse in std::iter::once(None).chain((0..expected.len()).map(Some)) {
+        let tx = db.begin().await?;
+        let result: Result<()> = async {
+            ensure!(insert(&tx, &value).await?);
+            let calls = Mutex::new(Vec::new());
+            let reader = Transfer::new(&tx, None);
+            let loaded = charged(&reader, &value, &|rows, bytes| {
+                let mut seen = calls
+                    .lock()
                     .map_err(|_| anyhow::anyhow!("callback trace poisoned"))?;
-                ensure!(
-                    seen == expected[..refuse.map_or(expected.len(), |index| index + 1)],
-                    "callback schedule: {seen:?}, expected {expected:?}"
-                );
-                match refuse {
-                    None => {
-                        same_completion(&loaded?.context("valid charged lookup missing")?, &value)?
+                let index = seen.len();
+                seen.push((rows, bytes));
+                if refuse == Some(index) {
+                    return Err(if rows == 0 {
+                        Error::Rejected(ErrorCode::AuthorityUnavailable)
+                    } else {
+                        Error::Capacity
                     }
-                    Some(index) => {
-                        let error = loaded.err().context("failed logical callback accepted")?;
-                        match (expected[index].0, error.downcast_ref::<Error>()) {
-                            (0, Some(Error::Rejected(ErrorCode::AuthorityUnavailable))) => {}
-                            (rows, Some(Error::Capacity)) if rows > 0 => {}
-                            _ => anyhow::bail!("callback failure changed cause"),
-                        }
+                    .into());
+                }
+                Ok(())
+            })
+            .await;
+            let seen = calls
+                .into_inner()
+                .map_err(|_| anyhow::anyhow!("callback trace poisoned"))?;
+            ensure!(
+                seen == expected[..refuse.map_or(expected.len(), |index| index + 1)],
+                "callback schedule: {seen:?}, expected {expected:?}"
+            );
+            match refuse {
+                None => same_completion(&loaded?.context("valid charged lookup missing")?, &value)?,
+                Some(index) => {
+                    let error = loaded.err().context("failed logical callback accepted")?;
+                    match (expected[index].0, error.downcast_ref::<Error>()) {
+                        (0, Some(Error::Rejected(ErrorCode::AuthorityUnavailable))) => {}
+                        (rows, Some(Error::Capacity)) if rows > 0 => {}
+                        _ => anyhow::bail!("callback failure changed cause"),
                     }
                 }
-                let body = reader.counts()?;
-                // Allocation debits 2 and 9 precede the body SELECTs. Checkpoints
-                // 3 and 10 follow them: refusal there preserves transferred bytes.
-                let receipt_read = refuse.is_none_or(|index| index >= 3);
-                let usage_read = captured && refuse.is_none_or(|index| index >= 10);
-                ensure!(
-                    body[0]
-                        == (
-                            usize::from(receipt_read),
-                            if receipt_read { value.json.len() } else { 0 }
-                        ),
-                    "receipt transfer at refusal {refuse:?}: {body:?}"
-                );
-                ensure!(
-                    body[1]
-                        == (
-                            usize::from(usage_read),
-                            if usage_read {
-                                value
-                                    .usage_evidence
-                                    .as_ref()
-                                    .context("usage trace")?
-                                    .json
-                                    .len()
-                            } else {
-                                0
-                            }
-                        ),
-                    "usage transfer at refusal {refuse:?}: {body:?}"
-                );
-                Ok(())
             }
-            .await;
-            tx.rollback().await?;
-            result?;
-            empty(&db).await?;
+            let body = reader.counts()?;
+            // Allocation debits 2 and 9 precede the body SELECTs. Checkpoints
+            // 3 and 10 follow them: refusal there preserves transferred bytes.
+            let receipt_read = refuse.is_none_or(|index| index >= 3);
+            let usage_read = refuse.is_none_or(|index| index >= 10);
+            ensure!(
+                body[0]
+                    == (
+                        usize::from(receipt_read),
+                        if receipt_read { value.json.len() } else { 0 }
+                    ),
+                "receipt transfer at refusal {refuse:?}: {body:?}"
+            );
+            ensure!(
+                body[1]
+                    == (
+                        usize::from(usage_read),
+                        if usage_read {
+                            value.usage_evidence.json.len()
+                        } else {
+                            0
+                        }
+                    ),
+                "usage transfer at refusal {refuse:?}: {body:?}"
+            );
+            Ok(())
         }
+        .await;
+        tx.rollback().await?;
+        result?;
+        empty(&db).await?;
     }
     db.close().await?;
     Ok(())

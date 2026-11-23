@@ -161,9 +161,7 @@ impl RetainedRoute {
         let Some(attachments) = &self.data.admission else {
             return Ok(None);
         };
-        let RouteSelection::Wire(inbound) = &self.selection else {
-            return Err(ErrorCode::CapabilityMismatch);
-        };
+        let RouteSelection::Wire(inbound) = &self.selection;
         let protocol = generation_protocol(inbound).map_err(|_| ErrorCode::CapabilityMismatch)?;
         attachments
             .iter()
@@ -173,12 +171,7 @@ impl RetainedRoute {
     }
 
     fn ordered_root(&self) -> std::result::Result<&Chain, ErrorCode> {
-        if self.ordered.is_some()
-            || self.data.policy.is_some()
-            || self.data.assessment.is_some()
-            || self.data.block.is_some()
-            || self.data.choice.is_some()
-        {
+        if self.ordered.is_some() || self.data.policy.is_some() {
             return Err(ErrorCode::CapabilityMismatch);
         }
         if [
@@ -197,9 +190,7 @@ impl RetainedRoute {
         }) {
             return Err(ErrorCode::CapabilityMismatch);
         }
-        let RouteSelection::Wire(inbound) = &self.selection else {
-            return Err(ErrorCode::CapabilityMismatch);
-        };
+        let RouteSelection::Wire(inbound) = &self.selection;
         let root = self
             .data
             .chains

@@ -7,9 +7,6 @@ use super::*;
 
 mod bounds;
 mod checkpoint;
-mod core_choice;
-#[cfg(unix)]
-mod cutover;
 mod execution;
 mod format;
 mod native_generate_content;

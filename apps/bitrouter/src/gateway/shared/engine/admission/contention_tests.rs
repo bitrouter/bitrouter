@@ -37,13 +37,13 @@ pub(super) async fn before_owner() -> Result<()> {
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL CREATEDB privilege"]
-async fn postgres_admission_survives_heartbeat_single_owner() -> Result<()> {
+async fn db_server_postgres_admission_survives_heartbeat_single_owner() -> Result<()> {
     exercise(1).await
 }
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL CREATEDB privilege"]
-async fn postgres_admission_survives_heartbeat_two_owners() -> Result<()> {
+async fn db_server_postgres_admission_survives_heartbeat_two_owners() -> Result<()> {
     exercise(2).await
 }
 

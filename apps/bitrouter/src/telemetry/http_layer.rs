@@ -27,9 +27,8 @@
 //!   `Context::current()`. This survives suspension points: the context is
 //!   re-attached on every poll of the wrapped future.
 //!
-//! `bitrouter::observe::http` is still emitted on, and is still a pinned
-//! `RUST_LOG` selector, but what it now carries is **diagnostics only** —
-//! DEBUG events. Suppressing it no longer affects span export. See
+//! `bitrouter::observe::http` is a pinned `RUST_LOG` selector for diagnostic
+//! DEBUG events. Filtering these events does not affect span export. See
 //! `docs/CLI.md`.
 //!
 //! Specs:
