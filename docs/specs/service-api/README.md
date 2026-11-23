@@ -641,6 +641,95 @@ requests to the installation and check returned operation/resource identities
 before accepting success. Capability and status installation IDs MUST match the
 requested installation; an `OperationResult` does not add an installation field.
 
+### File-configured catalog and request-local composition
+
+The operator declares upstreams in ordinary `providers`, `models` and `routers`
+configuration and exposes selected roots with `tenancy.catalog`. This is one
+process-wide compiled catalog, not a per-tenant configuration copy. Public
+management APIs cannot create or revise its credentials, profiles or routes.
+The file pool is reserved before startup import, and a retained DB resource in
+that exact operator-pool namespace refuses startup without shadowing it. Generic
+resource APIs retain their existing behavior outside that pool. File delivery
+and process startup own changes; neither endpoint below publishes
+configuration or advances a management operation journal.
+
+| Method | Path under `/control/v1` | Contract |
+| --- | --- | --- |
+| GET | `/tenants/{tenant_id}/catalog/routes/{route_id}/candidates?inbound_protocol={protocol}` | `CatalogCandidatesV1` |
+| POST | `/tenants/{tenant_id}/catalog/selections` | `CatalogSelectionRequestV1` → `CatalogSelectionV1` |
+
+Both require normal authenticated tenancy transport, exactly one
+`Bitrouter-Installation-Id` header and no-store responses, including preparation
+POSTs. The installation must match the actual service. Reads require current tenant/resource read authority;
+preparation also checks the selected dependency closure. Descriptors and
+successful preparation grant no execution or credential-use authority. Actual
+dispatch rechecks current grants, revocation and the configured platform
+credential/target/profile membership at each send.
+
+The closed [catalog DTOs](../../../crates/bitrouter-ai/src/tenancy/catalog.rs)
+define required fields and nullable values. A descriptor wraps the unchanged
+`CandidateManifest` with `schema_version: 1`, explicit ordinal `sources`, and
+configured `templates`. Every source records `candidate_index`, `source_id`,
+configured `provider`, required-nullable `account`, actual upstream `model`,
+and actual `outbound_protocol`. Clients MUST use these associations rather than
+infer commercial identity from opaque manifest IDs, ordinals, or a null account.
+Templates include an opaque `template_id`, the same source identity,
+required-nullable platform `credential_ref`, and exact `platform_profile` and
+`byok_profile` references. A no-key provider remains a BYOK template; it is
+omitted from the platform manifest and cannot be selected as platform-funded.
+
+Preparation accepts exactly `schema_version: 1`, `catalog_revision` (the
+readback manifest's `execution_revision`), `route_id`, `inbound_protocol`, and
+`candidates`. Each candidate contains `template_id`, required-nullable
+`credential_ref`, and optional `route_ref`: null credential selects that
+template's available platform slot; an exact tenant-owned credential reference
+selects BYOK. A BYOK-only `route_ref` can select an existing immutable tenant
+route's approved custom base, with current route/dependency grants and the same
+exact credential and otherwise matching configured target. Endpoints and secret
+values are never accepted in these instructions. Unsupported or out-of-root
+templates, wrong-tenant dependencies, duplicate template/credential/route triples
+and stale catalog identity fail. The same template may appear with distinct funding
+credentials, preserving one final order across platform and BYOK fallback.
+
+The response echoes `selection` and returns `candidates`, the final manifest
+and source mapping. Its derived route/execution revision binds the exact closed
+instructions. Dispatch MUST bind that prepared manifest in ordinary ordered v2
+mode and send those same instructions as the top-level reserved JSON member
+`bitrouter_catalog_selection`. The selection has 1–64 entries, additionally
+bounded by the host's `ordered_attempt_limit`, and at most 65,536 serialized
+UTF-8 bytes. Its original body representation must also fit that byte bound.
+The existing small `Bitrouter-Candidate-Selection` header remains required;
+it selects all prepared ordinals in order, with `admission_mode: "profiled"`.
+It does not carry the catalog instructions.
+
+The reserved member is supported only in ordered v2 protocol bodies, including
+the outer private Generate Content envelope. Duplicate, malformed, unknown-field,
+oversized or mismatched instructions fail before provider work. Core removes
+the member before protocol/provider decoding. SDK clients use
+`TenancyClient::catalog_candidates`, `prepare_catalog_selection`, and
+`OrderedTenantGateway::with_catalog_selection`; the attachment never changes
+shared client defaults. Requests without catalog instructions retain their
+existing strict behavior.
+
+Composition makes an immutable request-owned execution view with one fallback
+owner, execution receipt and usage-evidence chain. Platform entries use their
+mandatory file profile; BYOK entries use the template's neutral `byok_profile`,
+which may observe the provider rate window without charging it or enforcing
+platform health. No active tenant configuration or platform resource revision
+is written. There is no persisted historical catalog graph for reconstruction:
+current-format receipts/evidence remain self-contained, while a changed file
+snapshot does not authorize a fresh send through an old catalog binding. Earlier
+datasets follow the existing migration and rollback contract; catalog exposure
+does not make an incompatible dataset readable or executable.
+
+Configured roots with nonempty file generation defaults expose only the three
+canonical protocols: Chat Completions, Messages and Responses. Their typed
+defaults fill omitted values; explicit caller values win. Such roots have no
+configured Generate Content descriptor, rather than silently losing defaults
+or refusing unrelated application startup. Explicit request-envelope defaults
+on otherwise eligible native roots remain supported. This restriction applies
+to tenancy catalog exposure and does not change the ordinary OSS gateway.
+
 ### Ordered static dispatch
 
 Ordered dispatch is an explicit mode on the existing `/v1/chat/completions`,

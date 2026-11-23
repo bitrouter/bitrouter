@@ -168,6 +168,13 @@ providers:
 
 `api_protocol` accepts an ordered glob-prefix pattern map: `[{ "claude-*": messages }, { "gpt-5.5-codex": responses }, { "*": chat_completions }]` is valid and matches most-specific-first.
 
+For Messages-compatible endpoints, `providers.<id>.auth_scheme` accepts
+`x-api-key` or `bearer`. An omitted/null value inherits an explicit parent value
+through `derives`; otherwise Messages uses `x-api-key`. A child override wins,
+and both default and named account slots use that scheme. It selects one
+credential header, not both. Other protocol transports retain their own auth
+behavior; do not infer their wire headers from this setting.
+
 ## Multi-account (failover or balance)
 
 When you hold two subscriptions to the same upstream, expand the provider into accounts:

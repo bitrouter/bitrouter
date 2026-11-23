@@ -4,6 +4,7 @@ mod actor;
 mod admission;
 mod authority;
 mod cache;
+mod catalog;
 mod command;
 mod configuration;
 mod configuration_store;
@@ -137,6 +138,21 @@ pub(crate) struct Service {
 }
 
 impl Service {
+    pub(crate) async fn configure_catalog(
+        &self,
+        config: &crate::config::Config,
+    ) -> anyhow::Result<()> {
+        if let Some(catalog) = &config.tenancy.catalog {
+            let _read = self
+                .read_permit()
+                .map_err(|_| anyhow::anyhow!("catalog startup read unavailable"))?;
+            self.resources
+                .require_unclaimed_pool(&self.db, &catalog.pool_id)
+                .await?;
+        }
+        self.resources.configure(config)
+    }
+
     pub(crate) fn storage_budget(&self) -> storage::Budget {
         storage::Budget::new(self.admission.clone(), self.cleanup.clone())
     }

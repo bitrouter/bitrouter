@@ -76,6 +76,7 @@ pub(super) fn identifiers(value: &mut RetainedExecutionRevision) -> Result<()> {
 pub(super) fn route_data(value: &mut RouteData) -> Result<()> {
     let RouteData {
         reference: root,
+        authority_root,
         admission,
 
         dependencies,
@@ -86,6 +87,9 @@ pub(super) fn route_data(value: &mut RouteData) -> Result<()> {
         candidates,
     } = value;
     reference(root)?;
+    if let Some(value) = authority_root {
+        reference(value)?;
+    }
     if let Some(attachments) = admission {
         for attachment in attachments {
             reference(&mut attachment.credential)?;

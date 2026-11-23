@@ -131,6 +131,14 @@ pub(crate) fn router(service: Service, operators: ControlAuth) -> Router {
         .route("/control/v1/tenancy/capabilities", get(capabilities))
         .route("/control/v1/tenancy/directory", get(super::directory::http))
         .route(
+            "/control/v1/tenants/{tenant_id}/catalog/routes/{route_id}/candidates",
+            get(super::catalog::candidates),
+        )
+        .route(
+            "/control/v1/tenants/{tenant_id}/catalog/selections",
+            post(super::catalog::prepare),
+        )
+        .route(
             "/control/v1/tenancy/ordered/capabilities",
             get(super::ordered::capabilities),
         )
@@ -306,7 +314,10 @@ async fn authenticate(State(state): State<AuthState>, request: Request, next: Ne
         }
         let caller = caller(&state, &parts.headers).await?;
         let installation = one_header(&parts.headers, "bitrouter-installation-id")?;
-        if parts.method == Method::GET
+        let catalog_read = parts.uri.path().starts_with("/control/v1/tenants/")
+            && parts.uri.path().contains("/catalog/");
+        if (parts.method == Method::GET
+            || catalog_read && matches!(parts.method, Method::HEAD | Method::POST))
             && parts.uri.path() != "/control/v1/tenancy/capabilities"
             && parts.uri.path() != "/control/v1/tenancy/ordered/capabilities"
             && parts.uri.path() != "/control/v1/tenancy/ordered/generate-content/capabilities"

@@ -59,6 +59,7 @@ fn route(name: &str, header: &str) -> TestResult<RouteData> {
     }))?;
     let reference = reference(ResourceKind::Route, name)?;
     Ok(RouteData {
+        authority_root: None,
         admission: None,
         dependencies: vec![reference.clone()],
         reference,
@@ -410,6 +411,7 @@ fn constructor_compacts_actual_root_and_every_retained_reference_allocation() ->
     let data = Arc::try_unwrap(routes.remove("route").context("route")?)
         .map_err(|_| anyhow::anyhow!("unexpected shared route"))?;
     let RouteData {
+        authority_root: _,
         admission: _,
         reference,
         dependencies,

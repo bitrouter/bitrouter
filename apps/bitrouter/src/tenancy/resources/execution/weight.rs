@@ -288,6 +288,7 @@ impl Weight {
     fn route(&mut self, value: &RouteData) -> Result<()> {
         let RouteData {
             reference,
+            authority_root,
             admission,
             dependencies,
             selector,
@@ -304,6 +305,9 @@ impl Weight {
             }
         }
         self.reference(reference)?;
+        if let Some(value) = authority_root {
+            self.reference(value)?;
+        }
         self.vector(dependencies)?;
         for reference in dependencies {
             self.reference(reference)?;

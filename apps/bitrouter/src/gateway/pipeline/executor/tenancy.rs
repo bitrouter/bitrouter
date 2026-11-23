@@ -159,6 +159,31 @@ pub(super) fn has_execution(ctx: &PipelineContext) -> bool {
     execution(ctx).is_some()
 }
 
+pub(crate) async fn prepare_google_chat(
+    target: &RoutingTarget,
+    ctx: &PipelineContext,
+) -> Result<bool> {
+    match execution(ctx) {
+        Some(execution) => execution
+            .prepare_google_chat(target)
+            .await
+            .map_err(|code| execution.reject(code)),
+        None => Ok(false),
+    }
+}
+
+pub(super) fn model_target(
+    target: &RoutingTarget,
+    ctx: &PipelineContext,
+) -> Result<crate::gateway::model::target::ModelTarget> {
+    match execution(ctx) {
+        Some(execution) => execution
+            .google_chat_target(target)
+            .map_err(|code| execution.reject(code)),
+        None => Ok(target.model_target()),
+    }
+}
+
 pub(super) fn legacy_routing(ctx: &PipelineContext) -> bool {
     execution(ctx).is_some_and(|execution| !execution.profiled())
 }

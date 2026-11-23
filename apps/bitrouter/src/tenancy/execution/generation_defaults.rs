@@ -30,6 +30,7 @@ impl Submission {
         // separate native envelope selects its absence/default layer below.
         self.configuration_defaults = ConfigurationDefaults::Apply;
         self.generate_content = None;
+        self.binding.catalog_selection = None;
         if matches!(protocol, ApiProtocol::Custom(name) if name ==
             bitrouter_ai::tenancy::generate_content::PROTOCOL)
         {
@@ -43,6 +44,8 @@ impl Submission {
             {
                 return Err(invalid());
             }
+            self.binding.catalog_selection = body.catalog;
+            self.check_catalog_protocol(protocol)?;
             (Value::Object(body.request), body.envelope)
         } else {
             (serde_json::from_slice(body).map_err(|_| invalid())?, None)
@@ -57,6 +60,21 @@ impl Submission {
         Ok(input)
     }
 
+    fn check_catalog_protocol(&self, protocol: &ApiProtocol) -> Result<(), Failure> {
+        if self
+            .binding
+            .catalog_selection
+            .as_ref()
+            .is_some_and(|input| {
+                super::super::resources::execution::generation_protocol(protocol).ok()
+                    != Some(input.inbound_protocol)
+            })
+        {
+            return Err(ErrorCode::CapabilityMismatch.into());
+        }
+        Ok(())
+    }
+
     fn parse_generate_content(&mut self, bytes: &[u8]) -> Result<PipelineInput, Failure> {
         use crate::gateway::pipeline::types::generate_content::Input;
         let invalid = || Failure::from(ErrorCode::InvalidRequest);
@@ -67,6 +85,10 @@ impl Submission {
         {
             return Err(invalid());
         }
+        self.binding.catalog_selection = body.catalog;
+        self.check_catalog_protocol(&ApiProtocol::Custom(
+            bitrouter_ai::tenancy::generate_content::PROTOCOL.into(),
+        ))?;
         // Preserve the original tokens for the native request decoder.
         let raw = serde_json::to_vec(&body.request).map_err(|_| invalid())?;
         let request = serde_json::from_slice(&raw).map_err(|_| invalid())?;
@@ -107,6 +129,7 @@ const REMOVED_DEFAULTS_MEMBER: &str = "bitrouter_generation_defaults";
 struct OrderedBody {
     request: Map<String, Value>,
     envelope: Option<GenerationDefaultsEnvelope>,
+    catalog: Option<bitrouter_ai::tenancy::catalog::CatalogSelectionRequestV1>,
 }
 
 impl<'de> Deserialize<'de> for OrderedBody {
@@ -121,6 +144,7 @@ impl<'de> Deserialize<'de> for OrderedBody {
                 let mut body = OrderedBody {
                     request: Map::new(),
                     envelope: None,
+                    catalog: None,
                 };
                 while let Some(key) = map.next_key::<String>()? {
                     if key == REMOVED_DEFAULTS_MEMBER {
@@ -134,6 +158,11 @@ impl<'de> Deserialize<'de> for OrderedBody {
                             return Err(serde::de::Error::duplicate_field(ENVELOPE_BODY_MEMBER));
                         }
                         body.envelope = Some(map.next_value()?);
+                    } else if key == bitrouter_ai::tenancy::catalog::BODY_MEMBER {
+                        if body.catalog.is_some() {
+                            return Err(serde::de::Error::custom("duplicate configured selection"));
+                        }
+                        body.catalog = Some(catalog_member(&mut map)?);
                     } else {
                         body.request.insert(key, map.next_value()?);
                     }
@@ -148,6 +177,7 @@ impl<'de> Deserialize<'de> for OrderedBody {
 struct NativeBody {
     request: std::collections::BTreeMap<String, Box<serde_json::value::RawValue>>,
     envelope: Option<GenerationDefaultsEnvelope>,
+    catalog: Option<bitrouter_ai::tenancy::catalog::CatalogSelectionRequestV1>,
 }
 
 impl<'de> Deserialize<'de> for NativeBody {
@@ -162,6 +192,7 @@ impl<'de> Deserialize<'de> for NativeBody {
                 let mut body = NativeBody {
                     request: Default::default(),
                     envelope: None,
+                    catalog: None,
                 };
                 while let Some(key) = map.next_key::<String>()? {
                     if key == REMOVED_DEFAULTS_MEMBER {
@@ -175,6 +206,11 @@ impl<'de> Deserialize<'de> for NativeBody {
                             return Err(serde::de::Error::duplicate_field(ENVELOPE_BODY_MEMBER));
                         }
                         body.envelope = Some(map.next_value()?);
+                    } else if key == bitrouter_ai::tenancy::catalog::BODY_MEMBER {
+                        if body.catalog.is_some() {
+                            return Err(serde::de::Error::custom("duplicate configured selection"));
+                        }
+                        body.catalog = Some(catalog_member(&mut map)?);
                     } else {
                         if body.request.contains_key(&key) {
                             return Err(serde::de::Error::custom(
@@ -201,7 +237,26 @@ fn apply_envelope(envelope: &GenerationDefaultsEnvelope, params: &mut Generation
     );
 }
 
-fn apply(defaults: &CanonicalGenerationDefaultsV1, params: &mut GenerationParams) {
+fn catalog_member<'de, M: MapAccess<'de>>(
+    map: &mut M,
+) -> Result<bitrouter_ai::tenancy::catalog::CatalogSelectionRequestV1, M::Error> {
+    use bitrouter_ai::tenancy::{catalog::MAX_SELECTION_BYTES, validation::Validate};
+    let raw = map.next_value::<Box<serde_json::value::RawValue>>()?;
+    if raw.get().len() > MAX_SELECTION_BYTES {
+        return Err(serde::de::Error::custom(
+            "configured selection exceeds body limit",
+        ));
+    }
+    let value: bitrouter_ai::tenancy::catalog::CatalogSelectionRequestV1 =
+        serde_json::from_str(raw.get()).map_err(serde::de::Error::custom)?;
+    value.validate().map_err(serde::de::Error::custom)?;
+    Ok(value)
+}
+
+pub(in crate::tenancy) fn apply(
+    defaults: &CanonicalGenerationDefaultsV1,
+    params: &mut GenerationParams,
+) {
     macro_rules! fill {
         ($($field:ident),+ $(,)?) => {$(
             if params.$field.is_none() && !params.extra.contains_key(stringify!($field)) {

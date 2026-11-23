@@ -263,6 +263,9 @@ pub(in crate::tenancy) async fn prepare(
     now: DateTime<Utc>,
 ) -> Result<(ReadContext, Option<StoredResource>)> {
     if let Some((tenant, input)) = put::input(command) {
+        if resources.file_owned_key(input.key) {
+            return Err(ErrorCode::Forbidden);
+        }
         input.authorize(state, caller)?;
         authorize(
             state,
@@ -294,6 +297,9 @@ pub(in crate::tenancy) async fn prepare(
     match command {
         Command::RevokeResource(tenant, input) => {
             let key = input.reference.key();
+            if resources.file_owned_key(&key) {
+                return Err(ErrorCode::Forbidden);
+            }
             authorize(
                 state,
                 caller,

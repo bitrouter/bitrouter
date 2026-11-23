@@ -475,3 +475,6 @@ async fn ordered_calls_share_metadata_and_body_failure_validation() -> TestResul
     }
     Ok(())
 }
+
+#[path = "gateway/catalog.rs"]
+mod catalog;

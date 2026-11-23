@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 use super::*;
 
 mod bounds;
+mod catalog_namespace;
 mod checkpoint;
 mod execution;
 mod format;

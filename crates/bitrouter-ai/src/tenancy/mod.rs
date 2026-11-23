@@ -5,6 +5,7 @@
 
 pub mod admission;
 pub mod authority;
+pub mod catalog;
 pub mod configuration;
 pub mod directory;
 pub mod execution;

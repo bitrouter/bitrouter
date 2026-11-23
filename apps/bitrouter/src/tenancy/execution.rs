@@ -39,7 +39,8 @@ use crate::gateway::{
 
 pub(super) mod cached;
 pub(crate) mod deadline;
-mod generation_defaults;
+pub(super) mod generation_defaults;
+mod google_chat;
 pub(crate) mod http_continuation;
 pub(crate) mod lifecycle;
 mod native_controls;
@@ -78,6 +79,7 @@ struct DispatchIdentity {
     execution_revision: RevisionId,
     correlation_id: CorrelationId,
     selection: Option<OrderedCandidateSelection>,
+    catalog_selection: Option<bitrouter_ai::tenancy::catalog::CatalogSelectionRequestV1>,
     native_controls: bool,
 }
 
@@ -139,6 +141,7 @@ pub(crate) struct TenantExecution {
     journal: std::sync::OnceLock<Arc<super::receipts::journal::Journal>>,
     rejection: Mutex<Option<ErrorCode>>,
     hop: Mutex<Option<Arc<super::operational::Hop>>>,
+    google_chat: google_chat::Contexts,
     preparation_claimed: AtomicBool,
     entered: AtomicBool,
     #[cfg(feature = "eval-publication")]
@@ -407,6 +410,7 @@ impl Service {
             self.require_static_ordered_credentials(view, &route)
         })
         .map_err(Failure::from)?;
+        let configured = revision.is_configured();
         let mut limits = revision.document().limits.clone();
         if fail_fast {
             limits.queued_work = 0;
@@ -425,11 +429,16 @@ impl Service {
         let _count = self
             .pin_unknown_count(&submission.tenant, submission.deadline())
             .await?;
-        let lease = self
-            .admission
-            .acquire_until(&submission.tenant, &limits, submission.deadline())
-            .await
-            .map_err(Failure::from)?;
+        let lease = if configured {
+            self.admission
+                .acquire_configured_until(&submission.tenant, fail_fast, submission.deadline())
+                .await
+        } else {
+            self.admission
+                .acquire_until(&submission.tenant, &limits, submission.deadline())
+                .await
+        }
+        .map_err(Failure::from)?;
         let intent_slot = route
             .is_ordered()
             .then(|| self.reserve_ordered_intent())
@@ -497,6 +506,7 @@ impl Service {
             journal: std::sync::OnceLock::new(),
             rejection: Mutex::new(None),
             hop: Mutex::new(None),
+            google_chat: Default::default(),
             preparation_claimed: AtomicBool::new(false),
             entered: AtomicBool::new(false),
             #[cfg(feature = "eval-publication")]
@@ -1020,6 +1030,7 @@ fn dispatch_binding(headers: &HeaderMap) -> Result<DispatchIdentity, Failure> {
                 execution_revision: binding.execution_revision,
                 correlation_id: binding.correlation_id,
                 selection: None,
+                catalog_selection: None,
                 native_controls: false,
             })
         }
@@ -1062,6 +1073,7 @@ fn dispatch_binding(headers: &HeaderMap) -> Result<DispatchIdentity, Failure> {
                 execution_revision: binding.execution_revision,
                 correlation_id: binding.correlation_id,
                 selection: Some(binding.selection),
+                catalog_selection: None,
                 native_controls,
             })
         }

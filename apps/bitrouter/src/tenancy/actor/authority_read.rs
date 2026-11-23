@@ -122,9 +122,24 @@ impl Worker {
                 .snapshot
                 .principal(&caller, chrono::Utc::now())
                 .map_err(Failure::from)?;
-            directory::load_dependencies_in(&transaction, &mut facts, &references, bytes / 3)
-                .await
-                .map_err(|error| self.directory_failure(error))?;
+            let retained_references: Vec<_> = references
+                .iter()
+                .filter(|reference| {
+                    !self
+                        .resources
+                        .configured()
+                        .is_some_and(|catalog| catalog.contains(reference))
+                })
+                .cloned()
+                .collect();
+            directory::load_dependencies_in(
+                &transaction,
+                &mut facts,
+                &retained_references,
+                bytes / 3,
+            )
+            .await
+            .map_err(|error| self.directory_failure(error))?;
             // Retain only metadata. The canonical reader validates the bounded
             // encrypted row and drops its payload before reading the next slot.
             let oauth_count = references
@@ -180,13 +195,25 @@ impl Worker {
                     .admission_in(
                         &transaction,
                         header.revision,
-                        &admission_references,
+                        &admission_references
+                            .iter()
+                            .filter(|reference| {
+                                !self
+                                    .resources
+                                    .configured()
+                                    .is_some_and(|catalog| catalog.contains(reference))
+                            })
+                            .cloned()
+                            .collect::<Vec<_>>(),
                         &[],
                         &[],
                     )
                     .await
                     .map_err(|error| self.directory_failure(error))?,
             );
+            if let Some(catalog) = self.resources.configured() {
+                catalog.extend_facts(&mut facts.snapshot, &references);
+            }
             let view = View::new(facts.snapshot, oauth).map_err(Failure::from)?;
             Ok::<_, Failure>((caller, view))
         }

@@ -37,6 +37,13 @@ catalog of root groups and field units. Environment substitution in the local
 profile precedes parsing and semantic validation. See the [CLI reference](../../CLI.md#config-resolution)
 for source selection, substitutions and validation.
 
+`providers.<id>.auth_scheme` selects Messages credential presentation using
+exactly `x-api-key` or `bearer`. Omission or null declares no override: a derived
+provider inherits its parent's explicit scheme; otherwise Messages defaults to
+`x-api-key`. An explicit child value takes precedence. This setting also applies
+to configured account slots and selects one credential header. Other transport
+authentication retains its existing behavior. Unsupported values are rejected.
+
 Named routers use `bitrouter/<id>`. Selection, defaults and ordered request
 checks are separate. Policy bindings select literal names by exact match.
 
@@ -85,6 +92,25 @@ hot-reload protocol. Restart retains durable resources, revocations and executio
 records; it does not erase them merely because a startup option is omitted.
 The [tenant service guide](../../development/tenant-service.md) describes
 assembly, lifetime and storage ownership.
+
+### File-configured catalog
+
+`tenancy.catalog` exposes selected ordinary configured roots through one shared,
+tenant-neutral graph. `pool_id` names its reserved operator pool; `routes` maps
+public resource IDs to actual configured selectors. `profiles` maps exact
+`provider/account/canonical-model` source IDs to the current
+`AdmissionProfile` with `schema_version: 1`, explicit rate, health/group and
+fallback rules. The generated schema defines its fields. Selected routing
+Policies and request checks are not eligible static catalog roots.
+
+This option requires enabled tenancy and its explicit wrapping key. Configuration
+and startup own the graph; it is not published into tenant configurations or
+managed resource rows. A retained DB resource in the same operator-pool
+namespace fails startup before import. Generic tenant resources and independent
+operator pools keep their existing authority and lifecycle rules. The entire
+catalog is startup-only, including key and admission membership changes.
+Descriptors, BYOK templates and request-local selection follow the
+[service contract](../service-api/README.md#file-configured-catalog-and-request-local-composition).
 
 ### Process capacity
 

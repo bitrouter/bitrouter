@@ -130,3 +130,6 @@ fn evidence(receipt: &ExecutionReceipt) -> TestResult<ExecutionUsageEvidence> {
     value.validate_against(receipt)?;
     Ok(value)
 }
+
+#[path = "ordered_tenancy/catalog_control.rs"]
+mod catalog_control;
