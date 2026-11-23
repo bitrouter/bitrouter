@@ -3510,11 +3510,16 @@ impl Pipeline {
             .map_or(Ok(()), |execution| {
                 execution.admit_native_controls(prompt, &target.api_protocol)
             });
-        let assessment = controls
-            .and_then(|()| {
+        let google = match controls {
+            Ok(()) => super::executor::tenancy::prepare_google_chat(target, ctx).await,
+            Err(error) => Err(error),
+        };
+        let assessment = google
+            .and_then(|google| {
                 if ctx
                     .extension::<super::native::NativeManagedRequest>()
                     .is_some()
+                    || google
                 {
                     self.executor.preflight_managed(target, prompt, stream, ctx)
                 } else {
@@ -3537,9 +3542,12 @@ impl Pipeline {
         ctx: &PipelineContext,
         excluded: &mut bitrouter_ai::conversion::ConversionReport,
     ) -> Result<bool> {
-        let assessment = self
-            .executor
-            .preflight_generate_content(target, input, stream, ctx)
+        let assessment = super::executor::tenancy::prepare_google_chat(target, ctx)
+            .await
+            .and_then(|_| {
+                self.executor
+                    .preflight_generate_content(target, input, stream, ctx)
+            })
             .and_then(|report| {
                 report.require_admitted()?;
                 Ok(report)

@@ -378,6 +378,7 @@ impl HttpExecutor {
         ctx: &PipelineContext,
         capture: Option<Arc<BridgeCapture>>,
     ) -> Result<StreamPartStream> {
+        super::tenancy::prepare_google_chat(target, ctx).await?;
         let (adapter, transport) = self
             .dispatch
             .lookup(&target.api_protocol)
@@ -741,7 +742,10 @@ impl HttpExecutor {
         };
 
         Ok(Box::pin(
-            crate::gateway::providers::google_chat::bind_stream(stream, target.model_target()),
+            crate::gateway::providers::google_chat::bind_stream(
+                stream,
+                super::tenancy::model_target(target, ctx)?,
+            ),
         ))
     }
 }

@@ -1192,6 +1192,7 @@ impl HttpExecutor {
         };
         upstream.model = target.service_id.clone();
         upstream.stream = stream;
+        let model_target = tenancy::model_target(target, ctx)?;
         let (mut body, report) = if let Some(runtime) =
             ctx.extension::<super::native_context::NativePrivateContextRuntime>()
         {
@@ -1201,12 +1202,12 @@ impl HttpExecutor {
             runtime
                 .validate_target(prompt, ctx, target)
                 .map_err(crate::gateway::pipeline::native_context::private_context_error)?;
-            adapter.render_managed_request_for_target(&upstream, &target.model_target())?
+            adapter.render_managed_request_for_target(&upstream, &model_target)?
         } else {
             let report = adapter.admission(&upstream);
             report.require_admitted()?;
             (
-                adapter.render_request_for_target(&upstream, &target.model_target())?,
+                adapter.render_request_for_target(&upstream, &model_target)?,
                 report,
             )
         };
@@ -1369,7 +1370,7 @@ impl HttpExecutor {
         validate_continuation_authority(input.target, input.ctx, credential_authority.as_ref())?;
         crate::gateway::providers::google_chat::validate_authenticated_request(
             &request,
-            &input.target.model_target(),
+            &tenancy::model_target(input.target, input.ctx)?,
         )?;
         if input
             .ctx
@@ -2027,6 +2028,7 @@ impl Executor for HttpExecutor {
         prompt: &Prompt,
         ctx: &PipelineContext,
     ) -> Result<ExecutionResult> {
+        tenancy::prepare_google_chat(target, ctx).await?;
         if crate::gateway::providers::codex::requires_streaming(&target.model_target())
             || self
                 .auth_applier(target)
@@ -2252,9 +2254,11 @@ impl Executor for HttpExecutor {
         let replayable = crate::gateway::model::protocol::responses::output_replayable(&json);
         let result = ModelClient::parse_response(adapter.as_ref(), &target.api_protocol, &text)
             .map_err(|error| error_scrubber.scrub_error(error.into()))?;
-        let mut result =
-            crate::gateway::providers::google_chat::bind_result(result, &target.model_target())
-                .map_err(|error| error_scrubber.scrub_error(error.into()))?;
+        let mut result = crate::gateway::providers::google_chat::bind_result(
+            result,
+            &tenancy::model_target(target, ctx)?,
+        )
+        .map_err(|error| error_scrubber.scrub_error(error.into()))?;
         if (shared_attempt.is_shared() || tenant_attempt.is_some())
             && result.finish_reason.is_none()
         {

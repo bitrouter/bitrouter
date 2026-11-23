@@ -4,6 +4,7 @@
 
 mod auth;
 mod defaults;
+mod google_chat;
 mod legacy;
 mod recovery;
 

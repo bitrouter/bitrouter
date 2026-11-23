@@ -48,6 +48,7 @@ pub(crate) mod deadline;
 #[cfg(all(feature = "core", feature = "harness"))]
 mod experiment;
 pub(super) mod generation_defaults;
+mod google_chat;
 #[cfg(all(feature = "core", feature = "harness"))]
 pub(crate) mod host;
 pub(crate) mod http_continuation;
@@ -163,6 +164,7 @@ pub(crate) struct TenantExecution {
     journal: std::sync::OnceLock<Arc<super::receipts::journal::Journal>>,
     rejection: Mutex<Option<ErrorCode>>,
     hop: Mutex<Option<Arc<super::operational::Hop>>>,
+    google_chat: google_chat::Contexts,
     preparation_claimed: AtomicBool,
     entered: AtomicBool,
     #[cfg(feature = "core")]
@@ -616,6 +618,7 @@ impl Service {
             journal: std::sync::OnceLock::new(),
             rejection: Mutex::new(None),
             hop: Mutex::new(None),
+            google_chat: Default::default(),
             preparation_claimed: AtomicBool::new(false),
             entered: AtomicBool::new(false),
             #[cfg(feature = "core")]
