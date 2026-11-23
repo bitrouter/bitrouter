@@ -80,3 +80,6 @@ mod tests {
         ));
     }
 }
+
+/// MCP skill discovery and resource wire values.
+pub mod wire;

@@ -4,9 +4,9 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU8, Ordering},
 };
 
+use crate::managed_contract::protocol::{CoreError, OwnershipGrant};
 use anyhow::{Context, Result, ensure};
 use async_trait::async_trait;
-use bitrouter_ai::core::protocol::{CoreError, OwnershipGrant};
 use sea_orm::sea_query::{Alias, Expr, ExprTrait, Func};
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseTransaction, EntityTrait, QueryFilter,
@@ -84,7 +84,7 @@ impl Store {
         expected: u64,
         grant: &OwnershipGrant,
         workspace: &std::path::Path,
-        mode: bitrouter_ai::harness::agent::ToolMode,
+        mode: crate::managed_contract::harness::agent::ToolMode,
         previous: Option<&[u8]>,
         tool_free_config: bool,
     ) -> Result<u64, CoreError> {
@@ -214,7 +214,9 @@ impl NativeStore for Store {
             }
             Err(failure) => {
                 let error = failure.core();
-                if error.commit_status == bitrouter_ai::core::protocol::CommitStatus::NotCommitted {
+                if error.commit_status
+                    == crate::managed_contract::protocol::CommitStatus::NotCommitted
+                {
                     self.load_unconfirmed.store(false, Ordering::Release);
                 }
                 return Err(error);
@@ -346,7 +348,9 @@ impl NativeStore for Store {
                     error.commit_status,
                     started.elapsed().as_millis()
                 );
-                if error.commit_status == bitrouter_ai::core::protocol::CommitStatus::NotCommitted {
+                if error.commit_status
+                    == crate::managed_contract::protocol::CommitStatus::NotCommitted
+                {
                     self.last_write.store(0, Ordering::Release);
                 }
                 Err(error)
@@ -390,219 +394,45 @@ pub(crate) async fn load_in(
     load_bounded_in(tx, authority, check, None).await
 }
 
-#[derive(Clone, Copy)]
-enum ReadBudget<'a, 'b> {
-    Recovery(&'a Budget),
-    Operation(&'a crate::storage::operation_budget::OperationBudget<'b>),
-}
 enum ReadSource<'a> {
-    Review(&'a Binding, &'a str),
-    PaidRecovery(
-        &'a crate::tenancy::learning::recovery::RecoveryIdentity,
-        &'a Descriptor,
-    ),
     Session(&'a Authority),
-    Learner(&'a crate::tenancy::learner::identity::ReadIdentity, &'a str),
 }
 impl ReadSource<'_> {
     fn scope(&self) -> Scope {
-        match self {
-            Self::Session(authority) => Scope::for_session(authority).0,
-            Self::PaidRecovery(identity, _) => Scope::for_paid_recovery(identity).0,
-            Self::Review(binding, _) => Scope::for_session(binding.authority()).0,
-            Self::Learner(identity, _) => Scope::for_learner(identity).0,
-        }
+        let Self::Session(authority) = self;
+        Scope::for_session(authority).0
     }
     fn revision(&self) -> &str {
-        match self {
-            Self::Session(authority) => authority.descriptor().revision.as_str(),
-            Self::PaidRecovery(_, descriptor) => descriptor.revision.as_str(),
-            Self::Review(binding, _) => binding.descriptor().revision.as_str(),
-            Self::Learner(identity, _) => identity.source_revision().as_str(),
-        }
+        let Self::Session(authority) = self;
+        authority.descriptor().revision.as_str()
     }
     fn query(&self) -> Result<sea_orm::Select<session::Entity>> {
-        match self {
-            Self::Session(authority) => scoped(authority),
-            Self::PaidRecovery(_, descriptor) => {
-                Ok(session::Entity::find_by_id(self.scope().physical_key(
-                    KeyDomain::NativeSession,
-                    "",
-                    &[descriptor.principal.as_str(), &descriptor.name],
-                )?)
-                .filter(
-                    self.scope()
-                        .predicate(session::Column::InstallationId, session::Column::TenantId),
-                ))
-            }
-            Self::Review(binding, key) => {
-                crate::tenancy::experiment::queue::check_reader(binding)
-                    .map_err(crate::storage::operation_budget::Error::Rejected)?;
-                Ok(session::Entity::find_by_id(*key).filter(
-                    self.scope()
-                        .predicate(session::Column::InstallationId, session::Column::TenantId),
-                ))
-            }
-            Self::Learner(identity, key) => {
-                identity
-                    .check(&[])
-                    .map_err(crate::storage::operation_budget::Error::Rejected)?;
-                Ok(session::Entity::find_by_id(*key).filter(
-                    self.scope()
-                        .predicate(session::Column::InstallationId, session::Column::TenantId),
-                ))
-            }
-        }
+        let Self::Session(authority) = self;
+        scoped(authority)
     }
     fn validate(&self, descriptor: &Descriptor) -> Result<()> {
-        match self {
-            Self::PaidRecovery(identity, expected) => {
-                let (installation, tenant, principal) = identity.storage_identity();
-                ensure!(
-                    descriptor == *expected
-                        && &descriptor.installation == installation
-                        && &descriptor.tenant == tenant
-                        && &descriptor.principal == principal,
-                    "paid stopped native namespace changed"
-                );
-            }
-            Self::Review(binding, key) => {
-                crate::tenancy::experiment::queue::check_reader(binding)
-                    .map_err(crate::storage::operation_budget::Error::Rejected)?;
-                let (installation, tenant, _) = binding.authority().storage_identity();
-                ensure!(
-                    &descriptor.installation == installation
-                        && &descriptor.tenant == tenant
-                        && descriptor.revision == binding.descriptor().revision
-                        && self.scope().physical_key(
-                            KeyDomain::NativeSession,
-                            "",
-                            &[descriptor.principal.as_str(), &descriptor.name]
-                        )? == *key,
-                    "native review source namespace mismatch"
-                );
-            }
-            Self::Session(authority) => {
-                ensure!(authority.matches(descriptor), "native ownership mismatch");
-                authority
-                    .validate_descriptor(descriptor)
-                    .map_err(|failure| crate::tenancy::session::Rejected(failure.0.code))?;
-            }
-            Self::Learner(identity, key) => {
-                identity
-                    .check(&[])
-                    .map_err(crate::storage::operation_budget::Error::Rejected)?;
-                let (installation, tenant, _) = identity.storage_identity();
-                ensure!(
-                    &descriptor.installation == installation
-                        && &descriptor.tenant == tenant
-                        && &descriptor.revision == identity.source_revision()
-                        && self.scope().physical_key(
-                            KeyDomain::NativeSession,
-                            &descriptor.name,
-                            &[descriptor.principal.as_str(), &descriptor.name]
-                        )? == *key,
-                    "learner native source namespace mismatch"
-                );
-            }
-        }
+        let Self::Session(authority) = self;
+        ensure!(authority.matches(descriptor), "native ownership mismatch");
+        authority
+            .validate_descriptor(descriptor)
+            .map_err(|failure| crate::tenancy::session::Rejected(failure.0.code))?;
         Ok(())
     }
 }
-
 pub(crate) async fn load_bounded_in(
     tx: &DatabaseTransaction,
     authority: &Authority,
     check: &(dyn Fn() -> Result<()> + Sync),
     budget: Option<&Budget>,
 ) -> Result<Option<Loaded>> {
-    load_source_in(
-        tx,
-        ReadSource::Session(authority),
-        check,
-        budget.map(ReadBudget::Recovery),
-    )
-    .await
-}
-pub(crate) async fn load_for_model_in(
-    tx: &DatabaseTransaction,
-    authority: &Authority,
-    budget: &crate::storage::operation_budget::OperationBudget<'_>,
-) -> Result<Option<Loaded>> {
-    let check = || budget.check().map_err(anyhow::Error::from);
-    load_source_in(
-        tx,
-        ReadSource::Session(authority),
-        &check,
-        Some(ReadBudget::Operation(budget)),
-    )
-    .await
-}
-pub(crate) async fn load_for_paid_recovery_in(
-    tx: &DatabaseTransaction,
-    identity: &crate::tenancy::learning::recovery::RecoveryIdentity,
-    descriptor: &Descriptor,
-    budget: &crate::storage::operation_budget::OperationBudget<'_>,
-) -> Result<Option<Loaded>> {
-    let check = || budget.check().map_err(anyhow::Error::from);
-    load_source_in(
-        tx,
-        ReadSource::PaidRecovery(identity, descriptor),
-        &check,
-        Some(ReadBudget::Operation(budget)),
-    )
-    .await
-}
-
-pub(crate) async fn load_for_learner_in(
-    tx: &DatabaseTransaction,
-    identity: &crate::tenancy::learner::identity::ReadIdentity,
-    key: &str,
-    budget: &crate::storage::operation_budget::OperationBudget<'_>,
-) -> Result<Option<Loaded>> {
-    let check = || {
-        identity
-            .check(&[])
-            .map_err(crate::storage::operation_budget::Error::Rejected)?;
-        budget.check()?;
-        Ok(())
-    };
-    load_source_in(
-        tx,
-        ReadSource::Learner(identity, key),
-        &check,
-        Some(ReadBudget::Operation(budget)),
-    )
-    .await
-}
-
-/// A tenant-wide checked read does not bind, reopen or adopt the source owner.
-pub(crate) async fn load_for_review_in(
-    tx: &DatabaseTransaction,
-    binding: &Binding,
-    key: &str,
-    budget: &crate::storage::operation_budget::OperationBudget<'_>,
-) -> Result<Option<Loaded>> {
-    let check = || {
-        crate::tenancy::experiment::queue::check_reader(binding)
-            .map_err(crate::storage::operation_budget::Error::Rejected)?;
-        budget.check()?;
-        Ok(())
-    };
-    load_source_in(
-        tx,
-        ReadSource::Review(binding, key),
-        &check,
-        Some(ReadBudget::Operation(budget)),
-    )
-    .await
+    load_source_in(tx, ReadSource::Session(authority), check, budget).await
 }
 
 async fn load_source_in(
     tx: &DatabaseTransaction,
     source: ReadSource<'_>,
     check: &(dyn Fn() -> Result<()> + Sync),
-    budget: Option<ReadBudget<'_, '_>>,
+    budget: Option<&Budget>,
 ) -> Result<Option<Loaded>> {
     check()?;
     // A current owner lock precedes the counter lock and every consistent read.
@@ -643,7 +473,7 @@ async fn load_source_in(
             .into(),
     };
     let mut projection = query.clone().select_only();
-    if let Some(ReadBudget::Recovery(budget)) = budget {
+    if let Some(budget) = budget {
         ensure!(
             tx.get_database_backend() == DatabaseBackend::Sqlite,
             "recovery metadata requires file SQLite"
@@ -725,30 +555,16 @@ async fn load_source_in(
         let code = bitrouter_ai::tenancy::operation::ErrorCode::RevisionConflict;
         return Err(match &source {
             ReadSource::Session(_) => crate::tenancy::session::Rejected(code).into(),
-            ReadSource::Learner(_, _)
-            | ReadSource::Review(_, _)
-            | ReadSource::PaidRecovery(_, _) => {
-                crate::storage::operation_budget::Error::Rejected(code).into()
-            }
         });
     }
     if let Some(budget) = budget {
         let bytes = usize::try_from(actual)?;
-        match budget {
-            ReadBudget::Recovery(budget) => budget.charge(
-                1,
-                bytes
-                    .checked_mul(3)
-                    .context("native recovery allocation overflow")?,
-            )?,
-            ReadBudget::Operation(budget) => budget.charge(
-                1,
-                bytes
-                    .checked_mul(5)
-                    .and_then(|n| n.checked_add(8192))
-                    .context("native source allocation overflow")?,
-            )?,
-        }
+        budget.charge(
+            1,
+            bytes
+                .checked_mul(3)
+                .context("native recovery allocation overflow")?,
+        )?;
     }
     // Guard the actual cell too, even if a backend's isolation profile changes.
     let payload = query
@@ -827,27 +643,6 @@ pub(crate) async fn save_in(
     check: &(dyn Fn() -> Result<()> + Sync),
 ) -> Result<()> {
     save_with_budget(tx, binding, expected, journal, metadata, check, None).await
-}
-
-pub(crate) async fn save_experiment_in(
-    tx: &DatabaseTransaction,
-    binding: &Binding,
-    expected: u64,
-    journal: &[u8],
-    metadata: Option<&Metadata>,
-    budget: &crate::storage::operation_budget::OperationBudget<'_>,
-) -> Result<()> {
-    let check = || budget.check().map_err(anyhow::Error::from);
-    save_with_budget(
-        tx,
-        binding,
-        expected,
-        journal,
-        metadata,
-        &check,
-        Some(budget),
-    )
-    .await
 }
 
 async fn save_with_budget(

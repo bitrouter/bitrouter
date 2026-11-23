@@ -6,12 +6,8 @@ use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde_json::Value;
 
 use super::{
-    AcceptedSelectionV2, CandidateDescriptorV1, CandidateManifestV1, GenerationProtocol,
-    OrderedCandidateSelectionV1, OrderedCapabilitiesV2, OrderedDispatchBindingV2,
-};
-use crate::tenancy::{
-    execution_v2::{AttemptV2, ExecutionReceiptV2},
-    usage_evidence_v2::ExecutionUsageEvidenceV2,
+    AcceptedSelection, CandidateDescriptor, CandidateManifest, GenerationProtocol,
+    OrderedCandidateSelection, OrderedCapabilities, OrderedDispatchBinding,
 };
 
 fn contract(name: &str) -> Schema {
@@ -68,7 +64,7 @@ macro_rules! contracts {
 }
 
 contracts! {
-    GenerationProtocol, OrderedCandidateSelectionV1, AcceptedSelectionV2,
-    CandidateDescriptorV1, CandidateManifestV1, OrderedCapabilitiesV2,
-    OrderedDispatchBindingV2, AttemptV2, ExecutionReceiptV2, ExecutionUsageEvidenceV2,
+    GenerationProtocol, OrderedCandidateSelection, AcceptedSelection,
+    CandidateDescriptor, CandidateManifest, OrderedCapabilities,
+    OrderedDispatchBinding,
 }

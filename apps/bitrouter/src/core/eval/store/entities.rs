@@ -12,7 +12,9 @@ pub(super) mod subject_entity {
         pub owner_user_id: String,
         pub subject_id: String,
         pub scope: String,
-        pub policy_digest: String,
+        /// Schema-2 identity projection; the private SQL column keeps its baseline name.
+        #[sea_orm(column_name = "policy_digest")]
+        pub identity_digest: String,
         pub holdout: bool,
         pub content_digest: String,
         pub subject_json: String,

@@ -19,7 +19,7 @@ pub(in crate::tenancy) struct Identity {
     pub execution: ExecutionId,
     pub correlation: CorrelationId,
     pub revision: RevisionId,
-    pub ordered: Option<(bitrouter_ai::tenancy::ordered::AcceptedSelectionV2, u8)>,
+    pub ordered: Option<(bitrouter_ai::tenancy::ordered::AcceptedSelection, u8)>,
 }
 
 enum Phase {
@@ -85,14 +85,6 @@ impl Owner {
             .transpose()
     }
 
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(crate) fn storage_identity(&self) -> (&InstallationId, &TenantId, &PrincipalId) {
-        (
-            &self.identity.installation,
-            &self.identity.tenant,
-            &self.identity.principal,
-        )
-    }
     #[cfg(all(feature = "core", feature = "harness"))]
     pub(in crate::tenancy) fn attach_learning(
         &self,
@@ -727,34 +719,37 @@ impl Owner {
                     && frozen.attempts.len() == frozen.http_statuses.len(),
                 "ordered attempt facts count"
             );
-            let attempts = frozen
-                .attempts
-                .into_iter()
-                .zip(frozen.candidate_ordinals)
-                .zip(&frozen.http_statuses)
-                .map(|((attempt, ordinal), status)| {
-                    Ok(bitrouter_ai::tenancy::execution_v2::AttemptV2 {
-                        attempt_id: attempt.attempt_id,
-                        candidate_index: ordinal
-                            .ok_or_else(|| anyhow::anyhow!("ordered attempt missing ordinal"))?,
-                        target: attempt.target,
-                        outcome: attempt.outcome,
-                        observed_http_status: *status,
-                        usage: attempt.usage,
-                        native_usage: attempt.native_usage,
+            let attempts =
+                frozen
+                    .attempts
+                    .into_iter()
+                    .zip(frozen.candidate_ordinals)
+                    .zip(&frozen.http_statuses)
+                    .map(|((attempt, ordinal), status)| {
+                        Ok(bitrouter_ai::tenancy::execution::Attempt {
+                            attempt_id: attempt.attempt_id,
+                            candidate_index: Some(ordinal.ok_or_else(|| {
+                                anyhow::anyhow!("ordered attempt missing ordinal")
+                            })?),
+                            target: attempt.target,
+                            outcome: attempt.outcome,
+                            observed_http_status: *status,
+                            usage: attempt.usage,
+                            native_usage: attempt.native_usage,
+                        })
                     })
-                })
-                .collect::<anyhow::Result<Vec<_>>>()?;
-            let receipt = bitrouter_ai::tenancy::execution_v2::ExecutionReceiptV2 {
-                schema_version: 2,
+                    .collect::<anyhow::Result<Vec<_>>>()?;
+            let receipt = bitrouter_ai::tenancy::execution::ExecutionReceipt {
                 installation_id: self.identity.installation.clone(),
                 tenant_id: self.identity.tenant.clone(),
                 principal_id: self.identity.principal.clone(),
                 execution_id: self.identity.execution.clone(),
                 correlation_id: self.identity.correlation.clone(),
                 execution_revision: self.identity.revision.clone(),
-                accepted_selection: selection.clone(),
-                attempt_limit: *attempt_limit,
+                dispatch: bitrouter_ai::tenancy::execution::Dispatch::Ordered {
+                    accepted_selection: selection.clone(),
+                    attempt_limit: *attempt_limit,
+                },
                 state,
                 outcome: if unknown { Outcome::Unknown } else { outcome },
                 attempts,
@@ -763,7 +758,7 @@ impl Owner {
                     .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
                     .try_into()?,
             };
-            let document = frozen.usage_evidence.document_v2(&receipt);
+            let document = frozen.usage_evidence.document(&receipt);
             Terminal::V2(Arc::new(super::ordered::CandidateV2::new(
                 receipt,
                 Disposition {
@@ -775,6 +770,7 @@ impl Owner {
             )?))
         } else {
             let receipt = ExecutionReceipt {
+                dispatch: bitrouter_ai::tenancy::execution::Dispatch::Strict,
                 installation_id: self.identity.installation.clone(),
                 tenant_id: self.identity.tenant.clone(),
                 principal_id: self.identity.principal.clone(),

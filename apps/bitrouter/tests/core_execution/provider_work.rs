@@ -471,7 +471,7 @@ async fn provider_work_http_intent_ack_precedes_dispatch_and_cancel_fences_retry
                         .report
                         .continuation
                         .input,
-                    bitrouter_ai::core::evidence::NativeContinuationInput::Unknown
+                    bitrouter::managed_contract::evidence::NativeContinuationInput::Unknown
                 );
             }
         }

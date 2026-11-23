@@ -2,9 +2,9 @@ use super::*;
 use bitrouter::gateway::model::decision::DecisionRuntime;
 use bitrouter::gateway::model::decision::policy::{DecisionPolicy, DecisionPricing};
 use bitrouter::gateway::model::decision::typesafe::TypeSafeExecutor;
+use bitrouter::managed_contract::protocol::ContextMode;
 use bitrouter::storage::checkpoint::snapshot::context::FEATURE;
 use bitrouter::storage::checkpoint::snapshot::context::inspection::InspectionExt;
-use bitrouter_ai::core::protocol::ContextMode;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -380,7 +380,7 @@ async fn published_derivations_do_not_replace_exact_sources_or_full_context() ->
 #[tokio::test]
 async fn routing_inspection_reports_the_serving_model_without_automatic_workflow_classification()
 -> TestResult {
-    use bitrouter_ai::harness::inspection::RoutingPhase;
+    use bitrouter::managed_contract::harness::inspection::RoutingPhase;
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/systemone"))
@@ -395,14 +395,14 @@ async fn routing_inspection_reports_the_serving_model_without_automatic_workflow
     )
     .await?;
     let mut task = input();
-    task.routing.model = bitrouter_ai::core::protocol::ModelMode::Policy;
+    task.routing.model = bitrouter::managed_contract::harness::agent::ModelMode::Policy;
     task.routing.context = ContextMode::Auto;
     session
         .start("work", session.head().await.state_revision, task)
         .await?;
     session.drive().await?;
     let mut state = session.snapshot().await;
-    let inspection = bitrouter_ai::harness::inspection::Inspection::capture(&state)
+    let inspection = bitrouter::managed_contract::harness::inspection::Inspection::capture(&state)
         .ok_or("inspection missing")?;
     let routing = inspection
         .tasks
@@ -418,9 +418,9 @@ async fn routing_inspection_reports_the_serving_model_without_automatic_workflow
         .get_mut(&root_id)
         .and_then(|agent| agent.turn.as_mut())
         .ok_or("root missing")?;
-    turn.status = bitrouter_ai::harness::inspection::AgentStatus::Runnable;
+    turn.status = bitrouter::managed_contract::harness::inspection::AgentStatus::Runnable;
     turn.final_answer = None;
-    let preparing = bitrouter_ai::harness::inspection::Inspection::capture(&state)
+    let preparing = bitrouter::managed_contract::harness::inspection::Inspection::capture(&state)
         .ok_or("preparation inspection missing")?;
     let routing = preparing
         .tasks
@@ -429,7 +429,7 @@ async fn routing_inspection_reports_the_serving_model_without_automatic_workflow
         .ok_or("preparation routing missing")?;
     assert_eq!(
         routing.phase,
-        bitrouter_ai::harness::inspection::RoutingPhase::Preparing
+        bitrouter::managed_contract::harness::inspection::RoutingPhase::Preparing
     );
     assert!(routing.workflow.is_none() && routing.model.is_none());
     // The same runnable boundary waits for dependencies when a final answer
@@ -438,7 +438,7 @@ async fn routing_inspection_reports_the_serving_model_without_automatic_workflow
     child.agent_id = "waiting-child".into();
     child.parent_id = Some(root_id.clone());
     child.turn.as_mut().ok_or("child turn missing")?.status =
-        bitrouter_ai::harness::inspection::AgentStatus::Runnable;
+        bitrouter::managed_contract::harness::inspection::AgentStatus::Runnable;
     state.agents.insert(child.agent_id.clone(), child);
     state
         .agents
@@ -446,7 +446,7 @@ async fn routing_inspection_reports_the_serving_model_without_automatic_workflow
         .and_then(|agent| agent.turn.as_mut())
         .ok_or("root missing")?
         .final_answer = Some("waiting for child".into());
-    let waiting = bitrouter_ai::harness::inspection::Inspection::capture(&state)
+    let waiting = bitrouter::managed_contract::harness::inspection::Inspection::capture(&state)
         .ok_or("waiting inspection missing")?;
     let routing = waiting
         .tasks
@@ -455,7 +455,7 @@ async fn routing_inspection_reports_the_serving_model_without_automatic_workflow
         .ok_or("waiting routing missing")?;
     assert_eq!(
         routing.phase,
-        bitrouter_ai::harness::inspection::RoutingPhase::Waiting
+        bitrouter::managed_contract::harness::inspection::RoutingPhase::Waiting
     );
     assert!(routing.model.is_some());
     session.disconnect().await;

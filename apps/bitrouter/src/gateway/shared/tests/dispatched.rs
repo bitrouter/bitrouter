@@ -17,7 +17,7 @@ use axum::{
 };
 use bitrouter_ai::{
     gateway::execution::{AttemptState, ExecutionState, TerminalOutcome},
-    types::{ApiProtocol, ModelOperation, Prompt},
+    types::{ApiProtocol, ModelOperation, Prompt, StreamPart},
 };
 use futures::StreamExt;
 
@@ -353,10 +353,10 @@ pub(super) async fn exercise(first: &Store, second: &Store) -> Result<()> {
         )
         .await?;
     let config = Configuration {
-        format: 1,
+        format: 2,
         routing: serde_json::json!({"providers":{"dispatch-fixture":{"api_base":"http://127.0.0.1:1","auto_discover":false}}}),
         policies: vec![],
-        policy_lock: None,
+        model_policy: None,
         credentials: vec![CredentialBinding {
             provider: "dispatch-fixture".into(),
             account: "default".into(),
@@ -596,10 +596,18 @@ async fn responses_drop(fixture: &Fixture, store: &Store) -> Result<()> {
         .executor
         .execute_stream(&target, &prompt, &ctx)
         .await?;
+    let usage = tokio::time::timeout(Duration::from_secs(2), stream.next())
+        .await?
+        .context("Responses stream ended before exposing provider usage")??;
+    ensure!(
+        matches!(usage, StreamPart::Usage { usage } if usage.prompt_tokens == 7 && usage.completion_tokens == 3),
+        "Responses stream did not expose the provider usage before EOF"
+    );
     ensure!(
         tokio::time::timeout(Duration::from_millis(100), stream.next())
             .await
-            .is_err()
+            .is_err(),
+        "Responses stream exposed a terminal before upstream EOF"
     );
     drop(stream);
     admission.reconcile_dispatch().await?;
@@ -789,7 +797,6 @@ async fn streaming(fixture: &Fixture) -> Result<()> {
 }
 
 async fn batch_drop(fixture: &Fixture) -> Result<()> {
-    use bitrouter_ai::types::StreamPart;
     for (path, protocol) in [
         ("chat-batch", ApiProtocol::ChatCompletions),
         ("messages-batch", ApiProtocol::Messages),

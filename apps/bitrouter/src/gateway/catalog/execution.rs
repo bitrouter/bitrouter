@@ -316,8 +316,9 @@ pub(crate) fn select(
                 let default = effort
                     .get("default")
                     .and_then(|v| serde_json::from_value(v.clone()).ok());
-                model_config.reasoning_effort = (!levels.is_empty())
-                    .then_some(bitrouter_ai::types::ReasoningEffortConfig { levels, default });
+                model_config.reasoning_effort = (!levels.is_empty()).then_some(
+                    crate::gateway::model::capabilities::ReasoningEffortConfig { levels, default },
+                );
             }
             projected.models = vec![model_config];
             return Some((

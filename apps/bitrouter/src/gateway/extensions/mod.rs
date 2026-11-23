@@ -5,3 +5,6 @@ pub mod guardrails;
 
 pub mod legacy;
 pub mod registry;
+
+/// Native request-check inputs, decisions and callback contract.
+pub mod request_check;

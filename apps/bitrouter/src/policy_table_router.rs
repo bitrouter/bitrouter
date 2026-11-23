@@ -1,6 +1,6 @@
-//! Frozen named-policy actions selected from shared semantic routing evidence.
-//! Model selection, context planning and settlement run inside the SDK pipeline.
-//! Learn attribution retains one policy snapshot through guards and execution.
+//! Frozen model-selection tables over shared semantic routing evidence.
+//! Serving source always preserves context; BRO treatment measurements retain
+//! their explicit internal types. One table snapshot owns each decision.
 
 use std::collections::{BTreeSet, HashMap};
 use std::fmt;
@@ -10,7 +10,7 @@ use bitrouter_ai::types::{Content, Prompt, ReasoningEffort, Role, Tool};
 use http::HeaderMap;
 use {
     crate::config::PolicyKeyStrategy, crate::config::PolicyTableConfig,
-    bitrouter_ai::routing::PolicyModelTarget,
+    bitrouter_ai::policy::Target,
 };
 
 use crate::continuation::ContinuationAdjustment;
@@ -26,11 +26,11 @@ use crate::gateway::routing::workflow::online::OnlineWorkflowState;
 use crate::gateway::routing::workflow::predictive::{
     NextActionClass, PredictiveEvidence, is_predictive_reason_code, is_task_family_reason_code,
 };
-use crate::trajectory::guard::ProgressGuardPolicy;
 use crate::trajectory::types::HistoryCompleteness;
-use bitrouter_ai::harness::inspection::NextStepRole;
+use bitrouter_ai::policy::NextStep;
 use {
-    bitrouter_ai::eval::EvalExperimentRef, bitrouter_ai::eval::ExperimentArm,
+    crate::gateway::routing::exploration::AssignmentArm,
+    crate::gateway::routing::exploration::RouteAssignment,
     bitrouter_ai::eval::RouteActionCandidate, bitrouter_ai::eval::RouteDecisionMeasurement,
 };
 
@@ -107,7 +107,7 @@ pub struct PolicyDecision {
     pub trajectory_health_digest: Option<String>,
     pub progress_candidate_tier: Option<String>,
     pub progress_clause_ids: Vec<String>,
-    pub experiment: Option<EvalExperimentRef>,
+    pub experiment: Option<RouteAssignment>,
     pub route_measurement: Option<RouteDecisionMeasurement>,
 }
 
@@ -140,45 +140,13 @@ impl PolicyDecision {
     pub fn trace_identity(&self) -> &WorkflowIdentity {
         &self.workflow_identity
     }
-
-    pub(crate) fn tool_use_tier(&self) -> Option<String> {
-        self.policy_snapshot.tool_use_tier.clone()
-    }
-
-    pub(crate) fn tool_safe_tiers(&self) -> std::collections::BTreeSet<String> {
-        self.policy_snapshot
-            .tool_safe_tiers
-            .iter()
-            .cloned()
-            .collect()
-    }
-
-    pub(crate) fn effective_tier_efforts(
-        &self,
-        inherited: Option<ReasoningEffort>,
-    ) -> std::collections::BTreeMap<String, ReasoningEffort> {
-        self.policy_snapshot
-            .tiers
-            .iter()
-            .filter_map(|(tier, target)| {
-                target
-                    .effort()
-                    .or(inherited)
-                    .map(|effort| (tier.clone(), effort))
-            })
-            .collect()
-    }
-
-    pub(crate) fn effort_of_tier(&self, tier: &str) -> Option<ReasoningEffort> {
-        self.policy_snapshot.effort_of_tier(tier)
-    }
 }
 
 /// The resolved, immutable policy spec: fingerprint→tier→model plus tool-use
 /// guardrails. Learned-state databases never participate in this hot path.
 pub struct PolicyTable {
     /// Tier name → model id the request is rewritten to.
-    tiers: HashMap<String, PolicyModelTarget>,
+    tiers: HashMap<String, Target>,
     /// Request fingerprint → tier name.
     fingerprints: HashMap<String, String>,
     /// Tier for a fingerprint absent from `fingerprints`.
@@ -191,6 +159,24 @@ pub struct PolicyTable {
 }
 
 impl PolicyTable {
+    /// Build a serving table from validated model-only indexes. BRO treatment
+    /// constructors remain separate; source cannot choose their context action.
+    pub(crate) fn from_model_selection(
+        selection: &crate::model_policy::CompiledSelection,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            tiers: selection.tiers.clone().into_iter().collect(),
+            fingerprints: selection
+                .routes
+                .iter()
+                .map(|(key, tier)| (key.to_string(), tier.clone()))
+                .collect(),
+            default_tier: Some(selection.default_tier.clone()),
+            tool_use_tier: selection.tool_use_tier.clone(),
+            tool_safe_tiers: selection.tool_safe_tiers.clone(),
+        })
+    }
+
     /// Build the shared spec from config, or `None` when the section is inert
     /// (no tiers defined).
     pub fn from_config(config: &PolicyTableConfig) -> Option<Arc<Self>> {
@@ -262,33 +248,25 @@ impl PolicyTable {
 
     /// The model id a tier routes to.
     pub(crate) fn model_of_tier(&self, tier: &str) -> Option<&str> {
-        self.target_of_tier(tier).map(PolicyModelTarget::model)
+        self.target_of_tier(tier).map(Target::model)
     }
 
     /// The policy-owned effort override for a tier. An absent override
     /// preserves caller effort.
     pub(crate) fn effort_of_tier(&self, tier: &str) -> Option<ReasoningEffort> {
-        self.target_of_tier(tier)
-            .and_then(PolicyModelTarget::effort)
+        self.target_of_tier(tier).and_then(Target::effort)
     }
 
     /// The complete model/effort target selected by a tier.
-    pub(crate) fn target_of_tier(&self, tier: &str) -> Option<&PolicyModelTarget> {
+    pub(crate) fn target_of_tier(&self, tier: &str) -> Option<&Target> {
         self.tiers.get(tier)
     }
 
-    fn stable_tier_of_target(
-        &self,
-        model: &str,
-        effort: Option<ReasoningEffort>,
-        context: bitrouter_ai::routing::ContextStrategy,
-    ) -> Option<&str> {
+    fn stable_tier_of_target(&self, model: &str, effort: Option<ReasoningEffort>) -> Option<&str> {
         self.tiers
             .iter()
             .filter_map(|(tier, candidate)| {
-                (candidate.model() == model
-                    && candidate.effort() == effort
-                    && candidate.context == context)
+                (candidate.model() == model && candidate.effort() == effort)
                     .then_some(tier.as_str())
             })
             .min()
@@ -296,9 +274,7 @@ impl PolicyTable {
                 self.tiers
                     .iter()
                     .filter_map(|(tier, candidate)| {
-                        (candidate.model() == model
-                            && candidate.effort().is_none()
-                            && candidate.context == context)
+                        (candidate.model() == model && candidate.effort().is_none())
                             .then_some(tier.as_str())
                     })
                     .min()
@@ -310,7 +286,7 @@ impl PolicyTable {
         logging_action_tier: &str,
         input_effort: Option<ReasoningEffort>,
         exploration: Option<&RouteExploration>,
-        assignment: Option<&EvalExperimentRef>,
+        assignment: Option<&RouteAssignment>,
     ) -> anyhow::Result<RouteDecisionMeasurement> {
         let randomized = exploration.zip(assignment);
         let candidates = self
@@ -329,7 +305,6 @@ impl PolicyTable {
                     None => 0,
                 };
                 RouteActionCandidate {
-                    context: target.context,
                     tier: tier.clone(),
                     model: target.model().to_owned(),
                     effort: target.effort().or(input_effort),
@@ -406,7 +381,6 @@ pub struct PolicyTableRouter {
     decision_recorder: Option<Arc<PolicyDecisionJsonlRecorder>>,
     state_namespace: Option<String>,
     eval_observer: Option<EvalDecisionObserver>,
-    progress_guard: Option<ProgressGuardPolicy>,
     exploration: Option<RouteExploration>,
     classifier_constraints: HashMap<String, String>,
 }
@@ -431,7 +405,6 @@ impl PolicyTableRouter {
             decision_recorder: None,
             state_namespace: None,
             eval_observer: None,
-            progress_guard: None,
             exploration: None,
             classifier_constraints: HashMap::new(),
         })
@@ -474,16 +447,13 @@ impl PolicyTableRouter {
             decision_recorder: None,
             state_namespace: None,
             eval_observer: None,
-            progress_guard: None,
             exploration: None,
             classifier_constraints: HashMap::new(),
         }
     }
 
-    pub(crate) fn with_classifier_constraints(
-        mut self,
-        constraints: HashMap<String, String>,
-    ) -> Self {
+    #[cfg(test)]
+    fn with_classifier_constraints(mut self, constraints: HashMap<String, String>) -> Self {
         self.classifier_constraints = constraints;
         self
     }
@@ -525,20 +495,13 @@ impl PolicyTableRouter {
         self
     }
 
-    pub(crate) fn with_progress_guard(mut self, guard: Option<ProgressGuardPolicy>) -> Self {
-        self.progress_guard = guard;
-        self
-    }
-
-    pub(crate) fn with_exploration(mut self, exploration: Option<RouteExploration>) -> Self {
+    #[cfg(test)]
+    fn with_exploration(mut self, exploration: Option<RouteExploration>) -> Self {
         self.exploration = exploration;
         self
     }
 
-    pub(crate) fn progress_guard(&self) -> Option<&ProgressGuardPolicy> {
-        self.progress_guard.as_ref()
-    }
-
+    #[cfg(feature = "multi-instance")]
     pub(crate) fn eval_policy_name(&self) -> Option<&str> {
         self.eval_observer
             .as_ref()
@@ -590,7 +553,7 @@ impl PolicyTableRouter {
         respect_explicit_route: bool,
         apply_tool_floor: bool,
         assessment: Option<&crate::gateway::routing::assessment::Assessment>,
-        owned_assignment: Option<&bitrouter_ai::eval::EvalExperimentRef>,
+        owned_assignment: Option<&crate::gateway::routing::exploration::RouteAssignment>,
     ) -> PolicyDecision {
         // Keep this exact immutable table alive through guards, recording, and
         // final target materialization, even if a concurrent reload swaps the
@@ -699,8 +662,8 @@ impl PolicyTableRouter {
             }) {
                 Some(assignment) => {
                     let tier = match assignment.arm {
-                        ExperimentArm::Control => exploration.champion_tier.as_str(),
-                        ExperimentArm::Challenger => exploration.challenger_tier.as_str(),
+                        AssignmentArm::Control => exploration.champion_tier.as_str(),
+                        AssignmentArm::Challenger => exploration.challenger_tier.as_str(),
                     };
                     (tier, Some(assignment))
                 }
@@ -802,24 +765,8 @@ impl PolicyTableRouter {
         self.decision_for_inner(prompt, headers, false, !guarded, assessment, None)
     }
 
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(crate) fn decision_for_owned_experiment(
-        &self,
-        prompt: &Prompt,
-        headers: &HeaderMap,
-        assessment: Option<&crate::gateway::routing::assessment::Assessment>,
-        witness: &crate::tenancy::experiment::Witness,
-    ) -> crate::gateway::error::Result<PolicyDecision> {
-        let treatment = self.exploration.as_ref().ok_or_else(|| {
-            crate::gateway::error::BitrouterError::Forbidden(
-                "native experiment policy is absent".into(),
-            )
-        })?;
-        let assignment = witness.assignment_for(treatment)?;
-        Ok(self.decision_for_inner(prompt, headers, false, false, assessment, Some(assignment)))
-    }
-
-    pub(crate) fn apply_guarded_route(
+    #[cfg(test)]
+    fn apply_guarded_route(
         &self,
         decision: &mut PolicyDecision,
         selected_tier: Option<&str>,
@@ -867,16 +814,7 @@ impl PolicyTableRouter {
                 // decision never saw.
                 let table = &decision.policy_snapshot;
                 let selected_tier = table
-                    .stable_tier_of_target(
-                        effective_model,
-                        pinned_effort,
-                        decision
-                            .selected_tier
-                            .as_deref()
-                            .and_then(|tier| table.target_of_tier(tier))
-                            .map(|target| target.context)
-                            .unwrap_or_default(),
-                    )
+                    .stable_tier_of_target(effective_model, pinned_effort)
                     .ok_or_else(|| {
                         crate::gateway::error::BitrouterError::bad_request(
                             "provider continuation model is unavailable in the active policy",
@@ -908,7 +846,7 @@ impl PolicyTableRouter {
         input_effort: Option<ReasoningEffort>,
         decision: PolicyDecision,
         headers: &HeaderMap,
-    ) -> (Option<PolicyModelTarget>, Option<PendingEvalDecision>) {
+    ) -> (Option<Target>, Option<PendingEvalDecision>) {
         self.record_decision_capture(
             input_model,
             input_effort,
@@ -928,7 +866,7 @@ impl PolicyTableRouter {
         headers: &HeaderMap,
         request_id_override: Option<(&str, &str)>,
         invocation: Option<&EvalInvocation>,
-    ) -> Option<PolicyModelTarget> {
+    ) -> Option<Target> {
         self.record_decision_capture(
             input_model,
             input_effort,
@@ -948,7 +886,7 @@ impl PolicyTableRouter {
         headers: &HeaderMap,
         request_id_override: Option<(&str, &str)>,
         invocation: Option<&EvalInvocation>,
-    ) -> (Option<PolicyModelTarget>, Option<PendingEvalDecision>) {
+    ) -> (Option<Target>, Option<PendingEvalDecision>) {
         let baseline_tier = self.eval_baseline_tier(&decision);
         let baseline_effort = baseline_tier
             .as_deref()
@@ -1146,8 +1084,7 @@ impl PolicyTableRouter {
                 && configured.effort().is_none()
                 && let Some(effort) = decision.selected_effort
             {
-                return Some(PolicyModelTarget {
-                    context: configured.context,
+                return Some(Target {
                     model: selected_model.to_owned(),
                     effort: Some(effort),
                 });
@@ -1165,14 +1102,14 @@ fn key_strategy_name() -> &'static str {
 const MAX_PREDICTION_REASON_CODES: usize = 8;
 const PREDICTION_CONFIDENCE_PPM_MAX: u32 = 1_000_000;
 
-fn prediction_role_name(role: NextStepRole) -> &'static str {
+fn prediction_role_name(role: NextStep) -> &'static str {
     match role {
-        NextStepRole::Orchestrate => "orchestrate",
-        NextStepRole::Implement => "implement",
-        NextStepRole::Mechanical => "mechanical",
-        NextStepRole::Verify => "verify",
-        NextStepRole::Finalize => "finalize",
-        NextStepRole::Unknown => "unknown",
+        NextStep::Orchestrate => "orchestrate",
+        NextStep::Implement => "implement",
+        NextStep::Mechanical => "mechanical",
+        NextStep::Verify => "verify",
+        NextStep::Finalize => "finalize",
+        NextStep::Unknown => "unknown",
     }
 }
 
@@ -1233,7 +1170,7 @@ fn task_family_reason_codes(evidence: &[PredictiveEvidence]) -> Vec<String> {
 /// rewritten by the legacy inline policy table instead of reaching the signed
 /// policy its slug addresses.
 fn is_explicitly_routed(model: &str) -> bool {
-    model.starts_with('@') || model.contains(':') || crate::config::presets::is_reserved(model)
+    model.starts_with('@') || model.contains(':') || crate::config::resolution::is_reserved(model)
 }
 
 /// Whether the request carries a bitrouter server-tool declaration — a
@@ -1265,26 +1202,22 @@ mod tests {
     use super::*;
     use crate::config::PolicyKeyStrategy;
     #[cfg(feature = "core")]
-    use crate::core::eval::compiler::{EvalEvidenceRecord, EvalEvidenceSnapshot};
+    use crate::eval::settlement::EvalSettlementRecorder;
     #[cfg(feature = "core")]
-    use crate::core::eval::settlement::EvalSettlementRecorder;
-    #[cfg(feature = "core")]
-    use crate::core::eval::store::EvalStore;
-    #[cfg(feature = "core")]
-    use crate::core::policy::{CompileInput, compile_candidate};
+    use crate::eval::store::EvalStore;
     #[cfg(feature = "core")]
     use crate::gateway::caller::CallerContext;
     #[cfg(feature = "core")]
     use crate::gateway::observability::event::EventBus;
     #[cfg(feature = "core")]
     use crate::gateway::pipeline::settlement::{SettlementContext, SettlementRecorder};
+    use crate::gateway::routing::exploration::AssignmentUnit;
     use crate::gateway::routing::exploration::{OptimizationGate, RouteExploration};
     use crate::gateway::routing::workflow::decision::PolicyDecisionJsonlRecorder;
     use crate::gateway::routing::workflow::ir::{AgentRole, HarnessId, ProtocolKind};
     use crate::gateway::routing::workflow::online::OnlineWorkflowState;
-    use crate::policy_lock::{PolicyLock, semantic_digest};
+    use crate::policy_lock::semantic_digest;
     use crate::trajectory::canonical::CorrelationKey;
-    use bitrouter_ai::eval::ExperimentAssignmentUnit;
     #[cfg(feature = "core")]
     use bitrouter_ai::types::UsageOrigin;
     use bitrouter_ai::types::{
@@ -1294,19 +1227,13 @@ mod tests {
     use http::HeaderValue;
     use std::io::Write;
     use std::sync::{Arc, Mutex};
-    #[cfg(feature = "core")]
-    use {
-        bitrouter_ai::eval::EVAL_SCHEMA_VERSION, bitrouter_ai::eval::EvalVerdict,
-        bitrouter_ai::eval::EvaluationResult, bitrouter_ai::eval::EvaluatorIdentity,
-        bitrouter_ai::eval::EvaluatorKind,
-    };
 
     use crate::gateway::routing::assessment::{Assessment, Judgment};
-    use bitrouter_ai::harness::inspection::NextStepRole;
-    use bitrouter_ai::harness::inspection::ProgressState;
-    use bitrouter_ai::harness::inspection::TaskFamily;
+    use crate::managed_contract::harness::inspection::ProgressState;
+    use bitrouter_ai::policy::NextStep;
+    use bitrouter_ai::policy::TaskFamily;
 
-    fn semantic_fixture(task_family: TaskFamily, next_step_role: NextStepRole) -> Assessment {
+    fn semantic_fixture(task_family: TaskFamily, next_step_role: NextStep) -> Assessment {
         let labels = [
             (crate::gateway::routing::assessment::TASK, task_family.key()),
             (
@@ -1357,11 +1284,11 @@ mod tests {
     #[test]
     fn learned_route_is_bound_to_the_classifier_that_justified_it() -> anyhow::Result<()> {
         let mut config = comparator_config();
-        let key = "semantic_route/v1|code:debugging|verify|normal";
+        let key = "code:debugging|verify|normal";
         config.fingerprints.insert(key.into(), "economy".into());
         let table =
             PolicyTable::from_config(&config).ok_or_else(|| anyhow::anyhow!("missing policy"))?;
-        let mut assessment = semantic_fixture(TaskFamily::CodeDebugging, NextStepRole::Verify);
+        let mut assessment = semantic_fixture(TaskFamily::CodeDebugging, NextStep::Verify);
         let router = PolicyTableRouter::new(table).with_classifier_constraints(HashMap::from([(
             key.into(),
             assessment.classifier_digest.clone(),
@@ -1397,21 +1324,15 @@ mod tests {
         PolicyTableConfig {
             key_strategy: PolicyKeyStrategy::AgentTrace,
             tiers: HashMap::from([
-                ("cheap".to_string(), PolicyModelTarget::from("vendor/cheap")),
-                (
-                    "flagship".to_string(),
-                    PolicyModelTarget::from("vendor/flagship"),
-                ),
+                ("cheap".to_string(), Target::from("vendor/cheap")),
+                ("flagship".to_string(), Target::from("vendor/flagship")),
             ]),
             fingerprints: HashMap::from([
                 (
-                    "semantic_route/v1|unknown|orchestrate|normal".to_string(),
+                    "unknown|orchestrate|normal".to_string(),
                     "flagship".to_string(),
                 ),
-                (
-                    "semantic_route/v1|unknown|implement|normal".to_string(),
-                    "cheap".to_string(),
-                ),
+                ("unknown|implement|normal".to_string(), "cheap".to_string()),
             ]),
             default_tier: Some("flagship".to_string()),
             tool_use_tier: Some("flagship".to_string()),
@@ -1424,22 +1345,16 @@ mod tests {
         PolicyTableConfig {
             key_strategy: PolicyKeyStrategy::AgentTrace,
             tiers: HashMap::from([
-                (
-                    "economy".to_string(),
-                    PolicyModelTarget::from("vendor/economy"),
-                ),
-                (
-                    "strong".to_string(),
-                    PolicyModelTarget::from("vendor/strong"),
-                ),
+                ("economy".to_string(), Target::from("vendor/economy")),
+                ("strong".to_string(), Target::from("vendor/strong")),
             ]),
             fingerprints: HashMap::from([
                 (
-                    "semantic_route/v1|unknown|orchestrate|normal".to_string(),
+                    "unknown|orchestrate|normal".to_string(),
                     "strong".to_string(),
                 ),
                 (
-                    "semantic_route/v1|unknown|implement|normal".to_string(),
+                    "unknown|implement|normal".to_string(),
                     "economy".to_string(),
                 ),
             ]),
@@ -1583,7 +1498,7 @@ mod tests {
 
     #[test]
     fn opening_request_routes_to_its_tier() {
-        let assessment = semantic_fixture(TaskFamily::CodeDebugging, NextStepRole::Implement);
+        let assessment = semantic_fixture(TaskFamily::CodeDebugging, NextStep::Implement);
         // The explicit fix instruction predicts implementation → cheap.
         assert_eq!(
             route("inbound", vec![user("fix the bug")], vec![], &assessment),
@@ -1593,7 +1508,7 @@ mod tests {
 
     #[test]
     fn guarded_decision_log_uses_only_opaque_trajectory_request_identity() -> anyhow::Result<()> {
-        let assessment = semantic_fixture(TaskFamily::Unknown, NextStepRole::Unknown);
+        let assessment = semantic_fixture(TaskFamily::Unknown, NextStep::Unknown);
         let raw_request_id = "SECRET-task-labeled-request-header-SENTINEL";
         let opaque_request_id = CorrelationKey::from_bytes(rand::random())?
             .request_identity("owner-a", raw_request_id)?;
@@ -1640,7 +1555,7 @@ mod tests {
 
     #[test]
     fn after_tool_step_routes_to_its_tier() {
-        let assessment = semantic_fixture(TaskFamily::Unknown, NextStepRole::Unknown);
+        let assessment = semantic_fixture(TaskFamily::Unknown, NextStep::Unknown);
         // An incomplete tool call has unknown predictive role and therefore
         // uses the policy default rather than observed-state compatibility.
         assert_eq!(
@@ -1656,7 +1571,7 @@ mod tests {
 
     #[test]
     fn equivalent_tool_followups_share_the_trace_projection_route() {
-        let assessment = semantic_fixture(TaskFamily::Unknown, NextStepRole::Unknown);
+        let assessment = semantic_fixture(TaskFamily::Unknown, NextStep::Unknown);
         // Raw tool names do not participate in predictive task routing.
         assert_eq!(
             route(
@@ -1671,7 +1586,7 @@ mod tests {
 
     #[test]
     fn tool_use_guardrail_clamps_a_non_tool_safe_tier() {
-        let assessment = semantic_fixture(TaskFamily::Unknown, NextStepRole::Unknown);
+        let assessment = semantic_fixture(TaskFamily::Unknown, NextStep::Unknown);
         // `after_read_file` would route to cheap, but the request carries tools
         // and cheap is not tool-safe → clamped up to the tool_use_tier
         // (flagship). The guardrail is the key safety property.
@@ -1688,16 +1603,15 @@ mod tests {
 
     #[test]
     fn exploration_assignment_precedes_tool_clamping() -> anyhow::Result<()> {
-        let assessment = semantic_fixture(TaskFamily::Unknown, NextStepRole::Unknown);
+        let assessment = semantic_fixture(TaskFamily::Unknown, NextStep::Unknown);
         let mut config = comparator_config();
-        config.fingerprints.insert(
-            "semantic_route/v1|unknown|unknown|normal".into(),
-            "strong".into(),
-        );
+        config
+            .fingerprints
+            .insert("unknown|unknown|normal".into(), "strong".into());
         let exploration = RouteExploration {
             experiment_id:
                 "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
-            target_request_key: "semantic_route/v1|unknown|unknown|normal".into(),
+            target_request_key: "unknown|unknown|normal".into(),
             champion_tier: "strong".into(),
             challenger_tier: "economy".into(),
             challenger_exposure_ppm: 1_000_000,
@@ -1729,7 +1643,7 @@ mod tests {
         assert_eq!(clamped.selected_tier.as_deref(), Some("strong"));
         assert_eq!(
             clamped.experiment.as_ref().map(|experiment| experiment.arm),
-            Some(ExperimentArm::Challenger)
+            Some(AssignmentArm::Challenger)
         );
         let measurement = clamped
             .route_measurement
@@ -1748,7 +1662,7 @@ mod tests {
         let exploration = RouteExploration {
             experiment_id:
                 "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
-            target_request_key: "semantic_route/v1|unknown|implement|normal".into(),
+            target_request_key: "unknown|implement|normal".into(),
             champion_tier: "strong".into(),
             challenger_tier: "economy".into(),
             challenger_exposure_ppm: 100_000,
@@ -1761,13 +1675,13 @@ mod tests {
             },
         };
         for (arm, tier, expected) in [
-            (ExperimentArm::Control, "strong", 900_000),
-            (ExperimentArm::Challenger, "economy", 100_000),
+            (AssignmentArm::Control, "strong", 900_000),
+            (AssignmentArm::Challenger, "economy", 100_000),
         ] {
-            let assignment = EvalExperimentRef {
+            let assignment = RouteAssignment {
                 experiment_id: exploration.experiment_id.clone(),
                 arm,
-                assignment_unit: ExperimentAssignmentUnit::Task,
+                assignment_unit: AssignmentUnit::Task,
                 assignment_id_digest:
                     "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".into(),
                 challenger_propensity_ppm: 100_000,
@@ -1786,12 +1700,12 @@ mod tests {
     #[test]
     fn exploration_targets_exact_projection_when_static_route_uses_unknown_fallback()
     -> anyhow::Result<()> {
-        let assessment = semantic_fixture(TaskFamily::CodeDebugging, NextStepRole::Implement);
+        let assessment = semantic_fixture(TaskFamily::CodeDebugging, NextStep::Implement);
         let config = comparator_config();
         let exploration = RouteExploration {
             experiment_id:
                 "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
-            target_request_key: "semantic_route/v1|code:debugging|implement|normal".into(),
+            target_request_key: "code:debugging|implement|normal".into(),
             champion_tier: "economy".into(),
             challenger_tier: "strong".into(),
             challenger_exposure_ppm: 1_000_000,
@@ -1817,37 +1731,30 @@ mod tests {
 
         let decision = router.assessed_decision(&routed, &headers, &assessment);
 
-        assert_eq!(
-            decision.request_key,
-            "semantic_route/v1|unknown|implement|normal"
-        );
-        assert_eq!(
-            decision.route_projection,
-            "semantic_route/v1|code:debugging|implement|normal"
-        );
+        assert_eq!(decision.request_key, "unknown|implement|normal");
+        assert_eq!(decision.route_projection, "code:debugging|implement|normal");
         assert_eq!(decision.selected_tier.as_deref(), Some("strong"));
         assert_eq!(
             decision
                 .experiment
                 .as_ref()
                 .map(|experiment| experiment.arm),
-            Some(ExperimentArm::Challenger)
+            Some(AssignmentArm::Challenger)
         );
         Ok(())
     }
 
     #[test]
     fn exploration_without_stable_identity_uses_signed_champion_control() -> anyhow::Result<()> {
-        let assessment = semantic_fixture(TaskFamily::Unknown, NextStepRole::Unknown);
+        let assessment = semantic_fixture(TaskFamily::Unknown, NextStep::Unknown);
         let mut config = comparator_config();
-        config.fingerprints.insert(
-            "semantic_route/v1|unknown|unknown|normal".into(),
-            "economy".into(),
-        );
+        config
+            .fingerprints
+            .insert("unknown|unknown|normal".into(), "economy".into());
         let exploration = RouteExploration {
             experiment_id:
                 "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
-            target_request_key: "semantic_route/v1|unknown|unknown|normal".into(),
+            target_request_key: "unknown|unknown|normal".into(),
             champion_tier: "strong".into(),
             challenger_tier: "economy".into(),
             challenger_exposure_ppm: 1_000_000,
@@ -1885,18 +1792,17 @@ mod tests {
 
     #[test]
     fn progress_guard_clamp_preserves_the_assigned_challenger_arm() -> anyhow::Result<()> {
-        let assessment = semantic_fixture(TaskFamily::Unknown, NextStepRole::Unknown);
+        let assessment = semantic_fixture(TaskFamily::Unknown, NextStep::Unknown);
         let mut config = comparator_config();
-        config.fingerprints.insert(
-            "semantic_route/v1|unknown|unknown|normal".into(),
-            "strong".into(),
-        );
+        config
+            .fingerprints
+            .insert("unknown|unknown|normal".into(), "strong".into());
         let table = PolicyTable::from_config(&config)
             .ok_or_else(|| anyhow::anyhow!("comparison policy must contain tiers"))?;
         let router = PolicyTableRouter::new(table).with_exploration(Some(RouteExploration {
             experiment_id:
                 "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
-            target_request_key: "semantic_route/v1|unknown|unknown|normal".into(),
+            target_request_key: "unknown|unknown|normal".into(),
             champion_tier: "strong".into(),
             challenger_tier: "economy".into(),
             challenger_exposure_ppm: 1_000_000,
@@ -1925,7 +1831,7 @@ mod tests {
                 .experiment
                 .as_ref()
                 .map(|experiment| experiment.arm),
-            Some(ExperimentArm::Challenger)
+            Some(AssignmentArm::Challenger)
         );
         assert_eq!(
             decision
@@ -1939,7 +1845,7 @@ mod tests {
 
     #[test]
     fn explicit_provider_route_is_left_untouched() {
-        let assessment = semantic_fixture(TaskFamily::Unknown, NextStepRole::Unknown);
+        let assessment = semantic_fixture(TaskFamily::Unknown, NextStep::Unknown);
         // A `provider:model` pin (and the `claude-code:` subscription route) is
         // the caller's deliberate choice and is never re-tiered.
         assert_eq!(
@@ -1959,7 +1865,7 @@ mod tests {
 
     #[test]
     fn preset_routes_are_left_for_stage_zero_resolution() {
-        let assessment = semantic_fixture(TaskFamily::Unknown, NextStepRole::Unknown);
+        let assessment = semantic_fixture(TaskFamily::Unknown, NextStep::Unknown);
         assert_eq!(
             route("@coding", vec![user("hi")], vec![], &assessment),
             "@coding"
@@ -1972,7 +1878,7 @@ mod tests {
 
     #[test]
     fn idempotent_on_second_application() {
-        let assessment = semantic_fixture(TaskFamily::CodeDebugging, NextStepRole::Implement);
+        let assessment = semantic_fixture(TaskFamily::CodeDebugging, NextStep::Implement);
         // Applying twice must not double-route: the second pass is already on
         // the tier's model and no-ops.
         let mut p = prompt("inbound");
@@ -1988,12 +1894,12 @@ mod tests {
 
     #[test]
     fn unmapped_fingerprint_without_default_is_a_noop() {
-        let assessment = semantic_fixture(TaskFamily::Unknown, NextStepRole::Unknown);
+        let assessment = semantic_fixture(TaskFamily::Unknown, NextStep::Unknown);
         // No default_tier and an unmapped fingerprint → the caller's model is
         // left as-is.
         let cfg = PolicyTableConfig {
             key_strategy: Default::default(),
-            tiers: HashMap::from([("cheap".to_string(), PolicyModelTarget::from("vendor/cheap"))]),
+            tiers: HashMap::from([("cheap".to_string(), Target::from("vendor/cheap"))]),
             fingerprints: HashMap::from([(
                 "agent_trace/v1|opening|normal".to_string(),
                 "cheap".to_string(),
@@ -2012,7 +1918,7 @@ mod tests {
 
     #[test]
     fn route_prompt_writes_policy_decision_jsonl_when_recorder_is_configured() {
-        let assessment = semantic_fixture(TaskFamily::CodeDebugging, NextStepRole::Implement);
+        let assessment = semantic_fixture(TaskFamily::CodeDebugging, NextStep::Implement);
         let path = temp_path("decisions.jsonl");
         let table = PolicyTable::from_config(&config()).expect("configured");
         let recorder = PolicyDecisionJsonlRecorder::new(path.clone()).unwrap();
@@ -2052,7 +1958,7 @@ mod tests {
         assert_eq!(records[0].input_model, "inbound");
         assert_eq!(
             records[0].ledger_key.as_deref(),
-            Some("coding\0semantic_route/v1|unknown|implement|normal")
+            Some("coding\0unknown|implement|normal")
         );
         assert_eq!(records[0].static_model.as_deref(), Some("vendor/cheap"));
         assert_eq!(records[0].selected_model.as_deref(), Some("vendor/cheap"));
@@ -2196,10 +2102,10 @@ mod tests {
 
     #[test]
     fn explicit_economy_route_uses_strong_baseline_for_pending_eval_decision() {
-        let assessment = semantic_fixture(TaskFamily::CodeDebugging, NextStepRole::Implement);
+        let assessment = semantic_fixture(TaskFamily::CodeDebugging, NextStep::Implement);
         let mut config = comparator_config();
         config.fingerprints.insert(
-            "semantic_route/v1|code:debugging|implement|normal".to_string(),
+            "code:debugging|implement|normal".to_string(),
             "economy".to_string(),
         );
         let table = PolicyTable::from_config(&config).expect("configured");
@@ -2229,10 +2135,7 @@ mod tests {
             decision,
             &headers,
         );
-        assert_eq!(
-            selected.as_ref().map(PolicyModelTarget::model),
-            Some("vendor/economy")
-        );
+        assert_eq!(selected.as_ref().map(Target::model), Some("vendor/economy"));
 
         let decision = pending
             .get(&invocation, "local")
@@ -2248,24 +2151,20 @@ mod tests {
             Some(1_000_000)
         );
         assert_eq!(decision.baseline_tier.as_deref(), Some("strong"));
-        assert_eq!(
-            decision.request_key,
-            "semantic_route/v1|code:debugging|implement|normal"
-        );
+        assert_eq!(decision.request_key, "code:debugging|implement|normal");
     }
 
     #[test]
     fn certificate_baseline_overrides_policy_default_in_eval_outputs() {
-        let assessment = semantic_fixture(TaskFamily::CodeDebugging, NextStepRole::Implement);
+        let assessment = semantic_fixture(TaskFamily::CodeDebugging, NextStep::Implement);
         let mut table_config = comparator_config();
         table_config.fingerprints.insert(
-            "semantic_route/v1|code:debugging|implement|normal".to_string(),
+            "code:debugging|implement|normal".to_string(),
             "economy".to_string(),
         );
-        table_config.tiers.insert(
-            "reference".to_string(),
-            PolicyModelTarget::from("vendor/reference"),
-        );
+        table_config
+            .tiers
+            .insert("reference".to_string(), Target::from("vendor/reference"));
         let table = PolicyTable::from_config(&table_config).expect("configured");
         let pending = crate::gateway::observability::decision::PendingEvalDecisionStore::default();
         let path = temp_path("certificate-baseline-decisions.jsonl");
@@ -2277,7 +2176,7 @@ mod tests {
                 "auto:cost",
                 "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
                 HashMap::from([(
-                    "semantic_route/v1|code:debugging|implement|normal".to_string(),
+                    "code:debugging|implement|normal".to_string(),
                     "reference".to_string(),
                 )]),
                 Some("strong".to_string()),
@@ -2301,10 +2200,7 @@ mod tests {
             &headers,
         );
         assert!(captured.is_some());
-        assert_eq!(
-            selected.as_ref().map(PolicyModelTarget::model),
-            Some("vendor/economy")
-        );
+        assert_eq!(selected.as_ref().map(Target::model), Some("vendor/economy"));
 
         let pending_decision = pending
             .get(&invocation, "local")
@@ -2350,7 +2246,7 @@ mod tests {
 
     #[test]
     fn decision_keeps_one_policy_snapshot_through_reload_and_recording() {
-        let assessment = semantic_fixture(TaskFamily::Unknown, NextStepRole::Unknown);
+        let assessment = semantic_fixture(TaskFamily::Unknown, NextStep::Unknown);
         let table = PolicyTable::from_config(&config()).expect("configured");
         let router = PolicyTableRouter::new(table);
         let routed = prompt("inbound");
@@ -2367,15 +2263,12 @@ mod tests {
             None,
             None,
         );
-        assert_eq!(
-            selected.as_ref().map(PolicyModelTarget::model),
-            Some("vendor/cheap")
-        );
+        assert_eq!(selected.as_ref().map(Target::model), Some("vendor/cheap"));
     }
 
     #[test]
     fn latest_user_turn_routes_by_predictive_role_not_stale_tool_state() {
-        let assessment = semantic_fixture(TaskFamily::CodeGeneration, NextStepRole::Implement);
+        let assessment = semantic_fixture(TaskFamily::CodeGeneration, NextStep::Implement);
         // The decisive new user instruction routes to implementation instead
         // of consulting the stale observed read-tool projection.
         let routed = route(
@@ -2394,7 +2287,7 @@ mod tests {
 
     #[test]
     fn parallel_tool_calls_use_the_last_call_in_the_turn() {
-        let assessment = semantic_fixture(TaskFamily::Unknown, NextStepRole::Unknown);
+        let assessment = semantic_fixture(TaskFamily::Unknown, NextStep::Unknown);
         // An incomplete multi-tool turn has no confident predictive role and
         // therefore uses the policy default regardless of raw tool names.
         assert_eq!(
@@ -2410,17 +2303,14 @@ mod tests {
 
     #[test]
     fn colon_form_tier_target_is_idempotent() {
-        let assessment = semantic_fixture(TaskFamily::Unknown, NextStepRole::Unknown);
+        let assessment = semantic_fixture(TaskFamily::Unknown, NextStep::Unknown);
         // A tier that resolves to a `provider:model` (colon) id: the first pass
         // routes to it, and the second pass skips it as an explicit route.
         let cfg = PolicyTableConfig {
             key_strategy: Default::default(),
-            tiers: HashMap::from([(
-                "flagship".to_string(),
-                PolicyModelTarget::from("vendor:exact"),
-            )]),
+            tiers: HashMap::from([("flagship".to_string(), Target::from("vendor:exact"))]),
             fingerprints: HashMap::from([(
-                "semantic_route/v1|unknown|unknown|normal".to_string(),
+                "unknown|unknown|normal".to_string(),
                 "flagship".to_string(),
             )]),
             default_tier: None,
@@ -2442,13 +2332,12 @@ mod tests {
 
     #[test]
     fn same_model_compound_target_overrides_caller_effort() -> anyhow::Result<()> {
-        let assessment = semantic_fixture(TaskFamily::Unknown, NextStepRole::Unknown);
+        let assessment = semantic_fixture(TaskFamily::Unknown, NextStep::Unknown);
         let cfg = PolicyTableConfig {
             key_strategy: Default::default(),
             tiers: HashMap::from([(
                 "strong".to_string(),
-                PolicyModelTarget {
-                    context: Default::default(),
+                Target {
                     model: "vendor/same".to_string(),
                     effort: Some(ReasoningEffort::High),
                 },
@@ -2473,10 +2362,10 @@ mod tests {
     #[test]
     fn scalar_target_records_caller_effort_as_the_effective_static_treatment() -> anyhow::Result<()>
     {
-        let assessment = semantic_fixture(TaskFamily::Unknown, NextStepRole::Unknown);
+        let assessment = semantic_fixture(TaskFamily::Unknown, NextStep::Unknown);
         let cfg = PolicyTableConfig {
             key_strategy: Default::default(),
-            tiers: HashMap::from([("strong".to_string(), PolicyModelTarget::from("vendor/same"))]),
+            tiers: HashMap::from([("strong".to_string(), Target::from("vendor/same"))]),
             default_tier: Some("strong".to_string()),
             ..Default::default()
         };
@@ -2495,22 +2384,20 @@ mod tests {
 
     #[test]
     fn hidden_continuation_pins_same_model_compound_target() -> anyhow::Result<()> {
-        let assessment = semantic_fixture(TaskFamily::Unknown, NextStepRole::Unknown);
+        let assessment = semantic_fixture(TaskFamily::Unknown, NextStep::Unknown);
         let cfg = PolicyTableConfig {
             key_strategy: Default::default(),
             tiers: HashMap::from([
                 (
                     "low".to_string(),
-                    PolicyModelTarget {
-                        context: Default::default(),
+                    Target {
                         model: "vendor/same".to_string(),
                         effort: Some(ReasoningEffort::Low),
                     },
                 ),
                 (
                     "high".to_string(),
-                    PolicyModelTarget {
-                        context: Default::default(),
+                    Target {
                         model: "vendor/same".to_string(),
                         effort: Some(ReasoningEffort::High),
                     },
@@ -2547,10 +2434,10 @@ mod tests {
     #[test]
     fn hidden_continuation_effort_is_applied_through_a_scalar_compatibility_tier()
     -> anyhow::Result<()> {
-        let assessment = semantic_fixture(TaskFamily::Unknown, NextStepRole::Unknown);
+        let assessment = semantic_fixture(TaskFamily::Unknown, NextStep::Unknown);
         let cfg = PolicyTableConfig {
             key_strategy: Default::default(),
-            tiers: HashMap::from([("compat".to_string(), PolicyModelTarget::from("vendor/same"))]),
+            tiers: HashMap::from([("compat".to_string(), Target::from("vendor/same"))]),
             default_tier: Some("compat".to_string()),
             ..Default::default()
         };
@@ -2587,10 +2474,10 @@ mod tests {
     #[test]
     fn legacy_continuation_does_not_reinterpret_missing_effort_as_provider_default()
     -> anyhow::Result<()> {
-        let assessment = semantic_fixture(TaskFamily::Unknown, NextStepRole::Unknown);
+        let assessment = semantic_fixture(TaskFamily::Unknown, NextStep::Unknown);
         let cfg = PolicyTableConfig {
             key_strategy: Default::default(),
-            tiers: HashMap::from([("compat".to_string(), PolicyModelTarget::from("vendor/same"))]),
+            tiers: HashMap::from([("compat".to_string(), Target::from("vendor/same"))]),
             default_tier: Some("compat".to_string()),
             ..Default::default()
         };
@@ -2616,20 +2503,17 @@ mod tests {
 
     #[test]
     fn disabled_guardrail_lets_a_tool_request_route_cheap() {
-        let assessment = semantic_fixture(TaskFamily::CodeDebugging, NextStepRole::Implement);
+        let assessment = semantic_fixture(TaskFamily::CodeDebugging, NextStep::Implement);
         // With no `tool_use_tier`, the guardrail is off: a tool-carrying request
         // routes by fingerprint like any other (here `after_read_file` → cheap).
         let cfg = PolicyTableConfig {
             key_strategy: Default::default(),
             tiers: HashMap::from([
-                ("cheap".to_string(), PolicyModelTarget::from("vendor/cheap")),
-                (
-                    "flagship".to_string(),
-                    PolicyModelTarget::from("vendor/flagship"),
-                ),
+                ("cheap".to_string(), Target::from("vendor/cheap")),
+                ("flagship".to_string(), Target::from("vendor/flagship")),
             ]),
             fingerprints: HashMap::from([(
-                "semantic_route/v1|unknown|implement|normal".to_string(),
+                "unknown|implement|normal".to_string(),
                 "cheap".to_string(),
             )]),
             default_tier: Some("flagship".to_string()),
@@ -2647,7 +2531,7 @@ mod tests {
 
     #[test]
     fn fusion_declaration_is_left_untouched() {
-        let assessment = semantic_fixture(TaskFamily::CodeReview, NextStepRole::Verify);
+        let assessment = semantic_fixture(TaskFamily::CodeReview, NextStep::Verify);
         // A request carrying the fusion alias's injected declaration is owned by
         // the fusion flow; the policy table must not re-tier its outer model,
         // even though the model is colonless and the request carries tools.
@@ -2723,7 +2607,7 @@ mod tests {
 
     #[test]
     fn workflow_state_key_strategy_uses_ir_key_for_lookup() {
-        let assessment = semantic_fixture(TaskFamily::Unknown, NextStepRole::Unknown);
+        let assessment = semantic_fixture(TaskFamily::Unknown, NextStep::Unknown);
         let mut cfg = config();
         cfg.key_strategy = PolicyKeyStrategy::AgentTrace;
         cfg.fingerprints.clear();
@@ -2756,52 +2640,38 @@ mod tests {
 
     #[test]
     fn unknown_family_baseline_routes_unlisted_task_cells() {
-        let assessment = semantic_fixture(TaskFamily::CodeDebugging, NextStepRole::Implement);
+        let assessment = semantic_fixture(TaskFamily::CodeDebugging, NextStep::Implement);
         let router = router();
         let mut prompt = prompt("inbound");
         prompt.messages = completed_read_step();
 
         let decision = router.assessed_decision(&prompt, &HeaderMap::new(), &assessment);
 
-        assert_eq!(
-            decision.request_key,
-            "semantic_route/v1|unknown|implement|normal"
-        );
+        assert_eq!(decision.request_key, "unknown|implement|normal");
         assert_eq!(decision.selected_tier.as_deref(), Some("cheap"));
     }
 
     #[test]
     fn unknown_family_baseline_wins_before_observed_telemetry() {
-        let assessment = semantic_fixture(TaskFamily::CodeDebugging, NextStepRole::Implement);
+        let assessment = semantic_fixture(TaskFamily::CodeDebugging, NextStep::Implement);
         let mut cfg = config();
         cfg.fingerprints.insert(
             "agent_trace/v2|tool_followup|normal".to_string(),
             "flagship".to_string(),
         );
-        cfg.fingerprints.insert(
-            "semantic_route/v1|unknown|implement|normal".to_string(),
-            "cheap".to_string(),
-        );
+        cfg.fingerprints
+            .insert("unknown|implement|normal".to_string(), "cheap".to_string());
         let router = PolicyTableRouter::from_config(&cfg).expect("configured");
         let mut prompt = prompt("inbound");
         prompt.messages = completed_read_step();
 
         let online = OnlineWorkflowState::for_named_policy(&HeaderMap::new(), &prompt);
-        assert_eq!(
-            online.baseline_routing_key(),
-            "semantic_route/v1|unknown|implement|normal"
-        );
+        assert_eq!(online.baseline_routing_key(), "unknown|implement|normal");
 
         let decision = router.assessed_decision(&prompt, &HeaderMap::new(), &assessment);
 
-        assert_eq!(
-            decision.request_key,
-            "semantic_route/v1|unknown|implement|normal"
-        );
-        assert_eq!(
-            decision.route_projection,
-            "semantic_route/v1|code:debugging|implement|normal"
-        );
+        assert_eq!(decision.request_key, "unknown|implement|normal");
+        assert_eq!(decision.route_projection, "code:debugging|implement|normal");
         assert_eq!(
             decision.observed_route_projection,
             "agent_trace/v2|tool_followup|normal"
@@ -2811,18 +2681,12 @@ mod tests {
 
     #[test]
     fn observed_route_does_not_participate_in_named_auto_policy_lookup() {
-        let assessment = semantic_fixture(TaskFamily::CodeReview, NextStepRole::Verify);
+        let assessment = semantic_fixture(TaskFamily::CodeReview, NextStep::Verify);
         let cfg = PolicyTableConfig {
             key_strategy: PolicyKeyStrategy::AgentTrace,
             tiers: HashMap::from([
-                (
-                    "balanced".to_string(),
-                    PolicyModelTarget::from("vendor/balanced"),
-                ),
-                (
-                    "strong".to_string(),
-                    PolicyModelTarget::from("vendor/strong"),
-                ),
+                ("balanced".to_string(), Target::from("vendor/balanced")),
+                ("strong".to_string(), Target::from("vendor/strong")),
             ]),
             fingerprints: HashMap::from([(
                 "agent_trace/v2|tool_followup|normal".to_string(),
@@ -2839,38 +2703,26 @@ mod tests {
 
         let decision = router.assessed_decision(&prompt, &HeaderMap::new(), &assessment);
 
-        assert_eq!(
-            decision.route_projection,
-            "semantic_route/v1|code:review|verify|normal"
-        );
+        assert_eq!(decision.route_projection, "code:review|verify|normal");
         assert_eq!(decision.request_key, decision.route_projection);
         assert_eq!(decision.selected_tier.as_deref(), Some("balanced"));
     }
 
     #[test]
     fn exact_task_aware_v1_override_wins_before_unknown_baseline() {
-        let assessment = semantic_fixture(TaskFamily::CodeReview, NextStepRole::Verify);
+        let assessment = semantic_fixture(TaskFamily::CodeReview, NextStep::Verify);
         let cfg = PolicyTableConfig {
             key_strategy: PolicyKeyStrategy::AgentTrace,
             tiers: HashMap::from([
-                (
-                    "economy".to_string(),
-                    PolicyModelTarget::from("vendor/economy"),
-                ),
-                (
-                    "strong".to_string(),
-                    PolicyModelTarget::from("vendor/strong"),
-                ),
+                ("economy".to_string(), Target::from("vendor/economy")),
+                ("strong".to_string(), Target::from("vendor/strong")),
             ]),
             fingerprints: HashMap::from([
                 (
-                    "semantic_route/v1|code:review|verify|normal".to_string(),
+                    "code:review|verify|normal".to_string(),
                     "strong".to_string(),
                 ),
-                (
-                    "semantic_route/v1|unknown|verify|normal".to_string(),
-                    "economy".to_string(),
-                ),
+                ("unknown|verify|normal".to_string(), "economy".to_string()),
                 (
                     "agent_trace/v2|tool_followup|normal".to_string(),
                     "economy".to_string(),
@@ -2887,37 +2739,22 @@ mod tests {
 
         let decision = router.assessed_decision(&prompt, &HeaderMap::new(), &assessment);
 
-        assert_eq!(
-            decision.route_projection,
-            "semantic_route/v1|code:review|verify|normal"
-        );
-        assert_eq!(
-            decision.request_key,
-            "semantic_route/v1|code:review|verify|normal"
-        );
+        assert_eq!(decision.route_projection, "code:review|verify|normal");
+        assert_eq!(decision.request_key, "code:review|verify|normal");
         assert_eq!(decision.selected_tier.as_deref(), Some("strong"));
     }
 
     #[test]
     fn unknown_family_baseline_wins_before_observed_state() {
-        let assessment = semantic_fixture(TaskFamily::CodeReview, NextStepRole::Verify);
+        let assessment = semantic_fixture(TaskFamily::CodeReview, NextStep::Verify);
         let cfg = PolicyTableConfig {
             key_strategy: PolicyKeyStrategy::AgentTrace,
             tiers: HashMap::from([
-                (
-                    "economy".to_string(),
-                    PolicyModelTarget::from("vendor/economy"),
-                ),
-                (
-                    "strong".to_string(),
-                    PolicyModelTarget::from("vendor/strong"),
-                ),
+                ("economy".to_string(), Target::from("vendor/economy")),
+                ("strong".to_string(), Target::from("vendor/strong")),
             ]),
             fingerprints: HashMap::from([
-                (
-                    "semantic_route/v1|unknown|verify|normal".to_string(),
-                    "economy".to_string(),
-                ),
+                ("unknown|verify|normal".to_string(), "economy".to_string()),
                 (
                     "agent_trace/v2|tool_followup|normal".to_string(),
                     "strong".to_string(),
@@ -2934,83 +2771,46 @@ mod tests {
 
         let decision = router.assessed_decision(&prompt, &HeaderMap::new(), &assessment);
 
-        assert_eq!(
-            decision.route_projection,
-            "semantic_route/v1|code:review|verify|normal"
-        );
-        assert_eq!(
-            decision.request_key,
-            "semantic_route/v1|unknown|verify|normal"
-        );
+        assert_eq!(decision.route_projection, "code:review|verify|normal");
+        assert_eq!(decision.request_key, "unknown|verify|normal");
         assert_eq!(decision.selected_tier.as_deref(), Some("economy"));
     }
 
     #[tokio::test]
     async fn unified_v1_settlement_attributes_exact_route_and_unknown_baseline()
     -> anyhow::Result<()> {
-        let assessment = semantic_fixture(TaskFamily::CodeGeneration, NextStepRole::Implement);
-        let template = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .join("templates/auto-router/policy-lock.yaml");
-        let mut active: PolicyLock = serde_saphyr::from_str(&std::fs::read_to_string(template)?)?;
+        let assessment = semantic_fixture(TaskFamily::CodeGeneration, NextStep::Implement);
+        let mut active = crate::model_policy::decode(include_str!("../policy/default.yaml"))?;
         let configured = active
             .policies
             .get_mut("auto")
             .ok_or_else(|| anyhow::anyhow!("auto missing"))?;
-        configured.adequacy.min_semantic_successes_for_lock = 1;
-        configured.predictor =
-            Some(crate::gateway::routing::workflow::predictive::compiled_predictor_contract());
-        let key = "semantic_route/v1|unknown|implement|normal";
-        configured.routes.insert(key.into(), "balanced".into());
-        let digest = format!("sha256:{}", "a".repeat(64));
-        active.certificates.insert(
-            "auto".into(),
-            BTreeMap::from([(
-                key.into(),
-                crate::policy_lock::PolicyCertificate {
-                    classifier_digest: None,
-                    owner: crate::policy_lock::RouteOwner::Operator,
-                    selected_tier: "balanced".into(),
-                    baseline_tier: Some("balanced".into()),
-                    source: crate::policy_lock::CertificateSource::Operator,
-                    eligible_episodes: 0,
-                    independent_tasks: 0,
-                    quality: None,
-                    economics: None,
-                    latency: None,
-                    critical_violations: 0,
-                    verdict: crate::policy_lock::PromotionVerdict::Retain,
-                    evaluator_config_digest: None,
-                    compiler_config_digest: digest.clone(),
-                    evidence_digest: digest,
-                },
-            )]),
+        configured.classifier_digest = Some(
+            crate::gateway::routing::workflow::predictive::compiled_predictor_contract()
+                .config_digest,
         );
+        let key = "unknown|implement|normal";
+        configured.routes.insert(key.parse()?, "balanced".into());
+        let compiled = crate::model_policy::compile(&active)?;
         let policy_digest = semantic_digest(&active)?;
         let policy = active
             .policies
             .get("auto")
-            .ok_or_else(|| anyhow::anyhow!("template auto policy missing"))?;
-        let table = PolicyTable::from_config(
-            &policy.as_table_config(crate::config::PolicyRuntimeMode::Frozen),
-        )
-        .ok_or_else(|| anyhow::anyhow!("template policy table missing"))?;
-        let route_baselines = active.certificates["auto"]
-            .iter()
-            .filter_map(|(request_key, certificate)| {
-                certificate
-                    .baseline_tier
-                    .as_ref()
-                    .map(|baseline| (request_key.clone(), baseline.clone()))
-            })
-            .collect();
+            .ok_or_else(|| anyhow::anyhow!("auto missing"))?;
+        let table = PolicyTable::from_model_selection(
+            compiled
+                .selections()
+                .get("auto")
+                .ok_or_else(|| anyhow::anyhow!("compiled auto missing"))?,
+        );
+        let route_baselines = [(key.into(), "balanced".into())].into();
         let pending = PendingEvalDecisionStore::default();
         let router = PolicyTableRouter::new(table).with_eval_observer(
             pending.clone(),
             "auto",
             policy_digest.clone(),
             route_baselines,
-            policy.default_tier.clone(),
+            Some(policy.default_tier.clone()),
         );
         let mut prompt = prompt("@auto");
         prompt.messages = vec![user(
@@ -3020,19 +2820,16 @@ mod tests {
             router.decision_for_bound_policy(&prompt, &HeaderMap::new(), &assessment);
         assert_eq!(
             decision.route_projection,
-            "semantic_route/v1|code:generation|implement|normal"
+            "code:generation|implement|normal"
         );
-        assert_eq!(
-            decision.request_key,
-            "semantic_route/v1|unknown|implement|normal"
-        );
+        assert_eq!(decision.request_key, "unknown|implement|normal");
         assert_eq!(decision.selected_tier.as_deref(), Some("balanced"));
         let strong_model = policy
             .tiers
             .get("strong")
             .ok_or_else(|| anyhow::anyhow!("template strong tier missing"))?
-            .model()
-            .to_owned();
+            .model
+            .clone();
         router.apply_continuation_adjustment(
             &mut decision,
             &ContinuationAdjustment::Pin {
@@ -3056,12 +2853,9 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("pending unified-v1 decision missing"))?;
         assert_eq!(
             correlated.route_projection,
-            "semantic_route/v1|code:generation|implement|normal"
+            "code:generation|implement|normal"
         );
-        assert_eq!(
-            correlated.request_key,
-            "semantic_route/v1|unknown|implement|normal"
-        );
+        assert_eq!(correlated.request_key, "unknown|implement|normal");
         assert_eq!(correlated.baseline_tier.as_deref(), Some("balanced"));
         assert_eq!(correlated.task_family_reason_codes, Vec::<String>::new());
 
@@ -3113,12 +2907,9 @@ mod tests {
                 .ok_or_else(|| anyhow::anyhow!("settled unified-v1 decision missing"))?;
             assert_eq!(
                 settled.route_projection,
-                "semantic_route/v1|code:generation|implement|normal"
+                "code:generation|implement|normal".parse()?
             );
-            assert_eq!(
-                settled.request_key,
-                "semantic_route/v1|unknown|implement|normal"
-            );
+            assert_eq!(settled.request_key, "unknown|implement|normal".parse()?);
             assert_eq!(settled.baseline_tier.as_deref(), Some("balanced"));
             assert_eq!(
                 subject
@@ -3132,76 +2923,14 @@ mod tests {
             );
 
             assert_eq!(subject.scope, bitrouter_ai::eval::EvalScope::Request);
-            // A task evaluator explicitly attributes its task result to this
-            // decision. Request completion alone cannot provide this quality.
-            let mut subject = subject;
-            subject.scope = bitrouter_ai::eval::EvalScope::Task;
-            subject.subject_id = "independently-evaluated-task".into();
-            subject.eval_id = "task:independently-evaluated-task".into();
-            let result = EvaluationResult {
-                schema_version: EVAL_SCHEMA_VERSION,
-                eval_id: subject.eval_id.clone(),
-                evidence_digest: subject.evidence_digest.clone(),
-                evaluator: EvaluatorIdentity {
-                    authority_id: "task-native".into(),
-                    evaluator_id: "unified-v1-regression".into(),
-                    kind: EvaluatorKind::TaskNative,
-                    version: "1".into(),
-                    config_digest: policy_digest,
-                },
-                verdict: EvalVerdict::Pass,
-                metrics: BTreeMap::new(),
-                hard_violations: Vec::new(),
-                confidence_ppm: Some(1_000_000),
-                evidence_refs: Vec::new(),
-                decision_credit: BTreeMap::new(),
-                idempotency_key: "unified-v1-regression".into(),
-                submitted_at: "2026-08-15T00:00:01Z".into(),
-            };
-            let eval = EvalEvidenceSnapshot {
-                evidence_root:
-                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
-                frozen_at: "2026-08-15T00:00:02Z".into(),
-                records: vec![EvalEvidenceRecord {
-                    result_id: "unified-v1-result".into(),
-                    content_digest:
-                        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-                            .into(),
-                    subject,
-                    result,
-                }],
-            };
-            let routes = eval.route_evidence()?;
-            let attributed = routes
-                .get(&(
-                    "auto".to_owned(),
-                    "semantic_route/v1|code:generation|implement|normal".to_owned(),
-                ))
-                .ok_or_else(|| anyhow::anyhow!("unified-v1 compiler attribution missing"))?;
-            assert_eq!(attributed.baseline_tier.as_deref(), Some("balanced"));
-            assert_eq!(
-                attributed.matched_request_keys,
-                BTreeSet::from(["semantic_route/v1|unknown|implement|normal".to_owned()])
-            );
-            let compiled = compile_candidate(CompileInput {
-                current: &active,
-                parent_digest: None,
-                snapshot_time_unix_ms: 0,
-                eval: Some(&eval),
-                proposed_progress_guards: None,
-            })?
-            .document;
-            let certificate = compiled
-                .certificate("auto", "semantic_route/v1|code:generation|implement|normal")
-                .ok_or_else(|| anyhow::anyhow!("compiled unified-v1 certificate missing"))?;
-            assert_eq!(certificate.baseline_tier.as_deref(), Some("balanced"));
+            assert_eq!(subject.spec_version, bitrouter_ai::eval::SpecVersion::Beta1);
         }
         Ok(())
     }
 
     #[test]
     fn task_aware_policy_unknown_family_uses_unified_v1_key() {
-        let assessment = semantic_fixture(TaskFamily::Unknown, NextStepRole::Finalize);
+        let assessment = semantic_fixture(TaskFamily::Unknown, NextStep::Finalize);
         let mut cfg = config();
         cfg.fingerprints.clear();
         cfg.default_tier = None;
@@ -3211,21 +2940,16 @@ mod tests {
 
         let decision = router.assessed_decision(&prompt, &HeaderMap::new(), &assessment);
 
-        assert_eq!(
-            decision.route_projection,
-            "semantic_route/v1|unknown|finalize|normal"
-        );
+        assert_eq!(decision.route_projection, "unknown|finalize|normal");
     }
 
     #[test]
     fn unknown_family_uses_an_explicit_v1_route_before_default() -> anyhow::Result<()> {
-        let assessment = semantic_fixture(TaskFamily::Unknown, NextStepRole::Finalize);
+        let assessment = semantic_fixture(TaskFamily::Unknown, NextStep::Finalize);
         let mut cfg = config();
         cfg.fingerprints.clear();
-        cfg.fingerprints.insert(
-            "semantic_route/v1|unknown|finalize|normal".into(),
-            "economy".into(),
-        );
+        cfg.fingerprints
+            .insert("unknown|finalize|normal".into(), "economy".into());
         cfg.default_tier = Some("strong".into());
         let routed = PolicyTableRouter::from_config(&cfg)
             .ok_or_else(|| anyhow::anyhow!("configured router missing"))?;
@@ -3234,14 +2958,8 @@ mod tests {
 
         let explicit = routed.assessed_decision(&prompt, &HeaderMap::new(), &assessment);
 
-        assert_eq!(
-            explicit.route_projection,
-            "semantic_route/v1|unknown|finalize|normal"
-        );
-        assert_eq!(
-            explicit.request_key,
-            "semantic_route/v1|unknown|finalize|normal"
-        );
+        assert_eq!(explicit.route_projection, "unknown|finalize|normal");
+        assert_eq!(explicit.request_key, "unknown|finalize|normal");
         assert_eq!(explicit.selected_tier.as_deref(), Some("economy"));
 
         cfg.fingerprints.clear();
@@ -3254,7 +2972,7 @@ mod tests {
 
     #[test]
     fn task_aware_policy_records_bounded_task_observability() -> anyhow::Result<()> {
-        let assessment = semantic_fixture(TaskFamily::CodeReview, NextStepRole::Verify);
+        let assessment = semantic_fixture(TaskFamily::CodeReview, NextStep::Verify);
         let path = temp_path("task-aware-decisions.jsonl");
         let table = PolicyTable::from_config(&config())
             .ok_or_else(|| anyhow::anyhow!("configured table missing"))?;
@@ -3280,14 +2998,12 @@ mod tests {
 
     #[test]
     fn broad_opening_routes_on_predictive_orchestrate_role() {
-        let assessment = semantic_fixture(
-            TaskFamily::AgentMultiStepPlanning,
-            NextStepRole::Orchestrate,
-        );
+        let assessment =
+            semantic_fixture(TaskFamily::AgentMultiStepPlanning, NextStep::Orchestrate);
         let mut cfg = config();
         cfg.fingerprints.clear();
         cfg.fingerprints.insert(
-            "semantic_route/v1|agent:multi_step_planning|orchestrate|normal".to_string(),
+            "agent:multi_step_planning|orchestrate|normal".to_string(),
             "cheap".to_string(),
         );
         let router = PolicyTableRouter::from_config(&cfg).expect("configured");
@@ -3298,14 +3014,14 @@ mod tests {
 
         assert_eq!(
             decision.request_key,
-            "semantic_route/v1|agent:multi_step_planning|orchestrate|normal"
+            "agent:multi_step_planning|orchestrate|normal"
         );
         assert_eq!(decision.selected_tier.as_deref(), Some("cheap"));
     }
 
     #[test]
     fn observed_policy_route_is_ignored_in_favor_of_default() {
-        let assessment = semantic_fixture(TaskFamily::Unknown, NextStepRole::Unknown);
+        let assessment = semantic_fixture(TaskFamily::Unknown, NextStep::Unknown);
         let mut cfg = config();
         cfg.fingerprints.insert(
             "agent_trace/v2|tool_followup|normal".to_string(),
@@ -3317,16 +3033,13 @@ mod tests {
 
         let decision = router.assessed_decision(&prompt, &HeaderMap::new(), &assessment);
 
-        assert_eq!(
-            decision.request_key,
-            "semantic_route/v1|unknown|unknown|normal"
-        );
+        assert_eq!(decision.request_key, "unknown|unknown|normal");
         assert_eq!(decision.selected_tier.as_deref(), Some("flagship"));
     }
 
     #[test]
     fn default_policy_route_records_the_predictive_learning_key() {
-        let assessment = semantic_fixture(TaskFamily::Unknown, NextStepRole::Unknown);
+        let assessment = semantic_fixture(TaskFamily::Unknown, NextStep::Unknown);
         let mut cfg = config();
         cfg.fingerprints.clear();
         let router = PolicyTableRouter::from_config(&cfg).expect("configured");
@@ -3334,16 +3047,13 @@ mod tests {
 
         let decision = router.assessed_decision(&prompt, &HeaderMap::new(), &assessment);
 
-        assert_eq!(
-            decision.request_key,
-            "semantic_route/v1|unknown|unknown|normal"
-        );
+        assert_eq!(decision.request_key, "unknown|unknown|normal");
         assert_eq!(decision.selected_tier.as_deref(), Some("flagship"));
     }
 
     #[test]
     fn decision_reason_static_table() {
-        let assessment = semantic_fixture(TaskFamily::CodeDebugging, NextStepRole::Implement);
+        let assessment = semantic_fixture(TaskFamily::CodeDebugging, NextStep::Implement);
         let router = router();
         let mut p = prompt("inbound");
         p.messages = completed_read_step();
@@ -3358,7 +3068,7 @@ mod tests {
 
     #[test]
     fn continuation_pin_records_the_predictive_proposal_and_serving_adjustment() {
-        let assessment = semantic_fixture(TaskFamily::CodeDebugging, NextStepRole::Implement);
+        let assessment = semantic_fixture(TaskFamily::CodeDebugging, NextStep::Implement);
         let router = router();
         let mut p = prompt("inbound");
         p.messages = completed_read_step();
@@ -3398,7 +3108,7 @@ mod tests {
 
     #[test]
     fn continuation_detach_records_adjustment_without_rewriting_prediction() {
-        let assessment = semantic_fixture(TaskFamily::Unknown, NextStepRole::Unknown);
+        let assessment = semantic_fixture(TaskFamily::Unknown, NextStep::Unknown);
         let router = router();
         let mut p = prompt("inbound");
         p.messages = read_step();
@@ -3419,7 +3129,7 @@ mod tests {
 
     #[test]
     fn legacy_rejection_preserves_proposal_in_pending_eval_audit() {
-        let assessment = semantic_fixture(TaskFamily::CodeDebugging, NextStepRole::Implement);
+        let assessment = semantic_fixture(TaskFamily::CodeDebugging, NextStep::Implement);
         let table = PolicyTable::from_config(&config()).expect("configured");
         let pending = crate::gateway::observability::decision::PendingEvalDecisionStore::default();
         let router = PolicyTableRouter::new(table).with_eval_observer(
@@ -3463,7 +3173,7 @@ mod tests {
 
     #[test]
     fn continuation_adjustment_and_proposal_are_written_to_jsonl() -> anyhow::Result<()> {
-        let assessment = semantic_fixture(TaskFamily::CodeDebugging, NextStepRole::Implement);
+        let assessment = semantic_fixture(TaskFamily::CodeDebugging, NextStep::Implement);
         let path = temp_path("continuation-adjustment-decisions.jsonl");
         let table = PolicyTable::from_config(&config())
             .ok_or_else(|| anyhow::anyhow!("policy table missing"))?;
@@ -3508,7 +3218,7 @@ mod tests {
 
     #[test]
     fn continuation_pin_fails_closed_when_the_active_lock_removed_its_model() {
-        let assessment = semantic_fixture(TaskFamily::Unknown, NextStepRole::Unknown);
+        let assessment = semantic_fixture(TaskFamily::Unknown, NextStep::Unknown);
         let router = router();
         let mut p = prompt("inbound");
         p.messages = read_step();
@@ -3534,7 +3244,7 @@ mod tests {
 
     #[test]
     fn decision_reason_tool_guardrail() {
-        let assessment = semantic_fixture(TaskFamily::CodeDebugging, NextStepRole::Implement);
+        let assessment = semantic_fixture(TaskFamily::CodeDebugging, NextStep::Implement);
         let router = router();
         let mut p = prompt("inbound");
         p.messages = completed_read_step();
@@ -3549,7 +3259,7 @@ mod tests {
 
     #[test]
     fn decision_reason_records_progress_guard_before_tool_floor() {
-        let assessment = semantic_fixture(TaskFamily::Unknown, NextStepRole::Unknown);
+        let assessment = semantic_fixture(TaskFamily::Unknown, NextStep::Unknown);
         let router = router();
         let mut decision =
             router.candidate_for_guarded_policy(&prompt("inbound"), &HeaderMap::new(), &assessment);
@@ -3566,12 +3276,12 @@ mod tests {
 
     #[test]
     fn decision_reason_no_match() {
-        let assessment = semantic_fixture(TaskFamily::Unknown, NextStepRole::Unknown);
+        let assessment = semantic_fixture(TaskFamily::Unknown, NextStep::Unknown);
         let cfg = PolicyTableConfig {
             key_strategy: Default::default(),
-            tiers: HashMap::from([("cheap".to_string(), PolicyModelTarget::from("vendor/cheap"))]),
+            tiers: HashMap::from([("cheap".to_string(), Target::from("vendor/cheap"))]),
             fingerprints: HashMap::from([(
-                "semantic_route/v1|code:review|verify|normal".to_string(),
+                "code:review|verify|normal".to_string(),
                 "cheap".to_string(),
             )]),
             default_tier: None,
@@ -3592,7 +3302,7 @@ mod tests {
 
     #[test]
     fn policy_table_decision_never_exposes_learned_override_reasons() {
-        let assessment = semantic_fixture(TaskFamily::Unknown, NextStepRole::Unknown);
+        let assessment = semantic_fixture(TaskFamily::Unknown, NextStep::Unknown);
         let router = PolicyTableRouter::from_config(&config()).expect("configured");
         let mut prompt = prompt("inbound");
         prompt.messages = read_step();

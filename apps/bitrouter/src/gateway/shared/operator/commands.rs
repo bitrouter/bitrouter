@@ -85,11 +85,7 @@ impl<'a> Prepared<'a> {
                     format: config.format,
                     routing: config.routing.clone(),
                     policies: config.policies.clone(),
-                    policy_lock: config
-                        .policy_lock
-                        .clone()
-                        .map(serde_json::from_value)
-                        .transpose()?,
+                    model_policy: config.model_policy.clone(),
                     credentials: config
                         .credentials
                         .iter()

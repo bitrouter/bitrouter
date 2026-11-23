@@ -1,5 +1,53 @@
 //! Request capability projection shared by gateway routing and core.
 
+use bitrouter_ai::types::ReasoningEffort;
+use serde::{Deserialize, Serialize};
+
+/// Exact qualitative reasoning-effort support for one provider/model route.
+///
+/// Absence means unknown rather than unsupported. Policy-owned effort targets
+/// require this positive declaration; ordinary caller-authored parameters keep
+/// their existing pass-through behavior when support is unknown.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReasoningEffortConfig {
+    /// Effort values accepted by this exact provider/model route.
+    pub levels: Vec<ReasoningEffort>,
+    /// Provider default when the request omits an effort value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<ReasoningEffort>,
+}
+
+impl ReasoningEffortConfig {
+    /// Validate the internal capability declaration.
+    ///
+    /// # Errors
+    /// Rejects empty or duplicate levels and a default outside the declared levels.
+    pub fn validate(&self) -> Result<(), super::error::ModelError> {
+        if self.levels.is_empty() {
+            return Err(super::error::ModelError::invalid_request(
+                "reasoning_effort.levels must not be empty",
+            ));
+        }
+        let mut unique = std::collections::BTreeSet::new();
+        for level in &self.levels {
+            if !unique.insert(*level) {
+                return Err(super::error::ModelError::invalid_request(format!(
+                    "reasoning_effort.levels contains duplicate '{level}'"
+                )));
+            }
+        }
+        if let Some(default) = self.default
+            && !self.levels.contains(&default)
+        {
+            return Err(super::error::ModelError::invalid_request(format!(
+                "reasoning_effort.default '{default}' must be listed in levels"
+            )));
+        }
+        Ok(())
+    }
+}
+
 use bitrouter_ai::types::{
     Capability, Content, Modality, Prompt, ToolResultContentPart, ToolResultOutput,
 };

@@ -1,7 +1,7 @@
 //! Persisted session records and offline checkpoint inspection.
 //! Scheduling and execution transitions are implemented by core.
 
-use bitrouter_ai::harness::inspection::AgentStatus;
+use crate::managed_contract::harness::inspection::AgentStatus;
 pub mod accounting;
 pub mod allocation;
 pub mod collaboration;
@@ -21,7 +21,7 @@ use self::signals::SignalState;
 use crate::gateway::pipeline::native::{
     NativeContextValidationReport, NativeInputCountReport, NativePlan,
 };
-use bitrouter_ai::core::protocol::{
+use crate::managed_contract::protocol::{
     CoreError, HarnessManifest, Limits, MaterialRef, OperationReceipt, TaskInput, ToolExecute,
     ToolResult,
 };
@@ -99,7 +99,7 @@ pub struct ModelStep {
     /// Oversized terminal diagnostic, hashed as a serde JSON string. The
     /// readable original is not retained; terminal_reason explains the omission.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub failure_diagnostic: Option<bitrouter_ai::core::evidence::NativeEvidenceCommitment>,
+    pub failure_diagnostic: Option<crate::managed_contract::evidence::NativeEvidenceCommitment>,
     pub step_id: String,
     pub decision_id: String,
     pub context_revision: u64,
@@ -147,7 +147,7 @@ pub struct Invocation {
     /// Absence preserves an already authorized legacy reply contract.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recovery_archive_allowance: Option<u64>,
-    pub effect: bitrouter_ai::core::protocol::ToolEffect,
+    pub effect: crate::managed_contract::protocol::ToolEffect,
     pub signal_revision: u64,
     /// Workspace version used to authorize this invocation, including explicit
     /// unknown. Legacy snapshots are additionally fenced by restoration.
@@ -160,18 +160,18 @@ pub struct Invocation {
     /// Fresh harness evidence retained by the latest restoration, not an
     /// authorization to infer the outcome of a later crash.
     #[serde(default)]
-    pub recovery_observation: Option<bitrouter_ai::core::protocol::ToolObservation>,
+    pub recovery_observation: Option<crate::managed_contract::protocol::ToolObservation>,
     /// Revision at which restoration accepted the fresh harness observation.
     #[serde(default)]
     pub recovery_observation_revision: u64,
     /// Superseded restore evidence remains available for irreversible execution
     /// facts and artifact retention. The snapshot byte limit bounds this list.
     #[serde(default)]
-    pub prior_recovery_observations: Vec<bitrouter_ai::core::protocol::ToolObservation>,
+    pub prior_recovery_observations: Vec<crate::managed_contract::protocol::ToolObservation>,
     /// Immutable observations keyed by operation ID, including new uncertainty
     /// episodes. The complete snapshot remains bounded by checkpoint limits.
     #[serde(default)]
-    pub tool_observations: BTreeMap<String, bitrouter_ai::core::protocol::ToolObservation>,
+    pub tool_observations: BTreeMap<String, crate::managed_contract::protocol::ToolObservation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -192,7 +192,7 @@ pub struct RootRun {
     /// Immutable authenticated clock handoffs for this run. Each source head
     /// precedes the session.restored checkpoint that accepted the measurement.
     #[serde(default)]
-    pub activity_reconciliations: Vec<bitrouter_ai::core::protocol::RunActivityReconciliation>,
+    pub activity_reconciliations: Vec<crate::managed_contract::protocol::RunActivityReconciliation>,
     /// A committed resource failure stops new work while outcomes and cleanup
     /// remain admissible. It does not turn unknown effects into known results.
     #[serde(default)]
@@ -259,7 +259,7 @@ pub struct AgentState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ActivityGap {
-    pub durable_head: bitrouter_ai::core::checkpoint::DurableHead,
+    pub durable_head: crate::managed_contract::checkpoint::DurableHead,
     pub known_active_ms: u64,
 }
 
@@ -289,7 +289,8 @@ pub struct SessionSnapshot {
         BTreeMap<String, crate::storage::checkpoint::snapshot::accounting::work::RunCostWork>,
     /// Late results are retained as evidence, never injected into agent history.
     #[serde(default)]
-    pub provider_evidence: BTreeMap<String, bitrouter_ai::core::protocol::ProviderAttemptEvidence>,
+    pub provider_evidence:
+        BTreeMap<String, crate::managed_contract::protocol::ProviderAttemptEvidence>,
     #[serde(default)]
     pub root_queue: crate::storage::checkpoint::snapshot::root_queue::RootQueue,
     #[serde(default)]
@@ -300,7 +301,7 @@ pub struct SessionSnapshot {
     /// Wire checkpoints may replace recovery histories with this immutable
     /// object. Public snapshots and scheduler state are always fully hydrated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub recovery_archive: Option<bitrouter_ai::core::protocol::ArtifactRef>,
+    pub recovery_archive: Option<crate::managed_contract::protocol::ArtifactRef>,
     /// Managed HTTP exchanges retain their own immutable completion boundary.
     #[serde(
         default,

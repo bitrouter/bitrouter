@@ -46,17 +46,17 @@ pub struct AdmissionProfileObservationCapabilitiesV1 {
     #[serde(deserialize_with = "super::number::integer")]
     #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 1048576)))]
     pub max_response_bytes: u32,
-    /// Supported retained profile versions, exactly [1, 2].
+    /// Supported retained profile versions, exactly `[1]`.
     #[serde(deserialize_with = "profile_versions")]
-    #[cfg_attr(feature = "schema", schemars(extend("const" = serde_json::json!([1, 2]))))]
-    pub profile_versions: [u8; 2],
+    #[cfg_attr(feature = "schema", schemars(extend("const" = serde_json::json!([1]))))]
+    pub profile_versions: [u8; 1],
 }
 
-fn profile_versions<'de, D: serde::Deserializer<'de>>(d: D) -> Result<[u8; 2], D::Error> {
+fn profile_versions<'de, D: serde::Deserializer<'de>>(d: D) -> Result<[u8; 1], D::Error> {
     #[derive(Deserialize)]
     struct Version(#[serde(deserialize_with = "super::number::integer")] u8);
-    let [first, second] = <[Version; 2]>::deserialize(d)?;
-    Ok([first.0, second.0])
+    let [first] = <[Version; 1]>::deserialize(d)?;
+    Ok([first.0])
 }
 
 impl Validate for AdmissionProfileObservationCapabilitiesV1 {
@@ -66,7 +66,7 @@ impl Validate for AdmissionProfileObservationCapabilitiesV1 {
                 && (1..=256).contains(&self.max_profiles)
                 && (1..=1048576).contains(&self.max_request_bytes)
                 && (1..=1048576).contains(&self.max_response_bytes)
-                && self.profile_versions == [1, 2],
+                && self.profile_versions == [1],
             "profile observation capabilities",
         )
     }

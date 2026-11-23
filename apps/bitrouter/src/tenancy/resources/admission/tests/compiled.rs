@@ -59,14 +59,14 @@ async fn compiled_profile_fixture(
     }
     if shared_health {
         imports[1] = super::shared::shared("profile", 1000)?;
-        super::shared::import_v2(&resources, &db, imports).await?;
+        super::shared::import_current(&resources, &db, imports).await?;
     } else {
         import(&resources, &db, imports).await?;
     }
     let document = serde_json::from_value(json!({"routes":roots,"policy":null,
         "generation_defaults":{"max_output_tokens":25,"temperature":0.0},
-        "learning":{"mode":"off","max_evaluations":0},
-        "limits":{"active_executions":32,"queued_work":32,"learning_jobs":0}}))?;
+        "eval_publication": false,
+        "limits":{"active_executions":32,"queued_work":32}}))?;
     let tenant = "tenant".try_into()?;
     let revision = "config-v1".try_into()?;
     let compiled = resources
@@ -166,7 +166,7 @@ async fn shared_profile_256_compiled_shape_retains_exact_closure_and_original_by
         .as_array()
         .context("artifacts")?
         .iter()
-        .position(|row| row["definition"]["kind"] == "admission_profile_v2")
+        .position(|row| row["definition"]["kind"] == "admission_profile")
         .context("shared profile")?;
     changed["artifacts"]
         .as_array_mut()

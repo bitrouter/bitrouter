@@ -15,12 +15,8 @@ use std::sync::Arc;
 
 pub(in crate::tenancy) enum Request {
     One(ExecutionId),
-    OneV2(ExecutionId),
     UsageEvidence(ExecutionId),
-    UsageEvidenceV2(ExecutionId),
     ProviderTechnical(ExecutionId),
-    ProviderTechnicalV2(ExecutionId),
-    ProviderTechnicalV3(ExecutionId),
     Page {
         correlation: CorrelationId,
         after: Option<ExecutionId>,
@@ -129,32 +125,12 @@ pub(in crate::tenancy) async fn body(
     storage_failure: impl Fn() -> Failure,
 ) -> Result<Vec<u8>, Failure> {
     let encoded = match request {
-        Request::One(id)
-        | Request::OneV2(id)
-        | Request::UsageEvidence(id)
-        | Request::UsageEvidenceV2(id)
-        | Request::ProviderTechnical(id)
-        | Request::ProviderTechnicalV2(id)
-        | Request::ProviderTechnicalV3(id) => {
-            use super::store::format::{Format, Terminal};
+        Request::One(id) | Request::UsageEvidence(id) | Request::ProviderTechnical(id) => {
+            use super::store::format::Terminal;
             let terminal = super::store::lookup_terminal(db, installation, tenant, id)
                 .await
                 .map_err(|_| storage_failure())?
                 .ok_or_else(|| Failure::from(ErrorCode::NotFound))?;
-            if matches!(request, Request::ProviderTechnicalV3(_)) {
-                let facts = super::provider_technical::storage::read_v3(db, &terminal)
-                    .await
-                    .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
-                return serde_json::to_vec(&facts)
-                    .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable));
-            }
-            if matches!(request, Request::ProviderTechnicalV2(_)) {
-                let facts = super::provider_technical::storage::read_v2(db, &terminal)
-                    .await
-                    .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
-                return serde_json::to_vec(&facts)
-                    .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable));
-            }
             if matches!(request, Request::ProviderTechnical(_)) {
                 // Optional corruption refuses only this getter. Do not call the
                 // original receipt storage-health failure callback for it.
@@ -164,26 +140,17 @@ pub(in crate::tenancy) async fn body(
                 return serde_json::to_vec(&facts)
                     .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable));
             }
-            let expected = if matches!(request, Request::OneV2(_) | Request::UsageEvidenceV2(_)) {
-                Format::V2
-            } else {
-                Format::V1
-            };
-            if terminal.format() != expected {
-                return Err(ErrorCode::CapabilityMismatch.into());
-            }
-            if matches!(request, Request::One(_) | Request::OneV2(_)) {
+            if matches!(request, Request::One(_)) {
                 return Ok(terminal.json().as_bytes().to_vec());
             }
-            match terminal {
-                Terminal::V1(candidate) => match &candidate.usage_evidence {
-                    Some(evidence) => return Ok(evidence.json.as_bytes().to_vec()),
-                    None => {
-                        serde_json::to_vec(&super::usage_evidence::historical(&candidate.receipt))
-                    }
-                },
-                Terminal::V2(candidate) => return Ok(candidate.evidence.json.as_bytes().to_vec()),
-            }
+            return match terminal {
+                Terminal::V1(candidate) => candidate
+                    .usage_evidence
+                    .as_ref()
+                    .map(|evidence| evidence.json.as_bytes().to_vec())
+                    .ok_or_else(storage_failure),
+                Terminal::V2(candidate) => Ok(candidate.evidence.json.as_bytes().to_vec()),
+            };
         }
         Request::Page {
             correlation,

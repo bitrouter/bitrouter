@@ -793,7 +793,7 @@ async fn run_interactive(
 /// Providers offered by the OSS registry, with no special placement for Cloud.
 fn provider_choices(
     data: &crate::gateway::catalog::RegistryData,
-) -> Vec<&bitrouter_ai::catalog::types::RegistryProvider> {
+) -> Vec<&crate::gateway::catalog::types::RegistryProvider> {
     let mut providers: Vec<_> = data
         .providers
         .iter()

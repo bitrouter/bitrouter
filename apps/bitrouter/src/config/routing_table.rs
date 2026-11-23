@@ -283,7 +283,7 @@ fn build_targets(
     let model_constraints = provider
         .model_config(model_id)
         .map(
-            |model| bitrouter_ai::core::evidence::NativeRouteConstraints {
+            |model| crate::managed_contract::evidence::NativeRouteConstraints {
                 capabilities: model.capabilities.clone(),
                 token_limits: model.token_limits.clone(),
                 input_token_counting: model.input_token_counting,
@@ -868,7 +868,7 @@ impl RoutingTable for ConfigRoutingTable {
             prefs: resolution.prefs,
             overrides: resolution.overrides,
             policy: resolution.policy,
-            variant: resolution.variant,
+
             router: resolution.router,
             request_checks: resolution.request_checks,
         })
@@ -1054,16 +1054,16 @@ pub(crate) fn merge_prefs(base: &mut RoutingPrefs, extra: &RoutingPrefs) {
 /// Whether a configured endpoint matches these published rates. This is
 /// applicability only: it never applies a regional price multiplier.
 fn matches_pricing_endpoint(
-    profile: bitrouter_ai::catalog::types::PricingEndpointProfile,
+    profile: crate::gateway::catalog::types::PricingEndpointProfile,
     api_base: &str,
 ) -> bool {
     let Ok(url) = reqwest::Url::parse(api_base) else {
         return false;
     };
     let host = match profile {
-        bitrouter_ai::catalog::types::PricingEndpointProfile::OpenaiGlobal => "api.openai.com",
-        bitrouter_ai::catalog::types::PricingEndpointProfile::OpenaiUs => "us.api.openai.com",
-        bitrouter_ai::catalog::types::PricingEndpointProfile::OpenaiEurope => "eu.api.openai.com",
+        crate::gateway::catalog::types::PricingEndpointProfile::OpenaiGlobal => "api.openai.com",
+        crate::gateway::catalog::types::PricingEndpointProfile::OpenaiUs => "us.api.openai.com",
+        crate::gateway::catalog::types::PricingEndpointProfile::OpenaiEurope => "eu.api.openai.com",
     };
     url.scheme() == "https"
         && url.host_str() == Some(host)
@@ -1149,16 +1149,13 @@ providers:
     }
 
     #[tokio::test]
-    async fn resolved_provider_model_is_not_reinterpreted_as_a_variant() {
+    async fn resolved_provider_model_preserves_its_literal_name() {
         let t = table(
             r#"providers:
   vendor:
     api_base: https://vendor.example/v1
     api_key: k
     models: [{ id: free }]
-variants:
-  free:
-    routing: { only: [other] }
 "#,
         );
 
@@ -1667,7 +1664,7 @@ routers:
             crate::config::router::RouterConfig {
                 selection: crate::config::router::RouterSelection::Model {
                     model: "vendor:base".into(),
-                    routing: bitrouter_ai::routing::RoutingConfig::default(),
+                    routing: crate::config::router::RoutingConfig::default(),
                 },
                 defaults: crate::config::router::RouterDefaults::default(),
                 checks: crate::config::router::RouterChecks::default(),
@@ -1685,7 +1682,7 @@ routers:
     }
 
     #[tokio::test]
-    async fn preset_routing_flows_into_cascade() {
+    async fn named_router_routing_flows_into_cascade() {
         // `@careful` requires the `paid` tag — only paid providers enter the chain.
         let yaml = r#"
 providers:
@@ -1698,15 +1695,17 @@ providers:
     api_base: https://unpaid.example/v1
     api_key: k2
     models: [{ id: gpt-5 }]
-presets:
+routers:
   careful:
-    model: gpt-5
-    routing: { require_tags: [paid] }
+    selection:
+      kind: model
+      model: gpt-5
+      routing: { require_tags: [paid] }
 "#;
         let t = table(yaml);
         let chain = t
             .route_chain(
-                "@careful",
+                "bitrouter/careful",
                 &RoutingPrefs::default(),
                 &CallerContext::local(),
             )
@@ -2034,7 +2033,7 @@ models:
     }
 
     #[tokio::test]
-    async fn inbound_protocol_survives_preset_resolution() {
+    async fn inbound_protocol_survives_named_router_resolution() {
         // The inbound protocol (a caller pref) must survive the merge over the
         // preset-derived prefs base, so native routing still applies when a
         // request goes through an `@preset`.
@@ -2046,14 +2045,16 @@ providers:
     api_protocol:
       - "*": [chat_completions, messages]
     models: [{ id: MiniMax-M2 }]
-presets:
+routers:
   pick:
-    model: MiniMax-M2
+    selection:
+      kind: model
+      model: MiniMax-M2
 "#;
         let t = table(yaml);
         let chain = t
             .route_chain(
-                "@pick",
+                "bitrouter/pick",
                 &prefs_inbound(ApiProtocol::Messages),
                 &CallerContext::local(),
             )

@@ -53,18 +53,12 @@ impl Action {
         })
     }
 
-    /// Name in the original capability list, before versioned descriptors.
-    pub const fn legacy_name(self) -> &'static str {
-        match self {
-            Self::Models => "models",
-            Self::Route => "route_preview",
-            _ => self.id(),
-        }
-    }
-
     /// Descriptor version understood for this action.
     pub const fn version(self) -> u32 {
-        1
+        match self {
+            Self::Models | Self::Route | Self::Reload | Self::PolicyStatus | Self::PolicyShow => 2,
+            _ => 1,
+        }
     }
 
     pub const fn required_scope(self) -> ControlScope {
@@ -72,13 +66,5 @@ impl Action {
             Self::Reload => ControlScope::Reload,
             _ => ControlScope::Read,
         }
-    }
-
-    /// Only these original reads can be discovered without scoped descriptors.
-    pub const fn supports_legacy_discovery(self) -> bool {
-        matches!(
-            self,
-            Self::Status | Self::Models | Self::Route | Self::Requests
-        )
     }
 }

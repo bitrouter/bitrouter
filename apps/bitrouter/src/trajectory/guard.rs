@@ -4,8 +4,8 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use super::types::{HistoryCompleteness, TrajectoryEvent, TrajectoryEventKind, TrajectorySnapshot};
+use crate::gateway::routing::exploration::RouteAssignment;
 use crate::gateway::routing::workflow::ir::{RouteProjection, WorkflowStateKind};
-use bitrouter_ai::eval::EvalExperimentRef;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -61,7 +61,7 @@ pub struct RouteIntent {
     /// cycle through the selected tier.
     pub trajectory_snapshot_digest: String,
     pub policy_digest: String,
-    pub experiment: Option<EvalExperimentRef>,
+    pub experiment: Option<RouteAssignment>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

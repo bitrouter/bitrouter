@@ -13,7 +13,8 @@ use super::super::{
     manifest::{Artifact, CredentialBinding, Definition},
 };
 use super::{Candidate, Chain, RetainedPolicy, RouteData, ValidatedEnvelope, native_v1, target};
-use crate::{gateway::pipeline::routing::PromptOverrides, policy_lock::PolicyLock};
+use crate::gateway::pipeline::routing::PromptOverrides;
+use bitrouter_ai::policy::Document;
 
 // Internal decoded-work limits, in addition to the authenticated 1 MiB plaintext
 // bound. This counts target/projection content, not process RSS or cache weight.
@@ -25,7 +26,7 @@ const MAX_ROUTE_DEPENDENCIES: usize = 16_384;
 
 struct Source {
     native_route: bool,
-    admission: Option<Vec<bitrouter_ai::tenancy::resources_v3::NativeAdmissionAttachmentV1>>,
+    admission: Option<Vec<bitrouter_ai::tenancy::admission::AdmissionAttachment>>,
     routing: Arc<serde_json::Value>,
     credentials: Vec<CredentialBinding>,
     choice: Option<super::super::core_choice::Profile>,
@@ -36,7 +37,7 @@ struct Source {
 
 struct Policy {
     name: String,
-    document: Arc<PolicyLock>,
+    document: Arc<Document>,
 }
 
 pub(super) fn decode(envelope: Envelope) -> Result<ValidatedEnvelope> {
@@ -54,6 +55,10 @@ pub(super) fn decode_with_operation(
         routes,
         artifacts,
     } = envelope;
+    // Every authenticated policy in the closure must use the current source.
+    // Recovery never turns a source qualification error into a capability flag.
+    super::super::qualify_model_policies(&artifacts)
+        .map_err(|_| anyhow::anyhow!("invalid retained model policy source"))?;
     ensure!(
         artifacts.len() <= MAX_CLOSURE && routes.len() <= 256,
         ExecutionCapacityExceeded
@@ -63,7 +68,6 @@ pub(super) fn decode_with_operation(
     let mut sources = HashMap::new();
     let mut policies = HashMap::new();
     let mut graph = HashMap::new();
-    let mut learned_checkpoint = false;
     for Artifact {
         reference,
         definition,
@@ -103,27 +107,7 @@ pub(super) fn decode_with_operation(
                 sources.insert(
                     reference,
                     Source {
-                        native_route: false,
-                        routing: Arc::new(routing),
-                        credentials,
-                        envelope,
-                        admission: Some(attachments.into_iter().map(|item|bitrouter_ai::tenancy::resources_v3::NativeAdmissionAttachmentV1 {inbound_protocol:item.inbound_protocol,candidate_index:item.candidate_index,credential:item.credential,profile:item.profile}).collect()),
-                        choice: None,
-                        assessment: None,
-                        block: None,
-                    },
-                );
-            }
-            Definition::NativeProfiledRouteV1 {
-                routing,
-                credentials,
-                attachments,
-                ..
-            } => {
-                sources.insert(
-                    reference,
-                    Source {
-                        native_route: true,
+                        native_route: attachments.iter().any(|item| item.inbound_protocol == bitrouter_ai::tenancy::ordered::GenerationProtocol::GenerateContent),
                         routing: Arc::new(routing),
                         credentials,
                         envelope,
@@ -134,7 +118,7 @@ pub(super) fn decode_with_operation(
                     },
                 );
             }
-            Definition::AdmissionProfile { .. } | Definition::AdmissionProfileV2 { .. } => {}
+            Definition::AdmissionProfile { .. } => {}
             Definition::Policy { document, name, .. } => {
                 policies.insert(
                     reference,
@@ -143,10 +127,6 @@ pub(super) fn decode_with_operation(
                         document: Arc::new(document),
                     },
                 );
-            }
-            Definition::Checkpoint { evidence } => {
-                evidence.validate(&reference)?;
-                learned_checkpoint = true;
             }
             Definition::Credential { .. } => {
                 anyhow::bail!("credential plaintext in compiled envelope")
@@ -260,10 +240,7 @@ pub(super) fn decode_with_operation(
     for parent in retained.values() {
         if parent.admission.is_some() {
             ensure!(
-                document.policy.is_none()
-                    && document.learning.mode
-                        == bitrouter_ai::tenancy::configuration::LearningMode::Off
-                    && document.learning.max_evaluations == 0,
+                document.policy.is_none() && !document.eval_publication,
                 "profiled route requires static ordered configuration"
             );
         }
@@ -286,8 +263,9 @@ pub(super) fn decode_with_operation(
         }
     }
     Ok(ValidatedEnvelope {
+        bro_capture: false,
+
         document,
-        learned_checkpoint,
         routes: retained,
     })
 }

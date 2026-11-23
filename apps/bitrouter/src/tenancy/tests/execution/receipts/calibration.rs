@@ -1,7 +1,7 @@
 //! One real receipt pair and its same-actor archive writes, with sampled files.
 use super::*;
 use crate::{storage::write::measurement, tenancy::transaction::Phase};
-use bitrouter_ai::tenancy::{execution::Outcome, usage_evidence::ExecutionUsageEvidenceV1};
+use bitrouter_ai::tenancy::{execution::Outcome, usage_evidence::ExecutionUsageEvidence};
 use sea_orm::{ConnectionTrait, Statement};
 
 fn usage_stream() -> Result<String> {
@@ -119,7 +119,7 @@ async fn actual_receipt_and_same_actor_archive_estimates_cover_sampled_file_grow
             } else { actual };
             ensure!(encoded == expected);
             let usage = evidence(&h, &id).await?;
-            let document: ExecutionUsageEvidenceV1 = serde_json::from_slice(&usage)?;
+            let document: ExecutionUsageEvidence = serde_json::from_slice(&usage)?;
             ensure!(document.frames.len() == if stream { 17 } else { 1 });
             receipts.push((actual, encoded));
 

@@ -34,21 +34,28 @@ async fn charge(fixture: &Fixture, reference: &ResourceRef, status: Option<u16>)
 }
 
 #[tokio::test]
-async fn real_charges_preserve_member_rpm_and_v1_local_v2_shared_health() -> Result<()> {
+async fn real_charges_preserve_member_rpm_and_explicit_health_groups() -> Result<()> {
     let fixture = keyed_fixture().await?;
-    let mut a_rules = rules(2, Some(1), true);
+    let mut a_rules = rules("circuit", Some(1), true);
     a_rules["observe_rate_group_id"] = json!("window");
     let a = provision(&fixture, "member-a", "a", None, a_rules).await?;
-    let b = provision(&fixture, "member-b", "b", None, rules(2, Some(3), true)).await?;
+    let b = provision(
+        &fixture,
+        "member-b",
+        "b",
+        None,
+        rules("circuit", Some(3), true),
+    )
+    .await?;
     let local = provision(
         &fixture,
         "circuit",
         "local",
         None,
-        rules(1, Some(100), true),
+        rules("member-local", Some(100), true),
     )
     .await?;
-    let mut bypass_rules = rules(2, None, false);
+    let mut bypass_rules = rules("circuit", None, false);
     bypass_rules["observe_rate_group_id"] = json!("window");
     let bypass = provision(&fixture, "bypass", "bypass", None, bypass_rules).await?;
     let input = request(
@@ -93,8 +100,15 @@ async fn real_charges_preserve_member_rpm_and_v1_local_v2_shared_health() -> Res
 async fn independent_groups_and_installations_never_share_observations() -> Result<()> {
     let fixture = keyed_fixture().await?;
     let other = keyed_fixture().await?;
-    let first = provision(&fixture, "member", "first", None, rules(2, Some(3), true)).await?;
-    let mut isolated_rules = rules(2, Some(3), true);
+    let first = provision(
+        &fixture,
+        "member",
+        "first",
+        None,
+        rules("circuit", Some(3), true),
+    )
+    .await?;
+    let mut isolated_rules = rules("circuit", Some(3), true);
     isolated_rules["rate"]["rate_group_id"] = json!("other-window");
     isolated_rules["health_group_id"] = json!("other-health");
     let isolated = provision(&fixture, "isolated", "isolated", None, isolated_rules).await?;
@@ -104,10 +118,17 @@ async fn independent_groups_and_installations_never_share_observations() -> Resu
         "member",
         "other-pool",
         None,
-        rules(2, Some(3), true),
+        rules("circuit", Some(3), true),
     )
     .await?;
-    let other_ref = provision(&other, "member", "other", None, rules(2, Some(3), true)).await?;
+    let other_ref = provision(
+        &other,
+        "member",
+        "other",
+        None,
+        rules("circuit", Some(3), true),
+    )
+    .await?;
     charge(&fixture, &first, Some(401)).await?;
     let observed = read(
         &fixture,
@@ -151,7 +172,14 @@ async fn independent_groups_and_installations_never_share_observations() -> Resu
 #[tokio::test]
 async fn held_runtime_and_authority_locks_refuse_without_fencing_or_mutation() -> Result<()> {
     let fixture = keyed_fixture().await?;
-    let pin = provision(&fixture, "member", "create", None, rules(2, Some(3), true)).await?;
+    let pin = provision(
+        &fixture,
+        "member",
+        "create",
+        None,
+        rules("circuit", Some(3), true),
+    )
+    .await?;
     let input = request(&fixture, vec![pin])?;
     let before = durable(&fixture).await?;
     let runtime = operational(&fixture)?;
@@ -198,10 +226,17 @@ async fn held_runtime_and_authority_locks_refuse_without_fencing_or_mutation() -
 #[tokio::test]
 async fn sampling_capacity_denial_preserves_fields_and_allocates_no_health_entries() -> Result<()> {
     let fixture = keyed_fixture().await?;
-    let pin = provision(&fixture, "member", "create", None, rules(2, None, true)).await?;
+    let pin = provision(
+        &fixture,
+        "member",
+        "create",
+        None,
+        rules("circuit", None, true),
+    )
+    .await?;
     let input = request(&fixture, vec![pin.clone()])?;
-    let mut synthetic: bitrouter_ai::tenancy::admission_v2::AdmissionProfileV2 =
-        serde_json::from_value(rules(2, None, true))?;
+    let mut synthetic: bitrouter_ai::tenancy::admission::AdmissionProfile =
+        serde_json::from_value(rules("circuit", None, true))?;
     for n in 0..crate::tenancy::operational::MAX_RUNTIME_KEYS {
         synthetic.health_group_id = Some(format!("occupied-{n}").try_into()?);
         drop(
@@ -240,7 +275,14 @@ async fn sampling_capacity_denial_preserves_fields_and_allocates_no_health_entri
 #[tokio::test]
 async fn original_deadline_is_not_reset_between_sampling_and_encoding() -> Result<()> {
     let fixture = keyed_fixture().await?;
-    let pin = provision(&fixture, "member", "create", None, rules(2, None, false)).await?;
+    let pin = provision(
+        &fixture,
+        "member",
+        "create",
+        None,
+        rules("circuit", None, false),
+    )
+    .await?;
     let input = request(&fixture, vec![pin])?;
     let reader = fixture
         .service

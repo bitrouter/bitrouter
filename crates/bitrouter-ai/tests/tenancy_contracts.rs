@@ -8,6 +8,19 @@ use bitrouter_ai::tenancy::{
 use serde_json::json;
 
 #[test]
+fn retired_learned_checkpoint_kind_is_not_a_resource_reference()
+-> Result<(), Box<dyn std::error::Error>> {
+    use bitrouter_ai::tenancy::{authority::ResourceKind, configuration::ResourceRef};
+    let mut value = json!({"owner_kind":"tenant","owner_id":"tenant",
+        "resource_kind":"credential","resource_id":"resource","revision_id":"r1"});
+    let reference: ResourceRef = serde_json::from_value(value.clone())?;
+    assert_eq!(reference.resource_kind, ResourceKind::Credential);
+    value["resource_kind"] = "checkpoint".into();
+    assert!(serde_json::from_value::<ResourceRef>(value).is_err());
+    Ok(())
+}
+
+#[test]
 fn omitted_cas_and_duplicate_fields_do_not_become_valid_commands()
 -> Result<(), Box<dyn std::error::Error>> {
     let valid = json!({"operation_id":"op", "expected_revision":null, "state":"active", "installation_id":"install"});
@@ -165,8 +178,22 @@ fn resource_scope_is_explicit_and_operator_role_does_not_grant_execution()
 #[test]
 fn configuration_does_not_accept_host_fields_or_unbounded_references()
 -> Result<(), Box<dyn std::error::Error>> {
-    let mut wire = json!({"routes":[], "policy":null, "generation_defaults":{"max_output_tokens":1000,"temperature":1.0}, "learning":{"mode":"off","max_evaluations":0}, "limits":{"active_executions":16,"queued_work":32,"learning_jobs":2}});
-    serde_json::from_value::<Configuration>(wire.clone())?.validate()?;
+    let mut wire = json!({"routes":[], "policy":null, "generation_defaults":{"max_output_tokens":1000,"temperature":1.0}, "eval_publication": false, "limits":{"active_executions":16,"queued_work":32}});
+    for enabled in [false, true] {
+        wire["eval_publication"] = json!(enabled);
+        let configuration = serde_json::from_value::<Configuration>(wire.clone())?;
+        configuration.validate()?;
+        assert_eq!(configuration.eval_publication, enabled);
+    }
+    let mut invalid = wire.clone();
+    invalid
+        .as_object_mut()
+        .ok_or("object")?
+        .remove("eval_publication");
+    assert!(serde_json::from_value::<Configuration>(invalid).is_err());
+    invalid = wire.clone();
+    invalid["eval_publication"] = json!("enabled");
+    assert!(serde_json::from_value::<Configuration>(invalid).is_err());
     wire["upstream_url"] = "https://untrusted.invalid".into();
     assert!(serde_json::from_value::<Configuration>(wire.clone()).is_err());
     wire.as_object_mut().ok_or("object")?.remove("upstream_url");

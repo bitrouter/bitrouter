@@ -7,7 +7,7 @@ use super::native::{
 };
 use crate::gateway::error::BitrouterError;
 use crate::gateway::error::Result;
-use bitrouter_ai::core::evidence::NativeInputCount;
+use crate::managed_contract::evidence::NativeInputCount;
 
 pub(super) fn limit(control: &dyn NativeExecutionControl, request_id: &str) -> Result<Option<u64>> {
     let limit = control.auxiliary_report_byte_limit(request_id)?;
@@ -51,7 +51,7 @@ mod tests {
     use super::super::native::{NativePlan, NativePlanAdmission};
     use super::super::native_preparation::{NativePreparationWork, NativePreparationWorkKind};
     use super::*;
-    use bitrouter_ai::core::evidence::NativeAttemptReport;
+    use crate::managed_contract::evidence::NativeAttemptReport;
     use std::sync::atomic::{AtomicBool, Ordering};
 
     struct Control(Option<u64>);

@@ -1,6 +1,5 @@
 //! Explicit HTTP access to an independently running gateway.
 
-mod core;
 mod eval;
 pub mod execution;
 pub mod reply;
@@ -31,7 +30,6 @@ use crate::{
 /// HTTP protocol selection for ordinary requests and SSE streams.
 ///
 /// Protocol selection never retries a request using another HTTP version.
-/// Core WebSocket upgrades always use a separate HTTP/1.1 client.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum HttpVersion {
@@ -89,8 +87,6 @@ impl Default for TransportOptions {
 pub struct GatewayClient {
     endpoint: Url,
     http: reqwest::Client,
-    #[cfg(feature = "core")]
-    channel_http: reqwest::Client,
     options: TransportOptions,
 }
 
@@ -130,14 +126,10 @@ impl GatewayClient {
             bearer.set_sensitive(true);
             headers.insert(header::AUTHORIZATION, bearer);
         }
-        #[cfg(feature = "core")]
-        let channel_http = transport::build_http(headers.clone(), &options, true)?;
-        let http = transport::build_http(headers, &options, false)?;
+        let http = transport::build_http(headers, &options)?;
         Ok(Self {
             endpoint,
             http,
-            #[cfg(feature = "core")]
-            channel_http,
             options,
         })
     }

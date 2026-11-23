@@ -7,7 +7,7 @@ use crate::{
         resources::execution::RetainedExecutionRevision,
     },
 };
-use bitrouter_ai::tenancy::{configuration::LearningMode, identity::InstallationId};
+use bitrouter_ai::tenancy::identity::InstallationId;
 use sea_orm::{DatabaseBackend, Statement, sea_query::Query};
 
 pub(super) struct Configuration {
@@ -61,26 +61,19 @@ pub(super) async fn configuration(
         );
         return Ok(prior.clone());
     }
-    let execution = resources.open_paid_recovery(&saved, budget)?;
+    let execution = resources.open_obligation_recovery(&saved, budget)?;
     ensure!(
         execution.installation_id() == installation
             && execution.tenant_id() == tenant
             && execution.revision_id() == revision
-            && execution.document().learning.mode != LearningMode::Off,
+            && execution.document().eval_publication,
         "paid retained configuration binding changed"
     );
-    let maximum = execution.document().learning.max_evaluations;
-    ensure!(maximum > 0, "paid retained budget is zero");
-    Ok(Arc::new(Configuration {
-        execution,
-        maximum,
-        digest,
-    }))
+    anyhow::bail!("tenant configurations do not authorize automatic assessment")
 }
 
 pub(super) struct Closure {
     pub association: namespace::Stored,
-    pub subject: String,
     pub input: ScoringInput,
     pub digest: String,
 }
@@ -91,13 +84,9 @@ pub(super) async fn job(
     value: &Record,
     namespace: (Scope, Provenance),
     profile: &Configuration,
-    identity: &crate::tenancy::learning::recovery::RecoveryIdentity,
     budget: &OperationBudget<'_>,
 ) -> Result<Closure> {
     let (scope, provenance) = namespace;
-    if value.version == 4 {
-        return super::native::job(tx, value, scope, provenance, profile, identity, budget).await;
-    }
     let checkpoint = io::one(
         tx,
         checkpoints::Entity::find_by_id(&value.checkpoint)
@@ -130,7 +119,7 @@ pub(super) async fn job(
             && association.connection() == prefix.connection
             && prefix.session_key == value.session
             && d.revision == value.configuration.as_str()
-            && d.mode == profile.execution.document().learning.mode,
+            && d.mode == profile.execution.document().eval_publication,
         "paid checkpoint namespace differs from accepted record"
     );
     if value.status == Status::Accepted {
@@ -216,7 +205,6 @@ pub(super) async fn job(
     budget.charge(0, bytes)?;
     let digest = crate::storage::evolution::digest(&stamp)?;
     Ok(Closure {
-        subject: association.descriptor().model.clone(),
         association: namespace::Stored::Capture(Box::new(association)),
         input,
         digest,
@@ -268,12 +256,7 @@ pub(super) async fn terminal(
     input: &ScoringInput,
     budget: &OperationBudget<'_>,
 ) -> Result<String> {
-    let a = match namespace {
-        namespace::Stored::Native(a) => {
-            return super::native::terminal(tx, a, value, input, budget).await;
-        }
-        namespace::Stored::Capture(a) => a,
-    };
+    let namespace::Stored::Capture(a) = namespace;
     let mut terminal_receipt = None;
     if let Some(recovery) = &value.recovery {
         let saved = receipt(tx, &recovery.seed, budget)

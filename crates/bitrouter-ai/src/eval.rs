@@ -1,12 +1,26 @@
 //! Evaluation exchange contracts. Authority, evidence admission, digest
 //! construction and persistence are service-owned; these types perform no I/O.
 
+use crate::policy::RouteClass;
+use crate::tenancy::{
+    configuration::ResourceRef,
+    identity::{ExecutionId, InstallationId, RevisionId, TenantId},
+};
 use crate::types::ReasoningEffort;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const EVAL_SCHEMA_VERSION: u32 = 1;
-pub const ROUTE_MEASUREMENT_SCHEMA_VERSION: u32 = 2;
+/// Current evaluation exchange and frozen-evidence contract.
+pub const SPEC_VERSION: &str = "eval/1.0.0-beta.1";
+
+/// Closed discriminator for evaluation exchange documents.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SpecVersion {
+    /// The model-routing evaluation exchange.
+    #[serde(rename = "eval/1.0.0-beta.1")]
+    Beta1,
+}
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -17,43 +31,15 @@ pub enum EvalScope {
     Task,
 }
 
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ExperimentArm {
-    Control,
-    Challenger,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ExperimentAssignmentUnit {
-    Task,
-    Episode,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct EvalExperimentRef {
-    pub experiment_id: String,
-    pub arm: ExperimentArm,
-    pub assignment_unit: ExperimentAssignmentUnit,
-    pub assignment_id_digest: String,
-    pub challenger_propensity_ppm: u32,
-}
-
 /// One semantic policy action declared by the immutable routing snapshot.
 ///
-/// Probabilities describe the logging policy before deterministic tool,
-/// progress, or continuation guards. The effective action remains
+/// Probabilities describe the logging policy before deterministic tool or
+/// continuation guards. The effective action remains
 /// [`EvalDecisionRef::selected_tier`].
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RouteActionCandidate {
-    pub context: crate::routing::ContextStrategy,
     pub tier: String,
     pub model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -67,7 +53,6 @@ pub struct RouteActionCandidate {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RouteDecisionMeasurement {
-    pub schema_version: u32,
     pub logging_action_tier: String,
     pub logging_action_model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -83,8 +68,8 @@ pub struct RouteDecisionMeasurement {
 pub struct EvalDecisionRef {
     pub decision_id: String,
     pub policy: String,
-    pub route_projection: String,
-    pub request_key: String,
+    pub route_projection: RouteClass,
+    pub request_key: RouteClass,
     pub selected_tier: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected_effort: Option<ReasoningEffort>,
@@ -92,8 +77,6 @@ pub struct EvalDecisionRef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline_effort: Option<ReasoningEffort>,
     pub policy_digest: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub experiment: Option<EvalExperimentRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route_measurement: Option<RouteDecisionMeasurement>,
 }
@@ -110,16 +93,88 @@ pub struct EvidenceItem {
     pub attributes: BTreeMap<String, String>,
 }
 
+/// Explicit association with an actual immutable execution receipt.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvalExecutionRef {
+    /// Invocation being evaluated, in the enclosing tenant namespace.
+    pub execution_id: ExecutionId,
+    /// Configuration revision used by that invocation.
+    pub configuration_revision: RevisionId,
+}
+
+/// Closed identity profiles. Digests and policy names alone grant no identity.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "profile", rename_all = "snake_case", deny_unknown_fields)]
+pub enum EvalSubjectIdentity {
+    /// Model-policy evidence for one exact immutable route binding.
+    TenantModelPolicy {
+        /// Persistent service installation.
+        installation_id: InstallationId,
+        /// Authenticated tenant namespace.
+        tenant_id: TenantId,
+        /// Immutable configuration containing the bound route.
+        configuration_revision: RevisionId,
+        /// Full owner/kind/resource/revision identity of the selected Policy.
+        policy: ResourceRef,
+        /// Literal selected name in that Policy document.
+        name: String,
+        /// Optional source evidence; never a resource revision or authority.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_digest: Option<String>,
+        /// Optional classifier evidence, distinct from the source digest.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        classifier_digest: Option<String>,
+        /// Optional actual invocation; the service verifies its receipt.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        execution: Option<EvalExecutionRef>,
+    },
+    /// Policy-free tenant evidence, never eligible as model-policy evidence.
+    TenantGeneric {
+        /// Persistent service installation.
+        installation_id: InstallationId,
+        /// Authenticated tenant namespace.
+        tenant_id: TenantId,
+        /// Optional actual invocation, including its configuration revision.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        execution: Option<EvalExecutionRef>,
+    },
+    /// Gateway evidence using the gateway's independent authentication authority.
+    GatewayGeneric {},
+}
+
+impl EvalSubjectIdentity {
+    /// Tenant namespace claimed by this profile; never an authorization proof.
+    pub fn tenant_namespace(&self) -> Option<(&InstallationId, &TenantId)> {
+        match self {
+            Self::TenantModelPolicy {
+                installation_id,
+                tenant_id,
+                ..
+            }
+            | Self::TenantGeneric {
+                installation_id,
+                tenant_id,
+                ..
+            } => Some((installation_id, tenant_id)),
+            Self::GatewayGeneric {} => None,
+        }
+    }
+}
+
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EvalSubject {
-    pub schema_version: u32,
+    /// Exact evaluation exchange contract.
+    pub spec_version: SpecVersion,
+    /// Exact service-validated profile and resource ownership.
+    pub identity: EvalSubjectIdentity,
     pub eval_id: String,
     pub scope: EvalScope,
     pub subject_id: String,
-    pub policy_digest: String,
-    pub preset: Option<String>,
     pub cohort: Option<String>,
     pub holdout: bool,
     #[serde(default)]
@@ -196,7 +251,8 @@ pub struct DecisionCredit {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EvaluationResult {
-    pub schema_version: u32,
+    /// Exact evaluation exchange contract.
+    pub spec_version: SpecVersion,
     pub eval_id: String,
     pub evidence_digest: String,
     pub evaluator: EvaluatorIdentity,
@@ -243,7 +299,10 @@ pub struct EvalSnapshotEntry {
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EvalSnapshot {
+    /// Exact evaluation exchange contract.
+    pub spec_version: SpecVersion,
     pub evidence_root: String,
     pub frozen_at: String,
     pub entries: Vec<EvalSnapshotEntry>,

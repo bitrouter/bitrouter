@@ -58,13 +58,13 @@ fn general_progress_fixture_replays_without_routing_headers() -> anyhow::Result<
     assert_eq!(
         projections,
         [
-            "semantic_route/v1|unknown|unknown|normal",
-            "semantic_route/v1|unknown|implement|guarded",
-            "semantic_route/v1|unknown|implement|guarded",
-            "semantic_route/v1|unknown|implement|guarded",
-            "semantic_route/v1|unknown|implement|normal",
-            "semantic_route/v1|unknown|implement|normal",
-            "semantic_route/v1|unknown|implement|normal",
+            "unknown|unknown|normal",
+            "unknown|implement|guarded",
+            "unknown|implement|guarded",
+            "unknown|implement|guarded",
+            "unknown|implement|normal",
+            "unknown|implement|normal",
+            "unknown|implement|normal",
         ]
     );
     Ok(())
@@ -130,25 +130,26 @@ fn legacy_source_specific_decisions_remain_legacy_while_new_agent_trace_decision
 }
 
 #[tokio::test]
-async fn legacy_workflow_state_lock_is_rejected_before_replay() {
-    let root = temp_path("legacy-workflow-state-replay");
-    std::fs::create_dir_all(&root).unwrap();
-    let config_path = root.join("bitrouter.yaml");
-    let lock_path = root.join("policy-lock.yaml");
-    std::fs::write(
-        &config_path,
-        r#"
+async fn legacy_workflow_state_lock_is_rejected_before_replay() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let config_path = root.path().join("bitrouter.yaml");
+    let policy_path = root.path().join("policy.yaml");
+    let raw = r#"
+inherit_defaults: false
 policy:
-  path: "./policy-lock.yaml"
-presets:
+  path: "./policy.yaml"
+routers:
   legacy:
-    model: "vendor/strong"
-    policy: legacy
-"#,
-    )
-    .unwrap();
+    selection:
+      kind: policy
+      policy: legacy
+      base_model: "vendor/strong"
+"#;
+    std::fs::write(&config_path, raw)?;
+    // Keep a small old-input rejection fixture, without a legacy parser or
+    // old configuration syntax masking which source boundary rejects it.
     std::fs::write(
-        &lock_path,
+        &policy_path,
         r#"
 lockfileVersion: 1
 policies:
@@ -161,18 +162,14 @@ policies:
       "codex|responses|tool_followup": economy
     default_tier: strong
     tool_use_tier: strong
-    tool_safe_tiers:
-      - strong
-      - economy
+    tool_safe_tiers: [strong, economy]
 "#,
-    )
-    .unwrap();
-    let config =
-        config::parse_with(&std::fs::read_to_string(&config_path).unwrap(), |_| None).unwrap();
+    )?;
+    let config = config::parse_with(raw, |_| None)?;
     let error = policy_lock::load_for_config(&config, Some(&config_path))
         .await
-        .expect_err("retired workflow_state strategy must be rejected");
-    assert!(format!("{error:#}").contains("no longer supported"));
-
-    std::fs::remove_dir_all(root).unwrap();
+        .err()
+        .ok_or_else(|| anyhow::anyhow!("retired source was accepted"))?;
+    assert!(format!("{error:#}").contains("invalid model policy source"));
+    Ok(())
 }

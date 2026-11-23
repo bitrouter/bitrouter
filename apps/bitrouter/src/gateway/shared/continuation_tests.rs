@@ -113,7 +113,7 @@ async fn close_waits_for_accepted_bind_and_prevents_late_bind() -> Result<()> {
             .create(
                 &bind,
                 NewRecord {
-                    kind: Kind::EpisodeFence,
+                    kind: Kind::OperatorReceipt,
                     key: "gate-write",
                     status: "fixture",
                     due_at_ms: None,
@@ -136,7 +136,7 @@ async fn close_waits_for_accepted_bind_and_prevents_late_bind() -> Result<()> {
         let row: Stored<bool> = peer
             .authority
             .store()
-            .read(&inspection, Kind::EpisodeFence, "gate-write")
+            .read(&inspection, Kind::OperatorReceipt, "gate-write")
             .await?
             .context("post-close snapshot missed earlier bind commit")?;
         ensure!(row.value);
@@ -339,7 +339,7 @@ async fn unobserved_close_result_and_post_lock_evidence_are_recoverable() -> Res
                     .create(
                         &writing,
                         NewRecord {
-                            kind: Kind::EpisodeFence,
+                            kind: Kind::OperatorReceipt,
                             key: &evidence_key,
                             status: "fixture",
                             due_at_ms: None,
@@ -364,7 +364,7 @@ async fn unobserved_close_result_and_post_lock_evidence_are_recoverable() -> Res
         let evidence: Stored<bool> = peer
             .authority
             .store()
-            .read(&inspection, Kind::EpisodeFence, &evidence_key)
+            .read(&inspection, Kind::OperatorReceipt, &evidence_key)
             .await?
             .context("post-lock evidence used an earlier snapshot")?;
         ensure!(evidence.value);

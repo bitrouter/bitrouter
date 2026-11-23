@@ -68,9 +68,6 @@ pub(crate) fn router_source(
         crate::config::router::RouterConfigSource::User => {
             bitrouter_ai::control::models::RouterSource::User
         }
-        crate::config::router::RouterConfigSource::LegacyPreset => {
-            bitrouter_ai::control::models::RouterSource::Legacy
-        }
     })
 }
 
@@ -83,13 +80,11 @@ pub(crate) fn policy_candidate_models(
         return Vec::new();
     };
     let mut candidates = std::collections::BTreeSet::from([base_model.to_string()]);
-    if let Some(definition) = policy.and_then(|report| report.definitions.get(policy_name)) {
-        candidates.extend(
-            definition
-                .tiers
-                .values()
-                .map(|target| target.model().to_string()),
-        );
+    if let Some(definition) = policy
+        .and_then(|report| report.source.as_ref())
+        .and_then(|document| document.policies.get(policy_name))
+    {
+        candidates.extend(definition.tiers.values().map(|target| target.model.clone()));
     }
     candidates.into_iter().collect()
 }
@@ -387,9 +382,6 @@ fn policy_selection(d: &PolicyDecision) -> PolicySelection {
         selected_tier: d.selected_tier.clone(),
         selected_model: d.selected_model.clone(),
         selected_effort: d.selected_effort,
-        pinned: d.pinned,
-        locked: d.locked,
-        trialed: d.trialed,
     }
 }
 
@@ -559,20 +551,12 @@ routers:
 "#,
         );
         std::fs::write(
-            dir.path().join("policy-lock.yaml"),
-            r#"lockfileVersion: 4
-artifact:
-  evidence_root: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-  source_snapshot_time_unix_ms: 0
-  compiler:
-    id: bitrouter-policy-compiler
-    version: 1
-    config_digest: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            dir.path().join("policy.yaml"),
+            r#"spec_version: policy/1.0.0-beta.1
 policies:
   coding:
-    key_strategy: agent_trace
     tiers:
-      strong: { model: demo-model-big, context: evidence }
+      strong: { model: demo-model-big }
     routes: {}
     default_tier: strong
     tool_use_tier: strong

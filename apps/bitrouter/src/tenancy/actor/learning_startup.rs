@@ -39,7 +39,6 @@ impl Worker {
                 .await
                 .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
             let access = recovery::Access {
-                database: &self.db,
                 state: &current,
                 origin,
                 proof: &self.proof,

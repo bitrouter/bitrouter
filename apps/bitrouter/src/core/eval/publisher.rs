@@ -9,8 +9,8 @@ use crate::config::EvalConfig;
 use anyhow::Result;
 
 use {
-    crate::core::eval::EvalService, crate::core::eval::admission::SubmissionPrincipal,
-    crate::core::eval::store::EvalStore, bitrouter_ai::eval::AdmissionStatus,
+    crate::eval::EvalService, crate::eval::admission::SubmissionPrincipal,
+    crate::eval::store::EvalStore, bitrouter_ai::eval::AdmissionStatus,
 };
 
 use crate::trajectory::{

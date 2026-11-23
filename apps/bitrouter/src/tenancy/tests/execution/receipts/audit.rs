@@ -70,7 +70,7 @@ pub(in crate::tenancy::tests::execution) async fn roundtrip(
     )
     .await
     .map_err(failure)?;
-    let expected_evidence: bitrouter_ai::tenancy::usage_evidence::ExecutionUsageEvidenceV1 =
+    let expected_evidence: bitrouter_ai::tenancy::usage_evidence::ExecutionUsageEvidence =
         serde_json::from_slice(&evidence_bytes)?;
     ensure!(expected_evidence.capture == bitrouter_ai::tenancy::usage_evidence::Capture::Captured);
     let directory = tempfile::tempdir()?;
@@ -149,13 +149,7 @@ pub(in crate::tenancy::tests::execution) async fn roundtrip(
                 )
                 .await?;
             ensure!(serde_json::to_value(actual)? == serde_json::to_value(expected)?);
-            let actual_evidence = sdk
-                .usage_evidence(
-                    &expected.installation_id,
-                    &expected.tenant_id,
-                    &expected.execution_id,
-                )
-                .await?;
+            let actual_evidence = sdk.usage_evidence(expected).await?;
             ensure!(
                 serde_json::to_value(actual_evidence)? == serde_json::to_value(&expected_evidence)?,
                 "archive changed original usage observations"

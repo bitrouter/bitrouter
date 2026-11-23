@@ -4,7 +4,6 @@ mod inputs;
 pub(crate) mod plan;
 #[cfg(all(test, unix))]
 pub(crate) mod tests;
-pub(super) mod upgrade;
 pub(crate) mod v2;
 
 use super::{engine::Connections, files, format, inventory};

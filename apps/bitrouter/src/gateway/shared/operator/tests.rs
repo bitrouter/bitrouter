@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 use bitrouter_ai::gateway::operator::*;
-use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
+use sea_orm::{ConnectionTrait, DatabaseBackend, IsolationLevel, Statement};
 use serde_json::json;
 
 use super::{Actor, Failure, Operator};
@@ -13,7 +13,7 @@ use crate::gateway::providers::auth::store::CredentialKey;
 use crate::gateway::shared::{
     authority::Authority,
     credentials::Credentials,
-    engine::{Admission, AdmissionResult, Engine, TrajectoryBinding},
+    engine::{Admission, AdmissionResult, Engine},
     schema,
     store::{self, Kind, Store, Stored},
 };
@@ -228,7 +228,11 @@ async fn policy_receipts(a: &Operator, b: &Operator, actor: &Actor) -> Result<()
 
 async fn read_across_head_update(a: &Operator, b: &Operator, actor: &Actor) -> Result<()> {
     let store = a.authority.store();
-    let tx = store.begin().await?;
+    // The exclusive head lock controls the writer. Serializable isolation is
+    // needed on the reader, where it causes the stale snapshot to retry.
+    let tx = store
+        .begin_with_isolation(IsolationLevel::ReadCommitted)
+        .await?;
     let mut head = a.authority.fence_exclusive(&tx).await?;
     let status = head.status().to_owned();
     store
@@ -325,10 +329,10 @@ async fn credentials_and_publication(a: &Operator, b: &Operator, actor: &Actor) 
         Command::Publish(PublicationPut {
             expected_generation: 0,
             configuration: Publication {
-                format: 1,
+                format: 2,
                 routing: json!({"providers":{"fixture":{"api_base":"https://example.com/v1", "models":[{"id":"fixture-model"}], "headers":{"x-private":"operator-private-header-sentinel"}}}}),
                 policies: vec![],
-                policy_lock: None,
+                model_policy: None,
                 credentials: vec![CredentialBinding {
                     provider: "fixture".into(),
                     account: "default".into(),
@@ -394,7 +398,14 @@ async fn credentials_and_publication(a: &Operator, b: &Operator, actor: &Actor) 
     invalid.operation_id = "publish-invalid".into();
     if let Command::Publish(input) = &mut invalid.command {
         input.expected_generation = 2;
-        input.configuration.policy_lock = Some(json!("operator-private-invalid-sentinel"));
+        let mut document: bitrouter_ai::policy::Document =
+            serde_saphyr::from_str(include_str!("../../../../policy/default.yaml"))?;
+        document
+            .policies
+            .get_mut("auto")
+            .context("missing fixture policy")?
+            .default_tier = "operator-private-invalid-sentinel".into();
+        input.configuration.model_policy = Some(document);
     }
     let error = a
         .apply(actor, &invalid)
@@ -663,20 +674,6 @@ async fn resolution(a: &Operator, actor: &Actor) -> Result<()> {
         AdmissionResult::Accepted(view, _) => view,
         AdmissionResult::Existing(_) => anyhow::bail!("unexpected fixture deduplication"),
     };
-    let tx = a.authority.store().begin().await?;
-    engine
-        .bind_trajectory(
-            &tx,
-            &view.execution_id,
-            &TrajectoryBinding {
-                owner_user_id: tenant_id.clone(),
-                episode_id: "operator-episode".into(),
-                request_id: "operator-request".into(),
-                correlation_epoch: "fixture".into(),
-            },
-        )
-        .await?;
-    tx.commit().await?;
     let (stamp, _) = Credentials::new(a.authority.clone())
         .load(&CredentialKey {
             provider: "fixture".into(),

@@ -1,12 +1,9 @@
 //! Real controller, child, mounted App and actor; never a fabricated capture proof.
 //! Build the Rust peer separately, then set BITROUTER_OWNED_CAPTURE_FIXTURE to it.
 #[cfg(unix)]
-mod block;
-#[cfg(unix)]
 mod faults;
 #[cfg(unix)]
 mod ingress;
-mod learning;
 #[cfg(all(
     unix,
     feature = "core",
@@ -20,7 +17,6 @@ use crate::{
     config::agent::{AcpAgentConfig, AcpTransport},
     harness::acp::controlled::{ControlledSession, LocalControllerLaunch},
 };
-use bitrouter_ai::tenancy::configuration::LearningMode;
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 use std::{
     collections::HashMap,
@@ -31,12 +27,12 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 async fn prepared(
     fixture: &Fixture,
     route: &ResourceRef,
-    mode: LearningMode,
+    mode: bool,
 ) -> Result<(HeaderMap, CredentialIssued)> {
     let mut input = fixture.configuration_input("capture-configuration")?;
     input.document.routes.push(route.clone());
     input.document.generation_defaults.max_output_tokens = 25;
-    input.document.learning.mode = mode;
+    input.document.eval_publication = mode;
     let revision = match fixture
         .service
         .execute(
@@ -173,11 +169,7 @@ async fn reaped(marker: &Path) -> Result<()> {
 async fn real_controller_passive_modes_freeze_owned_prefix_without_judge_or_legacy_reads()
 -> Result<()> {
     let program = executable()?;
-    for mode in [
-        LearningMode::Off,
-        LearningMode::Observe,
-        LearningMode::Explore,
-    ] {
+    for mode in [false, true, true] {
         let mut provider = Provider::start(false).await?;
         let (fixture, route, _) = provision_protocol(&provider.url, "chat_completions").await?;
         let directory = tempfile::tempdir()?;
@@ -193,16 +185,16 @@ async fn real_controller_passive_modes_freeze_owned_prefix_without_judge_or_lega
             session = Some(tokio::time::timeout(TIMEOUT, ControlledSession::open_authenticated(app.clone(), ingress.clone(), launch(&program, &marker, &listener.origin, None), CancellationToken::new())).await??);
             let current = session.as_ref().context("session")?;
             // Native036 and capture consume the SAME host slot, before workspace I/O.
-            let native = crate::harness::resources::managed::session::NativeSession::open_authenticated(app.clone(), ingress, "competing", directory.path(), bitrouter_ai::harness::agent::ToolMode::ReadOnly, &crate::harness::resources::HarnessConfig::default()).await;
+            let native = crate::harness::resources::managed::session::NativeSession::open_authenticated(app.clone(), ingress, "competing", directory.path(), crate::managed_contract::harness::agent::ToolMode::ReadOnly, &crate::harness::resources::HarnessConfig::default()).await;
             let denied = native.err().context("native consumer acquired a second host slot")?;
-            ensure!(denied.code == bitrouter_ai::core::protocol::ErrorCode::LimitExceeded, "native open did not refuse the shared host slot");
+            ensure!(denied.code == crate::managed_contract::protocol::ErrorCode::LimitExceeded, "native open did not refuse the shared host slot");
             let id = current.new_session(directory.path().to_path_buf()).await?;
             current.prompt(&id, "private task").await?;
             let observed = provider.receive().await?;
             ensure!(observed.body["model"] == "model-a" && observed.body["max_tokens"] == 25);
             ensure!(observed.headers.get("authorization").and_then(|v| v.to_str().ok()) == Some("Bearer owned-upstream-secret"));
             let checkpoint = current.checkpoint(&id).await?;
-            ensure!(checkpoint.is_none() == (mode == LearningMode::Off));
+            ensure!(checkpoint.is_none() == !(mode));
             if let Some(checkpoint) = checkpoint {
                 ensure!(checkpoint.observations >= 5 && checkpoint.watermark > 0);
                 let before = count(&fixture, "acp_checkpoints").await?;
@@ -240,8 +232,7 @@ async fn owned_controller_denials_precede_capture_rows_child_or_workspace() -> R
         let directory = tempfile::tempdir()?;
         let marker = directory.path().join("must-not-exist");
         let checked = async {
-            let (mut ingress, credential) =
-                prepared(&fixture, &route, LearningMode::Observe).await?;
+            let (mut ingress, credential) = prepared(&fixture, &route, true).await?;
             if denial == "unauthenticated" {
                 ingress.clear();
             } else {
@@ -294,7 +285,7 @@ async fn revocation_refuses_new_content_but_retains_admitted_disconnect_cleanup(
     let listener = Listener::start(app.clone()).await?;
     let mut session = None;
     let checked = async {
-        let (ingress, credential) = prepared(&fixture, &route, LearningMode::Observe).await?;
+        let (ingress, credential) = prepared(&fixture, &route, true).await?;
         session = Some(
             ControlledSession::open_authenticated(
                 app,
@@ -358,7 +349,7 @@ async fn cancelled_initialize_waiter_keeps_real_child_owner_until_service_drain(
             .with_tenancy(fixture.service.clone()),
     );
     let checked = async {
-        let (ingress, _) = prepared(&fixture, &route, LearningMode::Observe).await?;
+        let (ingress, _) = prepared(&fixture, &route, true).await?;
         let launch = launch(&program, &marker, "http://127.0.0.1:1", Some(&gate_path));
         let opener = AbortOnDropHandle::new(tokio::spawn(async move {
             ControlledSession::open_authenticated(app, ingress, launch, CancellationToken::new())
@@ -393,7 +384,7 @@ async fn cancelled_capture_create_waiter_retains_shared_slot_and_marks_unstarted
     let directory = tempfile::tempdir()?;
     let marker = directory.path().join("never-spawned");
     let checked = async {
-        let (ingress, _) = prepared(&fixture, &route, LearningMode::Observe).await?;
+        let (ingress, _) = prepared(&fixture, &route, true).await?;
         let app = Arc::new(
             host_app(&fixture, &provider.url, Arc::new(HostSpies::default()))?
                 .with_tenancy(fixture.service.clone()),
@@ -474,7 +465,7 @@ async fn capture_profile_rechecks_current_role_and_original_credential_permissio
     let provider = Provider::start(false).await?;
     let (fixture, route, _) = provision_protocol(&provider.url, "chat_completions").await?;
     let checked = async {
-        let (ingress, _) = prepared(&fixture, &route, LearningMode::Observe).await?;
+        let (ingress, _) = prepared(&fixture, &route, true).await?;
         for (name, role, allowed) in [
             ("viewer", TenantRole::Viewer, false),
             ("editor", TenantRole::Editor, true),
@@ -550,7 +541,7 @@ async fn capture_profile_rechecks_current_role_and_original_credential_permissio
         let provider = Provider::start(false).await?;
         let (fixture, route, _) = provision_protocol(&provider.url, "chat_completions").await?;
         let checked = async {
-            let (ingress, _) = prepared(&fixture, &route, LearningMode::Observe).await?;
+            let (ingress, _) = prepared(&fixture, &route, true).await?;
             fixture
                 .service
                 .prepare_capture(
@@ -628,7 +619,7 @@ async fn failed_provider_initialization_keeps_partial_client_child_and_capture_u
     let directory = tempfile::tempdir()?;
     let marker = directory.path().join("child.json");
     let checked = async {
-        let (ingress, _) = prepared(&fixture, &route, LearningMode::Observe).await?;
+        let (ingress, _) = prepared(&fixture, &route, true).await?;
         let app = Arc::new(
             host_app(&fixture, &provider.url, Arc::new(HostSpies::default()))?
                 .with_tenancy(fixture.service.clone()),
@@ -682,7 +673,7 @@ async fn revoke_across_initialize_wait_prevents_the_next_provider_configuration_
     let gate_path = directory.path().join("initialize.sock");
     let gate = tokio::net::UnixListener::bind(&gate_path)?;
     let checked = async {
-        let (ingress, credential) = prepared(&fixture, &route, LearningMode::Observe).await?;
+        let (ingress, credential) = prepared(&fixture, &route, true).await?;
         let app = Arc::new(
             host_app(&fixture, &provider.url, Arc::new(HostSpies::default()))?
                 .with_tenancy(fixture.service.clone()),

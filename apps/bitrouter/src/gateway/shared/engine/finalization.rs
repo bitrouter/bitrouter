@@ -6,73 +6,15 @@ use bitrouter_ai::gateway::execution::{
     TerminalObservation, TerminalOutcome,
 };
 use sea_orm::{DatabaseTransaction, IsolationLevel};
-use sha2::{Digest, Sha256};
 
 use crate::metering::shared::evidence::validate_outcome;
 
 use super::{
-    Attempt, Engine, EpisodeFence, Execution, Outbox, Rejection, Resource, Tenant,
-    TrajectoryBinding, attempts::replace_attempt, validate_id,
+    Attempt, Engine, Execution, Outbox, Rejection, Resource, Tenant, attempts::replace_attempt,
 };
 use crate::gateway::shared::store::{Kind, NewRecord, Store, Stored};
 
 impl Engine {
-    /// Called within the trajectory start transaction, after choosing its epoch.
-    /// The same transaction must protect the episode fence before its guard.
-    pub async fn bind_trajectory(
-        &self,
-        tx: &DatabaseTransaction,
-        execution_id: &str,
-        binding: &TrajectoryBinding,
-    ) -> Result<()> {
-        for id in [
-            &binding.owner_user_id,
-            &binding.episode_id,
-            &binding.request_id,
-            &binding.correlation_epoch,
-        ] {
-            validate_id(id)?;
-        }
-        let _: Stored<Tenant> = self
-            .store()
-            .lock(tx, Kind::Tenant, &binding.owner_user_id)
-            .await?;
-        let mut execution: Stored<Execution> =
-            self.store().lock(tx, Kind::Execution, execution_id).await?;
-        ensure!(
-            execution.value.tenant_id == binding.owner_user_id
-                && execution.value.owner == self.owner,
-            Rejection::Forbidden
-        );
-        if let Some(existing) = &execution.value.trajectory {
-            ensure!(existing == binding, "execution trajectory binding changed");
-        }
-        ensure!(
-            matches!(
-                execution.value.view.state,
-                ExecutionState::Accepted | ExecutionState::Running
-            ) && execution.value.view.attempts.iter().all(|attempt| matches!(
-                attempt.state,
-                AttemptState::Prepared | AttemptState::NotDispatched
-            )),
-            "trajectory binding must precede dispatch"
-        );
-        let now = Store::now(tx).await?;
-        self.episode_fence(tx, binding, now).await?;
-        let due = self.live_owner(tx, false).await?;
-        if execution.value.trajectory.is_some() {
-            return Ok(());
-        }
-        execution.value.trajectory = Some(binding.clone());
-        let status = if matches!(execution.value.view.state, ExecutionState::Accepted) {
-            "accepted"
-        } else {
-            "running"
-        };
-        self.save_execution(tx, &mut execution, status, Some(due), now)
-            .await
-    }
-
     #[cfg(test)]
     pub async fn finish(
         &self,
@@ -91,8 +33,7 @@ impl Engine {
         validate_outcome(outcome)?;
         self.store()
             .retry(|| async {
-                // Tenant and execution are exclusively locked before accounting;
-                // the episode fence orders terminal publication with guards.
+                // Tenant and execution are exclusively locked before accounting.
                 // Waiting completions must observe the latest locked counters.
                 // https://www.postgresql.org/docs/current/transaction-iso.html#XACT-READ-COMMITTED
                 let tx = self
@@ -285,8 +226,6 @@ impl Engine {
                 .await?;
             replace_attempt(&mut execution.value, &attempt.value.view)?;
         }
-        self.install_projection_fence(tx, &execution.value, now)
-            .await?;
         execution.value.view.state = ExecutionState::Terminal {
             result: TerminalObservation {
                 outcome: outcome.clone(),
@@ -307,17 +246,7 @@ impl Engine {
         Ok(execution.value.view.clone())
     }
 
-    /// A running execution with observed terminal evidence is also a barrier.
-    /// A guard cannot bypass its pending effects during the record/finish gap.
-    pub(super) async fn install_projection_fence(
-        &self,
-        tx: &DatabaseTransaction,
-        execution: &Execution,
-        now: i64,
-    ) -> Result<()> {
-        install_projection_fence(self.store(), tx, execution, now).await
-    }
-
+    /// Publish the original terminal facts in the accounting transaction.
     pub(super) async fn publish_terminal_event(
         &self,
         tx: &DatabaseTransaction,
@@ -325,15 +254,6 @@ impl Engine {
         now: i64,
     ) -> Result<()> {
         publish_terminal_event(self.store(), tx, execution, now).await
-    }
-
-    pub(super) async fn episode_fence(
-        &self,
-        tx: &DatabaseTransaction,
-        binding: &TrajectoryBinding,
-        now: i64,
-    ) -> Result<Stored<EpisodeFence>> {
-        episode_fence(self.store(), tx, binding, now).await
     }
 }
 
@@ -348,30 +268,6 @@ fn aggregate_usage(execution: &Execution) -> Result<ExecutionUsage> {
         })
         .collect();
     crate::metering::shared::evidence::aggregate_usage(&observations)
-}
-
-pub(super) async fn install_projection_fence(
-    store: &Store,
-    tx: &DatabaseTransaction,
-    execution: &Execution,
-    now: i64,
-) -> Result<()> {
-    if let Some(binding) = &execution.trajectory {
-        let mut fence = episode_fence(store, tx, binding, now).await?;
-        if fence.value.pending.contains(&execution.view.execution_id) {
-            return Ok(());
-        }
-        ensure!(
-            fence.value.pending.len() < 256,
-            "trajectory projection backlog is full"
-        );
-        fence
-            .value
-            .pending
-            .insert(execution.view.execution_id.clone());
-        store.save(tx, &mut fence, "pending", None, now).await?;
-    }
-    Ok(())
 }
 
 pub(super) async fn publish_terminal_event(
@@ -407,41 +303,4 @@ pub(super) async fn publish_terminal_event(
         "terminal event identity already exists without finalization"
     );
     Ok(())
-}
-
-pub(super) async fn episode_fence(
-    store: &Store,
-    tx: &DatabaseTransaction,
-    binding: &TrajectoryBinding,
-    now: i64,
-) -> Result<Stored<EpisodeFence>> {
-    let key = hex::encode(Sha256::digest(serde_json::to_vec(&(
-        "gateway-episode-fence-v1",
-        &binding.owner_user_id,
-        &binding.episode_id,
-    ))?));
-    store
-        .create(
-            tx,
-            NewRecord {
-                kind: Kind::EpisodeFence,
-                key: &key,
-                status: "ready",
-                due_at_ms: None,
-                now_ms: now,
-                value: &EpisodeFence {
-                    owner_user_id: binding.owner_user_id.clone(),
-                    episode_id: binding.episode_id.clone(),
-                    pending: Default::default(),
-                },
-            },
-        )
-        .await?;
-    let fence: Stored<EpisodeFence> = store.lock(tx, Kind::EpisodeFence, &key).await?;
-    ensure!(
-        fence.value.owner_user_id == binding.owner_user_id
-            && fence.value.episode_id == binding.episode_id,
-        "episode projection fence identity mismatch"
-    );
-    Ok(fence)
 }

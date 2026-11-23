@@ -178,13 +178,16 @@ pub(super) fn stream(
             yield Ok::<_,std::io::Error>(wire.bytes);
         }
     };
-    Ok(bitrouter_ai::axum::response::Reply::sse_body(Body::from_stream(stream)).into_response())
+    Ok(
+        crate::gateway::http_adapter::response::Reply::sse_body(Body::from_stream(stream))
+            .into_response(),
+    )
 }
 
 /// Serialize before authorizing the JSON terminal. A bounded writer prevents
 /// both an oversized success response and a silent truncation after activation.
 pub(super) fn json(value: &serde_json::Value) -> Result<Response> {
-    let reply = bitrouter_ai::axum::response::Reply::json(value, BODY).map_err(|_| {
+    let reply = crate::gateway::http_adapter::response::Reply::json(value, BODY).map_err(|_| {
         BitrouterError::UpstreamInvalidResponse {
             message: "tenant JSON output exceeds the bounded delivery buffer".into(),
             usage: None,

@@ -14,10 +14,10 @@ use super::ThreadService;
 use super::state::State;
 use super::unknown_turn;
 use crate::harness::storage::ExecutionRecord;
-use bitrouter_ai::harness::runtime::ErrorCode;
-use bitrouter_ai::harness::runtime::ExecutionOwner;
-use bitrouter_ai::harness::thread::ThreadStatus;
-use bitrouter_ai::harness::turn::TurnStatus;
+use crate::managed_contract::harness::runtime::ErrorCode;
+use crate::managed_contract::harness::runtime::ExecutionOwner;
+use crate::managed_contract::harness::thread::ThreadStatus;
+use crate::managed_contract::harness::turn::TurnStatus;
 
 const MARKER_BYTES: u64 = 64 * 1024;
 
@@ -160,7 +160,7 @@ impl WorkspaceFence {
     pub(crate) fn activate_stopped_native(
         &self,
         checked: &crate::tenancy::session::recovery::CheckedRecovery,
-        grant: &bitrouter_ai::core::protocol::OwnershipGrant,
+        grant: &crate::managed_contract::protocol::OwnershipGrant,
     ) -> Result<(), ServiceError> {
         if !checked.committed() {
             return Err(storage("native repair is not committed"));

@@ -23,7 +23,7 @@ use crate::harness::context;
 use crate::harness::control::TurnControl;
 use crate::harness::storage::CommitRequest;
 use crate::harness::storage::ExecutionRecord;
-use bitrouter_ai::harness::runtime::EffectStatus;
+use crate::managed_contract::harness::runtime::EffectStatus;
 
 #[path = "tests_native.rs"]
 mod native;

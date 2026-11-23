@@ -133,7 +133,7 @@ async fn caller_drops_sse_before_terminal_retains_unknown_one_hop_without_resend
         receipt.state == ReceiptState::Unknown
             && receipt.outcome == Outcome::Unknown
             && receipt.attempts.len() == 1
-            && receipt.attempts[0].candidate_index == 0
+            && receipt.attempts[0].candidate_index == Some(0)
             && receipt.attempts[0].outcome == Outcome::Unknown
             && receipt.attempts[0].observed_http_status == Some(200),
         "unexpected disconnected receipt: {receipt:?}"
@@ -210,7 +210,7 @@ async fn caller_drops_unread_sse_after_durable_terminal_preserves_completed_one_
     let before = harness.receipt(&id).await?;
     ensure!(before.outcome == Outcome::Completed && before.attempts.len() == 1);
     ensure!(
-        before.attempts[0].candidate_index == 0
+        before.attempts[0].candidate_index == Some(0)
             && before.attempts[0].observed_http_status == Some(200)
     );
     drop(reply.body);

@@ -1,15 +1,10 @@
 use super::*;
 use sea_orm::sea_query::Query;
 
-pub(super) async fn write_header_in(db: &impl ConnectionTrait, next: &LoadedHeader) -> Result<()> {
-    let header = &next.header;
-    if next.format == Format::V1 {
-        ensure!(
-            header.operation_ids <= u64::from(super::super::ORDINARY_OPERATIONS)
-                && header.safety_operation_ids <= u64::from(super::super::SAFETY_OPERATIONS),
-            "expanded history requires an explicit authority format upgrade"
-        );
-    }
+pub(in crate::tenancy::store) async fn write_header_in(
+    db: &impl ConnectionTrait,
+    header: &AuthorityHeader,
+) -> Result<()> {
     chrono::DateTime::parse_from_rfc3339(&header.created_at)?;
     let ordinary = i64::try_from(header.operation_ids)?;
     let safety = i64::try_from(header.safety_operation_ids)?;
@@ -24,7 +19,7 @@ pub(super) async fn write_header_in(db: &impl ConnectionTrait, next: &LoadedHead
             (Alias::new("saturated"), Expr::val(header.saturated).into()),
         ])
         .and_where(Expr::col(Alias::new("singleton")).eq(1_i32))
-        .and_where(Expr::col(Alias::new("schema_version")).eq(next.format.number()))
+        .and_where(Expr::col(Alias::new("schema_version")).eq(AUTHORITY_SCHEMA_VERSION))
         .and_where(Expr::col(Alias::new("installation_id")).eq(header.installation.as_str()))
         .and_where(Expr::col(Alias::new("created_at")).eq(header.created_at.as_str()))
         .and_where(Expr::col(Alias::new("authority_revision")).lte(revision))
@@ -39,41 +34,6 @@ pub(super) async fn write_header_in(db: &impl ConnectionTrait, next: &LoadedHead
             .rows_affected()
             == 1,
         "authority header changed, format differs or stopped state would be cleared"
-    );
-    Ok(())
-}
-
-pub(super) async fn upgrade_format_in(
-    db: &impl ConnectionTrait,
-    validated: &LoadedHeader,
-) -> Result<()> {
-    let header = &validated.header;
-    let query = Query::update()
-        .table(Alias::new(Table::Header.name()))
-        .value(
-            Alias::new("schema_version"),
-            super::super::super::AUTHORITY_SCHEMA_VERSION,
-        )
-        .and_where(Expr::col(Alias::new("singleton")).eq(1_i32))
-        .and_where(Expr::col(Alias::new("schema_version")).eq(validated.format.number()))
-        .and_where(Expr::col(Alias::new("installation_id")).eq(header.installation.as_str()))
-        .and_where(Expr::col(Alias::new("created_at")).eq(header.created_at.as_str()))
-        .and_where(
-            Expr::col(Alias::new("authority_revision")).eq(i64::try_from(header.revision.get())?),
-        )
-        .and_where(Expr::col(Alias::new("operation_ids")).eq(i64::try_from(header.operation_ids)?))
-        .and_where(
-            Expr::col(Alias::new("safety_operation_ids"))
-                .eq(i64::try_from(header.safety_operation_ids)?),
-        )
-        .and_where(Expr::col(Alias::new("saturated")).eq(header.saturated))
-        .to_owned();
-    ensure!(
-        db.execute(db.get_database_backend().build(&query))
-            .await?
-            .rows_affected()
-            == 1,
-        "authority changed after format validation"
     );
     Ok(())
 }

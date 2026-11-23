@@ -101,7 +101,10 @@ async fn reserved_router_defaults_are_rejected_without_poisoning_other_execution
     let mut provider = Server::start().await?;
     let mut ready = ready(&provider).await?;
     ready.fixture.service.shutdown().await?;
-    let resources = Resources::with_key(ready.fixture.installation.clone(), [29; 32])?;
+    let resources = Resources::with_key(
+        ready.fixture.installation.clone(),
+        ready.fixture.wrapping_key,
+    )?;
     let mut slot = ready.route.clone();
     slot.resource_kind = ResourceKind::Credential;
     slot.resource_id = "upstream-slot".try_into()?;

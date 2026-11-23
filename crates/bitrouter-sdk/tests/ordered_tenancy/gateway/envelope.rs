@@ -1,12 +1,12 @@
 use super::*;
 use bitrouter_ai::tenancy::generation_defaults::{
-    ENVELOPE_BODY_MEMBER as BODY_MEMBER, GenerationDefaultsEnvelopeV1,
+    ENVELOPE_BODY_MEMBER as BODY_MEMBER, GenerationDefaultsEnvelope,
 };
 
 async fn send(
     client: &GatewayClient,
-    binding: &OrderedDispatchBindingV2,
-    defaults: GenerationDefaultsEnvelopeV1,
+    binding: &OrderedDispatchBinding,
+    defaults: GenerationDefaultsEnvelope,
     protocol: usize,
     stream: bool,
 ) -> TestResult {
@@ -46,7 +46,7 @@ async fn send(
 }
 
 #[tokio::test]
-async fn envelope_h1_h2_three_protocols_json_sse_are_bound_and_call_local() -> TestResult {
+async fn envelope_v2_h1_h2_three_protocols_json_sse_are_bound_and_call_local() -> TestResult {
     for (transport, wire) in versions() {
         for protocol in 0..3 {
             for stream in [false, true] {
@@ -60,11 +60,11 @@ async fn envelope_h1_h2_three_protocols_json_sse_are_bound_and_call_local() -> T
                 )
                 .await?;
                 let client = gateway_client(&server, transport)?;
-                let a: GenerationDefaultsEnvelopeV1 = serde_json::from_value(
-                    json!({"schema_version":1,"canonical":{"schema_version":1,"seed":7},"supplemental":{"vendor_knob":"a".repeat(8192),"headers":{"x-opaque":"data"}}}),
+                let a: GenerationDefaultsEnvelope = serde_json::from_value(
+                    json!({"schema_version":2,"configuration_defaults":"apply","canonical":{"schema_version":1,"seed":7},"supplemental":{"vendor_knob":"a".repeat(8192),"headers":{"x-opaque":"data"}}}),
                 )?;
-                let b: GenerationDefaultsEnvelopeV1 = serde_json::from_value(
-                    json!({"schema_version":1,"supplemental":{"vendor_knob":null}}),
+                let b: GenerationDefaultsEnvelope = serde_json::from_value(
+                    json!({"schema_version":2,"configuration_defaults":"preserve_absence","supplemental":{"vendor_knob":null}}),
                 )?;
                 let original = binding(vec![255, 3, 0])?;
                 let bound_a = original.clone().with_generation_defaults_envelope(&a)?;
@@ -82,7 +82,7 @@ async fn envelope_h1_h2_three_protocols_json_sse_are_bound_and_call_local() -> T
                 for record in &records[..2] {
                     assert_eq!(record.version, wire);
                     let body: Value = serde_json::from_slice(&record.body)?;
-                    let actual: GenerationDefaultsEnvelopeV1 =
+                    let actual: GenerationDefaultsEnvelope =
                         serde_json::from_value(body[BODY_MEMBER].clone())?;
                     assert!(actual == a || actual == b);
                     assert!(seen.insert(actual.digest()?.as_str().to_owned()));
@@ -116,8 +116,9 @@ async fn envelope_h1_h2_three_protocols_json_sse_are_bound_and_call_local() -> T
 async fn missing_changed_competing_and_oversized_envelopes_never_send() -> TestResult {
     let server = server::serve(Version::HTTP_11, vec![]).await?;
     let client = gateway_client(&server, HttpVersion::Http1Only)?;
-    let defaults: GenerationDefaultsEnvelopeV1 =
-        serde_json::from_value(json!({"schema_version":1,"supplemental":{"vendor_knob":7}}))?;
+    let defaults: GenerationDefaultsEnvelope = serde_json::from_value(
+        json!({"schema_version":2,"configuration_defaults":"preserve_absence","supplemental":{"vendor_knob":7}}),
+    )?;
     let original = binding(vec![0])?;
     let bound = original
         .clone()
@@ -134,6 +135,15 @@ async fn missing_changed_competing_and_oversized_envelopes_never_send() -> TestR
         client
             .ordered_tenant("scoped-token", &original)?
             .with_generation_defaults_envelope(defaults.clone())
+            .is_err()
+    );
+    let mut changed_mode = defaults.clone();
+    changed_mode.configuration_defaults =
+        bitrouter_ai::tenancy::generation_defaults::ConfigurationDefaults::Apply;
+    assert!(
+        client
+            .ordered_tenant("scoped-token", &bound)?
+            .with_generation_defaults_envelope(changed_mode)
             .is_err()
     );
     let mut changed = defaults.clone();
@@ -163,9 +173,11 @@ async fn missing_changed_competing_and_oversized_envelopes_never_send() -> TestR
     ));
     // The defaults object itself fits; the entire request does not.
     let mut large = defaults;
+    large.supplemental.insert("vendor_knob".into(), json!(""));
+    let overhead = serde_json::to_vec(&large)?.len();
     large.supplemental.insert(
         "vendor_knob".into(),
-        json!("x".repeat(16 * 1024 * 1024 - 64)),
+        json!("x".repeat(16 * 1024 * 1024 - overhead)),
     );
     let bound = original.with_generation_defaults_envelope(&large)?;
     assert!(matches!(
@@ -188,8 +200,10 @@ async fn rejected_programmatic_deep_envelope_is_disposed_without_recursive_drop(
     for _ in 0..16384 {
         nested = Value::Array(vec![nested]);
     }
-    let defaults = GenerationDefaultsEnvelopeV1 {
-        schema_version: 1,
+    let defaults = GenerationDefaultsEnvelope {
+        schema_version: 2,
+        configuration_defaults:
+            bitrouter_ai::tenancy::generation_defaults::ConfigurationDefaults::PreserveAbsence,
         canonical: None,
         supplemental: std::collections::BTreeMap::from([("nested".into(), nested)]),
     };

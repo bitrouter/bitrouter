@@ -12,9 +12,9 @@ use bitrouter_ai::{
     tenancy::{
         authority::{OwnerKind, ResourceKind},
         configuration::ResourceRef,
+        execution::ExecutionReceipt,
         execution::{Outcome, ReceiptState},
-        execution_v2::ExecutionReceiptV2,
-        ordered::{GenerationProtocol, OrderedCandidateSelectionV1, OrderedDispatchBindingV2},
+        ordered::{GenerationProtocol, OrderedCandidateSelection, OrderedDispatchBinding},
         validation::Validate,
     },
 };
@@ -220,7 +220,7 @@ impl OrderedHarness {
         limit: u8,
         malformed: Option<usize>,
         defaults: Value,
-        profiles: Option<&[bitrouter_ai::tenancy::admission::AdmissionProfileV1]>,
+        profiles: Option<&[bitrouter_ai::tenancy::admission::AdmissionProfile]>,
     ) -> Result<Self> {
         Self::with_resource_edits(count, limit, malformed, defaults, profiles, |_| Ok(())).await
     }
@@ -230,7 +230,7 @@ impl OrderedHarness {
         limit: u8,
         malformed: Option<usize>,
         defaults: Value,
-        profiles: Option<&[bitrouter_ai::tenancy::admission::AdmissionProfileV1]>,
+        profiles: Option<&[bitrouter_ai::tenancy::admission::AdmissionProfile]>,
         edit: impl FnOnce(&mut Vec<Value>) -> Result<()>,
     ) -> Result<Self> {
         Self::with_native_mode(count, limit, malformed, defaults, profiles, false, edit).await
@@ -241,7 +241,7 @@ impl OrderedHarness {
         limit: u8,
         malformed: Option<usize>,
         defaults: Value,
-        profiles: Option<&[bitrouter_ai::tenancy::admission::AdmissionProfileV1]>,
+        profiles: Option<&[bitrouter_ai::tenancy::admission::AdmissionProfile]>,
         native_controls: bool,
         edit: impl FnOnce(&mut Vec<Value>) -> Result<()>,
     ) -> Result<Self> {
@@ -262,7 +262,7 @@ impl OrderedHarness {
         limit: u8,
         malformed: Option<usize>,
         defaults: Value,
-        profiles: Option<&[bitrouter_ai::tenancy::admission::AdmissionProfileV1]>,
+        profiles: Option<&[bitrouter_ai::tenancy::admission::AdmissionProfile]>,
         capacity: CapacityConfig,
         edit: impl FnOnce(&mut Vec<Value>) -> Result<()>,
     ) -> Result<Self> {
@@ -283,7 +283,7 @@ impl OrderedHarness {
         limit: u8,
         malformed: Option<usize>,
         defaults: Value,
-        profiles: Option<&[bitrouter_ai::tenancy::admission::AdmissionProfileV1]>,
+        profiles: Option<&[bitrouter_ai::tenancy::admission::AdmissionProfile]>,
         (native_controls, adapter, capacity): (
             bool,
             Option<Arc<private_adapter::FixtureAdapter>>,
@@ -378,6 +378,15 @@ impl OrderedHarness {
             let mut attachments = Vec::new();
             for (index, profile) in profiles.iter().enumerate() {
                 let profile_ref = profiled::reference(index)?;
+                let mut profile = profile.clone();
+                // These fixtures request isolated circuits unless a test supplies an explicit shared group.
+                if profile
+                    .health_group_id
+                    .as_ref()
+                    .is_some_and(|group| group.as_str() == "profile")
+                {
+                    profile.health_group_id = Some(profile_ref.resource_id.clone());
+                }
                 for protocol in ["chat_completions", "messages", "responses"] {
                     attachments.push(json!({"inbound_protocol":protocol,"candidate_index":index,
                         "credential":credentials[index]["credential"],"profile":profile_ref}));
@@ -392,7 +401,7 @@ impl OrderedHarness {
             route_definition["definition"]["attachments"] = json!(attachments);
         }
         edit(&mut definitions)?;
-        // A retained route PolicyLock must match the configuration policy before
+        // A retained route's model Policy must match the configuration policy before
         // an ordered request can reach its capability refusal boundary.
         let policy = serde_json::from_value(
             definitions
@@ -404,9 +413,13 @@ impl OrderedHarness {
         // Import prerequisites before the route without exceeding one import's
         // 256-resource limit. The tested route itself still retains all ordinals.
         definitions.sort_by_key(|entry| entry["reference"]["resource_kind"] == "route");
-        let import_format = if definitions
+        let import_format = if definitions.iter().any(|entry| {
+            entry["definition"]["kind"] == "policy" || !entry["definition"]["policy"].is_null()
+        }) {
+            4
+        } else if definitions
             .iter()
-            .any(|entry| entry["definition"]["kind"] == "admission_profile_v2")
+            .any(|entry| entry["definition"]["kind"] == "admission_profile")
         {
             2
         } else {
@@ -443,15 +456,12 @@ impl OrderedHarness {
         .await?;
         fixture.service.execution_settings.ordered_attempt_limit = limit;
         fixture.service.execution_settings.ordered_native_controls = native_controls;
-        if adapter.is_some() {
+        if let Some(adapter) = adapter {
             let endpoint = base
                 .replace("/v1", "/adapter/v1/chat/completions")
                 .parse()?;
             fixture.service.private_adapter = Some(Arc::new(
-                crate::tenancy::execution::private_adapter::Peer::for_test(
-                    endpoint,
-                    private_adapter::KEY,
-                )?,
+                crate::tenancy::execution::private_adapter::Peer::for_test(endpoint, adapter.key)?,
             ));
         }
         let revision = if profiles.is_some() {
@@ -528,7 +538,7 @@ impl OrderedHarness {
         &self,
         indices: Vec<u16>,
         protocol: GenerationProtocol,
-    ) -> Result<OrderedDispatchBindingV2> {
+    ) -> Result<OrderedDispatchBinding> {
         let control = self.control(true, HttpVersion::Http1Only)?;
         let capabilities = control.ordered_capabilities().await?;
         ensure!(
@@ -557,7 +567,7 @@ impl OrderedHarness {
         Ok(capabilities.bind(
             self.revision.revision_id.clone(),
             "ordered-correlation".try_into()?,
-            OrderedCandidateSelectionV1 {
+            OrderedCandidateSelection {
                 generation_defaults_digest: None,
                 admission_mode: manifest.admission_mode,
                 schema_version: 1,
@@ -568,7 +578,7 @@ impl OrderedHarness {
     }
     async fn invoke(
         &self,
-        binding: &OrderedDispatchBindingV2,
+        binding: &OrderedDispatchBinding,
         protocol: GenerationProtocol,
         stream: bool,
         version: HttpVersion,
@@ -633,13 +643,13 @@ impl OrderedHarness {
             ),
         })
     }
-    async fn receipt(&self, id: &ExecutionId) -> Result<ExecutionReceiptV2> {
+    async fn receipt(&self, id: &ExecutionId) -> Result<ExecutionReceipt> {
         let client = self.control(false, HttpVersion::Http1Only)?;
         let receipt = client
-            .execution_v2(&self.fixture.installation, &self.fixture.tenant, id)
+            .execution(&self.fixture.installation, &self.fixture.tenant, id)
             .await?;
         receipt.validate()?;
-        let evidence = client.usage_evidence_v2(&receipt).await?;
+        let evidence = client.usage_evidence(&receipt).await?;
         evidence.validate_against(&receipt)?;
         ensure!(!evidence.truncated && evidence.attempts.len() == receipt.attempts.len());
         Ok(receipt)
@@ -702,12 +712,12 @@ async fn ordered_sdk_executes_one_eight_nine_and_sixty_four_actual_hops_in_suppl
         ensure!(
             receipt.outcome == Outcome::Completed && receipt.attempts.len() == usize::from(count)
         );
-        ensure!(receipt.accepted_selection.candidate_indices == indices);
+        ensure!(receipt_selection(&receipt)?.candidate_indices == indices);
         ensure!(
             receipt
                 .attempts
                 .iter()
-                .map(|attempt| attempt.candidate_index)
+                .filter_map(|attempt| attempt.candidate_index)
                 .collect::<Vec<_>>()
                 == indices
         );
@@ -729,12 +739,10 @@ async fn ordered_sdk_executes_one_eight_nine_and_sixty_four_actual_hops_in_suppl
             );
         }
         let client = harness.control(false, HttpVersion::Http1Only)?;
-        ensure!(
-            client
-                .execution(&harness.fixture.installation, &harness.fixture.tenant, &id)
-                .await
-                .is_err()
-        );
+        let reread = client
+            .execution(&harness.fixture.installation, &harness.fixture.tenant, &id)
+            .await?;
+        ensure!(serde_json::to_value(&reread)? == serde_json::to_value(&receipt)?);
         harness.fixture.service.shutdown().await?;
     }
     Ok(())
@@ -759,7 +767,7 @@ async fn ordered_sdk_three_protocols_json_and_streams_use_the_same_protected_rec
                 let id = harness.invoke(&binding, protocol, stream, version).await?;
                 let receipt = harness.receipt(&id).await?;
                 ensure!(receipt.outcome == Outcome::Completed && receipt.attempts.len() == 1);
-                ensure!(receipt.accepted_selection.inbound_protocol == protocol);
+                ensure!(receipt_selection(&receipt)?.inbound_protocol == protocol);
             }
         }
     }
@@ -797,8 +805,21 @@ async fn ordered_unknown_body_stops_the_chain_and_retains_unknown() -> Result<()
     ensure!(page.execution_ids.len() == 1);
     let receipt = harness.receipt(&page.execution_ids[0]).await?;
     ensure!(receipt.state == ReceiptState::Unknown && receipt.outcome == Outcome::Unknown);
-    ensure!(receipt.attempts.len() == 1 && receipt.attempts[0].candidate_index == 2);
+    ensure!(receipt.attempts.len() == 1 && receipt.attempts[0].candidate_index == Some(2));
     ensure!(harness.observed()? == vec!["model-2"]);
     harness.fixture.service.shutdown().await?;
     Ok(())
+}
+
+fn receipt_selection(
+    receipt: &ExecutionReceipt,
+) -> Result<&bitrouter_ai::tenancy::ordered::AcceptedSelection> {
+    match &receipt.dispatch {
+        bitrouter_ai::tenancy::execution::Dispatch::Ordered {
+            accepted_selection, ..
+        } => Ok(accepted_selection),
+        bitrouter_ai::tenancy::execution::Dispatch::Strict => {
+            anyhow::bail!("expected ordered receipt")
+        }
+    }
 }

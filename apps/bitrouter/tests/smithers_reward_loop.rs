@@ -1,19 +1,15 @@
-use std::collections::BTreeMap;
-
-use bitrouter::core::eval::EvalService;
-use bitrouter::core::eval::compiler::EvalEvidenceSnapshot;
-use bitrouter::core::eval::store::EvalStore;
-use bitrouter::core::policy::{CompileInput, compile_candidate};
 use bitrouter::core::workflow_state::archive::{CloudUsageRecord, WorkflowRunArtifact};
 use bitrouter::core::workflow_state::real_trace::{CapturedIngressTrace, RealTraceOutcome};
 use bitrouter::core::workflow_state::reward::BenchmarkOutcomeRecord;
 use bitrouter::core::workflow_state::reward_feedback::import_semantic_reward_feedback;
+use bitrouter::eval::EvalService;
+use bitrouter::eval::compiler::EvalEvidenceSnapshot;
+use bitrouter::eval::store::EvalStore;
 use bitrouter::gateway::routing::workflow::decision::PolicyDecisionRecord;
 use bitrouter::gateway::routing::workflow::ir::{HarnessId, ProtocolKind};
 use bitrouter::metering::{
     ChargeEvidence, ChargeStatus, EffectivePricingRates, PricingSource, ReconciliationStatus,
 };
-use bitrouter::policy_lock::{PolicyDefinition, PolicyLock, deterministic_yaml, semantic_digest};
 use bitrouter_ai::types::{NormalizedUsage, UsageOrigin};
 use serde_json::json;
 
@@ -64,33 +60,12 @@ fn provider_usage(request_id: &str) -> CloudUsageRecord {
     }
 }
 
-fn policy() -> PolicyDefinition {
-    let mut policy = PolicyDefinition {
-        tiers: BTreeMap::from([
-            ("economy".to_string(), "local/economy".into()),
-            ("strong".to_string(), "local/strong".into()),
-        ]),
-        default_tier: Some("strong".to_string()),
-        tool_use_tier: Some("strong".to_string()),
-        tool_safe_tiers: vec!["strong".to_string()],
-        ..PolicyDefinition::default()
-    };
-    policy.adequacy.enabled = true;
-    policy.adequacy.explore_enabled = true;
-    policy.adequacy.explore_tier = Some("economy".to_string());
-    policy.adequacy.explore_opening = true;
-    policy.adequacy.escalation_tier = Some("strong".to_string());
-    policy.adequacy.min_semantic_successes_for_lock = 1;
-    policy
-}
-
 #[tokio::test]
-async fn smithers_terminal_reward_materializes_only_the_credited_route() -> anyhow::Result<()> {
+async fn smithers_terminal_reward_freezes_only_the_credited_feedback() -> anyhow::Result<()> {
     let request_id = "req-smithers-1";
     let run_id = "run-smithers-1";
     let task_id = "case-release-review";
-    let target_key = "semantic_route/v1|unknown|orchestrate|normal";
-    let other_key = "semantic_route/v1|unknown|implement|normal";
+    let target_key = "unknown|orchestrate|normal";
     let ledger_key = format!("smithers\0{target_key}");
     let trace = CapturedIngressTrace {
         id: request_id.to_string(),
@@ -110,7 +85,7 @@ async fn smithers_terminal_reward_materializes_only_the_credited_route() -> anyh
         .into_iter()
         .collect(),
         raw_body: json!({
-            "model": "@smithers",
+            "model": "bitrouter/smithers",
             "messages": [{"role": "user", "content": "review the release"}]
         }),
         outcome: RealTraceOutcome {
@@ -125,7 +100,7 @@ async fn smithers_terminal_reward_materializes_only_the_credited_route() -> anyh
         captured_at: None,
         request_id: Some(request_id.to_string()),
         ingress_request_id_sha256: None,
-        input_model: "@smithers".to_string(),
+        input_model: "bitrouter/smithers".to_string(),
         input_effort: None,
         key_strategy: "agent_trace".to_string(),
         route_projection: Some(target_key.to_string()),
@@ -206,37 +181,36 @@ async fn smithers_terminal_reward_materializes_only_the_credited_route() -> anyh
     let manifest = eval_store.freeze_snapshot("2026-07-30T00:02:00Z").await?;
     let evidence = EvalEvidenceSnapshot::load(&eval_store, &manifest.evidence_root).await?;
 
-    let lock = PolicyLock {
-        policies: BTreeMap::from([("smithers".to_string(), policy())]),
-        ..Default::default()
-    };
-    let parent_digest = semantic_digest(&lock)?;
-    let evolved = compile_candidate(CompileInput {
-        current: &lock,
-        parent_digest: Some(&parent_digest),
-        snapshot_time_unix_ms: 1_785_369_600_000,
-        eval: Some(&evidence),
-        proposed_progress_guards: None,
-    })?
-    .document;
-    assert_eq!(evolved.policies["smithers"].routes[target_key], "economy");
-    assert!(!evolved.policies["smithers"].routes.contains_key(other_key));
-
-    let independently_evolved = compile_candidate(CompileInput {
-        current: &lock,
-        parent_digest: Some(&parent_digest),
-        snapshot_time_unix_ms: 1_785_369_600_000,
-        eval: Some(&evidence),
-        proposed_progress_guards: None,
-    })?
-    .document;
+    // Generic reward import produces immutable facts, not a candidate Policy.
+    // The feedback-to-v4 compiler exchange is retired; explicit source authorship
+    // and independently authorized publication are separate product operations.
+    assert_eq!(evidence.records.len(), 1);
+    let record = &evidence.records[0];
+    assert_eq!(record.subject.scope, bitrouter_ai::eval::EvalScope::Task);
+    assert!(matches!(
+        &record.subject.identity,
+        bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {}
+    ));
+    assert_eq!(record.subject.subject_id, task_id);
+    assert_eq!(record.subject.decisions.len(), 1);
+    assert_eq!(record.subject.decisions[0].policy, "smithers");
     assert_eq!(
-        deterministic_yaml(&evolved)?.as_bytes(),
-        deterministic_yaml(&independently_evolved)?.as_bytes()
+        record.subject.decisions[0].route_projection.to_string(),
+        target_key
     );
+    assert_eq!(record.subject.decisions[0].selected_tier, "economy");
+    assert_eq!(record.result.verdict, bitrouter_ai::eval::EvalVerdict::Pass);
+    let frozen = serde_json::to_vec(&evidence)?;
+    let replay =
+        import_semantic_reward_feedback(&service, &artifact.semantic_policy_transition_candidates)
+            .await?;
+    assert_eq!(replay.eval_ids, feedback.eval_ids);
+    assert_eq!(eval_store.list_subjects().await?.len(), 1);
+    let retained = EvalEvidenceSnapshot::load(&eval_store, &manifest.evidence_root).await?;
     assert_eq!(
-        semantic_digest(&evolved)?,
-        semantic_digest(&independently_evolved)?
+        serde_json::to_vec(&retained)?,
+        frozen,
+        "feedback replay changed frozen evidence"
     );
     Ok(())
 }

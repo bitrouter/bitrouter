@@ -170,8 +170,8 @@ pub(super) async fn provision(host: &mut Host, upstream: &str) -> Result<Provisi
         "document":{
             "routes":[route], "policy":null,
             "generation_defaults":{"max_output_tokens":64, "temperature":0.0},
-            "learning":{"mode":"off", "max_evaluations":0},
-            "limits":{"active_executions":1, "queued_work":0, "learning_jobs":0},
+            "eval_publication": false,
+            "limits":{"active_executions":1, "queued_work":0},
         },
     }))?;
     let revision = operator.put_configuration(&tenant, &input).await?;

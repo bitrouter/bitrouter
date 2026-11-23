@@ -13,11 +13,11 @@ use crate::harness::agent::Agent;
 use crate::harness::agent::RunChannels;
 use crate::harness::agent::RunInput;
 use crate::harness::storage::CommitRequest;
-use bitrouter_ai::harness::agent::RunStatus;
-use bitrouter_ai::harness::thread::PermissionProfile;
-use bitrouter_ai::harness::turn::TurnEventPayload;
-use bitrouter_ai::harness::turn::TurnStatus;
-use bitrouter_ai::harness::turn::VerificationStatus;
+use crate::managed_contract::harness::agent::RunStatus;
+use crate::managed_contract::harness::thread::PermissionProfile;
+use crate::managed_contract::harness::turn::TurnEventPayload;
+use crate::managed_contract::harness::turn::TurnStatus;
+use crate::managed_contract::harness::turn::VerificationStatus;
 
 struct TurnWorker {
     service: ThreadService,

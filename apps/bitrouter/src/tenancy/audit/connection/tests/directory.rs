@@ -2,7 +2,6 @@
 use super::*;
 use crate::tenancy::store::directory::{self, CapacityExceeded, DirectoryTotals, PageBudget};
 use sea_orm::DatabaseConnection;
-use sea_orm_migration::{MigratorTrait, SchemaManager};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 const CREDENTIALS: usize = 65;
@@ -39,19 +38,7 @@ impl ConnectionTrait for Counted<'_> {
 
 async fn seed() -> Result<DatabaseConnection> {
     let db = crate::db::connect("sqlite::memory:").await?;
-    let manager = SchemaManager::new(&db);
-    for migration in crate::db::migration::Migrator::migrations() {
-        if [
-            "m20240101_000028_",
-            "m20240101_000029_",
-            "m20240101_000039_",
-        ]
-        .iter()
-        .any(|prefix| migration.name().starts_with(prefix))
-        {
-            migration.up(&manager).await?;
-        }
-    }
+    crate::db::run_migrations(&db).await?;
     db.execute_unprepared(
         r#"INSERT INTO tenancy_tenants VALUES('t','r1','active','2000-01-01T00:00:00Z'),('other','r1','active','2000-01-01T00:00:00Z');
          INSERT INTO tenancy_principals VALUES('p','r1','issuer','subject','2000-01-01T00:00:00Z'),('other','r1','issuer','other','2000-01-01T00:00:00Z');

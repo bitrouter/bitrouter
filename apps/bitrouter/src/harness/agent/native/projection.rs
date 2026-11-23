@@ -4,10 +4,10 @@ use bitrouter_ai::types::{Content, Message, Role, ToolResultOutput};
 
 use crate::harness::agent::RunEvent;
 use crate::harness::storage::ExecutionRecord;
+use crate::managed_contract::harness::item::CallOrigin;
+use crate::managed_contract::harness::item::CallRecord;
+use crate::managed_contract::harness::runtime::EffectStatus;
 use crate::storage::checkpoint::snapshot::SessionSnapshot;
-use bitrouter_ai::harness::item::CallOrigin;
-use bitrouter_ai::harness::item::CallRecord;
-use bitrouter_ai::harness::runtime::EffectStatus;
 
 #[derive(Default)]
 pub(super) struct Projection {
@@ -19,7 +19,7 @@ pub(super) struct Projection {
 pub(super) fn project(
     state: &SessionSnapshot,
     presented: &BTreeSet<String>,
-    events: &[bitrouter_ai::core::checkpoint::DurableEvent],
+    events: &[crate::managed_contract::checkpoint::DurableEvent],
 ) -> Projection {
     let mut projection = Projection::default();
     let Some(root) = state.agents.get(&state.agent_id) else {
@@ -189,10 +189,9 @@ pub(super) fn project(
     for invocation in &turn.invocations {
         let intent_key = format!("intent:{}", invocation.public_call_id);
         if !presented.contains(&intent_key)
-            && invocation
-                .tool_observations
-                .values()
-                .any(|status| status.status == bitrouter_ai::core::protocol::ToolStatus::Running)
+            && invocation.tool_observations.values().any(|status| {
+                status.status == crate::managed_contract::protocol::ToolStatus::Running
+            })
         {
             projection.keys.push(intent_key);
             projection.records.push(ExecutionRecord::ToolIntent {
@@ -215,7 +214,7 @@ pub(super) fn project(
         }
         let output =
             serde_json::from_str::<ToolResultOutput>(&result.output).unwrap_or_else(|_| {
-                if result.status == bitrouter_ai::core::protocol::ToolOutcome::Succeeded {
+                if result.status == crate::managed_contract::protocol::ToolOutcome::Succeeded {
                     ToolResultOutput::Text {
                         value: result.output.clone(),
                     }
@@ -243,9 +242,13 @@ pub(super) fn project(
                 }],
             },
             effect: match result.status {
-                bitrouter_ai::core::protocol::ToolOutcome::EffectUnknown => EffectStatus::Unknown,
-                bitrouter_ai::core::protocol::ToolOutcome::NotExecuted
-                | bitrouter_ai::core::protocol::ToolOutcome::Denied => EffectStatus::NotExecuted,
+                crate::managed_contract::protocol::ToolOutcome::EffectUnknown => {
+                    EffectStatus::Unknown
+                }
+                crate::managed_contract::protocol::ToolOutcome::NotExecuted
+                | crate::managed_contract::protocol::ToolOutcome::Denied => {
+                    EffectStatus::NotExecuted
+                }
                 _ => EffectStatus::Completed,
             },
         });

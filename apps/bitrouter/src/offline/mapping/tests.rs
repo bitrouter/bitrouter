@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 fn example() -> Result<Value> {
     Ok(serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../docs/contracts/resource-tenancy/migration-example.json"
+        "/tests/fixtures/offline-mapping.json"
     )))?)
 }
 fn valid(value: &Value) -> Result<()> {
@@ -21,7 +21,7 @@ fn approval() -> Value {
 }
 
 #[test]
-fn frozen_example_preserves_duplicate_names_and_hashes_in_distinct_owners() -> Result<()> {
+fn example_preserves_duplicate_names_and_hashes_in_distinct_owners() -> Result<()> {
     let (_, counts) = Manifest::decode(&serde_json::to_vec(&example()?)?)?;
     ensure!(counts.mapping_keys == 3 && counts.mapped_keys == 2 && counts.quarantined_keys == 1);
     ensure!(counts.declared_mapped_rows == 4 && counts.declared_quarantined_rows == 2);

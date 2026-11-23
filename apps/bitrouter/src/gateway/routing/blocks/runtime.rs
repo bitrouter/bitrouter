@@ -38,6 +38,7 @@ pub struct BlockPolicyRouter {
 }
 
 impl BlockPolicyRouter {
+    #[cfg(all(feature = "core", feature = "harness"))]
     pub(crate) fn with_storage_budget(
         mut self,
         budget: Option<std::sync::Arc<std::sync::OnceLock<crate::tenancy::storage::Budget>>>,

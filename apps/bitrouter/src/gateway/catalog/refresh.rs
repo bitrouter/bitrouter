@@ -105,6 +105,7 @@ mod tests {
         policy::store::PolicyStore,
         reload::{AppReloader, ReloadSource},
     };
+    use anyhow::Context;
     use registry_json as serde_json;
     use serde_json::json;
     use std::sync::{
@@ -115,7 +116,7 @@ mod tests {
 
     fn yaml(url: &str, auto: bool, marker: &str) -> String {
         format!(
-            "registry:\n  url: '{url}'\n  auto_refresh: {auto}\npresets:\n  saved:\n    model: 'manual:{marker}'\nproviders:\n  manual:\n    api_base: 'https://manual.example/v1'\n    models: [{{id: '{marker}'}}]\n"
+            "registry:\n  url: '{url}'\n  auto_refresh: {auto}\nrouters:\n  saved:\n    selection:\n      kind: model\n      model: 'manual:stable'\nproviders:\n  manual:\n    api_base: 'https://manual.example/v1'\n    models: [{{id: stable}}, {{id: '{marker}'}}]\n"
         )
     }
     async fn fixture(
@@ -142,6 +143,19 @@ mod tests {
         );
         Ok((home, reloader, table))
     }
+    fn manual_models(table: &ConfigRoutingTable) -> anyhow::Result<Vec<String>> {
+        let snapshot = table.snapshot_config();
+        let provider = snapshot
+            .providers
+            .get("manual")
+            .context("manual provider")?;
+        Ok(provider
+            .models
+            .iter()
+            .map(|model| model.id.clone())
+            .collect())
+    }
+
     async fn wait_model(table: &ConfigRoutingTable, native: &str) -> anyhow::Result<()> {
         tokio::time::timeout(Duration::from_secs(4), async {
             loop {
@@ -222,9 +236,13 @@ mod tests {
         *state.write().unwrap_or_else(|p| p.into_inner()) =
             (200, super::super::tests::document("two"));
         wait_model(&table, "two").await?;
+        assert_eq!(manual_models(&table)?, ["stable", "applied"]);
         assert_eq!(
-            table.snapshot_config().presets["saved"].model.as_deref(),
-            Some("manual:applied")
+            table
+                .snapshot_config()
+                .resolve_router("bitrouter/saved")?
+                .clean_model,
+            "manual:stable"
         );
         *state.write().unwrap_or_else(|p| p.into_inner()) = (500, json!({"error":"unavailable"}));
         let current = count.load(Ordering::SeqCst);
@@ -245,9 +263,13 @@ mod tests {
             .reload()
             .await
             .map_err(|error| anyhow::anyhow!("{error}; report={:?}", reloader.reload_state()))?;
+        assert_eq!(manual_models(&table)?, ["stable", "pending"]);
         assert_eq!(
-            table.snapshot_config().presets["saved"].model.as_deref(),
-            Some("manual:pending")
+            table
+                .snapshot_config()
+                .resolve_router("bitrouter/saved")?
+                .clean_model,
+            "manual:stable"
         );
         stop.cancel();
         worker.await?;

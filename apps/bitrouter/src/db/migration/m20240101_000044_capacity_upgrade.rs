@@ -1,42 +1,24 @@
-//! Durable result for the one stopped-owner legacy count-fence transition.
-//! Creating this empty table never changes authority format or clears a stop.
+//! Read-only current authority schema validation, shared with stopped recovery.
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 use sea_orm_migration::prelude::*;
 
-#[derive(DeriveMigrationName)]
-pub struct Migration;
-pub(crate) const TABLE: &str = "tenancy_capacity_upgrades";
-
-pub(crate) fn definition() -> TableCreateStatement {
-    let mut table = Table::create();
-    table.table(Alias::new(TABLE));
-    for (name, width) in [
-        ("installation_id", 128),
-        ("operation_id", 128),
-        ("request_digest", 64),
-    ] {
-        table.col(super::m20240101_000028_resource_tenancy::identity(
-            DatabaseBackend::Sqlite,
-            name,
-            width,
-            false,
-        ));
-    }
-    table.col(ColumnDef::new(Alias::new("result_json")).text().not_null());
-    table.primary_key(
-        Index::create()
-            .col(Alias::new("installation_id"))
-            .col(Alias::new("operation_id")),
-    );
-    table.to_owned()
-}
-
 fn normalized(sql: &str) -> String {
-    sql.to_ascii_lowercase()
-        .replace("if not exists", "")
-        .chars()
-        .filter(|c| !c.is_ascii_whitespace())
-        .collect()
+    let mut quote = None;
+    let mut normalized = String::new();
+    for character in sql.chars() {
+        if let Some(delimiter) = quote {
+            normalized.push(character);
+            if character == delimiter {
+                quote = None;
+            }
+        } else if matches!(character, '\'' | '"') {
+            quote = Some(character);
+            normalized.push(character);
+        } else if !character.is_ascii_whitespace() {
+            normalized.push(character.to_ascii_lowercase());
+        }
+    }
+    normalized.replace("ifnotexists", "")
 }
 
 async fn table(db: &impl ConnectionTrait, definition: TableCreateStatement) -> Result<(), DbErr> {
@@ -76,14 +58,9 @@ async fn table(db: &impl ConnectionTrait, definition: TableCreateStatement) -> R
             .col(Alias::new("state"))
             .col(Alias::new("tenant_id"))
             .to_string(SqliteQueryBuilder);
-        let mut expected = vec![normalized(&expected)];
-        if db.query_one(Statement::from_string(DatabaseBackend::Sqlite,
-            "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='tenancy_dispatch_intents' LIMIT 1"
-        )).await?.is_some() {
-            let directory = super::m20240101_000045_ordered_receipts::directory_index()
-                .to_string(SqliteQueryBuilder);
-            expected.push(normalized(&directory));
-        }
+        let directory = super::m20240101_000045_ordered_receipts::directory_index()
+            .to_string(SqliteQueryBuilder);
+        let mut expected = vec![normalized(&expected), normalized(&directory)];
         let mut actual = indexes
             .iter()
             .map(|row| row.try_get::<String>("", "sql").map(|sql| normalized(&sql)))
@@ -93,10 +70,12 @@ async fn table(db: &impl ConnectionTrait, definition: TableCreateStatement) -> R
         if actual != expected {
             return Err(incompatible());
         }
-    } else if name == "tenancy_resource_lifecycle" && db.query_one(Statement::from_string(DatabaseBackend::Sqlite,
-        "SELECT 1 FROM seaql_migrations WHERE version='m20240101_000049_admission_index' LIMIT 1")).await?.is_some() {
-        let expected = super::m20240101_000049_admission_index::head_index().to_string(SqliteQueryBuilder);
-        if indexes.len() != 1 || normalized(&indexes[0].try_get::<String>("", "sql")?) != normalized(&expected) {
+    } else if name == "tenancy_resource_lifecycle" {
+        let expected =
+            super::m20240101_000049_admission_index::head_index().to_string(SqliteQueryBuilder);
+        if indexes.len() != 1
+            || normalized(&indexes[0].try_get::<String>("", "sql")?) != normalized(&expected)
+        {
             return Err(incompatible());
         }
     } else if !indexes.is_empty() {
@@ -105,7 +84,7 @@ async fn table(db: &impl ConnectionTrait, definition: TableCreateStatement) -> R
     Ok(())
 }
 fn incompatible() -> DbErr {
-    DbErr::Custom("incompatible capacity upgrade authority schema".into())
+    DbErr::Custom("incompatible current authority schema".into())
 }
 
 /// Read-only exact authority table profile shared by startup-independent tools.
@@ -121,38 +100,11 @@ pub(crate) async fn validate_authority(db: &impl ConnectionTrait) -> Result<(), 
     definitions.push(super::m20240101_000039_resource_lifecycle::definition(
         DatabaseBackend::Sqlite,
     ));
+    definitions.push(super::m20240101_000049_admission_index::definition(
+        DatabaseBackend::Sqlite,
+    ));
     for definition in definitions {
         table(db, definition).await?;
     }
     Ok(())
-}
-
-pub(crate) async fn validate(db: &impl ConnectionTrait) -> Result<(), DbErr> {
-    if db.get_database_backend() != DatabaseBackend::Sqlite {
-        return Err(incompatible());
-    }
-    table(db, definition()).await
-}
-
-#[async_trait::async_trait]
-impl MigrationTrait for Migration {
-    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        if manager.get_database_backend() != DatabaseBackend::Sqlite {
-            return Ok(());
-        }
-        if !manager.has_table(TABLE).await? {
-            manager.create_table(definition()).await?;
-        }
-        validate(manager.get_connection()).await
-    }
-    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        if manager.get_database_backend() == DatabaseBackend::Sqlite
-            && manager.has_table(TABLE).await?
-        {
-            return Err(DbErr::Custom(
-                "capacity upgrade requires verified-backup rollback".into(),
-            ));
-        }
-        Ok(())
-    }
 }

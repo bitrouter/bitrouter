@@ -1,22 +1,22 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "GenerationDefaultsEnvelopeV1",
-  "description": "Request-local defaults applied after caller protocol parsing.\n\nCaller-owned extras suppress same-name defaults on every outbound protocol.\nSupplemental parameters use the existing store, parallel-tool-call and Chat\nstream-options promotion rules; all other values remain opaque provider JSON.\nThis object grants no routing, credential or continuation authority.",
+  "title": "GenerationDefaultsEnvelope",
+  "description": "Request-local defaults applied after caller protocol parsing.\n\nCaller-owned extras suppress same-name defaults on every outbound protocol.\nSupplemental parameters use the existing store, parallel-tool-call and Chat\nstream-options promotion rules; all other values remain opaque provider JSON.\nThis object grants no routing, credential or continuation authority.\nSelect whether absent generation values receive configuration defaults.\nCaller and canonical values are preserved.",
   "type": "object",
   "properties": {
     "schema_version": {
-      "description": "Format, exactly one.",
+      "description": "Format, exactly two.",
       "type": "integer",
       "format": "uint8",
-      "minimum": 1,
-      "maximum": 1
+      "minimum": 2,
+      "maximum": 2
     },
     "canonical": {
-      "description": "The unchanged canonical defaults contract; present null is invalid.",
+      "description": "Canonical defaults. An explicit null is invalid.",
       "$ref": "#/$defs/CanonicalGenerationDefaultsV1"
     },
     "supplemental": {
-      "description": "Protocol-independent defaults, including null and malformed special values.\nProtected request controls, canonical names and the two transport member\nnames are reserved. Nested names are unrestricted opaque data.",
+      "description": "Protocol-independent defaults, including null and malformed special values.\nProtected request controls, canonical names and the transport member\nname are reserved. Nested names are unrestricted opaque data.",
       "type": "object",
       "additionalProperties": true,
       "propertyNames": {
@@ -34,17 +34,21 @@
             "stop",
             "presence_penalty",
             "frequency_penalty",
-            "bitrouter_generation_defaults",
             "bitrouter_generation_defaults_envelope"
           ]
         }
       }
+    },
+    "configuration_defaults": {
+      "description": "Required selection of the retained configuration default layer.",
+      "$ref": "#/$defs/ConfigurationDefaults"
     }
   },
   "additionalProperties": false,
   "required": [
     "schema_version",
-    "supplemental"
+    "supplemental",
+    "configuration_defaults"
   ],
   "$defs": {
     "CanonicalGenerationDefaultsV1": {
@@ -163,6 +167,21 @@
           "items": {
             "type": "string"
           }
+        }
+      ]
+    },
+    "ConfigurationDefaults": {
+      "description": "Selection of the configuration generation-default layer for one ordered call.\nNeither choice changes execution budgets, capability checks or policy locks.",
+      "oneOf": [
+        {
+          "description": "Fill missing temperature and output tokens from retained configuration.",
+          "type": "string",
+          "const": "apply"
+        },
+        {
+          "description": "Leave missing values absent until an existing later rule or renderer fills them.",
+          "type": "string",
+          "const": "preserve_absence"
         }
       ]
     }

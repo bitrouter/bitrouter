@@ -1,9 +1,0 @@
-{
-  "schemaVersion": 2,
-  "routingStrategy": "system_one_semantic_v1",
-  "routingContract": "Request and Core session signals share one classifier and action planner. The semantic_route/v1|<task-family>|<role>|<risk> projection is independent of input source.",
-  "bootstrap": "No migrated scorecard experiments. The default strong action remains active until explicit routes have matching System One contracts and certificates.",
-  "action": "model + optional effort + required context strategy; context capabilities are independently granted by the evidence owner.",
-  "quality": "unvalidated",
-  "learning": "Semantic probabilities, logging propensities and evaluator outcomes are separate evidence."
-}

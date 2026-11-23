@@ -20,7 +20,7 @@ use crate::gateway::routing::workflow::predictive::{
     compiled_predictor_contract, predict_next_step,
 };
 use crate::storage::evaluation::canonical_digest;
-use bitrouter_ai::harness::inspection::TaskFamily;
+use bitrouter_ai::policy::TaskFamily;
 
 pub const CLASSIFIER_BAKEOFF_SCHEMA_VERSION: u32 = 2;
 const CLASSIFICATION_WEIGHT_TASK: u32 = 4;

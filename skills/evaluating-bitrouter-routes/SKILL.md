@@ -1,103 +1,78 @@
 ---
 name: evaluating-bitrouter-routes
-description: Use when evaluating BitRouter route decisions or Eval Exchange subjects with task-native verifiers, human reviewers, private enterprise evaluators, agentic judges, or genuinely uncategorized evaluator sources.
+description: Use when evaluating BitRouter route decisions or Eval Exchange subjects with external verifiers, human reviewers, enterprise evaluators, agentic judges, or generic sources.
 ---
 
 # Evaluate BitRouter Routes
 
-Evaluate outcomes outside BitRouter's serving path. Produce an immutable result
-and stop after BitRouter reports its admission status. Do not run the optimizer
-or use low-level policy publication from the evaluator workflow.
+Evaluate actual outcomes outside the serving path. Read the
+[Eval Exchange reference](references/eval-exchange.md) before forming a packet;
+the [Eval specification](../../docs/specs/eval/README.md) defines the payloads.
 
-Read [the Eval Exchange reference](references/eval-exchange.md) before forming
-a subject or result. It is the exact current wire and authority contract.
+## Bind the subject
 
-## Classify the evaluation
+Set `spec_version: "eval/1.0.0-beta.1"` on subjects and results. A frozen
+snapshot carries that version too. Choose one closed subject identity profile:
 
-Choose scope from the observable outcome boundary:
+- `tenant_model_policy`: exact installation, tenant, configuration revision,
+  full Policy ResourceRef and literal selected name. Use revision-bound inference
+  and preserve any actual execution/receipt link.
+- `tenant_generic`: tenant evidence without Policy identity.
+- `gateway_generic`: gateway evidence using the gateway's independent authority,
+  without tenant or Policy fields.
 
-| Evidence boundary | Scope |
-|---|---|
-| One request-local outcome | `request` |
-| Bounded multi-request workflow or conversation | `episode` |
-| Externally defined task identity plus terminal task or verifier outcome | `task` |
+Use the matching endpoint. Generic facts cannot justify another Policy revision.
 
-Choose `evaluator.kind` from the actual source:
+Choose scope from the outcome actually observed: one request is `request`, a
+bounded workflow/conversation is `episode`, and an externally defined task with
+terminal task/verifier evidence is `task`. Keep logical task identity stable
+inside its run/source namespace; give separate attempts distinct evaluation IDs.
 
-| Evaluation source | Kind |
-|---|---|
-| Task-native verifier | `task_native` |
-| Human reviewer | `human` |
-| Private enterprise evaluator | `enterprise` |
-| Agentic judge | `agentic` |
-| Genuinely uncategorized evaluator | `generic` |
+## Build the packet
 
-## Build the evaluator packet
-
-1. Copy every decision's `decision_id`, `policy`, `route_projection`,
-   `request_key`, `selected_tier`, `baseline_tier`, `policy_digest`, and
-   optional `experiment` object from router-authored evidence. Preserve the
-   experiment object verbatim; never invent or edit its id, arm, assignment
-   unit, assignment-id digest, or challenger propensity.
-2. Redact evidence before it leaves its private source. Retain raw messages,
-   tool arguments, code, and evaluator output with the evaluator; place safe,
-   content-addressed evidence items in the subject.
-3. List only dimensions the evaluator was asked to judge. Leave unsupported
-   dimensions absent. Use `inconclusive` when evidence cannot support a
-   verdict.
-4. Set `confidence_ppm` to the evaluator's confidence that its verdict is
-   correct. Use `null` when the evaluator or rubric does not supply confidence.
-   For a task or episode cost result, submit the complete unit cost as
-   `cost.usd_micros` with unit `micro_usd`; never substitute one request's
-   price for the complete task or episode.
-5. Write a draft subject with an empty `evidence_digest`, then seal it:
+1. Copy router-authored decision IDs, selected/baseline tiers and efforts,
+   request/projection keys, diagnostic digests and route measurements exactly.
+   Use the exact Policy `RouteClass` strings for `request_key` and
+   `route_projection`.
+2. Keep raw prompts, code, tool arguments and evaluator output private. Submit
+   only redacted, content-addressed evidence and safe attributes.
+3. Request only supported dimensions. Keep cost/latency/reliability separate from
+   task quality. Use `inconclusive` when evidence does not justify a verdict.
+4. Write a draft with an empty evidence digest and seal it locally:
 
    ```bash
-   bro eval subject seal subject-draft.json --output subject.json
+   bitrouter eval subject seal subject-draft.json --output subject.json
    ```
 
-6. For a multi-decision subject, derive `decision_credit` from the fixed
-   evaluator credit policy:
-   - Exact supported decision/metric mappings: emit only those mappings.
-   - No policy or no exact mapping: use `{}` or omit the serde-defaulted field.
-     The result remains a record but produces no per-route evidence.
-   For a one-decision subject, empty credit means implicit full credit. When an
-   inconclusive evaluator intentionally withholds attribution, emit that
-   decision with `weight_ppm: 0` instead.
-   Keep hypothetical or illustrative weights outside submit-ready JSON.
+5. Repeat the subject's exact ID and sealed evidence digest on its result.
+6. Follow the endpoint's authority rules. Gateway evaluator kind must match its
+   configured source/authority. Tenant manual results require `generic`, the
+   authenticated principal's authority ID, and no hard violations.
+7. Use a fixed evidence-supported decision-credit policy. For multiple decisions
+   without an exact mapping, withhold credit. Empty credit on a single decision
+   means full credit; explicit zero weight withholds it.
+
+`confidence_ppm` is confidence in the verdict, not a quality score. Use `null`
+when the rubric provides none. Report complete task/episode cost at that scope;
+never duplicate a terminal reward across its individual requests.
 
 ## Submit and hand off
 
-1. Insert the sealed subject and submit a result that repeats its exact
-   `eval_id` and `evidence_digest`.
+Insert the sealed subject and submit its result using the matching SDK/HTTP
+profile. The gateway ledger also has local CLI operations:
 
-   ```bash
-   bro eval subject put subject.json --config bitrouter.yaml
-   bro eval result submit result.json --config bitrouter.yaml
-   ```
+```bash
+bitrouter eval subject put subject.json --config bitrouter.yaml
+bitrouter eval result submit result.json --config bitrouter.yaml
+```
 
-2. Treat an `admitted` response as eligible evidence. Preserve `held_out`,
-   `rejected`, and `disputed` responses as non-training records.
-3. Hand off the sealed subject, result, submission response, and private
-   evidence references, then stop. A later `bro optimize run` invocation
-   is a separate autonomous authorization; do not review, publish, or run it as
-   part of evaluation.
+Preserve the packet, response, evidence references and actual admission status:
+`admitted`, `held_out`, `rejected`, or `disputed`. Do not reinterpret a failed or
+interrupted mutation as proof that nothing committed. Keep equivalent retry
+identity, rubric/config digest and idempotency key stable.
 
-## Keep the packet consistent
-
-- Use `subject seal` for canonical evidence hashing and JSON.
-- Attribute metrics only to evidence-supported decisions.
-- Never copy a task- or episode-level reward onto each request. Use a fixed
-  causal policy (for example, a matched control plus one changed route family)
-  or withhold credit.
-- Preserve the router-authored baseline and selected tiers.
-- Preserve router-authored experiment references exactly.
-  Optimizer membership never comes from the evaluator-owned `cohort` string.
-- Treat `inconclusive` as zero quality evidence even if an old or malformed
-  packet assigns positive quality credit. Attribute cost or latency separately.
-- Keep evaluator identity, rubric/config digest, evidence references,
-  confidence, and idempotency key stable for an equivalent retry.
-- Keep `eval_id`, result, and evidence identities attempt-specific. For task
-  scope, keep `subject_id` stable for the canonical task inside its explicit
-  run/source/policy namespace so repeated attempts cannot inflate the generic
-  compiler's independent-task count.
+Stop after the authorized evaluator handoff. Freeze or Policy updates require
+those actions to be part of the task. If requested, the client may freeze facts,
+independently author a public model-only Policy source, create new immutable
+resource/configuration revisions, and explicitly activate with current authority
+and CAS. Submission, freeze and drafts never change active Policy automatically.

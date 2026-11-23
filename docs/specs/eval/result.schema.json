@@ -1,0 +1,181 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "EvaluationResult",
+  "type": "object",
+  "properties": {
+    "spec_version": {
+      "description": "Exact evaluation exchange contract.",
+      "$ref": "#/$defs/SpecVersion"
+    },
+    "eval_id": {
+      "type": "string"
+    },
+    "evidence_digest": {
+      "type": "string"
+    },
+    "evaluator": {
+      "$ref": "#/$defs/EvaluatorIdentity"
+    },
+    "verdict": {
+      "$ref": "#/$defs/EvalVerdict"
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/MetricValue"
+      },
+      "default": {}
+    },
+    "hard_violations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "confidence_ppm": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int64"
+    },
+    "evidence_refs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "decision_credit": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/DecisionCredit"
+      },
+      "default": {}
+    },
+    "idempotency_key": {
+      "type": "string"
+    },
+    "submitted_at": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "spec_version",
+    "eval_id",
+    "evidence_digest",
+    "evaluator",
+    "verdict",
+    "idempotency_key",
+    "submitted_at"
+  ],
+  "$defs": {
+    "SpecVersion": {
+      "description": "Closed discriminator for evaluation exchange documents.",
+      "oneOf": [
+        {
+          "description": "The model-routing evaluation exchange.",
+          "type": "string",
+          "const": "eval/1.0.0-beta.1"
+        }
+      ]
+    },
+    "EvaluatorIdentity": {
+      "type": "object",
+      "properties": {
+        "authority_id": {
+          "type": "string"
+        },
+        "evaluator_id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/EvaluatorKind"
+        },
+        "version": {
+          "type": "string"
+        },
+        "config_digest": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "authority_id",
+        "evaluator_id",
+        "kind",
+        "version",
+        "config_digest"
+      ]
+    },
+    "EvaluatorKind": {
+      "type": "string",
+      "enum": [
+        "task_native",
+        "human",
+        "enterprise",
+        "agentic",
+        "generic"
+      ]
+    },
+    "EvalVerdict": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "fail",
+        "inconclusive"
+      ]
+    },
+    "MetricValue": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "unit": {
+          "$ref": "#/$defs/MetricUnit"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "value",
+        "unit"
+      ]
+    },
+    "MetricUnit": {
+      "type": "string",
+      "enum": [
+        "boolean",
+        "ppm",
+        "micro_usd",
+        "milliseconds",
+        "count",
+        "scalar_micros"
+      ]
+    },
+    "DecisionCredit": {
+      "type": "object",
+      "properties": {
+        "weight_ppm": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "metric_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "weight_ppm"
+      ]
+    }
+  }
+}

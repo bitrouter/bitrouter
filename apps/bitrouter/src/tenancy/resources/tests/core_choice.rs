@@ -28,6 +28,8 @@ async fn choice_import_rejects_unsupported_child_graph_atomically() -> Result<()
         "policy-bound",
     ] {
         let (db, resources) = fixture().await?;
+        #[cfg(all(feature = "core", feature = "harness"))]
+        let resources = resources.for_bro_capture();
         let mut input = rows()?;
         match mutation {
             "missing" => {
@@ -67,8 +69,14 @@ async fn choice_import_rejects_unsupported_child_graph_atomically() -> Result<()
             !storage::has_resources(&db).await?,
             "failed import published a partial closure"
         );
-        import(&resources, &db, rows()?).await?;
-        ensure!(storage::references(&db).await?.len() == 3);
+        let current = import(&resources, &db, rows()?).await;
+        if cfg!(all(feature = "core", feature = "harness")) {
+            current?;
+            ensure!(storage::references(&db).await?.len() == 3);
+        } else {
+            ensure!(current.is_err(), "minimal profile imported native Choice");
+            ensure!(!storage::has_resources(&db).await?);
+        }
     }
     Ok(())
 }
@@ -82,13 +90,22 @@ async fn hidden_choice_survives_source_loss_and_keeps_exact_cache_root_pin() -> 
     };
     use crate::tenancy::cache::{Cache, CacheError};
     use bitrouter_ai::types::{ApiProtocol, ModelOperation};
-    let (db, resources) = fixture().await?;
+    let db = crate::db::connect("sqlite::memory:").await?;
+    crate::db::run_migrations(&db).await?;
+    let key = rand::random();
+    let installation = "installation".to_owned().try_into()?;
+    let mature = Resources::with_key(installation, key)?;
+    let resources = Resources::with_key(mature.installation.clone(), key)?.for_bro_capture();
     import(&resources, &db, rows()?).await?;
     let parent_ref = reference("tenant", ResourceKind::Route, "parent")?;
     let child_ref = reference("tenant", ResourceKind::Route, "child")?;
     let doc = document(vec![parent_ref.clone()], None)?;
     let compiled = compile(&resources, &db, &doc).await?;
     let row = validation::stored(doc, compiled)?;
+    ensure!(matches!(
+        mature.open_execution(&row),
+        Err(ErrorCode::CapabilityMismatch)
+    ));
     let checked = |code| anyhow::anyhow!("retained Choice: {code:?}");
     let view = resources.open_execution(&row).map_err(checked)?;
     ensure!(matches!(
@@ -157,7 +174,17 @@ async fn hidden_choice_survives_source_loss_and_keeps_exact_cache_root_pin() -> 
 #[tokio::test]
 async fn choice_child_cannot_be_exposed_and_minimal_profile_cannot_execute_it() -> Result<()> {
     let (db, resources) = fixture().await?;
-    import(&resources, &db, rows()?).await?;
+    ensure!(import(&resources, &db, rows()?).await.is_err());
+    ensure!(!storage::has_resources(&db).await?);
+    #[cfg(all(feature = "core", feature = "harness"))]
+    let resources = resources.for_bro_capture();
+    let current = import(&resources, &db, rows()?).await;
+    if !cfg!(all(feature = "core", feature = "harness")) {
+        ensure!(current.is_err(), "minimal profile imported native Choice");
+        ensure!(!storage::has_resources(&db).await?);
+        return Ok(());
+    }
+    current?;
     let parent = reference("tenant", ResourceKind::Route, "parent")?;
     let child = reference("tenant", ResourceKind::Route, "child")?;
     ensure!(
@@ -169,29 +196,21 @@ async fn choice_child_cannot_be_exposed_and_minimal_profile_cannot_execute_it() 
         .await
         .is_err()
     );
-    let qualified = compile(&resources, &db, &document(vec![parent], None)?).await;
-    if cfg!(all(feature = "core", feature = "harness")) {
-        ensure!(qualified.is_ok());
-    } else {
-        ensure!(
-            qualified.is_err(),
-            "unsupported profile qualified execution"
-        );
-    }
+    compile(&resources, &db, &document(vec![parent], None)?).await?;
     Ok(())
 }
 
 #[cfg(all(feature = "core", feature = "harness"))]
 #[tokio::test]
-async fn mixed_profiled_format_keeps_hidden_choice_projection_and_legacy_root() -> Result<()> {
+async fn current_bro_format_keeps_hidden_choice_projection_and_profiled_root() -> Result<()> {
     use bitrouter_ai::types::{ApiProtocol, ModelOperation};
     let (db, _) = fixture().await?;
     let authority = crate::tenancy::store::load(&db, chrono::Utc::now()).await?;
-    let resources = Resources::with_key(authority.installation, rand::random())?;
+    let resources = Resources::with_key(authority.installation, rand::random())?.for_bro_capture();
     let mut imports = rows()?;
     let mut profile_ref = reference("pool", ResourceKind::Policy, "operational")?;
     profile_ref.owner_kind = OwnerKind::OperatorPool;
-    imports.push(json!({"reference":profile_ref,"definition":{"kind":"admission_profile","profile":{"schema_version":1,"rate":null,"health":null,"fallback":"stop"}}}));
+    imports.push(json!({"reference":profile_ref,"definition":{"kind":"admission_profile","profile":{"schema_version":1,"rate":null,"health":null,"health_group_id":null,"fallback":"stop"}}}));
     let mut profiled = route("tenant", "profiled", "generation")?;
     profiled["definition"]["kind"] = json!("profiled_route");
     profiled["definition"]["attachments"] = json!(["chat_completions","messages","responses"].map(|protocol| json!({"inbound_protocol":protocol,"candidate_index":0,"credential":imports[1]["reference"],"profile":profile_ref})));
@@ -205,7 +224,10 @@ async fn mixed_profiled_format_keeps_hidden_choice_projection_and_legacy_root() 
         None,
     )?;
     let compiled = compile(&resources, &db, &doc).await?;
-    ensure!(compiled.compiler_version == PROFILED_COMPILER_VERSION);
+    ensure!(compiled.compiler_version == BRO_OBLIGATION_COMPILER_VERSION);
+    let envelope = decrypt(&resources, &doc, &compiled)?;
+    ensure!(envelope.format == 8);
+    envelope.validate_format()?;
     let row = validation::stored(doc, compiled)?;
     let view = resources
         .open_execution(&row)

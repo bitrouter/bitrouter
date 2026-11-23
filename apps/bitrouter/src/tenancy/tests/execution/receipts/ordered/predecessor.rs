@@ -323,8 +323,8 @@ pub(super) async fn provision(
         "expected_authority_revision":credential.authority_revision,
         "document":{"routes":[route],"policy":null,
             "generation_defaults":{"max_output_tokens":25,"temperature":0.0},
-            "learning":{"mode":"off","max_evaluations":0},
-            "limits":{"active_executions":4,"queued_work":4,"learning_jobs":0}}
+            "eval_publication": false,
+            "limits":{"active_executions":4,"queued_work":4}}
     }))?;
     let revision = control.put_configuration(&tenant, &input).await?;
     Ok(Provisioned {
@@ -421,7 +421,7 @@ async fn qualify(
     );
     // Deliberately bind the predecessor's real identities without pretending
     // its v1 discovery negotiated v2. This is the unsupported-version probe.
-    let binding = OrderedDispatchBindingV2 {
+    let binding = OrderedDispatchBinding {
         contract_version: "2".into(),
         installation_id: caps.installation_id.clone(),
         instance_id: caps.instance_id.clone(),
@@ -429,9 +429,9 @@ async fn qualify(
         execution_revision: provisioned.revision.revision_id.clone(),
         correlation_id: "unsupported-v2".try_into()?,
         receipt_mode: "strict".into(),
-        selection: OrderedCandidateSelectionV1 {
+        selection: OrderedCandidateSelection {
             generation_defaults_digest: None,
-            admission_mode: bitrouter_ai::tenancy::admission::AdmissionMode::Legacy,
+            admission_mode: bitrouter_ai::tenancy::admission::AdmissionMode::Unprofiled,
             schema_version: 1,
             route: provisioned.route.clone(),
             candidate_indices: vec![1],

@@ -2,7 +2,7 @@
 //! Execution, consent and dispatch authority stay with each owner.
 
 use super::{SkillCandidate, SkillConstraints, SkillSource};
-use bitrouter_ai::core::protocol::{CoreError, ErrorCode};
+use crate::managed_contract::protocol::{CoreError, ErrorCode};
 
 pub fn select(
     candidates: &mut [SkillCandidate],

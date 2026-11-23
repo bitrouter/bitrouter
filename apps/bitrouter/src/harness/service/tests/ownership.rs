@@ -12,10 +12,10 @@ use crate::harness::service::workspace;
 use crate::harness::storage::ExecutionRecord;
 use crate::harness::storage::ExecutionStore;
 use crate::harness::storage::MemoryExecutionStore;
-use bitrouter_ai::harness::runtime::ErrorCode;
-use bitrouter_ai::harness::runtime::OwnerClaim;
-use bitrouter_ai::harness::thread::ThreadStatus;
-use bitrouter_ai::harness::turn::TurnStatus;
+use crate::managed_contract::harness::runtime::ErrorCode;
+use crate::managed_contract::harness::runtime::OwnerClaim;
+use crate::managed_contract::harness::thread::ThreadStatus;
+use crate::managed_contract::harness::turn::TurnStatus;
 
 #[tokio::test]
 async fn independent_services_share_one_owner_and_transfer_only_after_joined_shutdown()
@@ -287,7 +287,7 @@ async fn independent_stores_exclude_one_workspace_and_retry_fifo_after_external_
         if matches!(fact.as_ref(), ExecutionRecord::WorkspaceReleasePrepared { execution_id, .. } if execution_id == &active.turn_id)))
         .ok_or("release preparation missing")?;
     let terminal = after.records.iter().position(|r| matches!(r, ExecutionRecord::TurnRecord { fact, .. }
-        if matches!(fact.as_ref(), ExecutionRecord::TurnLifecycle { lifecycle, .. } if matches!(lifecycle, bitrouter_ai::harness::turn::TurnLifecycle::Finished { .. }))))
+        if matches!(fact.as_ref(), ExecutionRecord::TurnLifecycle { lifecycle, .. } if matches!(lifecycle, crate::managed_contract::harness::turn::TurnLifecycle::Finished { .. }))))
         .ok_or("terminal fact missing")?;
     assert!(prepared < terminal);
     // A rejected start has not consumed its key or the provider fixture.

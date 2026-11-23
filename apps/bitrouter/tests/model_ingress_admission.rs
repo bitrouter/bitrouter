@@ -1,10 +1,10 @@
 //! Ingress must refuse unclassified data before a lossy canonical Prompt exists.
-use bitrouter::gateway::model::error::ModelError;
-use bitrouter::gateway::model::protocol::inbound_adapter_for;
-use bitrouter_ai::conversion::{
+use bitrouter::gateway::conversion_report::{
     ConversionDisposition, ConversionEffect, ConversionLocation, ConversionReason,
     ConversionReport, ConversionStage,
 };
+use bitrouter::gateway::model::error::ModelError;
+use bitrouter::gateway::model::protocol::inbound_adapter_for;
 use bitrouter_ai::types::ApiProtocol;
 use serde_json::{Value, json};
 type TestResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;

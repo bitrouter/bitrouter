@@ -101,11 +101,8 @@ impl MessagesTransport {
             format!("{}/v1/messages", path.strip_suffix("/v1").unwrap_or(path))
         };
         endpoint.set_path(&path);
-        let http = crate::transport::build_http(
-            headers,
-            &crate::gateway::TransportOptions::default(),
-            false,
-        )?;
+        let http =
+            crate::transport::build_http(headers, &crate::gateway::TransportOptions::default())?;
         Ok(Self { http, endpoint })
     }
 

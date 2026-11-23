@@ -37,7 +37,6 @@ async fn acquire(admission: &Arc<Admission>, key: &Key) -> Result<Lease> {
             &Limits {
                 active_executions: 4,
                 queued_work: 0,
-                learning_jobs: 0,
             },
         )
         .await

@@ -28,161 +28,148 @@ use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-/// A file migration must preserve real policy routing, request overrides and
+/// Current source and named routers preserve routing, overrides, context and
 /// settlement through every supported inbound protocol, including SSE.
 #[tokio::test]
-async fn named_router_migration_protocol_matrix() -> anyhow::Result<()> {
+async fn named_router_source_protocol_matrix() -> anyhow::Result<()> {
     use anyhow::Context;
+    use bitrouter_ai::policy::{Document, Policy, SpecVersion, Target};
+    use std::collections::BTreeMap;
+
     for streaming in [false, true] {
-        for migrated in [false, true] {
-            let upstream = if streaming {
-                mock_streaming_chat_completions_upstream("test-model").await
-            } else {
-                mock_chat_completions_upstream().await
-            };
-            let directory = tempfile::tempdir()?;
-            let config_path = directory.path().join("bitrouter.yaml");
-            let policy_path = directory.path().join("policy-lock.yaml");
-            let mut policy = bitrouter::policy_lock::PolicyLock::default();
-            policy.policies.insert(
+        let upstream = if streaming {
+            mock_streaming_chat_completions_upstream("test-model").await
+        } else {
+            mock_chat_completions_upstream().await
+        };
+        let directory = tempfile::tempdir()?;
+        let config_path = directory.path().join("bitrouter.yaml");
+        let policy_path = directory.path().join("policy.yaml");
+        let policy = Document {
+            spec_version: SpecVersion::Beta1,
+            policies: BTreeMap::from([(
                 "coding".into(),
-                bitrouter::policy_lock::PolicyDefinition {
-                    tiers: std::collections::BTreeMap::from([(
+                Policy {
+                    tiers: BTreeMap::from([(
                         "strong".into(),
-                        "mock:test-model".into(),
+                        Target {
+                            model: "mock:test-model".into(),
+                            effort: None,
+                        },
                     )]),
-                    default_tier: Some("strong".into()),
+                    default_tier: "strong".into(),
+                    classifier_digest: None,
+                    routes: BTreeMap::new(),
                     tool_use_tier: Some("strong".into()),
                     tool_safe_tiers: vec!["strong".into()],
-                    ..Default::default()
                 },
-            );
-            std::fs::write(
-                &policy_path,
-                bitrouter::policy_lock::deterministic_yaml(&policy)?,
-            )?;
-            let legacy = format!(
-                "inherit_defaults: false\nserver:\n  skip_auth: true\ndatabase:\n  url: 'sqlite::memory:'\nproviders:\n  mock:\n    api_base: {}\n    api_key: test-key\n    models:\n      - id: base-model\n      - id: test-model\npresets:\n  coding:\n    model: mock:base-model\n    policy: coding\n    system_prompt: default system\n    params:\n      temperature: 0.2\n",
-                upstream.uri()
-            );
-            let raw = if migrated {
-                bitrouter::router_migration::candidate_text(&legacy)?.0
-            } else {
-                legacy
-            };
-            std::fs::write(&config_path, &raw)?;
-            let cfg = config::parse(&raw)?;
-            let assembled = bitrouter::build_app_with_path(&cfg, Some(&config_path)).await?;
-            let server = TestServer::new(build_router(AppState {
-                language_model: assembled
-                    .app
-                    .language_model()
-                    .context("missing pipeline")?
-                    .clone(),
-                mcp: assembled.app.mcp().cloned(),
-                skip_auth: assembled.app.skip_auth(),
-                metrics_renderer: assembled.app.metrics_renderer().cloned(),
-                prompt_transforms: assembled.app.prompt_transforms().to_vec(),
-            }));
-            if migrated && !streaming {
-                for invalid in ["bitrouter/missing", "bitrouter/coding:cost"] {
-                    server
-                        .post("/v1/chat/completions")
-                        .json(&json!({
-                            "model": invalid, "messages": [{"role": "user", "content": "hello"}]
-                        }))
-                        .await
-                        .assert_status_bad_request();
-                }
-                assert!(
-                    upstream
-                        .received_requests()
-                        .await
-                        .context("missing capture")?
-                        .is_empty()
-                );
-            }
-            let selectors = if migrated {
-                vec!["@coding", "bitrouter/coding"]
-            } else {
-                vec!["@coding"]
-            };
-            for selector in &selectors {
-                let cases = [
-                    (
-                        "/v1/chat/completions".to_string(),
-                        json!({"model": selector, "messages": [{"role": "user", "content": "hello"}], "temperature": 0.7, "stream": streaming}),
-                    ),
-                    (
-                        "/v1/responses".to_string(),
-                        json!({"model": selector, "input": "hello", "temperature": 0.7, "stream": streaming}),
-                    ),
-                    (
-                        "/v1/messages".to_string(),
-                        json!({"model": selector, "messages": [{"role": "user", "content": "hello"}], "max_tokens": 64, "temperature": 0.7, "stream": streaming}),
-                    ),
-                ];
-                for (path, body) in cases {
-                    let response = server.post(&path).json(&body).await;
-                    response.assert_status_ok();
-                    assert!(!response.text().is_empty());
-                }
-            }
-            let received = upstream
-                .received_requests()
-                .await
-                .context("missing capture")?;
-            assert_eq!(received.len(), selectors.len() * 3);
-            for request in received {
-                let body: Value = serde_json::from_slice(&request.body)?;
-                assert_eq!(body["model"], "test-model");
-                assert_eq!(body["temperature"], 0.7);
-                assert_eq!(body["messages"][0]["role"], "system");
-                assert_eq!(body["messages"][0]["content"], "default system");
-            }
-            assembled
+            )]),
+        };
+        let policy_text = bitrouter::policy_lock::deterministic_yaml(&policy)?;
+        std::fs::write(&policy_path, &policy_text)?;
+        let raw = format!(
+            "inherit_defaults: false\nserver:\n  skip_auth: true\ndatabase:\n  url: 'sqlite::memory:'\nproviders:\n  mock:\n    api_base: {}\n    api_key: test-key\n    models:\n      - id: base-model\n      - id: test-model\nrouters:\n  coding:\n    selection:\n      kind: policy\n      policy: coding\n      base_model: mock:base-model\n    defaults:\n      system_prompt: default system\n      params:\n        temperature: 0.2\n",
+            upstream.uri()
+        );
+        std::fs::write(&config_path, &raw)?;
+        let cfg = config::parse(&raw)?;
+        let assembled = bitrouter::build_app_with_path(&cfg, Some(&config_path)).await?;
+        let server = TestServer::new(build_router(AppState {
+            language_model: assembled
                 .app
                 .language_model()
                 .context("missing pipeline")?
-                .drain_required_pending_settlements()
-                .await?;
-            let rows = requests::Entity::find().all(&assembled.db).await?;
-            let rejected = usize::from(migrated && !streaming) * 2;
-            assert_eq!(
-                rows.len(),
-                selectors.len() * 3 + rejected,
-                "one settlement per request"
-            );
-            assert_eq!(
-                rows.iter().filter(|row| row.router_id.is_none()).count(),
-                rejected
-            );
-            for row in rows.iter().filter(|row| row.router_id.is_none()) {
-                assert!(row.binding_digest.is_none());
-                assert!(row.original_selector.is_none());
-            }
-            let digests: std::collections::BTreeSet<_> = rows
-                .iter()
-                .filter_map(|row| row.binding_digest.as_deref())
-                .collect();
-            assert_eq!(digests.len(), 1, "aliases retain one binding identity");
-            for row in rows.into_iter().filter(|row| row.router_id.is_some()) {
-                assert_eq!(row.router_id.as_deref(), Some("coding"));
-                assert!(row.binding_digest.is_some());
-                assert!(
-                    row.original_selector
-                        .as_deref()
-                        .is_some_and(|value| selectors.contains(&value))
-                );
-                assert_eq!(row.model_id, "test-model");
-                assert_eq!(row.provider_id, "mock");
-            }
-            assert_eq!(
-                std::fs::read_to_string(policy_path)?,
-                bitrouter::policy_lock::deterministic_yaml(&policy)?,
-                "migration must not rewrite policy artifact"
-            );
+                .clone(),
+            mcp: assembled.app.mcp().cloned(),
+            skip_auth: assembled.app.skip_auth(),
+            metrics_renderer: assembled.app.metrics_renderer().cloned(),
+            prompt_transforms: assembled.app.prompt_transforms().to_vec(),
+        }));
+        let invalid = ["bitrouter/missing", "bitrouter/coding:cost", "@coding"];
+        for selector in invalid {
+            server
+                .post("/v1/chat/completions")
+                .json(&json!({
+                    "model": selector, "messages": [{"role": "user", "content": "hello"}]
+                }))
+                .await
+                .assert_status_bad_request();
         }
+        assert!(
+            upstream
+                .received_requests()
+                .await
+                .context("missing capture")?
+                .is_empty()
+        );
+        let selector = "bitrouter/coding";
+        let cases = [
+            (
+                "/v1/chat/completions",
+                json!({"model": selector, "messages": [{"role": "user", "content": "hello"}], "temperature": 0.7, "stream": streaming}),
+            ),
+            (
+                "/v1/responses",
+                json!({"model": selector, "input": "hello", "temperature": 0.7, "stream": streaming}),
+            ),
+            (
+                "/v1/messages",
+                json!({"model": selector, "messages": [{"role": "user", "content": "hello"}], "max_tokens": 64, "temperature": 0.7, "stream": streaming}),
+            ),
+        ];
+        for (path, body) in cases {
+            let response = server.post(path).json(&body).await;
+            response.assert_status_ok();
+            assert!(!response.text().is_empty());
+        }
+        let received = upstream
+            .received_requests()
+            .await
+            .context("missing capture")?;
+        assert_eq!(received.len(), 3);
+        for request in received {
+            let body: Value = serde_json::from_slice(&request.body)?;
+            assert_eq!(body["model"], "test-model");
+            assert_eq!(body["temperature"], 0.7);
+            assert_eq!(body["stream"].as_bool() == Some(true), streaming);
+            assert_eq!(body["messages"][0]["role"], "system");
+            assert_eq!(body["messages"][0]["content"], "default system");
+            assert_eq!(body["messages"][1]["role"], "user");
+            assert_eq!(body["messages"][1]["content"], "hello");
+        }
+        assembled
+            .app
+            .language_model()
+            .context("missing pipeline")?
+            .drain_required_pending_settlements()
+            .await?;
+        let rows = requests::Entity::find().all(&assembled.db).await?;
+        assert_eq!(rows.len(), 3 + invalid.len(), "one settlement per request");
+        assert_eq!(
+            rows.iter().filter(|row| row.router_id.is_none()).count(),
+            invalid.len()
+        );
+        for row in rows.iter().filter(|row| row.router_id.is_none()) {
+            assert!(row.binding_digest.is_none());
+            assert!(row.original_selector.is_none());
+        }
+        let digests: std::collections::BTreeSet<_> = rows
+            .iter()
+            .filter_map(|row| row.binding_digest.as_deref())
+            .collect();
+        assert_eq!(digests.len(), 1, "all protocols retain one router binding");
+        for row in rows.into_iter().filter(|row| row.router_id.is_some()) {
+            assert_eq!(row.router_id.as_deref(), Some("coding"));
+            assert!(row.binding_digest.is_some());
+            assert_eq!(row.original_selector.as_deref(), Some(selector));
+            assert_eq!(row.model_id, "test-model");
+            assert_eq!(row.provider_id, "mock");
+        }
+        assert_eq!(
+            std::fs::read_to_string(policy_path)?,
+            policy_text,
+            "serving must not rewrite source"
+        );
     }
     Ok(())
 }
@@ -532,11 +519,11 @@ async fn e2e_http_server_chat_completions_end_to_end() {
 }
 
 #[tokio::test]
-async fn workflow_state_policy_routes_by_ir_key() -> anyhow::Result<()> {
+async fn model_policy_routes_by_classification() -> anyhow::Result<()> {
     let strong = mock_chat_completions_upstream_with_content("strong").await;
     let cheap = mock_chat_completions_upstream_with_content("cheap").await;
-    let opening_key = "semantic_route/v1|code:generation|implement|normal";
-    let tool_followup_key = "semantic_route/v1|code:debugging|verify|normal";
+    let opening_key = "code:generation|implement|normal";
+    let tool_followup_key = "code:debugging|verify|normal";
 
     let yaml = format!(
         r#"
@@ -568,10 +555,9 @@ routers:
         cheap_uri = cheap.uri(),
     );
     let policy_yaml = format!(
-        r#"key_strategy: agent_trace
-tiers:
-  capable: {{model: strong:strong-model, context: evidence}}
-  cheap_tool_safe: {{model: cheap:cheap-model, context: evidence}}
+        r#"tiers:
+  capable: {{model: strong:strong-model}}
+  cheap_tool_safe: {{model: cheap:cheap-model}}
 routes:
   "{opening_key}": capable
   "{tool_followup_key}": cheap_tool_safe
@@ -629,21 +615,32 @@ tool_safe_tiers:
     assert_eq!(
         cheap_requests.len(),
         1,
-        "tool followup should route to cheap via workflow-state key"
+        "tool followup should route to cheap via its classification"
     );
     let strong_body: Value = serde_json::from_slice(&strong_requests[0].body).unwrap();
     let cheap_body: Value = serde_json::from_slice(&cheap_requests[0].body).unwrap();
     assert_eq!(strong_body["model"], "strong-model");
     assert_eq!(cheap_body["model"], "cheap-model");
+    assert_eq!(
+        strong_body["messages"],
+        json!([{"role":"user","content":"start"}])
+    );
+    assert_eq!(cheap_body["messages"].as_array().map(Vec::len), Some(3));
+    assert_eq!(cheap_body["messages"][0]["content"], "fix");
+    assert_eq!(
+        cheap_body["messages"][1]["tool_calls"][0]["id"],
+        "call_read_file"
+    );
+    assert_eq!(cheap_body["messages"][2]["tool_call_id"], "call_read_file");
+    assert_eq!(cheap_body["messages"][2]["content"], "source contents");
     Ok(())
 }
 
 #[tokio::test]
-async fn workflow_state_policy_routes_same_model_at_distinct_efforts_end_to_end()
--> anyhow::Result<()> {
+async fn model_policy_routes_same_model_at_distinct_efforts_end_to_end() -> anyhow::Result<()> {
     let upstream = mock_chat_completions_upstream().await;
-    let opening_key = "semantic_route/v1|code:generation|implement|normal";
-    let tool_followup_key = "semantic_route/v1|code:debugging|verify|normal";
+    let opening_key = "code:generation|implement|normal";
+    let tool_followup_key = "code:debugging|verify|normal";
     let yaml = format!(
         r#"
 server:
@@ -670,15 +667,12 @@ routers:
         upstream_uri = upstream.uri(),
     );
     let policy_yaml = format!(
-        r#"key_strategy: agent_trace
-tiers:
+        r#"tiers:
   high:
     model: mock:same-model
-    context: evidence
     effort: high
   low:
     model: mock:same-model
-    context: evidence
     effort: low
 routes:
   "{opening_key}": high
@@ -747,8 +741,10 @@ tool_safe_tiers: [high, low]
     Ok(())
 }
 
+// Retire adequacy/exploration activation here; retain the ordinary streaming
+// settlement invariant under model-only source.
 #[tokio::test]
-async fn streaming_adequacy_settlement_also_persists_metering() -> anyhow::Result<()> {
+async fn streaming_model_policy_settlement_also_persists_metering() -> anyhow::Result<()> {
     use std::time::Duration;
 
     let strong = mock_streaming_chat_completions_upstream("strong-model").await;
@@ -782,20 +778,12 @@ routers:
         strong_uri = strong.uri(),
         cheap_uri = cheap.uri(),
     );
-    let policy_yaml = r#"key_strategy: agent_trace
-tiers:
-  capable: {model: strong:strong-model, context: evidence}
-  cheap: {model: cheap:cheap-model, context: evidence}
+    let policy_yaml = r#"tiers:
+  capable: {model: strong:strong-model}
+  cheap: {model: cheap:cheap-model}
 default_tier: capable
 tool_use_tier: capable
 tool_safe_tiers: [capable, cheap]
-adequacy:
-  enabled: true
-  escalation_tier: capable
-  explore_enabled: true
-  explore_tier: cheap
-  explore_interval: 2
-  explore_threshold: 3
 "#
     .to_string();
     let (assembled, _policy_dir, _decision_backend) =
@@ -811,7 +799,7 @@ adequacy:
 
     let response = server
         .post("/v1/chat/completions")
-        .add_header("x-bitrouter-request-id", "adequacy-metering-1")
+        .add_header("x-bitrouter-request-id", "policy-metering-1")
         .add_header("accept", "text/event-stream")
         .json(&json!({
             "model": "bitrouter/auto",
@@ -837,7 +825,7 @@ adequacy:
 
     for _ in 0..100 {
         let row = requests::Entity::find()
-            .filter(requests::Column::RequestId.eq("adequacy-metering-1"))
+            .filter(requests::Column::RequestId.eq("policy-metering-1"))
             .one(&assembled.db)
             .await
             .expect("metering query runs");
@@ -852,8 +840,9 @@ adequacy:
     anyhow::bail!("metering row did not persist after policy settlement")
 }
 
+// Cancellation must still settle without an adequacy runtime or guard state.
 #[tokio::test]
-async fn disconnected_stream_with_adequacy_also_persists_metering() -> anyhow::Result<()> {
+async fn disconnected_model_policy_stream_also_persists_metering() -> anyhow::Result<()> {
     use std::convert::Infallible;
     use std::time::Duration;
 
@@ -917,20 +906,12 @@ routers:
     selection: {{kind: policy, policy: auto, base_model: router-entry}}
 "#,
     );
-    let policy_yaml = r#"key_strategy: agent_trace
-tiers:
-  capable: {model: mock:strong-model, context: evidence}
-  cheap: {model: mock:cheap-model, context: evidence}
+    let policy_yaml = r#"tiers:
+  capable: {model: mock:strong-model}
+  cheap: {model: mock:cheap-model}
 default_tier: capable
 tool_use_tier: capable
 tool_safe_tiers: [capable, cheap]
-adequacy:
-  enabled: true
-  escalation_tier: capable
-  explore_enabled: true
-  explore_tier: cheap
-  explore_interval: 2
-  explore_threshold: 3
 "#
     .to_string();
     let (assembled, _policy_dir, _decision_backend) =
@@ -950,7 +931,7 @@ adequacy:
 
     let response = reqwest::Client::new()
         .post(format!("http://{daemon_addr}/v1/chat/completions"))
-        .header("x-bitrouter-request-id", "adequacy-metering-drop-1")
+        .header("x-bitrouter-request-id", "policy-metering-drop-1")
         .json(&json!({
             "model": "bitrouter/auto",
             "stream": true,
@@ -983,7 +964,7 @@ adequacy:
 
     for _ in 0..100 {
         let row = requests::Entity::find()
-            .filter(requests::Column::RequestId.eq("adequacy-metering-drop-1"))
+            .filter(requests::Column::RequestId.eq("policy-metering-drop-1"))
             .one(&assembled.db)
             .await
             .expect("metering query runs");
@@ -2592,12 +2573,14 @@ async fn assemble_named_fixture(
     policy_yaml: &str,
 ) -> anyhow::Result<(bitrouter::Assembled, tempfile::TempDir, MockServer)> {
     let directory = tempfile::tempdir()?;
-    let mut lock = bitrouter::policy_lock::PolicyLock::default();
-    lock.policies
-        .insert("auto".into(), serde_saphyr::from_str(policy_yaml)?);
-    decision::certify_routes(&mut lock);
-    let path = directory.path().join("policy-lock.yaml");
-    std::fs::write(&path, bitrouter::policy_lock::deterministic_yaml(&lock)?)?;
+    let policy: bitrouter_ai::policy::Policy = serde_saphyr::from_str(policy_yaml)?;
+    let mut source = bitrouter_ai::policy::Document {
+        spec_version: bitrouter_ai::policy::SpecVersion::Beta1,
+        policies: std::collections::BTreeMap::from([("auto".into(), policy)]),
+    };
+    decision::pin_classifier(&mut source);
+    let path = directory.path().join("policy.yaml");
+    std::fs::write(&path, bitrouter::policy_lock::deterministic_yaml(&source)?)?;
     let mut config = config::parse_with(yaml, |_| None)?;
     config.policy.path = Some(path);
     let backend = decision::attach(&mut config, |input| {

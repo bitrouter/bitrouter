@@ -78,7 +78,7 @@ fn run(scenario: Scenario, strategy: &'static str, seed: u64, sessions: usize) -
     let mut data = EffectiveObservations::default();
     let mut feedback: Vec<Feedback> = Vec::new();
     let mut exposure = config.initial_exposure_ppm;
-    let mut previous_recommendation = Recommendation::Explore;
+    let mut previous_recommendation = Recommendation::CollectEvidence;
     let mut withdrawn = false;
     let mut result = Run {
         scenario,
@@ -141,7 +141,7 @@ fn run(scenario: Scenario, strategy: &'static str, seed: u64, sessions: usize) -
                         }
                         Recommendation::Rollback => result.rollbacks += 1,
                         Recommendation::Hold => result.holds += 1,
-                        Recommendation::Explore => {}
+                        Recommendation::CollectEvidence => {}
                     }
                 }
                 // This experiment measures the protected exploration allocator.

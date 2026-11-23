@@ -1,8 +1,8 @@
 use bitrouter_ai::tenancy::{
-    resources::{ResourcePut, ResourceRevoke},
+    resources::{Definition, ResourcePut, ResourceRevoke},
     validation::Validate,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 
 fn put() -> serde_json::Value {
     json!({
@@ -86,7 +86,7 @@ fn published_resource_schemas_match_the_public_contract() -> Result<(), Box<dyn 
 {
     use bitrouter_ai::tenancy::resources::{ResourceCapabilities, ResourceStatus};
     let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/specs/resource-provisioning-v1");
+        .join("../../docs/specs/resource-provisioning");
     for (name, schema) in [
         ("put.schema.json", schemars::schema_for!(ResourcePut)),
         ("revoke.schema.json", schemars::schema_for!(ResourceRevoke)),
@@ -111,24 +111,87 @@ fn published_resource_schemas_match_the_public_contract() -> Result<(), Box<dyn 
 }
 
 #[test]
-fn format_one_attachment_rejects_native_authority_in_bytes_and_programmatic_values()
--> Result<(), Box<dyn std::error::Error>> {
-    use bitrouter_ai::tenancy::{admission::AdmissionAttachmentV1, ordered::GenerationProtocol};
+fn current_attachment_accepts_all_four_explicit_protocols() -> Result<(), Box<dyn std::error::Error>>
+{
+    use bitrouter_ai::tenancy::{admission::AdmissionAttachment, ordered::GenerationProtocol};
     let mut original = json!({"inbound_protocol":"messages", "candidate_index":0,
         "credential":{"owner_kind":"tenant","owner_id":"one","resource_kind":"credential","resource_id":"key","revision_id":"r1"},
         "profile":{"owner_kind":"operator_pool","owner_id":"pool","resource_kind":"policy","resource_id":"profile","revision_id":"r1"}});
-    let mut attachment: AdmissionAttachmentV1 = serde_json::from_value(original.clone())?;
+    let mut attachment: AdmissionAttachment = serde_json::from_value(original.clone())?;
     attachment.validate()?;
     attachment.inbound_protocol = GenerationProtocol::GenerateContent;
-    assert!(attachment.validate().is_err());
+    attachment.validate()?;
     original["inbound_protocol"] = json!("generate_content");
-    assert!(
-        serde_json::from_str::<AdmissionAttachmentV1>(&serde_json::to_string(&original)?).is_err()
-    );
+    serde_json::from_str::<AdmissionAttachment>(&serde_json::to_string(&original)?)?.validate()?;
     let mut command = put();
     command["key"]["resource_kind"] = json!("route");
     command["definition"] = json!({"kind":"profiled_route","routing":{},"selector":"provider/model","policy":null,
         "credentials":[{"provider":"provider","account":"default","credential":original["credential"]}],"attachments":[original]});
-    assert!(serde_json::from_value::<ResourcePut>(command).is_err());
+    serde_json::from_value::<ResourcePut>(command)?.validate()?;
+    Ok(())
+}
+
+#[test]
+fn programmatic_routes_check_depth_before_definition_and_command_serialization()
+-> Result<(), Box<dyn std::error::Error>> {
+    for profiled in [false, true] {
+        let credential = json!({"owner_kind":"tenant","owner_id":"one",
+            "resource_kind":"credential","resource_id":"key","revision_id":"r1"});
+        let mut value = put();
+        value["key"]["resource_kind"] = json!("route");
+        value["definition"] = json!({"kind":"route","routing":{},
+            "selector":"provider/model","policy":null,
+            "credentials":[{"provider":"provider","account":"default","credential":credential}]});
+        if profiled {
+            value["definition"]["kind"] = json!("profiled_route");
+            value["definition"]["attachments"] = json!([{
+                "inbound_protocol":"messages","candidate_index":0,"credential":credential,
+                "profile":{"owner_kind":"operator_pool","owner_id":"pool",
+                    "resource_kind":"policy","resource_id":"profile","revision_id":"r1"}
+            }]);
+        }
+        let mut command: ResourcePut = serde_json::from_value(value)?;
+        for containers in [1, 124, 125, 10_000] {
+            let (Definition::Route { routing, .. } | Definition::ProfiledRoute { routing, .. }) =
+                &mut command.definition
+            else {
+                return Err("route fixture".into());
+            };
+            let mut nested = Value::Null;
+            for _ in 1..containers {
+                nested = Value::Array(vec![nested]);
+            }
+            *routing = Value::Object([("nested".into(), nested)].into_iter().collect());
+            let definition_result = command.definition.validate();
+            let command_result = command.validate();
+            let (Definition::Route { routing, .. } | Definition::ProfiledRoute { routing, .. }) =
+                &mut command.definition
+            else {
+                return Err("route fixture".into());
+            };
+            // Drop the deep input iteratively before assertions can unwind.
+            let mut pending = vec![routing.take()];
+            while let Some(value) = pending.pop() {
+                match value {
+                    Value::Array(values) => pending.extend(values),
+                    Value::Object(values) => {
+                        pending.extend(values.into_iter().map(|(_, value)| value))
+                    }
+                    _ => {}
+                }
+            }
+            for result in [definition_result, command_result] {
+                if containers <= 124 {
+                    result?;
+                } else {
+                    assert_eq!(
+                        result.err().map(|error| error.to_string()).as_deref(),
+                        Some("invalid tenancy contract: routing JSON depth"),
+                        "profiled={profiled}, containers={containers}"
+                    );
+                }
+            }
+        }
+    }
     Ok(())
 }

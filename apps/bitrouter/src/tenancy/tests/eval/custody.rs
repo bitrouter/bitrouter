@@ -105,7 +105,7 @@ async fn safety_revoke_ahead_of_queued_eval_prevents_ledger_mutation() -> Result
             secret,
             "POST",
             "subjects",
-            serde_json::to_vec(&subject()?)?,
+            serde_json::to_vec(&subject(&fixture)?)?,
         )?));
         tokio::time::timeout(Duration::from_secs(3), async {
             while fixture.service.commands.capacity() == 16 {
@@ -170,7 +170,7 @@ async fn http_waiter_deadline_is_unavailable_and_timely_rollback_preserves_autho
         secret,
         "POST",
         "subjects",
-        serde_json::to_vec(&subject()?)?,
+        serde_json::to_vec(&subject(&fixture)?)?,
     )?));
     tokio::time::timeout(Duration::from_secs(3), gate.entered.notified()).await?;
     tokio::time::pause();
@@ -264,7 +264,7 @@ async fn late_eval_commit_remains_persisted_and_fenced_after_http_unavailable() 
         secret,
         "POST",
         "subjects",
-        serde_json::to_vec(&subject()?)?,
+        serde_json::to_vec(&subject(&fixture)?)?,
     )?));
     tokio::time::timeout(Duration::from_secs(3), gate.entered.notified()).await?;
     tokio::time::pause();
@@ -316,7 +316,7 @@ async fn consumed_eval_commit_error_retains_ingress_lease_and_never_acknowledges
             "CREATE TABLE eval_custody_child (parent INTEGER REFERENCES eval_custody_parent(id) DEFERRABLE INITIALLY DEFERRED)",
             "CREATE TRIGGER eval_commit_fault AFTER INSERT ON eval_subjects BEGIN INSERT INTO eval_custody_child(parent) VALUES (77); END",
         ] { fixture.db.execute_unprepared(sql).await?; }
-        let response = router(&fixture)?.oneshot(request(&fixture, secret, "POST", "subjects", serde_json::to_vec(&subject()?)?)?).await?;
+        let response = router(&fixture)?.oneshot(request(&fixture, secret, "POST", "subjects", serde_json::to_vec(&subject(&fixture)?)?)?).await?;
         ensure!(response.status() == StatusCode::SERVICE_UNAVAILABLE);
         drop(response);
         fixture.service.cleanup.quarantined().await;
@@ -352,7 +352,7 @@ async fn revocation_after_commit_suppresses_http_success_without_deleting_eviden
                 secret,
                 "POST",
                 "subjects",
-                serde_json::to_vec(&subject()?)?,
+                serde_json::to_vec(&subject(&fixture)?)?,
             )?),
         ));
         tokio::time::timeout(Duration::from_secs(3), gate.entered.notified()).await?;
@@ -394,7 +394,7 @@ async fn revocation_after_commit_suppresses_http_success_without_deleting_eviden
                 .await?,
         )
         .await?;
-        ensure!(persisted == subject()?);
+        ensure!(persisted == subject(&fixture)?);
         ensure!(fixture.service.eval.leases.available_permits() == 8);
         fixture.service.shutdown().await?;
         Ok::<_, anyhow::Error>(())

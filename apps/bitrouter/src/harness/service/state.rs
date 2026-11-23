@@ -17,12 +17,12 @@ use super::startup;
 use super::steering;
 use super::workspace;
 use crate::harness::storage::ExecutionStore;
-use bitrouter_ai::harness::agent::AgentConfig;
-use bitrouter_ai::harness::runtime::ErrorCode;
-use bitrouter_ai::harness::runtime::RuntimeLimits;
-use bitrouter_ai::harness::thread::PermissionProfile;
-use bitrouter_ai::harness::thread::ThreadSnapshot;
-use bitrouter_ai::harness::turn::TurnSnapshot;
+use crate::managed_contract::harness::agent::AgentConfig;
+use crate::managed_contract::harness::runtime::ErrorCode;
+use crate::managed_contract::harness::runtime::RuntimeLimits;
+use crate::managed_contract::harness::thread::PermissionProfile;
+use crate::managed_contract::harness::thread::ThreadSnapshot;
+use crate::managed_contract::harness::turn::TurnSnapshot;
 
 pub(super) struct PendingInput {
     pub(super) response: oneshot::Sender<bool>,
@@ -55,10 +55,11 @@ pub(super) struct TurnRecord {
 }
 
 pub(super) struct State {
-    pub(super) startup_discovery: Option<bitrouter_ai::harness::runtime::StartupDiscovery>,
+    pub(super) startup_discovery:
+        Option<crate::managed_contract::harness::runtime::StartupDiscovery>,
     pub(super) cold_executions: HashMap<String, startup::ColdExecution>,
     pub(super) workspace_fences: HashMap<PathBuf, Arc<workspace::WorkspaceFence>>,
-    pub(super) execution_ownership: Option<bitrouter_ai::harness::runtime::OwnerClaim>,
+    pub(super) execution_ownership: Option<crate::managed_contract::harness::runtime::OwnerClaim>,
     pub(super) threads: HashMap<String, ThreadRecord>,
     pub(super) ready_threads: VecDeque<String>,
     pub(super) running_turns: HashMap<String, String>,

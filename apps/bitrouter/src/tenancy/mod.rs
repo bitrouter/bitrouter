@@ -13,16 +13,11 @@ mod configuration_store;
 pub(crate) mod continuation;
 mod directory;
 mod error;
-#[cfg(feature = "core")]
 pub(crate) mod eval;
 pub(crate) mod execution;
 #[cfg(all(feature = "core", feature = "harness"))]
-pub(crate) mod experiment;
-#[cfg(all(feature = "core", feature = "harness"))]
 pub(crate) mod hosts;
 pub(crate) mod http;
-#[cfg(all(feature = "core", feature = "harness"))]
-pub(crate) mod learner;
 #[cfg(all(feature = "core", feature = "harness"))]
 pub(crate) mod learning;
 mod model;
@@ -42,8 +37,6 @@ pub(crate) mod storage;
 mod store;
 #[cfg(test)]
 mod tests;
-#[cfg(feature = "core")]
-pub(crate) mod trajectory;
 pub(super) mod trajectory_profile;
 mod transaction;
 
@@ -128,11 +121,6 @@ pub(crate) struct Service {
     cleanup: Arc<transaction::Proof>,
     #[cfg(all(feature = "core", feature = "harness"))]
     hosts: Arc<hosts::Hosts>,
-    #[cfg(all(feature = "core", feature = "harness"))]
-    learning_worker: Arc<AtomicBool>,
-    #[cfg(all(test, unix, feature = "core", feature = "harness"))]
-    learner_test: Arc<learner::testing::Hooks>,
-    #[cfg(feature = "core")]
     eval: Arc<eval::State>,
     reads: Arc<Semaphore>,
     resources: Arc<resources::Resources>,
@@ -322,17 +310,6 @@ impl Service {
             startup_test,
         )
         .await?;
-        #[cfg(all(feature = "core", feature = "harness"))]
-        if let Err(error) =
-            learner::registration::initialize(&service, config.learning_registrations.as_deref())
-                .await
-        {
-            // H bootstrap and crypto succeeded. Failure must drain this actual
-            // Service before returning, before any listener or worker exposure.
-            let stopped = service.shutdown().await;
-            stopped?;
-            return Err(error);
-        }
         if service.http_continuation.state.enabled() {
             service.http_registry.start_reconciler();
         }
@@ -452,7 +429,6 @@ impl Service {
             .bind_receipt_volume(receipt_volume.clone())
             .map_err(|_| anyhow::anyhow!("receipt volume observation failed"))?;
         let accepting = Arc::new(std::sync::Mutex::new(true));
-        #[cfg(feature = "core")]
         let eval = eval::State::new(live.clone());
         let http_state = crate::continuation::tenant::state::State::new(
             continuations,
@@ -485,9 +461,7 @@ impl Service {
             #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
             observe_capacity: receipt_observer.enabled(),
             http_continuation: http_state,
-            #[cfg(feature = "core")]
             eval: eval.clone(),
-            #[cfg(feature = "core")]
             accepting: accepting.clone(),
         };
         let stop = CancellationToken::new();
@@ -520,15 +494,10 @@ impl Service {
             receipt_observer,
             stop,
             accepting,
-            #[cfg(feature = "core")]
             eval,
             cleanup,
             #[cfg(all(feature = "core", feature = "harness"))]
             hosts: Arc::new(hosts::Hosts::new()),
-            #[cfg(all(feature = "core", feature = "harness"))]
-            learning_worker: Arc::new(AtomicBool::new(false)),
-            #[cfg(all(test, unix, feature = "core", feature = "harness"))]
-            learner_test: Arc::default(),
             reads,
             resources,
             native_continuation: None,
@@ -704,7 +673,6 @@ impl Service {
                     "HTTP continuation cleanup retained ownership"
                 );
             }
-            #[cfg(feature = "core")]
             {
                 let _gate = self
                     .accepting
@@ -921,12 +889,7 @@ impl Service {
     fn enqueue(&self, job: Job, safety: bool) -> Result<(), Failure> {
         let operation = match &job {
             #[cfg(all(feature = "core", feature = "harness"))]
-            Job::Native(_)
-            | Job::Capture(_)
-            | Job::Learning(_)
-            | Job::Experiment(_)
-            | Job::ExperimentRead(_)
-            | Job::Learner(_) => None,
+            Job::Native(_) | Job::Capture(_) | Job::Learning(_) => None,
             Job::Command(message) => Some(message.command.operation_id().clone()),
             Job::OAuth(_)
             | Job::Directory(_)
@@ -939,11 +902,9 @@ impl Service {
             | Job::OrderedIntent(_) => None,
             #[cfg(test)]
             Job::Escalate { .. } | Job::Archive { .. } => None,
+            Job::Eval(_) => None,
             #[cfg(feature = "core")]
-            Job::Eval(_)
-            | Job::Settlement(_)
-            | Job::TrajectoryBegin(_)
-            | Job::TrajectoryTerminal(_) => None,
+            Job::Settlement(_) => None,
         };
         let accepting = self
             .accepting

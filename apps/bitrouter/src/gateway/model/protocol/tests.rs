@@ -11,7 +11,7 @@ use bitrouter_ai::types::*;
 fn request_projection_report(
     protocol: ApiProtocol,
     prompt: &Prompt,
-) -> crate::gateway::model::error::Result<bitrouter_ai::conversion::ConversionReport> {
+) -> crate::gateway::model::error::Result<crate::gateway::conversion_report::ConversionReport> {
     match adapter_for(protocol)?.render_request(prompt) {
         Err(crate::gateway::model::error::ModelError::Incompatible { report }) => Ok(report),
         Err(error) => Err(error),
@@ -2079,6 +2079,7 @@ fn responses_outbound_merges_text_siblings() -> crate::gateway::model::error::Re
     // the synthesised `format`.
     let adapter = adapter_for(ApiProtocol::Responses)?;
     let mut prompt = sample_prompt_with_schema();
+    prompt.params.extra_protocol = Some(ApiProtocol::Responses);
     prompt
         .params
         .extra
@@ -3998,7 +3999,7 @@ fn messages_parse_request_rejects_unsigned_thinking_without_erasing_history()
     };
     assert_eq!(
         report.issues[0].reason,
-        bitrouter_ai::conversion::ConversionReason::ReasoningContinuityMissing
+        crate::gateway::conversion_report::ConversionReason::ReasoningContinuityMissing
     );
     Ok(())
 }
@@ -5300,7 +5301,7 @@ fn unnamed_pdf_file_renders_to_messages_document_block() -> crate::gateway::mode
     let report = request_projection_report(ApiProtocol::Messages, &prompt)?;
     assert_eq!(
         report.issues[0].reason,
-        bitrouter_ai::conversion::ConversionReason::FileNameOmissionUnclassified
+        crate::gateway::conversion_report::ConversionReason::FileNameOmissionUnclassified
     );
     assert_eq!(prompt, original);
     if let Content::File { filename, .. } = &mut prompt.messages[0].content[0] {
@@ -5672,7 +5673,7 @@ fn tool_result_content_rejects_non_image_media_on_anthropic()
     let report = request_projection_report(ApiProtocol::Messages, &source)?;
     assert_eq!(
         report.issues[0].location,
-        bitrouter_ai::conversion::ConversionLocation::ToolResultContent {
+        crate::gateway::conversion_report::ConversionLocation::ToolResultContent {
             message: 0,
             block: 0,
             part: 1
@@ -5859,7 +5860,7 @@ fn tool_result_json_renders_responses_string_without_accepting_error_status_loss
     )?;
     assert_eq!(
         report.issues[0].reason,
-        bitrouter_ai::conversion::ConversionReason::ToolResultStatusUnrepresentable
+        crate::gateway::conversion_report::ConversionReason::ToolResultStatusUnrepresentable
     );
     Ok(())
 }
@@ -6753,14 +6754,14 @@ fn responses_request_rejects_dynamic_mcp_without_mutating_client_pair()
     assert_eq!(report.issues.len(), 2);
     assert_eq!(
         report.issues[0].location,
-        bitrouter_ai::conversion::ConversionLocation::MessageContent {
+        crate::gateway::conversion_report::ConversionLocation::MessageContent {
             message: 0,
             block: 2
         }
     );
     assert_eq!(
         report.issues[1].location,
-        bitrouter_ai::conversion::ConversionLocation::MessageContent {
+        crate::gateway::conversion_report::ConversionLocation::MessageContent {
             message: 0,
             block: 3
         }
@@ -7030,7 +7031,7 @@ fn responses_render_request_rejects_provider_executed_call_omission()
     let report = request_projection_report(ApiProtocol::Responses, &prompt)?;
     assert_eq!(
         report.issues[0].location,
-        bitrouter_ai::conversion::ConversionLocation::MessageContent {
+        crate::gateway::conversion_report::ConversionLocation::MessageContent {
             message: 0,
             block: 1
         }
@@ -7382,7 +7383,7 @@ fn function_tool_strict_refused_on_anthropic_and_gemini() -> crate::gateway::mod
         let report = request_projection_report(protocol.clone(), &prompt)?;
         assert_eq!(
             report.issues[0].reason,
-            bitrouter_ai::conversion::ConversionReason::FunctionStrictUnrepresentable
+            crate::gateway::conversion_report::ConversionReason::FunctionStrictUnrepresentable
         );
         if let Tool::Function { strict, .. } = &mut prompt.tools[0] {
             *strict = None;
@@ -7590,7 +7591,7 @@ fn provider_defined_tool_cross_protocol_is_excluded() -> crate::gateway::model::
     let report = request_projection_report(ApiProtocol::Responses, &source)?;
     assert_eq!(
         report.issues[0].location,
-        bitrouter_ai::conversion::ConversionLocation::ToolDefinition { tool: 0 }
+        crate::gateway::conversion_report::ConversionLocation::ToolDefinition { tool: 0 }
     );
     assert_eq!(source, original);
     Ok(())
@@ -7610,7 +7611,7 @@ fn provider_defined_tool_cross_protocol_onto_anthropic_is_excluded()
     let report = request_projection_report(ApiProtocol::Messages, &source)?;
     assert_eq!(
         report.issues[0].location,
-        bitrouter_ai::conversion::ConversionLocation::ToolDefinition { tool: 0 }
+        crate::gateway::conversion_report::ConversionLocation::ToolDefinition { tool: 0 }
     );
     assert_eq!(source, original);
     Ok(())
@@ -7630,7 +7631,7 @@ fn provider_defined_tool_omission_refuses_chat_projection()
     let report = request_projection_report(ApiProtocol::ChatCompletions, &source)?;
     assert_eq!(
         report.issues[0].location,
-        bitrouter_ai::conversion::ConversionLocation::ToolDefinition { tool: 0 }
+        crate::gateway::conversion_report::ConversionLocation::ToolDefinition { tool: 0 }
     );
     assert_eq!(source, original);
     Ok(())
@@ -7652,7 +7653,7 @@ fn responses_server_tools_refuse_chat_omission() -> crate::gateway::model::error
     let original = prompt.clone();
     let report = request_projection_report(ApiProtocol::ChatCompletions, &prompt)?;
     assert!(report.issues.iter().all(|issue| issue.reason
-        == bitrouter_ai::conversion::ConversionReason::ProviderToolDefinitionUnrepresentable));
+        == crate::gateway::conversion_report::ConversionReason::ProviderToolDefinitionUnrepresentable));
     assert_eq!(prompt, original);
     Ok(())
 }
@@ -7673,7 +7674,7 @@ fn messages_server_tools_refuse_chat_omission() -> crate::gateway::model::error:
     let original = prompt.clone();
     let report = request_projection_report(ApiProtocol::ChatCompletions, &prompt)?;
     assert!(report.issues.iter().all(|issue| issue.reason
-        == bitrouter_ai::conversion::ConversionReason::ProviderToolDefinitionUnrepresentable));
+        == crate::gateway::conversion_report::ConversionReason::ProviderToolDefinitionUnrepresentable));
     assert_eq!(prompt, original);
     Ok(())
 }
@@ -9535,7 +9536,7 @@ fn responses_unpaired_execution_denied_is_refused() -> crate::gateway::model::er
     let report = request_projection_report(ApiProtocol::Responses, &prompt)?;
     assert_eq!(
         report.issues[0].reason,
-        bitrouter_ai::conversion::ConversionReason::ToolResultStatusUnrepresentable
+        crate::gateway::conversion_report::ConversionReason::ToolResultStatusUnrepresentable
     );
     Ok(())
 }
@@ -9551,7 +9552,7 @@ fn responses_unpaired_denial_without_reason_is_refused() -> crate::gateway::mode
     let report = request_projection_report(ApiProtocol::Responses, &prompt)?;
     assert_eq!(
         report.issues[0].reason,
-        bitrouter_ai::conversion::ConversionReason::ToolResultStatusUnrepresentable
+        crate::gateway::conversion_report::ConversionReason::ToolResultStatusUnrepresentable
     );
     Ok(())
 }
@@ -9570,7 +9571,7 @@ fn execution_denied_status_loss_is_refused_on_non_responses_wires()
         let report = request_projection_report(protocol, &prompt)?;
         assert_eq!(
             report.issues[0].reason,
-            bitrouter_ai::conversion::ConversionReason::ToolResultStatusUnrepresentable
+            crate::gateway::conversion_report::ConversionReason::ToolResultStatusUnrepresentable
         );
     }
     Ok(())
@@ -9604,7 +9605,7 @@ fn approval_only_tool_message_has_explicit_chat_rejection()
         let report = request_projection_report(protocol, &prompt)?;
         assert_eq!(
             report.issues[0].reason,
-            bitrouter_ai::conversion::ConversionReason::ApprovalUnrepresentable
+            crate::gateway::conversion_report::ConversionReason::ApprovalUnrepresentable
         );
     }
     Ok(())

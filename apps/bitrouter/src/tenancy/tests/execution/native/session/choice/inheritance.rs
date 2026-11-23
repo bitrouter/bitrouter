@@ -269,15 +269,15 @@ async fn owned_choice_children_and_completion_wakeup_admit_fresh_exact_r1_after_
 
 #[tokio::test]
 async fn owned_choice_uses_real_optional_evidence_without_erasing_source_history() -> Result<()> {
-    optional_evidence(bitrouter_ai::core::protocol::ContextMode::Auto).await
+    optional_evidence(crate::managed_contract::protocol::ContextMode::Auto).await
 }
 
 #[tokio::test]
 async fn owned_choice_fixed_context_keeps_history_despite_provider_omission_choice() -> Result<()> {
-    optional_evidence(bitrouter_ai::core::protocol::ContextMode::Fixed).await
+    optional_evidence(crate::managed_contract::protocol::ContextMode::Fixed).await
 }
 
-async fn optional_evidence(context: bitrouter_ai::core::protocol::ContextMode) -> Result<()> {
+async fn optional_evidence(context: crate::managed_contract::protocol::ContextMode) -> Result<()> {
     let mut generation = Provider::start(false).await?;
     let mut choice = wire::Endpoint::hiding().await?;
     let directory = tempfile::tempdir()?;
@@ -347,7 +347,7 @@ async fn optional_evidence(context: bitrouter_ai::core::protocol::ContextMode) -
             .values()
             .find(|view| view.decision_id.as_deref() == Some(&decision.decision_id))
             .context("applied Choice view")?;
-        let automatic = context == bitrouter_ai::core::protocol::ContextMode::Auto;
+        let automatic = context == crate::managed_contract::protocol::ContextMode::Auto;
         ensure!(
             view.omitted.is_empty() != automatic,
             "selected context did not respect the caller's omission capability: reason={}",

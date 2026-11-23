@@ -6,8 +6,8 @@
 
 use super::*;
 use sea_orm::{
-    Value,
-    sea_query::{Alias, Cond, Expr, Func, OnConflict, Query},
+    DatabaseBackend, QueryResult, Statement, Value,
+    sea_query::{Alias, Cond, Expr, Func, OnConflict, Order, Query, SelectStatement},
 };
 
 const TABLE: &str = "tenancy_admission_index";
@@ -71,7 +71,7 @@ pub(in crate::tenancy::resources) fn entries(
         key: Key::resource(&reference.key())?,
         reference: reference.clone(),
     }];
-    if let Definition::AdmissionProfileV2 { profile } = definition
+    if let Definition::AdmissionProfile { profile } = definition
         && let Some(group) = &profile.health_group_id
     {
         entries.push(Entry {
@@ -92,59 +92,143 @@ fn predicate(key: &Key) -> Cond {
 }
 
 /// Bounded SQL projection before driver allocation, including embedded NULs.
-pub(super) fn bounded(
-    db: &impl ConnectionTrait,
-    column: &str,
-    bytes: u64,
-) -> sea_orm::sea_query::SimpleExpr {
+fn bounded(backend: DatabaseBackend, column: &str, bytes: u64) -> sea_orm::sea_query::SimpleExpr {
     let value = Expr::col(Alias::new(column));
-    let length = if db.get_database_backend() == sea_orm::DatabaseBackend::Sqlite {
+    let sqlite = backend == DatabaseBackend::Sqlite;
+    let length = if sqlite {
         Func::cust(Alias::new("length")).arg(value.clone().cast_as(Alias::new("BLOB")))
     } else {
         Func::cust(Alias::new("octet_length")).arg(value.clone())
     };
-    Expr::case(Expr::expr(length).lte(bytes), value)
+    let mut valid = Expr::expr(length).lte(bytes);
+    if sqlite {
+        valid =
+            valid.and(Expr::expr(Func::cust(Alias::new("typeof")).arg(value.clone())).eq("text"));
+    }
+    Expr::case(valid, value)
         .finally(Expr::val(Option::<String>::None))
         .into()
 }
 
+fn select(backend: DatabaseBackend) -> SelectStatement {
+    let mut query = Query::select();
+    query.from(Alias::new(TABLE));
+    for (name, limit) in COLUMNS
+        .into_iter()
+        .zip([32, 32, 128, 32, 128])
+        .chain([("reference_json", 1024)])
+    {
+        query.expr_as(bounded(backend, name, limit), Alias::new(name));
+    }
+    query
+}
+
+fn decode(row: &QueryResult) -> Result<Entry> {
+    let [kind, owner_kind, owner_id, resource_kind, resource_id] =
+        COLUMNS.map(|name| row.try_get::<String>("", name));
+    let key = Key([kind?, owner_kind?, owner_id?, resource_kind?, resource_id?]);
+    let reference = serde_json::from_str(&row.try_get::<String>("", "reference_json")?)?;
+    Ok(Entry { key, reference })
+}
+
 /// Batch exact primary-key probes; query and result size follow the caller's keys.
 pub(super) async fn lookup(db: &impl ConnectionTrait, keys: &[Key]) -> Result<Vec<Entry>> {
+    let backend = db.get_database_backend();
     let mut result = Vec::new();
     for batch in keys.chunks(32) {
-        let mut query = Query::select();
-        query.from(Alias::new(TABLE)).cond_where(
+        let mut query = select(backend);
+        query.cond_where(
             batch
                 .iter()
                 .fold(Cond::any(), |c, key| c.add(predicate(key))),
         );
-        for (name, limit) in COLUMNS
-            .into_iter()
-            .zip([32, 32, 128, 32, 128])
-            .chain([("reference_json", 1024)])
-        {
-            query.expr_as(bounded(db, name, limit), Alias::new(name));
-        }
         query.limit(u64::try_from(batch.len())? + 1);
-        let rows = db
-            .query_all(db.get_database_backend().build(&query))
-            .await?;
+        let rows = db.query_all(backend.build(&query)).await?;
         ensure!(rows.len() <= batch.len(), "duplicate admission witness");
+        let mut seen = HashSet::new();
         for row in rows {
-            let mut values = Vec::new();
-            for name in COLUMNS {
-                values.push(row.try_get::<String>("", name)?);
-            }
-            let key = Key(values
-                .try_into()
-                .map_err(|_| anyhow::anyhow!("admission key width"))?);
-            ensure!(batch.contains(&key), "foreign admission witness");
-            let reference: ResourceRef =
-                serde_json::from_str(&row.try_get::<String>("", "reference_json")?)?;
-            result.push(Entry { key, reference });
+            let entry = decode(&row)?;
+            ensure!(batch.contains(&entry.key), "foreign admission witness");
+            ensure!(
+                seen.insert(entry.key.clone()),
+                "duplicate admission witness"
+            );
+            result.push(entry);
         }
     }
     Ok(result)
+}
+
+async fn authenticate_entry(
+    resources: &Resources,
+    db: &impl ConnectionTrait,
+    entry: &Entry,
+) -> Result<Artifact> {
+    let artifact = resources
+        .load(db, &entry.reference)
+        .await
+        .map_err(|_| anyhow::anyhow!("admission witness unavailable"))?;
+    ensure!(
+        entries(&artifact.reference, &artifact.definition)?
+            .iter()
+            .any(|expected| expected.key == entry.key),
+        "admission witness identity mismatch"
+    );
+    Ok(artifact)
+}
+
+pub(super) fn page_query(backend: DatabaseBackend, after: Option<&Key>) -> Statement {
+    let column = |name| (Alias::new(TABLE), Alias::new(name));
+    let mut query = select(backend);
+    if let Some(after) = after {
+        if backend == DatabaseBackend::MySql {
+            // MySQL range optimization can use every PK part with explicit prefixes.
+            let mut seek = Cond::any();
+            let mut prefix = Cond::all();
+            for (name, value) in COLUMNS.into_iter().zip(&after.0) {
+                let key = Expr::col(column(name));
+                seek = seek.add(prefix.clone().add(key.clone().gt(value.as_str())));
+                prefix = prefix.add(key.eq(value.as_str()));
+            }
+            query.cond_where(seek);
+        } else {
+            query.and_where(
+                Expr::tuple(COLUMNS.map(|name| Expr::col(column(name)).into())).gt(Expr::tuple(
+                    after
+                        .0
+                        .each_ref()
+                        .map(|value| Expr::val(value.as_str()).into()),
+                )),
+            );
+        }
+    }
+    for name in COLUMNS {
+        // Order by the collated PK column, bypassing the bounded projection alias.
+        query.order_by(column(name), Order::Asc);
+    }
+    query.limit(32);
+    backend.build(&query)
+}
+
+/// Walk the complete witness index in the fixed startup transaction.
+pub(in crate::tenancy::resources) async fn verify_index(
+    resources: &Resources,
+    db: &impl ConnectionTrait,
+) -> Result<()> {
+    let mut after = None;
+    loop {
+        let rows = db
+            .query_all(page_query(db.get_database_backend(), after.as_ref()))
+            .await?;
+        if rows.is_empty() {
+            return Ok(());
+        }
+        for row in rows {
+            let entry = decode(&row)?;
+            authenticate_entry(resources, db, &entry).await?;
+            after = Some(entry.key);
+        }
+    }
 }
 
 /// Insert only; the caller owns validation and the resource/operation transaction.
@@ -214,27 +298,33 @@ impl Resources {
         query_keys.extend(groups.iter().map(|(owner, group)| Key::group(owner, group)));
         let mut unique = HashSet::new();
         query_keys.retain(|key| unique.insert(key.clone()));
-        let entries = lookup(db, &query_keys).await?;
-        let mut pending: HashSet<_> = references.iter().cloned().collect();
-        for entry in entries {
-            let artifact = self
-                .load(db, &entry.reference)
-                .await
-                .map_err(|_| anyhow::anyhow!("admission witness unavailable"))?;
-            ensure!(
-                self::entries(&artifact.reference, &artifact.definition)?
-                    .iter()
-                    .any(|item| item.key == entry.key),
-                "admission witness identity mismatch"
+        let witnesses = lookup(db, &query_keys).await?;
+        let mut observed = HashSet::new();
+        let mut required = HashSet::new();
+        let mut require = |artifact: &Artifact| -> Result<()> {
+            required.extend(
+                entries(&artifact.reference, &artifact.definition)?
+                    .into_iter()
+                    .map(|entry| entry.key),
             );
+            Ok(())
+        };
+        let mut pending: HashSet<_> = references.iter().cloned().collect();
+        for entry in witnesses {
+            let artifact = authenticate_entry(self, db, &entry).await?;
+            require(&artifact)?;
             state.insert(&artifact)?;
             pending.remove(&artifact.reference);
+            observed.insert(entry.key);
         }
         // Pins and heads authenticate independently: a valid historical pin must
         // never confer the current head's authority on an absent or revoked pin.
         for reference in pending {
             match self.load(db, &reference).await {
-                Ok(artifact) => state.insert(&artifact)?,
+                Ok(artifact) => {
+                    require(&artifact)?;
+                    state.insert(&artifact)?;
+                }
                 Err(ErrorCode::NotFound) => {}
                 Err(_) => anyhow::bail!("admission pinned resource unavailable"),
             }
@@ -268,8 +358,26 @@ impl Resources {
                 artifact.definition.is_admission_profile(),
                 "admission profile head changes type"
             );
+            require(&artifact)?;
             state.insert(&artifact)?;
             state.apply_lifecycle(&head);
+        }
+        // Pins and heads prove what must already exist. Absence is permissible
+        // for new keys, but a retained artifact cannot recreate its witnesses.
+        let additional: Vec<_> = required.difference(&observed).cloned().collect();
+        ensure!(
+            additional.iter().all(|key| !unique.contains(key)),
+            "retained admission witness missing"
+        );
+        // A retained definition can reveal a group or witness anchor outside
+        // the initial probes. Authenticate those additional exact keys too.
+        let supplemental = lookup(db, &additional).await?;
+        ensure!(
+            supplemental.len() == additional.len(),
+            "retained admission witness missing"
+        );
+        for entry in supplemental {
+            authenticate_entry(self, db, &entry).await?;
         }
         Ok(state)
     }
@@ -293,7 +401,7 @@ pub(in crate::tenancy::resources) async fn verify(
         "retained admission witness missing"
     );
     let groups: Vec<_> = match &artifact.definition {
-        Definition::AdmissionProfileV2 { profile } => profile
+        Definition::AdmissionProfile { profile } => profile
             .health_group_id
             .as_ref()
             .map(|group| (artifact.reference.owner_id.clone(), group.clone()))
@@ -332,7 +440,7 @@ pub(in crate::tenancy::resources) async fn retain(
         return Ok(());
     }
     let groups = match &artifact.definition {
-        Definition::AdmissionProfileV2 { profile } => profile
+        Definition::AdmissionProfile { profile } => profile
             .health_group_id
             .as_ref()
             .map(|group| (artifact.reference.owner_id.clone(), group.clone()))

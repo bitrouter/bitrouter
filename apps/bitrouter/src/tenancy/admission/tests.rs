@@ -10,7 +10,6 @@ fn limits(active: u16, queued: u16) -> Limits {
     Limits {
         active_executions: active,
         queued_work: queued,
-        learning_jobs: 0,
     }
 }
 

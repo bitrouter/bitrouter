@@ -1,10 +1,9 @@
 use super::*;
 use bitrouter_ai::tenancy::{
     authority::{OwnerKind, ResourceKind},
-    configuration::{GenerationDefaults, Learning, LearningMode, Limits},
+    configuration::{GenerationDefaults, Limits},
 };
 use sea_orm::{DatabaseConnection, Statement, TransactionTrait};
-use sea_orm_migration::{MigratorTrait, SchemaManager};
 use serde_json::json;
 
 #[cfg(any(feature = "db-postgres", feature = "db-mysql"))]
@@ -13,14 +12,7 @@ mod server;
 
 async fn database() -> Result<DatabaseConnection> {
     let db = crate::db::connect("sqlite::memory:").await?;
-    let manager = SchemaManager::new(&db);
-    for migration in crate::db::migration::Migrator::migrations() {
-        if migration.name().starts_with("m20240101_000028_")
-            || migration.name().starts_with("m20240101_000029_")
-        {
-            migration.up(&manager).await?;
-        }
-    }
+    crate::db::run_migrations(&db).await?;
     for tenant in ["tenant-a", "tenant-b", "Tenant-a"] {
         add_tenant(&db, tenant).await?;
     }
@@ -67,14 +59,10 @@ fn draft(tenant: &str, revision: &str, created: u64) -> Result<StoredConfigurati
                     max_output_tokens: 1024,
                     temperature: 0.5,
                 },
-                learning: Learning {
-                    mode: LearningMode::Off,
-                    max_evaluations: 0,
-                },
+                eval_publication: false,
                 limits: Limits {
                     active_executions: 1,
                     queued_work: 0,
-                    learning_jobs: 0,
                 },
             },
         },
@@ -419,6 +407,7 @@ async fn invalid_retained_schema_and_dependency_metadata_fail_closed() -> Result
     let db = database().await?;
     let record = draft("tenant-a", "v1", 1)?;
     insert_configuration(&db, &record).await?;
+    // Public ConfigurationRevision remains schema 1, independently of authority format 5.
     for schema_version in [-1, 2] {
         db.execute(Statement::from_sql_and_values(
             DatabaseBackend::Sqlite,

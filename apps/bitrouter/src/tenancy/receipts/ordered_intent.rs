@@ -10,15 +10,15 @@ use crate::tenancy::{
 };
 use anyhow::{Context, Result, ensure};
 use bitrouter_ai::tenancy::{
+    execution::ExecutionReceipt,
     execution::{Outcome, Provenance, ReceiptState, Usage},
-    execution_v2::ExecutionReceiptV2,
     identity::{
         CorrelationId, ExecutionId, InstallationId, PrincipalId, RevisionId, TenantId, Timestamp,
     },
     operation::DispatchState,
-    ordered::AcceptedSelectionV2,
+    ordered::AcceptedSelection,
     usage_evidence::{Capture, Estimation},
-    usage_evidence_v2::{EvidenceBudgetV2, ExecutionUsageEvidenceV2},
+    usage_evidence::{EvidenceBudget, ExecutionUsageEvidence},
     validation::Validate,
 };
 use sea_orm::{
@@ -48,7 +48,7 @@ pub(in crate::tenancy) struct Intent {
     execution: ExecutionId,
     correlation: CorrelationId,
     revision: RevisionId,
-    selection: AcceptedSelectionV2,
+    selection: AcceptedSelection,
     attempt_limit: u8,
     evidence_bytes: usize,
     frame_bytes: usize,
@@ -63,7 +63,7 @@ impl Intent {
             .ordered
             .as_ref()
             .context("ordered intent selection missing")?;
-        let budget = EvidenceBudgetV2::for_attempts(selection.candidate_indices.len())?;
+        let budget = EvidenceBudget::for_attempts(selection.candidate_indices.len())?;
         let intent = Self {
             schema_version: 2,
             installation: identity.installation.clone(),
@@ -89,7 +89,7 @@ impl Intent {
     fn validate(&self) -> Result<()> {
         self.selection.validate()?;
         self.origin.validate()?;
-        let b = EvidenceBudgetV2::for_attempts(self.selection.candidate_indices.len())?;
+        let b = EvidenceBudget::for_attempts(self.selection.candidate_indices.len())?;
         ensure!(
             self.schema_version == 2
                 && (1..=64).contains(&self.attempt_limit)
@@ -109,27 +109,29 @@ impl Intent {
         );
         Ok(())
     }
-    fn matches(&self, receipt: &ExecutionReceiptV2) -> bool {
+    fn matches(&self, receipt: &ExecutionReceipt) -> bool {
         self.installation == receipt.installation_id
             && self.tenant == receipt.tenant_id
             && self.principal == receipt.principal_id
             && self.execution == receipt.execution_id
             && self.correlation == receipt.correlation_id
             && self.revision == receipt.execution_revision
-            && self.selection == receipt.accepted_selection
-            && self.attempt_limit == receipt.attempt_limit
+            && matches!(&receipt.dispatch,
+                bitrouter_ai::tenancy::execution::Dispatch::Ordered { accepted_selection, attempt_limit }
+                if accepted_selection == &self.selection && *attempt_limit == self.attempt_limit)
     }
     fn unknown(&self) -> Result<Terminal> {
-        let receipt = ExecutionReceiptV2 {
-            schema_version: 2,
+        let receipt = ExecutionReceipt {
             installation_id: self.installation.clone(),
             tenant_id: self.tenant.clone(),
             principal_id: self.principal.clone(),
             execution_id: self.execution.clone(),
             correlation_id: self.correlation.clone(),
             execution_revision: self.revision.clone(),
-            accepted_selection: self.selection.clone(),
-            attempt_limit: self.attempt_limit,
+            dispatch: bitrouter_ai::tenancy::execution::Dispatch::Ordered {
+                accepted_selection: self.selection.clone(),
+                attempt_limit: self.attempt_limit,
+            },
             state: ReceiptState::Unknown,
             outcome: Outcome::Unknown,
             attempts: Vec::new(),
@@ -144,15 +146,16 @@ impl Intent {
             },
             recorded_at: self.admitted_at.clone(),
         };
-        let evidence = ExecutionUsageEvidenceV2 {
-            schema_version: 2,
+        let evidence = ExecutionUsageEvidence {
             installation_id: self.installation.clone(),
             tenant_id: self.tenant.clone(),
             execution_id: self.execution.clone(),
-            accepted_selection: self.selection.clone(),
+            dispatch: receipt.dispatch.clone(),
+            parent_execution_id: None,
+            child_execution_ids: Vec::new(),
             capture: Capture::Unavailable,
-            extractor_version: ExecutionUsageEvidenceV2::extractor_version_for(
-                self.selection.inbound_protocol,
+            extractor_version: ExecutionUsageEvidence::extractor_version_for(
+                &receipt.dispatch,
                 &[],
             ),
             estimation: Estimation::NotCaptured,
@@ -351,7 +354,7 @@ pub(in crate::tenancy) async fn inventory(
     db: &impl ConnectionTrait,
     installation: &InstallationId,
 ) -> Result<PendingInventory> {
-    crate::db::migration::m20240101_000045_ordered_receipts::validate(db).await?;
+    crate::db::migration::validate_ordered_receipts(db).await?;
     let backend = db.get_database_backend();
     let length = octets(backend, "intent_json");
     let invalid=Query::select().from(Alias::new(TABLE)).expr(Expr::val(1)).and_where(Expr::cust(format!("{length} NOT BETWEEN 1 AND {MAX_BYTES} OR byte_count != {length} OR {} != 64 OR {} >128 OR {} >128 OR {} >128",octets(backend,"content_digest"),octets(backend,"installation_id"),octets(backend,"tenant_id"),octets(backend,"execution_id")))).limit(1).to_owned();

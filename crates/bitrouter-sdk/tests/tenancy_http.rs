@@ -32,7 +32,7 @@ fn applied_to(resource: &str) -> Value {
     result
 }
 fn configuration() -> Value {
-    json!({"routes":[],"policy":null,"generation_defaults":{"max_output_tokens":100,"temperature":1.0},"learning":{"mode":"off","max_evaluations":0},"limits":{"active_executions":16,"queued_work":32,"learning_jobs":2}})
+    json!({"routes":[],"policy":null,"generation_defaults":{"max_output_tokens":100,"temperature":1.0},"eval_publication": false,"limits":{"active_executions":16,"queued_work":32}})
 }
 fn revision() -> Value {
     json!({"tenant_id":"tenant","revision_id":"revision","schema_version":1,"compiler_version":"1","content_digest":"a".repeat(64),"document":configuration()})
@@ -44,7 +44,7 @@ fn empty_usage() -> Value {
     json!({"input_tokens":null,"output_tokens":null,"cache_read_tokens":null,"cache_write_tokens":null,"reasoning_tokens":null,"provenance":"unknown","complete":false})
 }
 fn receipt() -> Value {
-    json!({"installation_id":"installation","tenant_id":"tenant","principal_id":"principal","execution_id":"execution","correlation_id":"correlation","execution_revision":"revision","state":"unknown","outcome":"unknown","attempts":[],"usage":empty_usage(),"recorded_at":"2026-10-25T00:00:00Z"})
+    json!({"dispatch":{"mode":"strict"},"installation_id":"installation","tenant_id":"tenant","principal_id":"principal","execution_id":"execution","correlation_id":"correlation","execution_revision":"revision","state":"unknown","outcome":"unknown","attempts":[],"usage":empty_usage(),"recorded_at":"2026-10-25T00:00:00Z"})
 }
 fn tenant_input() -> TestResult<TenantPut> {
     Ok(serde_json::from_value(

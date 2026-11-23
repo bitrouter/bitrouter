@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 pub struct ControlActionSpec {
     pub action: Action,
     pub id: &'static str,
-    pub legacy_name: &'static str,
     pub shared_id: Option<&'static str>,
     pub version: u32,
     pub method: &'static str,
@@ -50,7 +49,6 @@ macro_rules! action {
         ControlActionSpec {
             action: Action::$variant,
             id: Action::$variant.id(),
-            legacy_name: Action::$variant.legacy_name(),
             shared_id: $shared,
             version: Action::$variant.version(),
             method: $method,
@@ -70,7 +68,6 @@ pub const ACTIONS: &[ControlActionSpec] = &[
     ControlActionSpec {
         action: Action::Reload,
         id: Action::Reload.id(),
-        legacy_name: Action::Reload.legacy_name(),
         shared_id: None,
         version: Action::Reload.version(),
         method: "POST",

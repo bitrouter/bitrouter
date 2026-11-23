@@ -14,7 +14,7 @@ use bitrouter_ai::{
             AdmissionProfileObservationRequestV1 as Request,
             AdmissionProfileObservationSnapshotV1 as Snapshot,
         },
-        resources_v2::{DefinitionV2, ResourcePutV2},
+        resources::{Definition, ResourcePut},
     },
 };
 use serde_json::{Value, json};
@@ -28,16 +28,8 @@ const TOKEN: &str = "profile-observation-test-operator-token-at-least-32-bytes";
 const PATH: &str = "/control/v1/tenancy/admission-profiles/observations/v1";
 const CAPS: &str = "/control/v1/tenancy/admission-profiles/observations/capabilities";
 
-fn rules(version: u32, rpm: Option<u32>, health: bool) -> Value {
-    let mut value = json!({"schema_version":version,"rate":rpm.map(|rpm|json!({"rate_group_id":"window","member_rpm":rpm})),"health":if health {json!({"rules":"availability_v1","failure_threshold":1,"transient_cooldown_seconds":10,"persistent_cooldown_seconds":30,"probe_lease_seconds":5})} else {Value::Null},"fallback":"stop"});
-    if version == 2 {
-        value["health_group_id"] = if health {
-            json!("circuit")
-        } else {
-            Value::Null
-        };
-    }
-    value
+fn rules(group: &str, rpm: Option<u32>, health: bool) -> Value {
+    json!({"schema_version":1,"rate":rpm.map(|rpm|json!({"rate_group_id":"window","member_rpm":rpm})),"health":if health {json!({"rules":"availability_v1","failure_threshold":1,"transient_cooldown_seconds":10,"persistent_cooldown_seconds":30,"probe_lease_seconds":5})} else {Value::Null},"health_group_id":if health {json!(group)} else {Value::Null},"fallback":"stop"})
 }
 async fn provision(
     fixture: &Fixture,
@@ -62,35 +54,19 @@ async fn provision_in_pool(
         resource_kind: ResourceKind::Policy,
         resource_id: name.try_into()?,
     };
-    let command = if rules["schema_version"] == 2 {
-        Command::ResourceV2(
-            fixture.tenant.clone(),
-            ResourcePutV2 {
-                format: 2,
-                operation_id: operation.try_into()?,
-                installation_id: fixture.installation.clone(),
-                key: key.clone(),
-                expected_revision: expected,
-                definition: DefinitionV2::AdmissionProfileV2 {
-                    profile: serde_json::from_value(rules)?,
-                },
+    let command = Command::Resource(
+        fixture.tenant.clone(),
+        ResourcePut {
+            format: 1,
+            operation_id: operation.try_into()?,
+            installation_id: fixture.installation.clone(),
+            key: key.clone(),
+            expected_revision: expected,
+            definition: Definition::AdmissionProfile {
+                profile: serde_json::from_value(rules)?,
             },
-        )
-    } else {
-        Command::Resource(
-            fixture.tenant.clone(),
-            ResourcePut {
-                format: 1,
-                operation_id: operation.try_into()?,
-                installation_id: fixture.installation.clone(),
-                key: key.clone(),
-                expected_revision: expected,
-                definition: Definition::AdmissionProfile {
-                    profile: serde_json::from_value(rules)?,
-                },
-            },
-        )
-    };
+        },
+    );
     let result = result(
         fixture
             .service
@@ -232,14 +208,14 @@ async fn revoke(fixture: &Fixture, reference: ResourceRef, name: &str) -> Result
 }
 
 #[tokio::test]
-async fn standalone_versions_observe_without_routes_configurations_or_credentials() -> Result<()> {
+async fn standalone_profiles_observe_without_routes_configurations_or_credentials() -> Result<()> {
     let fixture = keyed_fixture().await?;
     let local = provision(
         &fixture,
         "local",
         "create-local",
         None,
-        rules(1, Some(0), true),
+        rules("member-local", Some(0), true),
     )
     .await?;
     let shared = provision(
@@ -247,7 +223,7 @@ async fn standalone_versions_observe_without_routes_configurations_or_credential
         "shared",
         "create-shared",
         None,
-        rules(2, None, false),
+        rules("circuit", None, false),
     )
     .await?;
     for table in ["tenancy_configurations", "tenancy_credentials"] {
@@ -297,22 +273,22 @@ async fn standalone_versions_observe_without_routes_configurations_or_credential
 async fn current_head_rotation_retains_pins_and_both_revocation_boundaries() -> Result<()> {
     let mut fixture = keyed_fixture().await?;
     let mut revoked_pins = Vec::new();
-    for version in [1, 2] {
-        let name = format!("profile-{version}");
+    for member in [1, 2] {
+        let name = format!("profile-{member}");
         let pin = provision(
             &fixture,
             &name,
-            &format!("create-{version}"),
+            &format!("create-{member}"),
             None,
-            rules(version, Some(1), false),
+            rules("circuit", Some(1), false),
         )
         .await?;
         let head = provision(
             &fixture,
             &name,
-            &format!("rotate-{version}"),
+            &format!("rotate-{member}"),
             Some(pin.revision_id.clone()),
-            rules(version, Some(7), false),
+            rules("circuit", Some(7), false),
         )
         .await?;
         let input = request(&fixture, vec![pin.clone(), head.clone()])?;
@@ -322,12 +298,12 @@ async fn current_head_rotation_retains_pins_and_both_revocation_boundaries() -> 
             ensure!(entry.current_profile_revision.as_ref() == Some(&head.revision_id));
             ensure!(entry.rate.as_ref().context("rate")?.member_rpm == 7);
         }
-        revoke(&fixture, pin.clone(), &format!("revoke-pin-{version}")).await?;
+        revoke(&fixture, pin.clone(), &format!("revoke-pin-{member}")).await?;
         let observed = read(&fixture, &request(&fixture, input.profiles.clone())?).await?;
         ensure!(observed.profiles[0].availability == AvailabilityObservation::AuthorityDenied);
         ensure!(observed.profiles[1].availability == AvailabilityObservation::Eligible);
         revoked_pins.extend(input.profiles.clone());
-        revoke(&fixture, head, &format!("revoke-head-{version}")).await?;
+        revoke(&fixture, head, &format!("revoke-head-{member}")).await?;
         let observed = read(&fixture, &request(&fixture, input.profiles.clone())?).await?;
         ensure!(
             observed
@@ -355,7 +331,14 @@ async fn current_head_rotation_retains_pins_and_both_revocation_boundaries() -> 
 #[tokio::test]
 async fn missing_nonprofile_and_full_ref_transplants_never_substitute_authority() -> Result<()> {
     let fixture = keyed_fixture().await?;
-    let pin = provision(&fixture, "profile", "create", None, rules(2, Some(5), true)).await?;
+    let pin = provision(
+        &fixture,
+        "profile",
+        "create",
+        None,
+        rules("circuit", Some(5), true),
+    )
+    .await?;
     let mut cases = vec![pin.clone()];
     for field in 0..3 {
         let mut missing = pin.clone();
@@ -369,21 +352,10 @@ async fn missing_nonprofile_and_full_ref_transplants_never_substitute_authority(
     let mut policy = credential(&fixture, "nonprofile")?;
     policy.key = pin.key();
     policy.key.resource_id = "other-policy".try_into()?;
-    let mut document = crate::policy_lock::PolicyLock::default();
-    document.policies.insert(
-        "selected".into(),
-        crate::policy_lock::PolicyDefinition {
-            tiers: [(
-                "only".into(),
-                bitrouter_ai::routing::PolicyModelTarget::model_only("fixture:model".into()),
-            )]
-            .into(),
-            default_tier: Some("only".into()),
-            ..Default::default()
-        },
-    );
     policy.definition = Definition::Policy {
-        document: serde_json::to_value(document)?,
+        document: serde_json::from_value(
+            serde_json::json!({"spec_version":"policy/1.0.0-beta.1","policies":{"selected":{"tiers":{"only":{"model":"fixture:model"}},"default_tier":"only"}}}),
+        )?,
         name: "selected".into(),
         dependencies: Vec::new(),
     };
@@ -409,7 +381,14 @@ async fn missing_nonprofile_and_full_ref_transplants_never_substitute_authority(
 async fn scheduled_real_authority_publication_between_sampling_and_finish_rejects_batch()
 -> Result<()> {
     let fixture = keyed_fixture().await?;
-    let pin = provision(&fixture, "profile", "create", None, rules(2, Some(2), true)).await?;
+    let pin = provision(
+        &fixture,
+        "profile",
+        "create",
+        None,
+        rules("circuit", Some(2), true),
+    )
+    .await?;
     let input = request(&fixture, vec![pin.clone()])?;
     let reader = fixture
         .service
@@ -433,7 +412,7 @@ async fn scheduled_real_authority_publication_between_sampling_and_finish_reject
             "profile",
             "rotate",
             Some(pin.revision_id),
-            rules(2, Some(3), true),
+            rules("circuit", Some(3), true),
         ),
     )
     .await??;

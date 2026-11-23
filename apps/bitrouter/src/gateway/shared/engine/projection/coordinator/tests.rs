@@ -4,12 +4,8 @@ use super::*;
 use crate::gateway::shared::{authority::Authority, schema, test_database::EmptyDatabase};
 use crate::runtime_crypto::DeploymentKey;
 use crate::storage::evaluation::shared::SharedEvaluation;
-use crate::trajectory::types::{
-    BeginRequest, EpisodeStart, HistoryCompleteness, KeyedDigest, TRAJECTORY_SCHEMA_VERSION,
-    TrajectoryEvent, TrajectoryEventKind, TrajectoryEvidence,
-};
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
-use std::{collections::BTreeMap, time::Duration};
+use std::time::Duration;
 
 #[tokio::test]
 #[ignore = "requires BITROUTER_TEST_DATABASE_URL with PostgreSQL CREATEDB privilege"]
@@ -32,15 +28,14 @@ async fn exercise(database: &mut EmptyDatabase) -> Result<()> {
         schema::initialize_all(&first).await?;
         let deployment_key = rand::random();
         Authority::new(first.clone(), DeploymentKey::from_bytes(deployment_key)?).initialize().await?;
-        let a = engine(first.clone(), deployment_key).await?;
-        let b = engine(second.clone(), deployment_key).await?;
+        let a = join_engine(first.clone(), deployment_key).await?;
+        let b = join_engine(second.clone(), deployment_key).await?;
         lease_recovery(&a, &b).await?;
-        for guarded in [false, true] {
-            let terminal = seed(&a, guarded).await?;
+        {
+            let terminal = seed(&a).await?;
             let tx = first.begin().await?;
             a.authority.fence(&tx).await?;
-            let mut fence = match &terminal.binding { Some(binding) => Some(a.episode_fence(&tx, binding, Store::now(&tx).await?).await?), None => None };
-            a.project_in(&tx, &terminal, fence.as_mut()).await?;
+            a.project_in(&tx, &terminal).await?;
             tx.rollback().await?;
             assert_phase(&a, &terminal, false, false).await?;
             let (left, right) = tokio::join!(a.deliver(&terminal.record.event), b.deliver(&terminal.record.event));
@@ -50,10 +45,7 @@ async fn exercise(database: &mut EmptyDatabase) -> Result<()> {
             b.deliver(&terminal.record.event).await?;
             let replay: Stored<Receipt> = second.get(Kind::ProjectionReceipt, &terminal.record.event.event_id).await?.context("missing replay receipt")?;
             ensure!(original.revision()? == replay.revision()? && original.value.projection == replay.value.projection);
-            if guarded {
-                admission_provenance(&b, &terminal, &original).await?;
-                receipt_phase_corruption(&b, &terminal, &original).await?;
-            }
+            receipt_phase_corruption(&b, &terminal, &original).await?;
             let mut forged = terminal.record.event.clone(); forged.tenant_id = "foreign".into();
             ensure!(b.deliver(&forged).await.is_err());
             // An existing receipt cannot recreate a disappeared domain row.
@@ -68,17 +60,18 @@ async fn exercise(database: &mut EmptyDatabase) -> Result<()> {
             tx.commit().await?;
         }
         failure_boundaries(&a).await?;
+        prejoin_rejects_guarded_history(&a, deployment_key).await?;
         Ok::<(), anyhow::Error>(())
     }.await
 }
 
-async fn engine(store: Store, deployment_key: [u8; 32]) -> Result<Engine> {
+async fn join_engine(store: Store, deployment_key: [u8; 32]) -> Result<Engine> {
     let authority = Authority::new(store, DeploymentKey::from_bytes(deployment_key)?);
     Engine::join(authority, 30_000).await
 }
 
 async fn lease_recovery(first: &Engine, second: &Engine) -> Result<()> {
-    let terminal = seed(first, true).await?;
+    let terminal = seed(first).await?;
     let event = &terminal.record.event;
     let claim_a = first
         .claim_outbox(1, 100)
@@ -88,14 +81,7 @@ async fn lease_recovery(first: &Engine, second: &Engine) -> Result<()> {
     ensure!(claim_a.event == *event);
     let tx = first.store().begin().await?;
     first.authority.fence(&tx).await?;
-    let mut fence = first
-        .episode_fence(
-            &tx,
-            terminal.binding.as_ref().context("missing binding")?,
-            Store::now(&tx).await?,
-        )
-        .await?;
-    first.project_in(&tx, &terminal, Some(&mut fence)).await?;
+    first.project_in(&tx, &terminal).await?;
     tx.commit().await?;
     assert_phase(first, &terminal, true, false).await?;
 
@@ -173,117 +159,11 @@ async fn wait_for_claim_expiry(engine: &Engine, id: &str) -> Result<()> {
     .context("outbox lease did not expire")?
 }
 
-async fn admission_provenance(
-    engine: &Engine,
-    terminal: &Terminal,
-    original: &Stored<Receipt>,
-) -> Result<()> {
-    let Some(Completion::Trajectory { admission }) = &original.value.completion else {
-        anyhow::bail!("fixture lost its original admission");
-    };
-    let event = &terminal.record.event;
-    for (column, changed, retained) in [
-        (
-            "authority_id",
-            "foreign-evaluator",
-            admission.authority_id.as_str(),
-        ),
-        (
-            "reason",
-            "different-valid-reason",
-            admission.reason.as_str(),
-        ),
-        (
-            "created_at",
-            "2000-01-01T00:00:00Z",
-            admission.created_at.as_str(),
-        ),
-    ] {
-        // The column is selected only from the static fixture list above.
-        // https://www.postgresql.org/docs/current/sql-update.html
-        let sql = format!(
-            "UPDATE gateway_shared_eval_admission_events SET {column}=$1 WHERE namespace=$2 AND result_id=$3 AND sequence=$4"
-        );
-        let alter = |value: &str| {
-            Statement::from_sql_and_values(
-                DatabaseBackend::Postgres,
-                &sql,
-                [
-                    value.into(),
-                    engine.store().namespace().into(),
-                    admission.result_id.clone().into(),
-                    admission.sequence.into(),
-                ],
-            )
-        };
-        ensure!(
-            engine
-                .store()
-                .database()
-                .execute(alter(changed))
-                .await?
-                .rows_affected()
-                == 1
-        );
-        let rejected = engine.deliver(event).await;
-        ensure!(
-            engine
-                .store()
-                .database()
-                .execute(alter(retained))
-                .await?
-                .rows_affected()
-                == 1
-        );
-        let expected = if column == "authority_id" {
-            "required evaluation lost its trusted admission"
-        } else {
-            "delivered admission evidence changed"
-        };
-        ensure!(
-            rejected
-                .err()
-                .is_some_and(|error| error.to_string() == expected),
-            "changed admission {column} did not fail its evidence check"
-        );
-
-        let tx = engine.store().begin().await?;
-        let receipt: Stored<Receipt> = engine
-            .store()
-            .read(&tx, Kind::ProjectionReceipt, &event.event_id)
-            .await?
-            .context("receipt disappeared")?;
-        ensure!(
-            receipt.revision()? == original.revision()?
-                && receipt.value.completion == original.value.completion
-        );
-        let outbox: Stored<super::super::super::Outbox> = engine
-            .store()
-            .read(&tx, Kind::Outbox, &event.event_id)
-            .await?
-            .context("terminal outbox disappeared")?;
-        ensure!(outbox.value.acknowledged_at_ms.is_none());
-        let latest = SharedEvaluation::new(engine.store().namespace())?
-            .latest_admission_in(&tx, &event.tenant_id, &admission.result_id)
-            .await?;
-        ensure!(
-            latest.as_ref() == Some(admission),
-            "replay replaced the original admission"
-        );
-        tx.commit().await?;
-        engine.deliver(event).await?;
-    }
-    Ok(())
-}
-
 async fn receipt_phase_corruption(
     engine: &Engine,
     terminal: &Terminal,
     original: &Stored<Receipt>,
 ) -> Result<()> {
-    let Evaluation::Trajectory { reference } = &original.value.projection.evaluation else {
-        anyhow::bail!("missing trajectory receipt");
-    };
     let event = &terminal.record.event;
     let source = serde_json::to_value(&original.value)?;
     let mut missing = source.clone();
@@ -297,24 +177,7 @@ async fn receipt_phase_corruption(
     // Read every delivery metadata field so a failed replay cannot silently
     // repeat bookkeeping. JSON object field order is stable within this query.
     // https://www.postgresql.org/docs/current/functions-json.html
-    let delivery_query = || {
-        Statement::from_sql_and_values(
-            DatabaseBackend::Postgres,
-            "SELECT to_jsonb(o)::text AS snapshot FROM gateway_shared_trajectory_outbox o WHERE namespace=$1 AND owner_user_id=$2 AND outbox_id=$3",
-            [
-                engine.store().namespace().into(),
-                event.tenant_id.clone().into(),
-                reference.outbox_id.clone().into(),
-            ],
-        )
-    };
-    let delivery_before: String = engine
-        .store()
-        .database()
-        .query_one(delivery_query())
-        .await?
-        .context("missing delivered trajectory outbox")?
-        .try_get("", "snapshot")?;
+    let evidence_before = evidence_snapshot(engine).await?;
     for (body, status) in [
         (serde_json::to_string(&cleared)?, "delivered"),
         (serde_json::to_string(&missing)?, "delivered"),
@@ -365,20 +228,8 @@ async fn receipt_phase_corruption(
                 && after.try_get::<String>("", "status")? == status
         );
         ensure!(u64::try_from(after.try_get::<i64>("", "revision")?)? == original.revision()?);
-        let delivery_after: String = engine
-            .store()
-            .database()
-            .query_one(delivery_query())
-            .await?
-            .context("trajectory outbox disappeared")?
-            .try_get("", "snapshot")?;
-        ensure!(delivery_after == delivery_before);
+        ensure!(evidence_snapshot(engine).await? == evidence_before);
         let tx = engine.store().begin().await?;
-        let admission = SharedEvaluation::new(engine.store().namespace())?
-            .latest_admission_in(&tx, &event.tenant_id, &reference.result_digest)
-            .await?
-            .context("admission disappeared")?;
-        ensure!(original.value.completion == Some(Completion::Trajectory { admission }));
         let outbox: Stored<super::super::super::Outbox> = engine
             .store()
             .read(&tx, Kind::Outbox, &event.event_id)
@@ -391,7 +242,7 @@ async fn receipt_phase_corruption(
     Ok(())
 }
 
-async fn seed(engine: &Engine, guarded: bool) -> Result<Terminal> {
+async fn seed(engine: &Engine) -> Result<Terminal> {
     let mut record = crate::metering::shared::tests::fixture()?;
     let id = record.event.execution.execution_id.clone();
     record.event.event_id = format!("gateway-terminal-{id}");
@@ -408,50 +259,15 @@ async fn seed(engine: &Engine, guarded: bool) -> Result<Terminal> {
     }
     let tx = engine.store().begin().await?;
     engine.authority.fence(&tx).await?;
-    let (binding, inputs) = if guarded {
-        let begin = start(&record)?;
-        let binding = TrajectoryBinding {
-            owner_user_id: record.event.tenant_id.clone(),
-            episode_id: begin.episode.episode_id.clone(),
-            request_id: begin.event.request_id.clone().context("missing request")?,
-            correlation_epoch: begin.episode.correlation_key_id.clone(),
-        };
-        let mut fence = engine
-            .episode_fence(&tx, &binding, Store::now(&tx).await?)
-            .await?;
-        fence.value.pending.insert(id.clone());
-        engine
-            .store()
-            .save(&tx, &mut fence, "pending", None, Store::now(&tx).await?)
-            .await?;
-        let trajectory = SharedTrajectory::new(engine.store().namespace())?;
-        trajectory
-            .begin_in(&tx, &record.event.tenant_id, &begin)
-            .await?;
-        let route = crate::trajectory::shared::tests::guarded_batch(&[], &begin.event)?;
-        trajectory
-            .append_route_in(&tx, &record.event.tenant_id, &route)
-            .await?;
-        let decision = crate::trajectory::evaluation::decode_eval_decision(&route[0])?
-            .context("missing decision")?;
-        record.request_id = Some(binding.request_id.clone());
-        let inputs =
-            crate::gateway::shared::capture::projection::tests::selected(&record, decision, true)?;
-        (Some(binding), inputs)
-    } else {
-        record.request_id = None;
-        (
-            None,
-            crate::gateway::shared::capture::projection::tests::untracked(&record)?,
-        )
-    };
+    record.request_id = None;
+    let inputs = crate::gateway::shared::capture::projection::tests::untracked(&record)?;
     let execution = Execution {
         tenant_id: record.event.tenant_id.clone(),
         principal_id: record.principal_id.clone(),
         authorization_revision: "fixture".into(),
         tenant_revision: 1,
         owner: engine.owner.clone(),
-        trajectory: binding.clone(),
+        trajectory: None,
         projection: Some(Box::new(inputs.clone())),
         view: record.event.execution.clone(),
     };
@@ -531,47 +347,6 @@ async fn seed(engine: &Engine, guarded: bool) -> Result<Terminal> {
     Ok(Terminal {
         record,
         inputs: Box::new(inputs),
-        binding,
-    })
-}
-
-fn start(record: &Record) -> Result<BeginRequest> {
-    let id = &record.event.execution.execution_id;
-    let digest = KeyedDigest::parse(format!("hmac-sha256:key-1:{}", "1".repeat(64)))?;
-    let mut event = TrajectoryEvent {
-        schema_version: TRAJECTORY_SCHEMA_VERSION,
-        event_id: format!("start-{id}"),
-        owner_user_id: record.event.tenant_id.clone(),
-        episode_id: format!("episode-{id}"),
-        request_id: Some(format!("request-{id}")),
-        sequence: 1,
-        kind: TrajectoryEventKind::RequestStarted,
-        evidence: TrajectoryEvidence {
-            structural: BTreeMap::new(),
-            categorical: BTreeMap::from([
-                ("correlation.source".into(), "explicit_root".into()),
-                ("history.completeness".into(), "complete".into()),
-            ]),
-            digests: BTreeMap::new(),
-            route_measurement: None,
-            routing_evidence: vec![],
-        },
-        captured_at: "1970-01-01T00:00:01Z".into(),
-        content_digest: String::new(),
-    };
-    event.content_digest = event.semantic_digest()?;
-    Ok(BeginRequest {
-        episode: EpisodeStart {
-            episode_id: event.episode_id.clone(),
-            correlation_digest: digest.clone(),
-            correlation_key_id: "key-1".into(),
-            correlation_source: "explicit_root".into(),
-            completeness: HistoryCompleteness::Complete,
-        },
-        event,
-        full_input_digest: digest,
-        native_parent_id: None,
-        protocol: "responses".into(),
     })
 }
 
@@ -600,41 +375,10 @@ async fn assert_phase(
         )
         .await?;
     ensure!(row.is_some() == projected);
-    if let Some(binding) = &terminal.binding {
-        let fence = engine
-            .episode_fence(&tx, binding, Store::now(&tx).await?)
-            .await?;
-        ensure!(fence.value.pending.contains(&event.execution.execution_id) != projected);
-        let history = SharedTrajectory::new(engine.store().namespace())?
-            .history_in(&tx, &event.tenant_id, &binding.episode_id)
-            .await?;
-        ensure!(
-            history
-                .iter()
-                .filter(|event| event.kind == TrajectoryEventKind::RequestSettled)
-                .count()
-                == usize::from(projected)
-        );
-    }
     if let Some(receipt) = receipt {
         let eval = SharedEvaluation::new(engine.store().namespace())?;
         let subject_id = match &receipt.value.projection.evaluation {
             Evaluation::Request { eval_id, .. } => eval_id,
-            Evaluation::Trajectory { reference } => {
-                ensure!(
-                    eval.result_in(&tx, &event.tenant_id, &reference.result_digest)
-                        .await?
-                        .is_some()
-                        == delivered
-                );
-                ensure!(
-                    eval.latest_admission_in(&tx, &event.tenant_id, &reference.result_digest)
-                        .await?
-                        .is_some()
-                        == delivered
-                );
-                &reference.subject_id
-            }
             Evaluation::None { .. } => anyhow::bail!("fixture requires evaluation"),
         };
         ensure!(
@@ -652,31 +396,18 @@ async fn failure_boundaries(engine: &Engine) -> Result<()> {
     for (table, predicate, projected) in [
         ("gateway_shared_metering_requests", "true", false),
         (
-            "gateway_shared_trajectory_events",
-            "NEW.kind='request_settled'",
-            false,
-        ),
-        ("gateway_shared_trajectory_outbox", "true", false),
-        (
             "gateway_shared_records",
             "NEW.kind='projection_receipt'",
             false,
         ),
-        (
-            "gateway_shared_records",
-            "TG_OP='UPDATE' AND NEW.kind='episode_fence'",
-            false,
-        ),
         ("gateway_shared_eval_subjects", "true", true),
-        ("gateway_shared_eval_results", "true", true),
-        ("gateway_shared_eval_admission_events", "true", true),
         (
             "gateway_shared_records",
             "NEW.kind='projection_receipt' AND NEW.status='delivered'",
             true,
         ),
     ] {
-        let terminal = seed(engine, true).await?;
+        let terminal = seed(engine).await?;
         let function = format!("projection_fail_{}", uuid::Uuid::new_v4().simple());
         let statement = format!(
             "CREATE FUNCTION {function}() RETURNS trigger LANGUAGE plpgsql AS $body$ BEGIN IF NEW.namespace='{}' AND ({predicate}) THEN RAISE EXCEPTION 'injected projection write failure'; END IF; RETURN NEW; END $body$",
@@ -720,5 +451,167 @@ async fn failure_boundaries(engine: &Engine) -> Result<()> {
         engine.deliver(&terminal.record.event).await?;
         assert_phase(engine, &terminal, true, true).await?;
     }
+    Ok(())
+}
+
+async fn evidence_snapshot(engine: &Engine) -> Result<String> {
+    engine.store().database().query_one(Statement::from_sql_and_values(DatabaseBackend::Postgres,
+        "SELECT jsonb_build_object(
+            'metering',(SELECT COALESCE(jsonb_agg(to_jsonb(m) ORDER BY execution_id),'[]'::jsonb) FROM gateway_shared_metering_requests m WHERE namespace=$1),
+            'subjects',(SELECT COALESCE(jsonb_agg(to_jsonb(s) ORDER BY eval_id),'[]'::jsonb) FROM gateway_shared_eval_subjects s WHERE namespace=$1),
+            'results',(SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY result_id),'[]'::jsonb) FROM gateway_shared_eval_results r WHERE namespace=$1),
+            'admissions',(SELECT COALESCE(jsonb_agg(to_jsonb(a) ORDER BY sequence),'[]'::jsonb) FROM gateway_shared_eval_admission_events a WHERE namespace=$1)
+        )::text AS snapshot",
+        [engine.store().namespace().into()]
+    )).await?.context("missing evidence snapshot")?.try_get("", "snapshot").map_err(Into::into)
+}
+
+async fn record_snapshot(store: &Store) -> Result<String> {
+    store.database().query_one(Statement::from_sql_and_values(DatabaseBackend::Postgres,
+        "SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY id),'[]'::jsonb)::text AS snapshot FROM gateway_shared_records r WHERE namespace=$1",
+        [store.namespace().into()]
+    )).await?.context("missing record snapshot")?.try_get("", "snapshot").map_err(Into::into)
+}
+
+async fn replace_body(
+    store: &Store,
+    kind: &str,
+    key: &str,
+    body: &serde_json::Value,
+) -> Result<()> {
+    ensure!(store.database().execute(Statement::from_sql_and_values(DatabaseBackend::Postgres,
+        "UPDATE gateway_shared_records SET body=$1 WHERE namespace=$2 AND kind=$3 AND key=$4",
+        [serde_json::to_string(body)?.into(), store.namespace().into(), kind.into(), key.into()]
+    )).await?.rows_affected() == 1);
+    Ok(())
+}
+
+async fn prejoin_rejects_guarded_history(engine: &Engine, key: [u8; 32]) -> Result<()> {
+    // More than one page of terminal history precedes the attacked last row.
+    // Current ledger/head/publications remain unchanged throughout the campaign.
+    for _ in 0..33 {
+        seed(engine).await?;
+    }
+    let store = engine.store();
+    let last = store.database().query_one(Statement::from_sql_and_values(DatabaseBackend::Postgres,
+        "SELECT key FROM gateway_shared_records WHERE namespace=$1 AND kind='execution' ORDER BY key DESC LIMIT 1",
+        [store.namespace().into()]
+    )).await?.context("missing terminal history")?.try_get::<String>("", "key")?;
+    let retained: Stored<serde_json::Value> = store
+        .get(Kind::Execution, &last)
+        .await?
+        .context("missing execution")?;
+    let original = retained.value;
+    let mut old_requirement = original.clone();
+    old_requirement["projection"]["requirements"]["trajectory"] = "guarded_policies".into();
+    let mut old_capture = original.clone();
+    old_capture["projection"]["policy"]["guarded"] = true.into();
+    let mut old_binding = original.clone();
+    let binding = serde_json::json!({"owner_user_id": original["tenant_id"], "episode_id":"retired", "request_id":"retired", "correlation_epoch":"retired"});
+    old_binding["trajectory"] = binding.clone();
+    let mut missing_capture = original.clone();
+    missing_capture["projection"] = serde_json::Value::Null;
+    let mut old_digest = original.clone();
+    old_digest["projection"]["requirements"]["policy_lock_digest"] =
+        old_digest["projection"]["requirements"]["source_digest"].clone();
+    old_digest["projection"]["requirements"]
+        .as_object_mut()
+        .context("requirements object")?
+        .remove("source_digest");
+    for body in [
+        old_requirement,
+        old_capture,
+        old_binding,
+        missing_capture,
+        old_digest,
+    ] {
+        replace_body(store, "execution", &last, &body).await?;
+        let before = record_snapshot(store).await?;
+        let evidence = evidence_snapshot(engine).await?;
+        let rejected = join_engine(store.clone(), key).await;
+        ensure!(
+            rejected.is_err(),
+            "retired execution registered a new incarnation"
+        );
+        ensure!(record_snapshot(store).await? == before);
+        ensure!(evidence_snapshot(engine).await? == evidence);
+        replace_body(store, "execution", &last, &original).await?;
+    }
+    let terminal = seed(engine).await?;
+    engine.deliver(&terminal.record.event).await?;
+    let receipt_key = &terminal.record.event.event_id;
+    let retained: Stored<serde_json::Value> = store
+        .get(Kind::ProjectionReceipt, receipt_key)
+        .await?
+        .context("missing projection receipt")?;
+    let original_receipt = retained.value;
+    let mut old_sink = original_receipt.clone();
+    old_sink["projection"]["evaluation"] = serde_json::json!({"sink":"trajectory", "reference":{}});
+    let mut old_completion = original_receipt.clone();
+    old_completion["completion"] = serde_json::json!({"sink":"trajectory", "admission":{}});
+    let mut bound = original_receipt.clone();
+    bound["projection"]["binding"] = binding;
+    for body in [old_sink, old_completion, bound] {
+        replace_body(store, "projection_receipt", receipt_key, &body).await?;
+        let before = record_snapshot(store).await?;
+        ensure!(
+            join_engine(store.clone(), key).await.is_err(),
+            "retired projection registered an incarnation"
+        );
+        ensure!(record_snapshot(store).await? == before);
+        replace_body(store, "projection_receipt", receipt_key, &original_receipt).await?;
+    }
+    let guard_id = format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    );
+    store.database().execute(Statement::from_sql_and_values(DatabaseBackend::Postgres,
+        "INSERT INTO gateway_shared_records (id,namespace,kind,key,revision,status,due_at_ms,updated_at_ms,body) VALUES ($1,$2,'episode_fence','retired-fence',0,'pending',NULL,0,'{}')",
+        [guard_id.clone().into(), store.namespace().into()]
+    )).await?;
+    let before = record_snapshot(store).await?;
+    ensure!(join_engine(store.clone(), key).await.is_err());
+    ensure!(record_snapshot(store).await? == before);
+    store
+        .database()
+        .execute(Statement::from_sql_and_values(
+            DatabaseBackend::Postgres,
+            "DELETE FROM gateway_shared_records WHERE namespace=$1 AND id=$2",
+            [store.namespace().into(), guard_id.into()],
+        ))
+        .await?;
+    for (kind, json_kind) in [
+        ("guard_activated", "request_started"),
+        ("request_started", "guard_activated"),
+    ] {
+        let event = format!("retired-{}", uuid::Uuid::new_v4());
+        store.database().execute(Statement::from_sql_and_values(DatabaseBackend::Postgres,
+            "INSERT INTO gateway_shared_trajectory_events (namespace,owner_user_id,event_id,episode_id,request_id,sequence,kind,captured_at,content_digest,event_json) VALUES ($1,'tenant',$2,$2,NULL,1,$3,'2026-11-18T00:00:00Z',$4,$5)",
+            [store.namespace().into(), event.clone().into(), kind.into(), format!("sha256:{}", "a".repeat(64)).into(), serde_json::json!({"kind":json_kind}).to_string().into()]
+        )).await?;
+        let before = record_snapshot(store).await?;
+        ensure!(join_engine(store.clone(), key).await.is_err());
+        ensure!(record_snapshot(store).await? == before);
+        let retained = store.database().query_one(Statement::from_sql_and_values(DatabaseBackend::Postgres,
+            "SELECT kind,event_json FROM gateway_shared_trajectory_events WHERE namespace=$1 AND event_id=$2",
+            [store.namespace().into(), event.clone().into()]
+        )).await?.context("guard history disappeared")?;
+        ensure!(retained.try_get::<String>("", "kind")? == kind);
+        ensure!(
+            retained.try_get::<String>("", "event_json")?
+                == serde_json::json!({"kind":json_kind}).to_string()
+        );
+        store
+            .database()
+            .execute(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                "DELETE FROM gateway_shared_trajectory_events WHERE namespace=$1 AND event_id=$2",
+                [store.namespace().into(), event.into()],
+            ))
+            .await?;
+    }
+    // All current request captures/receipts still admit a fresh worker.
+    join_engine(store.clone(), key).await?;
     Ok(())
 }

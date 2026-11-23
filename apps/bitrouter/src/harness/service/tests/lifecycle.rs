@@ -9,12 +9,12 @@ use crate::harness::service::ThreadService;
 use crate::harness::storage::ExecutionRecord;
 use crate::harness::storage::ExecutionStore;
 use crate::harness::storage::MemoryExecutionStore;
-use bitrouter_ai::harness::item::CallOrigin;
-use bitrouter_ai::harness::runtime::EffectStatus;
-use bitrouter_ai::harness::runtime::ErrorCode;
-use bitrouter_ai::harness::runtime::RuntimeLimits;
-use bitrouter_ai::harness::turn::TurnStatus;
-use bitrouter_ai::harness::turn::VerificationStatus;
+use crate::managed_contract::harness::item::CallOrigin;
+use crate::managed_contract::harness::runtime::EffectStatus;
+use crate::managed_contract::harness::runtime::ErrorCode;
+use crate::managed_contract::harness::runtime::RuntimeLimits;
+use crate::managed_contract::harness::turn::TurnStatus;
+use crate::managed_contract::harness::turn::VerificationStatus;
 
 #[tokio::test]
 async fn approval_is_task_bound_and_one_use() -> Result<(), Box<dyn std::error::Error>> {
@@ -413,19 +413,19 @@ impl ExecutionStore for FailingStore {
     async fn claim_owner(
         &self,
         id: &str,
-    ) -> Result<bitrouter_ai::harness::runtime::OwnerClaim, String> {
+    ) -> Result<crate::managed_contract::harness::runtime::OwnerClaim, String> {
         self.memory.claim_owner(id).await
     }
     async fn read_owner(
         &self,
         id: &str,
-    ) -> Result<Option<bitrouter_ai::harness::runtime::ExecutionOwner>, String> {
+    ) -> Result<Option<crate::managed_contract::harness::runtime::ExecutionOwner>, String> {
         self.memory.read_owner(id).await
     }
     async fn stop_owner(
         &self,
-        owner: &bitrouter_ai::harness::runtime::ExecutionOwner,
-    ) -> Result<bitrouter_ai::harness::runtime::ExecutionOwner, String> {
+        owner: &crate::managed_contract::harness::runtime::ExecutionOwner,
+    ) -> Result<crate::managed_contract::harness::runtime::ExecutionOwner, String> {
         self.memory.stop_owner(owner).await
     }
 
@@ -466,7 +466,7 @@ impl ExecutionStore for FailingStore {
 
     async fn commit_owned(
         &self,
-        owner: &bitrouter_ai::harness::runtime::ExecutionOwner,
+        owner: &crate::managed_contract::harness::runtime::ExecutionOwner,
         id: &str,
         version: u64,
         records: &[ExecutionRecord],
@@ -666,7 +666,7 @@ async fn release_preparation_failure_retains_exclusion_without_publishing_comple
     assert!(!saved.records.iter().any(|r| matches!(
         turn_fact(r),
         ExecutionRecord::TurnLifecycle {
-            lifecycle: bitrouter_ai::harness::turn::TurnLifecycle::Finished { .. },
+            lifecycle: crate::managed_contract::harness::turn::TurnLifecycle::Finished { .. },
             ..
         }
     )));

@@ -3,6 +3,7 @@
 use crate::config::EvalAuthorityConfig;
 use crate::config::EvalAuthorityKind;
 use crate::config::EvalConfig;
+#[cfg(feature = "core")]
 use crate::trajectory::evaluation::validate_builtin_trajectory_result;
 use anyhow::Result;
 use bitrouter_ai::eval::AdmissionOutcome;
@@ -17,14 +18,21 @@ use {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SubmissionPrincipal {
     LocalOperator,
-    BuiltinTrajectory { owner_user_id: String },
-    ApiKey { key_id: String, user_id: String },
+    #[cfg(feature = "core")]
+    BuiltinTrajectory {
+        owner_user_id: String,
+    },
+    ApiKey {
+        key_id: String,
+        user_id: String,
+    },
 }
 
 impl SubmissionPrincipal {
     pub fn owner_user_id(&self) -> &str {
         match self {
             Self::LocalOperator => "local",
+            #[cfg(feature = "core")]
             Self::BuiltinTrajectory { owner_user_id } => owner_user_id,
             Self::ApiKey { user_id, .. } => user_id,
         }
@@ -41,6 +49,7 @@ pub async fn submit(
         SubmissionPrincipal::LocalOperator => {
             store.subject_for_owner(&result.eval_id, "local").await?
         }
+        #[cfg(feature = "core")]
         SubmissionPrincipal::BuiltinTrajectory { owner_user_id } => {
             store
                 .subject_for_owner(&result.eval_id, owner_user_id)
@@ -52,6 +61,7 @@ pub async fn submit(
     }
     .ok_or_else(|| anyhow::anyhow!("unknown eval subject '{}'", result.eval_id))?;
     validate_result_for_subject(&result, &subject)?;
+    #[cfg(feature = "core")]
     if matches!(&principal, SubmissionPrincipal::BuiltinTrajectory { .. }) {
         validate_builtin_trajectory_result(&result)?;
     }
@@ -62,7 +72,9 @@ pub async fn submit(
     let result_id = insertion.result_id().to_string();
 
     let authority = match &principal {
-        SubmissionPrincipal::LocalOperator | SubmissionPrincipal::BuiltinTrajectory { .. } => None,
+        SubmissionPrincipal::LocalOperator => None,
+        #[cfg(feature = "core")]
+        SubmissionPrincipal::BuiltinTrajectory { .. } => None,
         SubmissionPrincipal::ApiKey { key_id, user_id } => {
             let Some(authority) = config.authorities.get(&result.evaluator.authority_id) else {
                 return record(
@@ -313,12 +325,11 @@ mod tests {
 
     use super::*;
     use {
-        crate::storage::evaluation::evidence_digest, bitrouter_ai::eval::EVAL_SCHEMA_VERSION,
-        bitrouter_ai::eval::EvalScope, bitrouter_ai::eval::EvalSubject,
-        bitrouter_ai::eval::EvaluatorIdentity,
+        crate::storage::evaluation::evidence_digest, bitrouter_ai::eval::EvalScope,
+        bitrouter_ai::eval::EvalSubject, bitrouter_ai::eval::EvaluatorIdentity,
     };
 
-    async fn service() -> anyhow::Result<crate::core::eval::EvalService> {
+    async fn service() -> anyhow::Result<crate::eval::EvalService> {
         let db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&db).await?;
         let store = EvalStore::new(db);
@@ -326,12 +337,11 @@ mod tests {
         store
             .insert_subject_owned(
                 &EvalSubject {
-                    schema_version: EVAL_SCHEMA_VERSION,
+                    spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
+                    identity: bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {},
                     eval_id: "eval-1".into(),
                     scope: EvalScope::Task,
                     subject_id: "task-1".into(),
-                    policy_digest: digest(),
-                    preset: Some("auto".into()),
                     cohort: None,
                     holdout: false,
                     decisions: Vec::new(),
@@ -364,7 +374,7 @@ mod tests {
                 },
             ),
         ]);
-        Ok(crate::core::eval::EvalService::new(
+        Ok(crate::eval::EvalService::new(
             store,
             EvalConfig { authorities },
         ))
@@ -377,7 +387,7 @@ mod tests {
         idempotency_key: &str,
     ) -> EvaluationResult {
         EvaluationResult {
-            schema_version: EVAL_SCHEMA_VERSION,
+            spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
             eval_id: "eval-1".into(),
             evidence_digest:
                 "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945".into(),
@@ -407,6 +417,7 @@ mod tests {
         "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into()
     }
 
+    #[cfg(feature = "core")]
     #[tokio::test]
     async fn builtin_trajectory_principal_is_owner_scoped_and_metric_limited() -> anyhow::Result<()>
     {
@@ -417,12 +428,11 @@ mod tests {
         store
             .insert_subject_owned(
                 &EvalSubject {
-                    schema_version: EVAL_SCHEMA_VERSION,
+                    spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
+                    identity: bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {},
                     eval_id: "trajectory:episode-1:3".into(),
                     scope: EvalScope::Episode,
                     subject_id: "episode-1".into(),
-                    policy_digest: digest(),
-                    preset: Some("auto:cost".into()),
                     cohort: None,
                     holdout: false,
                     decisions: Vec::new(),
@@ -437,7 +447,7 @@ mod tests {
                 "owner-a",
             )
             .await?;
-        let service = crate::core::eval::EvalService::new(store, EvalConfig::default());
+        let service = crate::eval::EvalService::new(store, EvalConfig::default());
         let mut operational = result(
             "bitrouter.builtin",
             EvaluatorKind::Generic,
@@ -492,6 +502,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "core")]
     #[tokio::test]
     async fn builtin_trajectory_principal_rejects_non_operational_identity_and_metrics()
     -> anyhow::Result<()> {
@@ -632,12 +643,11 @@ mod tests {
         let evidence = Vec::new();
         store
             .insert_subject(&EvalSubject {
-                schema_version: EVAL_SCHEMA_VERSION,
+                spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
+                identity: bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {},
                 eval_id: "eval-1".into(),
                 scope: EvalScope::Task,
                 subject_id: "held-out-task".into(),
-                policy_digest: digest(),
-                preset: Some("auto".into()),
                 cohort: Some("holdout".into()),
                 holdout: true,
                 decisions: Vec::new(),
@@ -647,7 +657,7 @@ mod tests {
                 observed_at: "2026-07-30T00:00:00Z".into(),
             })
             .await?;
-        let service = crate::core::eval::EvalService::new(store.clone(), EvalConfig::default());
+        let service = crate::eval::EvalService::new(store.clone(), EvalConfig::default());
 
         let outcome = service
             .submit(

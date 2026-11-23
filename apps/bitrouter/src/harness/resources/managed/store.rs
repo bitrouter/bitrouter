@@ -1,7 +1,7 @@
 //! Backend contract for persisted native managed sessions.
 
+use crate::managed_contract::protocol::CoreError;
 use async_trait::async_trait;
-use bitrouter_ai::core::protocol::CoreError;
 
 #[cfg(feature = "core")]
 pub(crate) mod choice;

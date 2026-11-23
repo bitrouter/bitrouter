@@ -85,11 +85,7 @@ pub(super) async fn prepare(
 
 /// A retained document cannot enable facilities omitted from this binary.
 pub(super) fn validate_profile(document: &Configuration) -> Result<(), ErrorCode> {
-    if !cfg!(feature = "core")
-        && (document.learning.mode != bitrouter_ai::tenancy::configuration::LearningMode::Off
-            || document.learning.max_evaluations != 0
-            || document.limits.learning_jobs != 0)
-    {
+    if document.eval_publication && !cfg!(feature = "core") {
         return Err(ErrorCode::InvalidRequest);
     }
     Ok(())

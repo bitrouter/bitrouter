@@ -16,8 +16,7 @@ impl Drop for ReleaseGates {
 #[tokio::test]
 async fn readonly_required_observation_keeps_storage_fenced_after_rollback() -> Result<()> {
     tokio::time::timeout(TIMEOUT, async {
-        let (fixture, revision) =
-            policy_fixture("https://example.invalid/v1", LearningMode::Observe).await?;
+        let (fixture, revision) = policy_fixture("https://example.invalid/v1", true).await?;
         let issued = fixture.issue("readonly-observation").await?;
         fixture
             .service

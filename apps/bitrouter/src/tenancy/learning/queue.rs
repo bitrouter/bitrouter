@@ -9,8 +9,6 @@ use tokio::{
 };
 
 pub(in crate::tenancy) enum Work {
-    NativePrepare(Box<super::native::Prepare>),
-    NativeStopped(Arc<crate::harness::resources::managed::session::owned::CleanupProof>),
     Prepare {
         binding: Arc<Binding>,
         native: String,
@@ -28,7 +26,6 @@ pub(in crate::tenancy) enum Reply {
     Finished,
     Observed,
     CaptureStopped,
-    NativeStopped,
     Stopped,
 }
 pub(in crate::tenancy) struct Job {
@@ -41,8 +38,6 @@ impl Work {
     pub(in crate::tenancy) fn binding(&self) -> super::source::Binding {
         match self {
             Self::Prepare { binding, .. } => super::source::Binding::Capture(binding.clone()),
-            Self::NativePrepare(request) => super::source::Binding::Native(request.binding.clone()),
-            Self::NativeStopped(proof) => super::source::Binding::Native(proof.binding().clone()),
             Self::CaptureStopped(proof) => super::source::Binding::Capture(proof.binding().clone()),
             Self::StopSet(proof) => proof.binding().clone(),
             Self::Accept(owner) | Self::Finish(owner) | Self::Observe(owner) => {
@@ -53,11 +48,7 @@ impl Work {
     pub(in crate::tenancy) fn cleanup(&self) -> bool {
         matches!(
             self,
-            Self::Finish(_)
-                | Self::Observe(_)
-                | Self::CaptureStopped(_)
-                | Self::NativeStopped(_)
-                | Self::StopSet(_)
+            Self::Finish(_) | Self::Observe(_) | Self::CaptureStopped(_) | Self::StopSet(_)
         )
     }
     pub(in crate::tenancy) fn settled(&self, disposition: Disposition) {
@@ -65,11 +56,7 @@ impl Work {
             Self::Accept(owner) => owner.settled(disposition),
             Self::Finish(owner) => owner.finish_settled(disposition),
             Self::Observe(owner) => owner.observe_settled(disposition),
-            Self::Prepare { .. }
-            | Self::NativePrepare(_)
-            | Self::CaptureStopped(_)
-            | Self::NativeStopped(_)
-            | Self::StopSet(_) => {}
+            Self::Prepare { .. } | Self::CaptureStopped(_) | Self::StopSet(_) => {}
         }
     }
 }
@@ -271,37 +258,6 @@ pub(in crate::tenancy) async fn stop_set(
         .map_err(|error| error.0.code)?;
     match tokio::time::timeout_at(deadline, receive).await {
         Ok(Ok(Ok(Reply::Stopped))) => Ok(()),
-        Ok(Ok(Err(error))) => Err(error.0.code),
-        _ => Err(ErrorCode::AuthorityUnavailable),
-    }
-}
-
-pub(super) async fn prepare_native(
-    request: super::native::Prepare,
-) -> Result<Arc<Prepared>, Failure> {
-    let deadline = request.deadline;
-    let receive = enqueue(Work::NativePrepare(Box::new(request)), deadline).await?;
-    match tokio::time::timeout_at(deadline, receive).await {
-        Ok(Ok(Ok(Reply::Prepared(value)))) => Ok(value),
-        Ok(Ok(Err(error))) => Err(error),
-        _ => Err(ErrorCode::AuthorityUnavailable.into()),
-    }
-}
-
-pub(in crate::tenancy) async fn native_stopped(
-    proof: Arc<crate::harness::resources::managed::session::owned::CleanupProof>,
-) -> Result<(), ErrorCode> {
-    let deadline = Instant::now() + std::time::Duration::from_secs(5);
-    let receive = enqueue(Work::NativeStopped(proof), deadline)
-        .await
-        .map_err(|e| e.0.code)?;
-    match tokio::time::timeout_at(
-        deadline + crate::tenancy::transaction::CLEANUP_TIMEOUT,
-        receive,
-    )
-    .await
-    {
-        Ok(Ok(Ok(Reply::NativeStopped))) => Ok(()),
         Ok(Ok(Err(error))) => Err(error.0.code),
         _ => Err(ErrorCode::AuthorityUnavailable),
     }

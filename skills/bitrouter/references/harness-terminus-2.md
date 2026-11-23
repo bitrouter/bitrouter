@@ -25,7 +25,7 @@ from harbor.models.trial.config import AgentConfig
 
 agent_config = AgentConfig(
     name=AgentName.TERMINUS_2,
-    model_name="openai/@coding",
+    model_name="openai/bitrouter/coding",
     kwargs={
         "api_base": "http://127.0.0.1:4356/v1",
         "parser_name": "json",
@@ -39,8 +39,8 @@ For the local `server.skip_auth: true` default, set `OPENAI_API_KEY=unused` in
 the Harbor process. For an authenticated local daemon, set it to the BitRouter
 virtual key. For Cloud, use `https://api.bitrouter.ai/v1` and a `brk_*` key.
 
-The model name has a LiteLLM provider prefix. `openai/@coding` sends the
-BitRouter preset `@coding`; replace it with the preset or model exposed by your
+The model name has a LiteLLM provider prefix. `openai/bitrouter/coding` sends the
+BitRouter router `bitrouter/coding`; replace it with the router or model exposed by your
 BitRouter configuration.
 
 For an explicit Claude subscription route, use LiteLLM's Anthropic provider so
@@ -79,7 +79,7 @@ Run a Harbor task with `terminus-2` after applying the equivalent agent config:
 ```bash
 harbor run \
   --agent terminus-2 \
-  --model openai/@coding \
+  --model openai/bitrouter/coding \
   --path /path/to/tasks \
   --task-name hello-world
 ```

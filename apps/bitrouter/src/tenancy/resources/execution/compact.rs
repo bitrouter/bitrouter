@@ -42,6 +42,7 @@ fn reference(value: &mut ResourceRef) -> Result<()> {
 
 pub(super) fn identifiers(value: &mut RetainedExecutionRevision) -> Result<()> {
     let RetainedExecutionRevision {
+        bro_capture: _,
         installation,
         tenant,
         revision,
@@ -56,7 +57,7 @@ pub(super) fn identifiers(value: &mut RetainedExecutionRevision) -> Result<()> {
         routes: roots,
         policy,
         generation_defaults: _,
-        learning: _,
+        eval_publication: _,
         limits: _,
     } = document;
     for root in roots {

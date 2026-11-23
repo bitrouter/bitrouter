@@ -1,13 +1,14 @@
 //! Internal storage namespaces and immutable provenance, never live authority.
 //!
-//! Legacy keys retain their exact bytes. Tenant namespaces come only from an
-//! admitted execution or authenticated ledger identity; decoding row metadata
-//! does not create a namespace handle.
+//! Global gateway keys retain their exact bytes. Tenant write namespaces come
+//! from admitted executions or authenticated ledger identities. Retained-row
+//! validation derives inert key namespaces without granting live authority.
 
 use anyhow::{Result, ensure};
 use bitrouter_ai::tenancy::identity::{InstallationId, PrincipalId, TenantId};
 use sea_orm::sea_query::{Condition, Expr, IntoColumnRef};
 
+#[cfg(feature = "core")]
 use crate::tenancy::execution::TenantExecution;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -55,14 +56,6 @@ pub(crate) enum KeyDomain {
     #[cfg(all(feature = "core", feature = "harness"))]
     CaptureSchedule,
     #[cfg(all(feature = "core", feature = "harness"))]
-    NativeExperimentCounter,
-    #[cfg(all(feature = "core", feature = "harness"))]
-    NativeExperimentUnit,
-    #[cfg(all(feature = "core", feature = "harness"))]
-    NativeExperimentStep,
-    #[cfg(all(feature = "core", feature = "harness"))]
-    NativeExperimentPending,
-    #[cfg(all(feature = "core", feature = "harness"))]
     LearningBudget,
     #[cfg(all(feature = "core", feature = "harness"))]
     LearningJob,
@@ -70,10 +63,6 @@ pub(crate) enum KeyDomain {
     LearningPending,
     #[cfg(all(feature = "core", feature = "harness"))]
     AssessmentRevision,
-    TrajectoryEpisode,
-    TrajectoryRequest,
-    TrajectoryEvent,
-    TrajectoryOutbox,
 }
 
 impl KeyDomain {
@@ -95,14 +84,6 @@ impl KeyDomain {
             #[cfg(all(feature = "core", feature = "harness"))]
             Self::CaptureSchedule => "capture.schedule",
             #[cfg(all(feature = "core", feature = "harness"))]
-            Self::NativeExperimentCounter => "native.experiment.counter",
-            #[cfg(all(feature = "core", feature = "harness"))]
-            Self::NativeExperimentUnit => "native.experiment.unit",
-            #[cfg(all(feature = "core", feature = "harness"))]
-            Self::NativeExperimentStep => "native.experiment.step",
-            #[cfg(all(feature = "core", feature = "harness"))]
-            Self::NativeExperimentPending => "native.experiment.pending",
-            #[cfg(all(feature = "core", feature = "harness"))]
             Self::LearningBudget => "learning.budget",
             #[cfg(all(feature = "core", feature = "harness"))]
             Self::LearningJob => "learning.job",
@@ -110,33 +91,16 @@ impl KeyDomain {
             Self::LearningPending => super::partition::LEARNING_PENDING,
             #[cfg(all(feature = "core", feature = "harness"))]
             Self::AssessmentRevision => "learning.assessment",
-            Self::TrajectoryEpisode => "trajectory.episode",
-            Self::TrajectoryRequest => "trajectory.request",
-            Self::TrajectoryEvent => "trajectory.event",
-            Self::TrajectoryOutbox => "trajectory.outbox",
         }
     }
 }
 
 impl Scope {
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(crate) fn for_learner(
-        identity: &crate::tenancy::learner::identity::ReadIdentity,
-    ) -> (Self, Provenance) {
-        let (installation, tenant, principal) = identity.storage_identity();
-        (
-            Self(Namespace::Tenant {
-                installation: installation.clone(),
-                tenant: tenant.clone(),
-            }),
-            Provenance(Some(principal.clone())),
-        )
-    }
-
     pub(crate) fn legacy() -> Self {
         Self(Namespace::Legacy)
     }
 
+    #[cfg(feature = "core")]
     pub(crate) fn for_execution(execution: &TenantExecution) -> (Self, Provenance) {
         let (installation, tenant, principal) = execution.storage_identity();
         (
@@ -148,21 +112,6 @@ impl Scope {
         )
     }
 
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(crate) fn for_receipt(
-        owner: &crate::tenancy::receipts::owner::Owner,
-    ) -> (Self, Provenance) {
-        let (installation, tenant, principal) = owner.storage_identity();
-        (
-            Self(Namespace::Tenant {
-                installation: installation.clone(),
-                tenant: tenant.clone(),
-            }),
-            Provenance(Some(principal.clone())),
-        )
-    }
-
-    #[cfg(feature = "core")]
     pub(crate) fn for_eval(identity: &crate::tenancy::eval::EvalIdentity) -> (Self, Provenance) {
         let (installation, tenant, principal) = identity.storage_identity();
         (
@@ -172,6 +121,14 @@ impl Scope {
             }),
             Provenance(Some(principal.clone())),
         )
+    }
+
+    /// Inert namespace for canonical retained-row validation, never live authority.
+    pub(crate) fn for_retained_eval(installation: InstallationId, tenant: TenantId) -> Self {
+        Self(Namespace::Tenant {
+            installation,
+            tenant,
+        })
     }
 
     #[cfg(all(feature = "core", feature = "harness"))]

@@ -15,9 +15,13 @@ fn route_record(reference: &ResourceRef, slot: &ResourceRef, url: &str) -> Value
 #[tokio::test]
 async fn another_installation_cannot_resume_with_equal_names_and_wrapping_key() -> Result<()> {
     let mut provider = Server::start().await?;
-    let first = ready(&provider).await?;
-    let second = ready(&provider).await?;
+    let first_fixture = Fixture::new().await?;
+    let mut second_fixture = Fixture::new().await?;
+    second_fixture.wrapping_key = first_fixture.wrapping_key;
+    let first = ready_with_fixture(&provider, first_fixture).await?;
+    let second = ready_with_fixture(&provider, second_fixture).await?;
     let outcome: Result<()> = async {
+        ensure!(first.fixture.wrapping_key == second.fixture.wrapping_key);
         ensure!(first.fixture.installation != second.fixture.installation);
         ensure!(first.fixture.tenant == second.fixture.tenant);
         ensure!(first.fixture.principal == second.fixture.principal);
@@ -67,7 +71,10 @@ async fn same_installation_tenant_route_and_revision_transplants_do_not_send() -
     let mut tenant_slot = first_slot.clone();
     tenant_slot.owner_id = tenant_route.owner_id.clone();
     let credential = |reference: &ResourceRef| json!({"reference":reference,"definition":{"kind":"credential","credential":{"type":"api_key","data":{"value":"owned-upstream-secret"}}}});
-    let resources = Resources::with_key(ready.fixture.installation.clone(), [29; 32])?;
+    let resources = Resources::with_key(
+        ready.fixture.installation.clone(),
+        ready.fixture.wrapping_key,
+    )?;
     resources.provision_bytes(&ready.fixture.db,&serde_json::to_vec(&json!({"format":1,"installation_id":ready.fixture.installation,"resources":[
         credential(&second_slot),credential(&tenant_slot),route_record(&alias,&first_slot,&provider.url),route_record(&revised,&second_slot,&provider.url),route_record(&tenant_route,&tenant_slot,&provider.url)
     ]}))?).await?;
@@ -142,6 +149,7 @@ async fn same_installation_tenant_route_and_revision_transplants_do_not_send() -
                 .map_err(failure)?,
         )?;
         let other = Fixture {
+            wrapping_key: ready.fixture.wrapping_key,
             service: ready.fixture.service.clone(),
             db: ready.fixture.db.clone(),
             operator: ready.fixture.operator.clone(),

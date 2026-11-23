@@ -9,11 +9,11 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use bitrouter_ai::decisions::{DecisionRequest, DecisionTextKind};
-use bitrouter_ai::extension::request_check::{
+use crate::gateway::extensions::request_check::{
     ContentFragment, ContentFragmentKind, ContentRole, Decision, Input, RequestCheckCoverage,
     RequestCheckCoverageScope, RequestCheckCoverageStatus,
 };
+use bitrouter_ai::decisions::{DecisionRequest, DecisionTextKind};
 use bitrouter_ai::types::{
     Content, ModelOperation, Prompt, Role, ToolResultContentPart, ToolResultOutput,
 };
@@ -106,7 +106,7 @@ pub trait RequestCheckerRunner: Send + Sync {
 }
 
 const MAX_PROJECTED_FRAGMENTS: u64 =
-    bitrouter_ai::extension::request_check::MAX_CONTENT_FRAGMENTS as u64;
+    crate::gateway::extensions::request_check::MAX_CONTENT_FRAGMENTS as u64;
 
 struct ContentProjection {
     fragments: Vec<ContentFragment>,

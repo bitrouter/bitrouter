@@ -1,24 +1,45 @@
 //! Named router configuration and effective-router normalization.
 //!
-//! `RouterConfig` is the user-facing input introduced by the router migration.
-//! Resolution and policy consumers use the borrowed
-//! `EffectiveRouterDefinition` below, which is also the normalization target
-//! for legacy `presets:`. Keeping one effective representation prevents the
-//! compatibility syntax from growing a second execution path.
+//! Named routers are the sole router configuration surface. Resolution, policy
+//! binding and diagnostics consume one borrowed effective definition.
 
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::config::Config;
-use crate::config::PresetConfig;
 use crate::config::checker::CheckerConfig;
 use crate::gateway::error::BitrouterError;
 use crate::gateway::error::Result;
 use crate::gateway::pipeline::request_checks::MAX_REQUEST_CHECKS_PER_ROUTER;
 use crate::gateway::pipeline::request_checks::RequestCheckBinding;
 use crate::gateway::pipeline::routing::PromptOverrides;
-use bitrouter_ai::routing::RoutingConfig;
 use bitrouter_ai::routing::SortOrder;
+
+/// Provider routing preferences accepted by a named router.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+#[schemars(rename = "RouterRoutingConfig")]
+pub struct RoutingConfig {
+    /// Cascade-chain ordering.
+    pub sort: Option<SortOrder>,
+    /// Provider tags required by the router.
+    pub require_tags: Vec<String>,
+    /// Providers allowed by the router.
+    pub only: Vec<String>,
+    /// Providers excluded by the router.
+    pub ignore: Vec<String>,
+}
+
+impl From<RoutingConfig> for bitrouter_ai::control::models::RoutingOptions {
+    fn from(value: RoutingConfig) -> Self {
+        Self {
+            sort: value.sort,
+            require_tags: value.require_tags,
+            only: value.only,
+            ignore: value.ignore,
+        }
+    }
+}
 
 /// One named router definition.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -59,11 +80,11 @@ pub struct RouterRequestCheck {
 /// Default total checker deadline.
 pub const DEFAULT_CHECKER_TIMEOUT_MS: u64 = 500;
 /// Longest configurable checker deadline.
-pub const MAX_CHECKER_TIMEOUT_MS: u64 = bitrouter_ai::extension::request_check::MAX_TIMEOUT_MS;
+pub const MAX_CHECKER_TIMEOUT_MS: u64 = crate::gateway::extensions::request_check::MAX_TIMEOUT_MS;
 /// Default projected-text byte limit.
 pub const DEFAULT_CHECKER_MAX_INPUT_BYTES: u64 = 256 * 1024;
 /// Largest configurable projected-text byte limit.
-pub const MAX_CHECKER_INPUT_BYTES: u64 = bitrouter_ai::extension::request_check::MAX_INPUT_BYTES;
+pub const MAX_CHECKER_INPUT_BYTES: u64 = crate::gateway::extensions::request_check::MAX_INPUT_BYTES;
 const fn default_checker_timeout_ms() -> u64 {
     DEFAULT_CHECKER_TIMEOUT_MS
 }
@@ -119,18 +140,16 @@ pub enum RouterSelection {
         model: String,
         /// Provider preferences applied by the existing cascade resolver.
         #[serde(default)]
-        #[schemars(with = "StrictRoutingConfig")]
         routing: RoutingConfig,
     },
     /// Let one existing policy choose the effective model.
     Policy {
-        /// Policy name in `policy-lock.yaml`.
+        /// Literal Policy name in the current `policy.yaml` source.
         policy: String,
         /// Exact base-model input retained by the current policy runtime.
         base_model: String,
         /// Provider preferences applied after the policy selects a model.
         #[serde(default)]
-        #[schemars(with = "StrictRoutingConfig")]
         routing: RoutingConfig,
     },
 }
@@ -151,8 +170,6 @@ pub struct RouterDefaults {
 pub enum RouterConfigSource {
     /// A canonical entry under `routers:`.
     User,
-    /// A compatibility entry normalized from `presets:`.
-    LegacyPreset,
 }
 
 /// Redaction-safe selection summary for router diagnostics.
@@ -201,28 +218,6 @@ pub struct RouterInventoryEntry {
     pub binding_digest: String,
 }
 
-/// Provider routing preferences accepted by a named router.
-#[derive(Default, Deserialize, schemars::JsonSchema)]
-#[serde(default, deny_unknown_fields)]
-#[schemars(rename = "RouterRoutingConfig")]
-struct StrictRoutingConfig {
-    sort: Option<SortOrder>,
-    require_tags: Vec<String>,
-    only: Vec<String>,
-    ignore: Vec<String>,
-}
-
-impl From<StrictRoutingConfig> for RoutingConfig {
-    fn from(value: StrictRoutingConfig) -> Self {
-        Self {
-            sort: value.sort,
-            require_tags: value.require_tags,
-            only: value.only,
-            ignore: value.ignore,
-        }
-    }
-}
-
 impl<'de> Deserialize<'de> for RouterSelection {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
@@ -234,21 +229,18 @@ impl<'de> Deserialize<'de> for RouterSelection {
             Model {
                 model: String,
                 #[serde(default)]
-                routing: StrictRoutingConfig,
+                routing: RoutingConfig,
             },
             Policy {
                 policy: String,
                 base_model: String,
                 #[serde(default)]
-                routing: StrictRoutingConfig,
+                routing: RoutingConfig,
             },
         }
 
         Ok(match Input::deserialize(deserializer)? {
-            Input::Model { model, routing } => Self::Model {
-                model,
-                routing: routing.into(),
-            },
+            Input::Model { model, routing } => Self::Model { model, routing },
             Input::Policy {
                 policy,
                 base_model,
@@ -256,7 +248,7 @@ impl<'de> Deserialize<'de> for RouterSelection {
             } => Self::Policy {
                 policy,
                 base_model,
-                routing: routing.into(),
+                routing,
             },
         })
     }
@@ -264,9 +256,7 @@ impl<'de> Deserialize<'de> for RouterSelection {
 
 /// One normalized router selection.
 ///
-/// A missing model is retained here because legacy preset parsing accepts it;
-/// the existing resolver and policy validation boundaries report the error
-/// only when that definition is consumed.
+/// Model references come from already validated named router definitions.
 #[derive(Clone, Copy)]
 pub(super) enum EffectiveRouterSelection<'a> {
     Model {
@@ -331,28 +321,6 @@ impl<'a> EffectiveRouterDefinition<'a> {
             },
             routing,
             checks: &router.checks.request,
-        }
-    }
-
-    /// Translate one legacy preset without changing when invalid legacy input
-    /// is rejected.
-    pub(super) fn from_legacy_preset(preset: &'a PresetConfig) -> Self {
-        let model = preset.model.as_deref();
-        let selection = match preset.policy.as_deref() {
-            Some(policy) => EffectiveRouterSelection::Policy {
-                policy,
-                base_model: model,
-            },
-            None => EffectiveRouterSelection::Model { model },
-        };
-        Self {
-            selection,
-            defaults: EffectiveRouterDefaults {
-                system_prompt: preset.system_prompt.as_deref(),
-                params: &preset.params,
-            },
-            routing: &preset.routing,
-            checks: &[],
         }
     }
 
@@ -532,21 +500,12 @@ impl<'a> EffectiveRouterDefinition<'a> {
 
 pub(super) fn router_inventory(config: &Config) -> Result<Vec<RouterInventoryEntry>> {
     validate_router_config(config)?;
-    let mut entries = Vec::with_capacity(config.routers.len() + config.presets.len());
+    let mut entries = Vec::with_capacity(config.routers.len());
     for (id, router) in &config.routers {
         entries.push(
             EffectiveRouterDefinition::from_router(router).inventory_entry(
                 id,
                 RouterConfigSource::User,
-                &config.checkers,
-            )?,
-        );
-    }
-    for (id, preset) in &config.presets {
-        entries.push(
-            EffectiveRouterDefinition::from_legacy_preset(preset).inventory_entry(
-                id,
-                RouterConfigSource::LegacyPreset,
                 &config.checkers,
             )?,
         );
@@ -569,11 +528,6 @@ pub(super) fn validate_router_config(config: &Config) -> Result<()> {
         if !valid_router_id(router_id) {
             return Err(BitrouterError::bad_request(format!(
                 "invalid router id '{router_id}' (use a lowercase letter followed by up to 63 lowercase letters, digits, '_' or '-')"
-            )));
-        }
-        if config.presets.contains_key(router_id) {
-            return Err(BitrouterError::bad_request(format!(
-                "router '{router_id}' conflicts with legacy preset '@{router_id}'"
             )));
         }
         if router_id == "fusion" {
@@ -649,7 +603,7 @@ fn validate_model_selector(router_id: &str, field: &str, selector: &str) -> Resu
         )));
     }
     let recursive = selector.starts_with('@')
-        || selector.starts_with(crate::config::presets::RESERVED_NAMESPACE)
+        || selector.starts_with(crate::config::resolution::RESERVED_NAMESPACE)
         || matches!(selector.strip_prefix("bitrouter:"), Some("auto" | "fusion"));
     if recursive {
         return Err(BitrouterError::bad_request(format!(
@@ -672,83 +626,6 @@ mod tests {
             defaults: RouterDefaults::default(),
             checks: RouterChecks::default(),
         }
-    }
-
-    #[test]
-    fn legacy_model_preset_normalizes_to_model_selection() {
-        let preset = PresetConfig {
-            model: Some("vendor:base".into()),
-            system_prompt: Some("Be precise".into()),
-            params: serde_json::Map::from_iter([("temperature".into(), 0.2.into())]),
-            routing: RoutingConfig {
-                only: vec!["vendor".into()],
-                ..RoutingConfig::default()
-            },
-            ..PresetConfig::default()
-        };
-
-        let router = EffectiveRouterDefinition::from_legacy_preset(&preset);
-
-        assert_eq!(router.base_model(), Some("vendor:base"));
-        assert_eq!(router.policy(), None);
-        assert_eq!(router.routing.only, ["vendor"]);
-        let defaults = router.defaults.to_prompt_overrides();
-        assert_eq!(defaults.system_prompt.as_deref(), Some("Be precise"));
-        assert_eq!(defaults.params["temperature"], 0.2);
-    }
-
-    #[test]
-    fn legacy_policy_preset_keeps_exact_base_model() {
-        let preset = PresetConfig {
-            model: Some("vendor:strong".into()),
-            policy: Some("coding".into()),
-            ..PresetConfig::default()
-        };
-
-        let router = EffectiveRouterDefinition::from_legacy_preset(&preset);
-
-        assert_eq!(router.base_model(), Some("vendor:strong"));
-        assert_eq!(router.policy(), Some("coding"));
-    }
-
-    #[test]
-    fn legacy_missing_model_remains_deferred_for_existing_consumers() {
-        let preset = PresetConfig {
-            policy: Some("coding".into()),
-            ..PresetConfig::default()
-        };
-
-        let router = EffectiveRouterDefinition::from_legacy_preset(&preset);
-
-        assert_eq!(router.base_model(), None);
-        assert_eq!(router.policy(), Some("coding"));
-    }
-
-    #[test]
-    fn policy_bindings_follow_direct_config_mutation_without_a_cache() {
-        let mut config = Config::default();
-        config.presets.insert(
-            "coding".into(),
-            PresetConfig {
-                policy: Some("first".into()),
-                ..PresetConfig::default()
-            },
-        );
-
-        let missing_base = config.router_policy_bindings().collect::<Vec<_>>();
-        assert_eq!(missing_base, [("coding", "first", None)]);
-
-        config.presets.insert(
-            "coding".into(),
-            PresetConfig {
-                model: Some("vendor:strong".into()),
-                policy: Some("second".into()),
-                ..PresetConfig::default()
-            },
-        );
-
-        let updated = config.router_policy_bindings().collect::<Vec<_>>();
-        assert_eq!(updated, [("coding", "second", Some("vendor:strong"))]);
     }
 
     #[test]
@@ -826,18 +703,6 @@ mod tests {
         config
             .routers
             .insert("project".into(), model_router("vendor:base"));
-        config.presets.insert(
-            "project".into(),
-            PresetConfig {
-                model: Some("vendor:base".into()),
-                ..PresetConfig::default()
-            },
-        );
-        let collision = config
-            .validate_router_config()
-            .err()
-            .ok_or_else(|| BitrouterError::internal("router/preset collision was accepted"))?;
-        assert!(collision.to_string().contains("conflicts"));
         Ok(())
     }
 

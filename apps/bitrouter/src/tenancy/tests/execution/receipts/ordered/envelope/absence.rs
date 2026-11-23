@@ -1,19 +1,17 @@
 //! Request-scoped configuration selection across actual provider wires.
 use super::*;
 use bitrouter_ai::tenancy::generation_defaults::{
-    ConfigurationDefaults, GenerationDefaultsEnvelopeV2,
+    ConfigurationDefaults, GenerationDefaultsEnvelope,
 };
 mod isolation;
 mod matrix;
-#[cfg(unix)]
-mod predecessor;
 mod refusals;
 
 fn values(
     mode: ConfigurationDefaults,
     canonical: Value,
     supplemental: Value,
-) -> Result<GenerationDefaultsEnvelopeV2> {
+) -> Result<GenerationDefaultsEnvelope> {
     let mut value =
         json!({"schema_version":2,"configuration_defaults":mode,"supplemental":supplemental});
     if !canonical.is_null() {
@@ -22,7 +20,7 @@ fn values(
     Ok(serde_json::from_value(value)?)
 }
 
-fn defaults(supplemental: Value) -> Result<GenerationDefaultsEnvelopeV2> {
+fn defaults(supplemental: Value) -> Result<GenerationDefaultsEnvelope> {
     values(
         ConfigurationDefaults::PreserveAbsence,
         json!({"schema_version":1,"max_tokens":23}),
@@ -32,8 +30,8 @@ fn defaults(supplemental: Value) -> Result<GenerationDefaultsEnvelopeV2> {
 
 pub(in crate::tenancy::tests::execution::receipts::ordered) async fn invoke(
     harness: &OrderedHarness,
-    binding: &OrderedDispatchBindingV2,
-    defaults: GenerationDefaultsEnvelopeV2,
+    binding: &OrderedDispatchBinding,
+    defaults: GenerationDefaultsEnvelope,
     protocol: GenerationProtocol,
     stream: bool,
     version: HttpVersion,
@@ -49,7 +47,7 @@ pub(in crate::tenancy::tests::execution::receipts::ordered) async fn invoke(
     )?;
     let call = client
         .ordered_tenant(harness.token()?, binding)?
-        .with_generation_defaults_envelope_v2(defaults)?;
+        .with_generation_defaults_envelope(defaults)?;
     let mut request = match protocol {
         GenerationProtocol::Responses => json!({"model":MODEL,"input":"hello","stream":stream}),
         _ => json!({"model":MODEL,"messages":[{"role":"user","content":"hello"}],"stream":stream}),

@@ -32,7 +32,7 @@ fn snapshot() -> Value {
 }
 
 fn capabilities() -> Value {
-    json!({"contract_version":1,"installation_id":"installation","instance_id":"instance","authority_revision":7,"observation_enabled":true,"max_profiles":256,"max_request_bytes":1048576,"max_response_bytes":1048576,"profile_versions":[1,2]})
+    json!({"contract_version":1,"installation_id":"installation","instance_id":"instance","authority_revision":7,"observation_enabled":true,"max_profiles":256,"max_request_bytes":1048576,"max_response_bytes":1048576,"profile_versions":[1]})
 }
 fn client(server: &server::Server, version: HttpVersion) -> TestResult<TenancyClient> {
     Ok(TenancyClient::with_options(
@@ -67,7 +67,7 @@ async fn discovery_and_ordered_profile_reads_use_exact_h1_h2_paths_and_headers()
         let client = client(&server, transport)?;
         let caps = client.admission_profile_observation_capabilities().await?;
         assert!(caps.observation_enabled);
-        assert_eq!(caps.profile_versions, [1, 2]);
+        assert_eq!(caps.profile_versions, [1]);
         let input = input()?;
         for rate in [true, false] {
             for observed in [true, false] {

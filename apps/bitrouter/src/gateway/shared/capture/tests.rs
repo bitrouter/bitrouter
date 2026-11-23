@@ -55,7 +55,7 @@ fn changed_identity_contract_and_disappearing_receipts_fail() -> Result<()> {
         ensure!(original.merge(&changed).is_err());
     }
     let mut changed = original.clone();
-    changed.requirements.trajectory = TrajectoryRequirement::GuardedPolicies;
+    changed.requirements.source_digest = Some(format!("sha256:{}", "a".repeat(64)));
     ensure!(original.merge(&changed).is_err());
     original.routing.push(receipt());
     ensure!(original.merge(&input()?).is_err());
@@ -103,20 +103,18 @@ fn escaped_byte_budget_reserves_terminal_headroom() -> Result<()> {
 #[test]
 fn requirements_retain_policy_authority_independent_of_core() -> Result<()> {
     let config = crate::config::parse(
-        "inherit_defaults: false\npresets:\n  coding:\n    model: fixture:strong\n    policy: auto\n",
+        "inherit_defaults: false\nrouters:\n  coding:\n    selection:\n      kind: policy\n      base_model: fixture:strong\n      policy: auto\n",
     )?;
-    let document: PolicyLock =
+    let document: bitrouter_ai::policy::Document =
         serde_saphyr::from_str(include_str!("../../../../policy/default.yaml"))?;
     let requirements = Requirements::from_config(&config, Some(&document))?;
-    ensure!(
-        requirements.policy_lock_digest.as_deref() == Some(semantic_digest(&document)?.as_str())
-    );
+    ensure!(requirements.source_digest.as_deref() == Some(semantic_digest(&document)?.as_str()));
     ensure!(requirements.policy_evaluation == PolicyEvaluation::SelectedUntrackedRequestSubject);
     let mut tracked = config.clone();
     tracked.trajectory.enabled = true;
     let next = Requirements::from_config(&tracked, Some(&document))?;
     ensure!(next.policy_evaluation == requirements.policy_evaluation);
-    ensure!(next.trajectory == TrajectoryRequirement::GuardedPolicies);
+    ensure!(next.trajectory == TrajectoryRequirement::Disabled);
     let mut unknown = serde_json::to_value(&requirements)?;
     unknown["format"] = 2.into();
     ensure!(
@@ -124,6 +122,29 @@ fn requirements_retain_policy_authority_independent_of_core() -> Result<()> {
             .validate()
             .is_err()
     );
+    Ok(())
+}
+
+#[test]
+fn retired_guard_requirements_and_captures_are_rejected_from_current_shape() -> Result<()> {
+    let original = serde_json::to_value(input()?)?;
+    let mut requirement = original.clone();
+    requirement["requirements"]["trajectory"] = "guarded_policies".into();
+    ensure!(serde_json::from_value::<Inputs>(requirement).is_err());
+
+    for guarded in [false, true] {
+        let mut capture = original.clone();
+        capture["requirements"]["source_digest"] = format!("sha256:{}", "a".repeat(64)).into();
+        capture["policy"] = serde_json::json!({
+            "state": "evaluated", "policy": "auto",
+            "digest": format!("sha256:{}", "a".repeat(64)),
+            "guarded": guarded, "treatment": null
+        });
+        ensure!(serde_json::from_value::<Inputs>(capture).is_err());
+    }
+    let mut historical = original;
+    historical["requirements"]["policy_lock_digest"] = serde_json::Value::Null;
+    ensure!(serde_json::from_value::<Inputs>(historical).is_err());
     Ok(())
 }
 
@@ -146,75 +167,39 @@ mod extra_capture_contract {
         guarded: bool,
     }
 
-    fn document(guarded: bool) -> Result<PolicyLock> {
-        let mut document: PolicyLock =
-            serde_saphyr::from_str(include_str!("../../../../policy/default.yaml"))?;
-        if guarded {
-            let definition = document.policies.get_mut("auto").context("missing auto")?;
-            definition.progress_guard = Some(crate::trajectory::guard::ProgressGuardPolicy {
-                escalation_tier: definition
-                    .default_tier
-                    .clone()
-                    .context("missing default tier")?,
-                protected_tiers: definition.tiers.keys().cloned().collect(),
-                max_consecutive_unprotected: Some(2),
-                max_same_projection_unprotected: None,
-                max_recovery_count: None,
-                max_episode_requests: None,
-                max_episode_elapsed_ms: None,
-                max_episode_cost_micro_usd: None,
-                hold_for_requests: 2,
-                incomplete_history: crate::trajectory::guard::IncompleteHistoryAction::Observe,
-            });
-        }
-        Ok(document)
+    fn document() -> Result<bitrouter_ai::policy::Document> {
+        Ok(serde_saphyr::from_str(include_str!(
+            "../../../../policy/default.yaml"
+        ))?)
     }
 
     impl Fixture {
-        fn new(document: PolicyLock) -> Result<Self> {
-            let mut config = crate::config::parse(
-                "inherit_defaults: false\npresets:\n  coding:\n    model: fixture:strong\n    policy: auto\n",
+        fn new(document: bitrouter_ai::policy::Document) -> Result<Self> {
+            let config = crate::config::parse(
+                "inherit_defaults: false\nrouters:\n  coding:\n    selection:\n      kind: policy\n      base_model: fixture:strong\n      policy: auto\n",
             )?;
-            let definition = document.policies.get("auto").context("missing auto")?;
-            let guarded = definition.progress_guard.is_some();
-            config.trajectory.enabled = guarded;
+            let compiled = crate::model_policy::compile(&document)?;
+            let definition = compiled.selections().get("auto").context("missing auto")?;
             let requirements = Requirements::from_config(&config, Some(&document))?;
             let pending = PendingEvalDecisionStore::default();
-            let router =
-                PolicyTableRouter::from_config(&definition.as_table_config(config.policy.mode))
-                    .context("fixture policy is inert")?
-                    .with_eval_observer(
-                        pending.clone(),
-                        "auto",
-                        semantic_digest(&document)?,
-                        std::collections::HashMap::new(),
-                        definition.default_tier.clone(),
-                    )
-                    .with_progress_guard(definition.progress_guard.clone());
-            let trajectory = if guarded {
-                Some(Arc::new(
-                    crate::trajectory::correlation::TrajectoryRuntime::new(
-                        crate::trajectory::store::TrajectoryStore::new(
-                            sea_orm::DatabaseConnection::Disconnected,
-                        ),
-                        crate::trajectory::canonical::Canonicalizer::new(
-                            crate::trajectory::canonical::CorrelationKey::from_bytes(
-                                rand::random(),
-                            )?,
-                        ),
-                    ),
-                ))
-            } else {
-                None
-            };
+            let router = PolicyTableRouter::new(
+                crate::policy_table_router::PolicyTable::from_model_selection(definition),
+            )
+            .with_eval_observer(
+                pending.clone(),
+                "auto",
+                semantic_digest(&document)?,
+                Default::default(),
+                Some(definition.default_tier.clone()),
+            );
             let runtime =
-                PolicyRuntime::from_document(&config, Some(document), pending.clone(), trajectory)?;
+                PolicyRuntime::from_document(&config, Some(document), pending.clone(), None)?;
             Ok(Self {
                 requirements,
                 snapshot: runtime.routing_snapshot(),
                 router,
                 pending,
-                guarded,
+                guarded: false,
             })
         }
 
@@ -279,56 +264,28 @@ mod extra_capture_contract {
     }
 
     #[test]
-    fn guard_checks_original_contract_and_frozen_selection() -> Result<()> {
-        let fixture = Fixture::new(document(true)?)?;
+    fn guards_cannot_replace_model_only_capture() -> Result<()> {
+        let fixture = Fixture::new(document()?)?;
         let capture = fixture.capture()?;
-        let digest = fixture.snapshot.digest().context("missing policy digest")?;
-        let original = capture.snapshot().context("missing original inputs")?;
-        original.check_guard_policy("auto", digest)?;
-        ensure!(
-            original
-                .check_guard_policy("auto", &format!("sha256:{}", "f".repeat(64)))
-                .is_err()
-        );
-        let unguarded = Fixture::new(document(false)?)?;
-        ensure!(
-            unguarded
-                .capture()?
-                .snapshot()
-                .context("missing unguarded input")?
-                .check_guard_policy("auto", digest)
-                .is_err()
-        );
+        let before = capture.snapshot().context("initial capture absent")?;
         let (_, pending) = fixture.handoff()?;
-        capture.policy("auto", true, Some(&pending), &fixture.snapshot)?;
-        let selected = capture.snapshot().context("missing selected input")?;
-        selected.check_guard_policy("auto", digest)?;
-        let Policy::Evaluated {
-            treatment: Some(treatment),
-            ..
-        } = &selected.policy
-        else {
-            anyhow::bail!("guard handoff lost its treatment");
-        };
-        let route_id =
-            crate::trajectory::correlation::stable_id("route-intent", "owner", &pending.request_id);
-        ensure!(treatment.decision.decision_id == route_id);
-        ensure!(treatment.decision.decision_id != pending.decision_id);
-        let mut original = treatment.decision.clone();
-        selected.check_trajectory_decision(&original)?;
-        original.decision_id = pending.decision_id.clone();
-        ensure!(selected.check_trajectory_decision(&original).is_err());
-        ensure!(selected.check_guard_policy("another", digest).is_err());
-        capture.ready()?;
-        let terminal = capture.terminal()?.context("missing terminal input")?;
-        ensure!(terminal.check_guard_policy("auto", digest).is_err());
+        ensure!(
+            capture
+                .policy("auto", true, Some(&pending), &fixture.snapshot)
+                .is_err()
+        );
+        ensure!(capture.snapshot().as_deref() == Some(before.as_ref()));
+        let mut raw = serde_json::to_value(document()?)?;
+        raw["policies"]["auto"]["progress_guard"] = serde_json::json!({"escalation_tier":"strong"});
+        ensure!(serde_json::from_value::<bitrouter_ai::policy::Document>(raw).is_err());
         Ok(())
     }
 
     #[test]
     fn frozen_name_digest_and_guard_reject_without_replacing_capture() -> Result<()> {
-        for guarded in [false, true] {
-            let fixture = Fixture::new(document(guarded)?)?;
+        {
+            let guarded = false;
+            let fixture = Fixture::new(document()?)?;
             let capture = fixture.capture()?;
             let before = capture.snapshot().context("missing initial capture")?;
             let (_, pending) = fixture.handoff()?;
@@ -377,20 +334,18 @@ mod extra_capture_contract {
 
     #[test]
     fn internally_consistent_new_lock_cannot_replace_admitted_policy_authority() -> Result<()> {
-        let original_document = document(false)?;
+        let original_document = document()?;
         let mut replacement_document = original_document.clone();
         let definition = replacement_document
             .policies
             .get_mut("auto")
             .context("missing auto")?;
-        definition.default_tier = Some(
-            definition
-                .tiers
-                .keys()
-                .find(|tier| Some(tier.as_str()) != definition.default_tier.as_deref())
-                .cloned()
-                .context("fixture needs a second valid tier")?,
-        );
+        definition.default_tier = definition
+            .tiers
+            .keys()
+            .find(|tier| tier.as_str() != definition.default_tier.as_str())
+            .cloned()
+            .context("fixture needs a second valid tier")?;
         let original = Fixture::new(original_document)?;
         let replacement = Fixture::new(replacement_document)?;
         ensure!(original.snapshot.digest() != replacement.snapshot.digest());
@@ -440,7 +395,7 @@ mod extra_capture_contract {
 
     #[test]
     fn normalized_policy_capture_excludes_untrusted_labels_and_request_content() -> Result<()> {
-        let fixture = Fixture::new(document(false)?)?;
+        let fixture = Fixture::new(document()?)?;
         let (_, mut pending) = fixture.handoff()?;
         pending.predicted_role = Some(PRIVATE_MARKER.into());
         pending.predicted_task_family = Some(PRIVATE_MARKER.into());
@@ -511,7 +466,7 @@ mod extra_capture_contract {
 
     #[test]
     fn no_selected_tier_retains_evaluated_failure_without_ready_or_bypass() -> Result<()> {
-        let fixture = Fixture::new(document(false)?)?;
+        let fixture = Fixture::new(document()?)?;
         let invocation = EvalInvocation::new("owner");
         let mut decision = fixture.decision();
         decision.selected_tier = None;
@@ -548,7 +503,7 @@ mod extra_capture_contract {
 
     #[test]
     fn direct_handoff_survives_cache_removal_before_capture_and_source_drop() -> Result<()> {
-        let fixture = Fixture::new(document(false)?)?;
+        let fixture = Fixture::new(document()?)?;
         let (invocation, handed_off) = fixture.handoff()?;
         ensure!(fixture.pending.peek(&invocation, "owner").as_ref() == Some(&handed_off));
         ensure!(fixture.pending.remove(&invocation, "owner"));
@@ -580,7 +535,7 @@ mod extra_capture_contract {
 
     #[test]
     fn cold_inputs_reject_unknown_contract_and_mismatched_digest_without_adoption() -> Result<()> {
-        let fixture = Fixture::new(document(false)?)?;
+        let fixture = Fixture::new(document()?)?;
         let (_, pending) = fixture.handoff()?;
         let capture = fixture.capture()?;
         capture.policy("auto", false, Some(&pending), &fixture.snapshot)?;
@@ -595,7 +550,7 @@ mod extra_capture_contract {
         let mut future_format = original_json.clone();
         future_format["requirements"]["format"] = 2.into();
         let mut substituted_lock = original_json.clone();
-        substituted_lock["requirements"]["policy_lock_digest"] =
+        substituted_lock["requirements"]["source_digest"] =
             format!("sha256:{}", "0".repeat(64)).into();
         for json in [future_format, substituted_lock] {
             let rejected: Inputs = serde_json::from_value(json)?;
@@ -634,7 +589,7 @@ mod extra_capture_contract {
             request.request_id = "execution".into();
             PipelineContext::new(request)
         };
-        let fixture = Fixture::new(document(false)?)?;
+        let fixture = Fixture::new(document()?)?;
         let (_, pending) = fixture.handoff()?;
         let capture = fixture.capture()?;
         capture.policy("auto", false, Some(&pending), &fixture.snapshot)?;

@@ -37,6 +37,8 @@ fn sizable(id: &str) -> Result<Candidate> {
     let mut evidence = Snapshot::default();
     for index in 0..8 {
         let attempt = Attempt {
+            candidate_index: None,
+            observed_http_status: None,
             attempt_id: format!("attempt-{index}-{}", "a".repeat(112)).try_into()?,
             target: Some(Target {
                 provider_id: "p".repeat(120).try_into()?,

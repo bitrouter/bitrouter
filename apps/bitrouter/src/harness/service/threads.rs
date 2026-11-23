@@ -22,15 +22,15 @@ use crate::harness::thread::ThreadTarget;
 use crate::harness::thread::WorkspaceGrant;
 use crate::harness::turn::ApprovalAnswer;
 use crate::harness::turn::CancelTurnRequest;
-use bitrouter_ai::harness::agent::ToolMode;
-use bitrouter_ai::harness::runtime::ErrorCode;
-use bitrouter_ai::harness::thread::PermissionProfile;
-use bitrouter_ai::harness::thread::ThreadSnapshot;
-use bitrouter_ai::harness::thread::ThreadStatus;
-use bitrouter_ai::harness::turn::TurnEventPayload;
-use bitrouter_ai::harness::turn::TurnReceipt;
-use bitrouter_ai::harness::turn::TurnSnapshot;
-use bitrouter_ai::harness::turn::TurnStatus;
+use crate::managed_contract::harness::agent::ToolMode;
+use crate::managed_contract::harness::runtime::ErrorCode;
+use crate::managed_contract::harness::thread::PermissionProfile;
+use crate::managed_contract::harness::thread::ThreadSnapshot;
+use crate::managed_contract::harness::thread::ThreadStatus;
+use crate::managed_contract::harness::turn::TurnEventPayload;
+use crate::managed_contract::harness::turn::TurnReceipt;
+use crate::managed_contract::harness::turn::TurnSnapshot;
+use crate::managed_contract::harness::turn::TurnStatus;
 
 pub(super) fn unknown_thread() -> ServiceError {
     ServiceError::new(
@@ -329,7 +329,7 @@ impl ThreadService {
         };
         snapshot.cursor = version;
         let mut presentation = super::observation::Presentation::new(
-            bitrouter_ai::harness::thread::ThreadView {
+            crate::managed_contract::harness::thread::ThreadView {
                 recovery: None,
                 thread: snapshot.clone(),
                 config: config.clone(),
@@ -474,7 +474,7 @@ impl ThreadService {
                 }
                 for change in &event.changes {
                     match change {
-                        bitrouter_ai::harness::thread::ThreadChange::TurnQueued {
+                        crate::managed_contract::harness::thread::ThreadChange::TurnQueued {
                             receipt, ..
                         } if receipt.turn_id == turn_id => {
                             let mut snapshot =
@@ -482,7 +482,7 @@ impl ThreadService {
                             snapshot.status = TurnStatus::Queued;
                             found = Some(snapshot);
                         }
-                        bitrouter_ai::harness::thread::ThreadChange::TurnActivated {
+                        crate::managed_contract::harness::thread::ThreadChange::TurnActivated {
                             turn_id: id,
                             ..
                         } if id == turn_id => {
@@ -490,14 +490,14 @@ impl ThreadService {
                                 turn.status = TurnStatus::Accepted;
                             }
                         }
-                        bitrouter_ai::harness::thread::ThreadChange::QueuedTurnCancelled {
+                        crate::managed_contract::harness::thread::ThreadChange::QueuedTurnCancelled {
                             turn_id: id,
                         } if id == turn_id => {
                             if let Some(turn) = &mut found {
                                 turn.status = TurnStatus::Cancelled;
                             }
                         }
-                        bitrouter_ai::harness::thread::ThreadChange::TurnLifecycle {
+                        crate::managed_contract::harness::thread::ThreadChange::TurnLifecycle {
                             turn_id: id,
                             lifecycle,
                         } if id == turn_id => {

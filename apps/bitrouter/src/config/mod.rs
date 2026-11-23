@@ -2,7 +2,7 @@
 //!
 //! The [`Config`] type is the parsed shape of a `bitrouter.yaml` file. Top
 //! level keys: `server`, `database`, `providers`, `models`, `routers`,
-//! `checkers`, `presets`, `variants`; per-plugin config lives under `plugins`. Load a file with
+//! `checkers`; per-plugin config lives under `plugins`. Load a file with
 //! [`load`]; build a [`RoutingTable`](crate::gateway::pipeline::routing::RoutingTable) over
 //! it with [`ConfigRoutingTable`](routing_table::ConfigRoutingTable).
 //!
@@ -23,12 +23,12 @@
 pub(crate) const WORKFLOW_TRACE_JSONL_ENV: &str = "BITROUTER_WORKFLOW_TRACE_JSONL";
 
 use bitrouter_ai::control::ControlScope;
+use bitrouter_ai::policy::Target;
 #[cfg(doc)]
 use bitrouter_ai::routing::SortOrder;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
-use {bitrouter_ai::routing::PolicyModelTarget, bitrouter_ai::routing::RoutingConfig};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -43,7 +43,7 @@ pub mod decision;
 pub mod gateway_state;
 pub mod mcp;
 pub mod pattern;
-pub mod presets;
+pub mod resolution;
 pub mod router;
 pub mod routing_table;
 pub mod server_tools;
@@ -56,7 +56,7 @@ pub(crate) mod yaml;
 mod tests;
 
 use pattern::PatternMap;
-use presets::PresetResolution;
+use resolution::RouterResolution;
 
 /// Retained native-model, onboarding-launch and headless prompt defaults.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
@@ -138,10 +138,6 @@ pub struct Config {
     pub routers: HashMap<String, router::RouterConfig>,
     /// Compiled request-check extensions, keyed by the ids referenced from named routers.
     pub checkers: HashMap<String, checker::CheckerConfig>,
-    /// `@preset` definitions.
-    pub presets: HashMap<String, PresetConfig>,
-    /// `:variant` definitions.
-    pub variants: HashMap<String, VariantConfig>,
     /// Plugin config, keyed by plugin / bundle id.
     pub plugins: HashMap<String, serde_json::Value>,
     /// Top-level MCP gateway settings (aggregation, caching). All fields
@@ -168,7 +164,7 @@ pub struct Config {
     pub registry: RegistryConfig,
     /// Adaptive model-policy settings. A file-backed config resolves the
     /// optional path relative to its own directory; when omitted the app looks
-    /// for `policy-lock.yaml` next to `bitrouter.yaml`. The SDK only carries
+    /// for `policy.yaml` next to `bitrouter.yaml`. The SDK only carries
     /// this declaration -- loading and evolving policy locks belongs to the
     /// BitRouter app layer.
     pub policy: PolicyConfig,
@@ -195,8 +191,6 @@ impl Default for Config {
             models: HashMap::new(),
             routers: HashMap::new(),
             checkers: HashMap::new(),
-            presets: HashMap::new(),
-            variants: HashMap::new(),
             plugins: HashMap::new(),
             mcp: McpConfig::default(),
             mcp_servers: HashMap::new(),
@@ -275,46 +269,30 @@ impl Config {
         router::validate_router_config(self)
     }
 
-    /// Resolve a raw model selector through canonical routers and legacy
-    /// preset compatibility syntax.
-    pub fn resolve_router(&self, raw_model: &str) -> Result<PresetResolution> {
+    /// Resolve a raw model selector through explicit named routers.
+    pub fn resolve_router(&self, raw_model: &str) -> Result<RouterResolution> {
         self.validate_router_config()?;
         if let Some((provider, _)) = raw_model.split_once(':')
             && let Some(message) = crate::gateway::providers::retired::provider_message(provider)
         {
             return Err(BitrouterError::bad_request(message));
         }
-        presets::resolve_routers(
-            raw_model,
-            &self.routers,
-            &self.presets,
-            &self.variants,
-            &self.checkers,
-        )
+        resolution::resolve_routers(raw_model, &self.routers, &self.checkers)
     }
 
-    /// Redaction-safe inventory of canonical and legacy router definitions.
+    /// Redaction-safe inventory of named router definitions.
     pub fn router_inventory(&self) -> Result<Vec<router::RouterInventoryEntry>> {
         router::router_inventory(self)
     }
 
     /// Policy bindings from normalized router definitions.
     ///
-    /// The optional base model deliberately preserves legacy parsing behavior
-    /// so read and validation consumers can distinguish a valid binding from
-    /// one whose missing model must be reported at their existing boundary.
     pub fn router_policy_bindings(&self) -> impl Iterator<Item = (&str, &str, Option<&str>)> {
-        let routers = self.routers.iter().filter_map(|(id, config)| {
+        self.routers.iter().filter_map(|(id, config)| {
             router::EffectiveRouterDefinition::from_router(config)
                 .into_policy_binding()
                 .map(|(policy, base_model)| (id.as_str(), policy, base_model))
-        });
-        let presets = self.presets.iter().filter_map(|(id, preset)| {
-            router::EffectiveRouterDefinition::from_legacy_preset(preset)
-                .into_policy_binding()
-                .map(|(policy, base_model)| (id.as_str(), policy, base_model))
-        });
-        routers.chain(presets)
+        })
     }
 }
 
@@ -484,47 +462,12 @@ pub enum EvalAuthorityKind {
     Generic,
 }
 
-/// Current routing-policy artifact configuration.
+/// Portable model-policy source location.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct PolicyConfig {
-    /// Override for the policy lock. Relative paths are resolved against the
-    /// directory containing the parsed `bitrouter.yaml`. `None` means the
-    /// sibling `policy-lock.yaml` default.
+    /// Source path relative to the configuration directory. Defaults to policy.yaml.
     pub path: Option<PathBuf>,
-    /// Runtime authority for adaptive routing and active policy publication.
-    /// `writeback` is accepted as a migration alias for older configuration.
-    #[serde(alias = "writeback")]
-    pub mode: PolicyRuntimeMode,
-}
-
-/// Process-owned routing-policy behavior.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, schemars::JsonSchema,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum PolicyRuntimeMode {
-    /// Route from the static lock while continuing to record evidence. Learned
-    /// database state cannot affect live routing or replace the active lock.
-    #[default]
-    #[serde(alias = "locked")]
-    Frozen,
-    /// Permit explicit validated publication to atomically replace the active
-    /// lock. Request-time routing remains identical to frozen mode.
-    #[serde(alias = "evolve")]
-    Adaptive,
-}
-
-impl PolicyRuntimeMode {
-    /// Disable legacy request-time learning in every process mode. Thresholds
-    /// and tier names remain compiler inputs only.
-    pub fn apply_to_adequacy(self, configured: &AdequacyConfig) -> AdequacyConfig {
-        let _ = self;
-        let mut effective = configured.clone();
-        effective.enabled = false;
-        effective.explore_enabled = false;
-        effective
-    }
 }
 
 /// Default complete Registry v1 document, pinned to this beta contract on the
@@ -574,21 +517,21 @@ impl RegistryConfig {
 }
 
 /// Frozen named-policy inputs consumed by the shared semantic action selector.
-/// This is the internal table projection of a versioned lock, not a top-level
+/// This is an internal routing projection, not a top-level
 /// configuration entry or an ingress transform.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct PolicyTableConfig {
     /// The predictor strategy used for `fingerprints`. Active policy routing
-    /// uses only canonical source-independent `semantic_route/v1` keys.
+    /// uses only canonical model route classes.
     pub key_strategy: PolicyKeyStrategy,
     /// Tier name → the model id every request on that tier is routed to. The
     /// value is fed straight into the routing table, so it may be a bare
     /// canonical id (resolved via the cascade/registry) or an explicit
     /// `provider:model` id (a Strategy-1 direct route). The section is inert
     /// while this map is empty.
-    pub tiers: HashMap<String, PolicyModelTarget>,
-    /// Canonical `semantic_route/v1|<task-family>|<role>|<risk>` key → tier name.
+    pub tiers: HashMap<String, Target>,
+    /// Canonical `<task-family>|<role>|<risk>` key → tier name.
     /// Lookup first tries the exact key, then the same role/risk under the
     /// `unknown` task-family baseline, then [`default_tier`](Self::default_tier).
     pub fingerprints: HashMap<String, String>,
@@ -636,7 +579,7 @@ impl<'de> Deserialize<'de> for PolicyKeyStrategy {
         match value.as_str() {
             "agent_trace" => Ok(Self::AgentTrace),
             "workflow_state" | "legacy_fingerprint" => Err(serde::de::Error::custom(format!(
-                "policy_table.key_strategy: '{value}' is no longer supported; use 'agent_trace' with canonical semantic_route/v1 routes"
+                "policy_table.key_strategy: '{value}' is no longer supported; use 'agent_trace' with model route classes"
             ))),
             _ => Err(serde::de::Error::unknown_variant(&value, &["agent_trace"])),
         }
@@ -651,54 +594,10 @@ impl schemars::JsonSchema for PolicyKeyStrategy {
     fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
         schemars::json_schema!({
             "type": "string",
-            "description": "Active policy routing uses canonical source-independent semantic_route/v1 predictive keys.",
+            "description": "Active policy routing uses canonical model route classes.",
             "enum": ["agent_trace"],
         })
     }
-}
-
-/// Parse the one canonical predictive policy-key shape.
-///
-/// The returned tuple is `(task_family, next_step_role, risk)`. Keeping this
-/// boundary in the SDK lets configuration validation and the runtime predictor
-/// share one public wire contract without making observed telemetry routable.
-pub fn parse_semantic_route_key(value: &str) -> Option<(&str, &str, &str)> {
-    let mut segments = value.split('|');
-    let (Some(namespace), Some(task_family), Some(role), Some(risk), None) = (
-        segments.next(),
-        segments.next(),
-        segments.next(),
-        segments.next(),
-        segments.next(),
-    ) else {
-        return None;
-    };
-    if namespace != "semantic_route/v1"
-        || !matches!(
-            task_family,
-            "code:generation"
-                | "code:debugging"
-                | "code:review"
-                | "code:sql_database"
-                | "code:frontend_ui"
-                | "code:devops_config"
-                | "code:repository_analysis"
-                | "agent:multi_step_planning"
-                | "agent:workflow_execution"
-                | "agent:web_research"
-                | "agent:memory_operations"
-                | "agent:general"
-                | "unknown"
-        )
-        || !matches!(
-            role,
-            "orchestrate" | "implement" | "mechanical" | "verify" | "finalize" | "unknown"
-        )
-        || !matches!(risk, "normal" | "context" | "guarded")
-    {
-        return None;
-    }
-    Some((task_family, role, risk))
 }
 
 /// Online adequacy-learning settings — the `policy_table.adequacy` block.
@@ -716,8 +615,8 @@ pub fn parse_semantic_route_key(value: &str) -> Option<(&str, &str, &str)> {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct AdequacyConfig {
-    /// Legacy input compatibility only. Effective activation is derived from
-    /// [`PolicyConfig::mode`] and this field is omitted from new output.
+    /// Explicit in-memory BRO adequacy switch. Mature model Policy compilation
+    /// leaves it disabled; it is not part of the public Policy source.
     #[serde(skip_serializing)]
     #[schemars(skip)]
     pub enabled: bool,
@@ -1105,7 +1004,7 @@ pub struct PricingConfig {
     /// Published tariff's processing profile. A mismatch with the effective
     /// endpoint makes application price evidence unavailable.
     #[serde(default)]
-    pub endpoint_profile: Option<bitrouter_ai::catalog::types::PricingEndpointProfile>,
+    pub endpoint_profile: Option<crate::gateway::catalog::types::PricingEndpointProfile>,
     /// Micro-USD per uncached prompt token (base bracket). `None` means the
     /// provider did not publish a rate; explicit `0` remains free.
     #[serde(default)]
@@ -1538,16 +1437,16 @@ pub struct ProviderModel {
     /// Concrete route token limits. Missing fields remain unknown. In
     /// particular, an input limit does not imply a combined context window.
     #[serde(default)]
-    pub token_limits: bitrouter_ai::core::evidence::ModelTokenLimits,
+    pub token_limits: crate::managed_contract::evidence::ModelTokenLimits,
     /// Explicit support for a provider input-token counting endpoint. Managed
     /// requests require a successful count when enabled; ordinary calls do not
     /// invoke it. API wire compatibility alone does not enable counting.
     #[serde(default)]
-    pub input_token_counting: Option<bitrouter_ai::core::evidence::InputTokenCounting>,
+    pub input_token_counting: Option<crate::managed_contract::evidence::InputTokenCounting>,
     /// Positively verified qualitative effort levels for this exact route.
     /// Absence means unknown, not unsupported.
     #[serde(default)]
-    pub reasoning_effort: Option<bitrouter_ai::types::ReasoningEffortConfig>,
+    pub reasoning_effort: Option<crate::gateway::model::capabilities::ReasoningEffortConfig>,
     /// Provider/model request-shape quirks that do not change model semantics.
     #[serde(default)]
     pub compatibility: ModelCompatibility,
@@ -1625,31 +1524,6 @@ pub struct VirtualEndpoint {
     pub service_id: String,
 }
 
-/// An `@preset` definition.
-#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
-#[serde(default)]
-pub struct PresetConfig {
-    /// Substitute the request's model with this one.
-    pub model: Option<String>,
-    /// Name of a policy in `policy-lock.yaml`. Only requests that explicitly
-    /// select this preset opt into adaptive model selection.
-    pub policy: Option<String>,
-    /// Prepend / replace the system prompt.
-    pub system_prompt: Option<String>,
-    /// Generation-parameter overrides, merged shallowly into the request.
-    pub params: serde_json::Map<String, serde_json::Value>,
-    /// Routing knobs fed into the cascade.
-    pub routing: RoutingConfig,
-}
-
-/// A `:variant` definition — a routing modifier only.
-#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
-#[serde(default)]
-pub struct VariantConfig {
-    /// Routing knobs fed into the cascade.
-    pub routing: RoutingConfig,
-}
-
 // ===== `${VAR}` substitution + loader =====
 
 /// Replace every `${VAR}` reference with the value resolved by `lookup`, an
@@ -1676,6 +1550,19 @@ pub struct VariantConfig {
 pub fn substitute_with<F>(input: &str, lookup: F) -> Result<String>
 where
     F: Fn(&str) -> Option<String>,
+{
+    substitute_with_missing(input, lookup, |name| {
+        Err(BitrouterError::bad_request(format!(
+            "config references undefined environment variable '{name}'"
+        )))
+    })
+}
+
+/// Resolve defaults before handing undefined, unqualified references to a diagnostic.
+pub(crate) fn substitute_with_missing<F, M>(input: &str, lookup: F, missing: M) -> Result<String>
+where
+    F: Fn(&str) -> Option<String>,
+    M: Fn(&str) -> Result<String>,
 {
     let mut out = String::with_capacity(input.len());
     let mut iter = input.char_indices().peekable();
@@ -1719,11 +1606,7 @@ where
                         Some(v) => v,
                         None => match default {
                             Some(d) => d.to_string(),
-                            None => {
-                                return Err(BitrouterError::bad_request(format!(
-                                    "config references undefined environment variable '{name}'"
-                                )));
-                            }
+                            None => missing(name)?,
                         },
                     };
                     out.push_str(&value);
@@ -1934,13 +1817,13 @@ fn validate_continuation_config(config: &ContinuationConfig) -> Result<()> {
 }
 
 /// Validate one policy-table definition independently of the top-level config.
-/// Policy lock loading reuses this so inline legacy tables and named lock
-/// policies enforce identical tier/guardrail/adequacy invariants.
+/// This private experiment projection is not a public model-policy document.
+/// Model-only source compilation has its own strict validator.
 pub fn validate_policy_table_config(policy: &PolicyTableConfig) -> Result<()> {
     for fingerprint in policy.fingerprints.keys() {
-        if parse_semantic_route_key(fingerprint).is_none() {
+        if bitrouter_ai::policy::RouteClass::parse_key(fingerprint).is_none() {
             return Err(BitrouterError::bad_request(format!(
-                "policy_table fingerprint '{fingerprint}' is not a canonical semantic_route/v1|<task-family>|<role>|<risk> key"
+                "policy_table fingerprint '{fingerprint}' is not a canonical <task-family>|<role>|<risk> key"
             )));
         }
     }

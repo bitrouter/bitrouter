@@ -1,8 +1,8 @@
 use super::*;
+#[cfg(not(feature = "core"))]
 mod trajectory_features;
 use bitrouter_ai::tenancy::configuration::{
-    Activation, Configuration, ConfigurationPut, ConfigurationRevision, GenerationDefaults,
-    Learning, LearningMode, Limits,
+    Activation, Configuration, ConfigurationPut, ConfigurationRevision, GenerationDefaults, Limits,
 };
 
 fn empty_document() -> Configuration {
@@ -13,14 +13,10 @@ fn empty_document() -> Configuration {
             max_output_tokens: 1024,
             temperature: 0.0,
         },
-        learning: Learning {
-            mode: LearningMode::Off,
-            max_evaluations: 0,
-        },
+        eval_publication: false,
         limits: Limits {
             active_executions: 1,
             queued_work: 0,
-            learning_jobs: 0,
         },
     }
 }
@@ -140,7 +136,7 @@ async fn minimal_build_rejects_activation_and_restore_of_retained_learning() -> 
         // Preserve a valid compiler binding, as produced by a full build, then
         // exercise the minimal binary's activation/restart boundary.
         let mut document = revision.document;
-        document.learning.mode = LearningMode::Observe;
+        document.eval_publication = true;
         let compiled = fixture
             .service
             .resources

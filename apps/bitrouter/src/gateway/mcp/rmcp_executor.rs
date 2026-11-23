@@ -74,9 +74,9 @@ use crate::gateway::error::Result;
 /// turn the gateway into a general JSON-RPC tunnel, letting an inbound caller
 /// invoke upstream surface that the gateway never meant to expose.
 pub const RELAYED_EXTENSION_METHODS: &[&str] = &[
-    bitrouter_ai::protocol::mcp_skills::SKILLS_LIST_METHOD,
-    bitrouter_ai::protocol::mcp_skills::SKILLS_GET_METHOD,
-    bitrouter_ai::protocol::mcp_skills::RESOURCES_DIRECTORY_READ_METHOD,
+    crate::skills::wire::SKILLS_LIST_METHOD,
+    crate::skills::wire::SKILLS_GET_METHOD,
+    crate::skills::wire::RESOURCES_DIRECTORY_READ_METHOD,
 ];
 
 /// [`ClientHandler`] for upstream MCP servers reached through [`RmcpExecutor`].
@@ -490,16 +490,14 @@ fn require_skills_capability(peer: &Peer<RoleClient>, server: &str, method: &str
         .capabilities
         .extensions
         .as_ref()
-        .and_then(|extensions| {
-            extensions.get(bitrouter_ai::protocol::mcp_skills::SKILLS_EXTENSION_ID)
-        });
+        .and_then(|extensions| extensions.get(crate::skills::wire::SKILLS_EXTENSION_ID));
     if info.capabilities.resources.is_none() || settings.is_none() {
         return Err(BitrouterError::NotFound(format!(
             "mcp '{server}': '{method}' requires this connection to declare Resources and {}",
-            bitrouter_ai::protocol::mcp_skills::SKILLS_EXTENSION_ID,
+            crate::skills::wire::SKILLS_EXTENSION_ID,
         )));
     }
-    if method == bitrouter_ai::protocol::mcp_skills::RESOURCES_DIRECTORY_READ_METHOD
+    if method == crate::skills::wire::RESOURCES_DIRECTORY_READ_METHOD
         && settings.and_then(|value| value.get("directoryRead"))
             != Some(&serde_json::Value::Bool(true))
     {
@@ -953,7 +951,7 @@ async fn send_custom_request(
         // rmcp's untagged result union recognizes the directory envelope as
         // its ordinary Resources list shape before trying CustomResult.
         ServerResult::ListResourcesResult(value)
-            if method == bitrouter_ai::protocol::mcp_skills::RESOURCES_DIRECTORY_READ_METHOD =>
+            if method == crate::skills::wire::RESOURCES_DIRECTORY_READ_METHOD =>
         {
             serde_json::to_value(value).map_err(|error| upstream(server, error.to_string()))
         }
@@ -966,14 +964,13 @@ async fn send_custom_request(
 
 fn validate_skills_metadata(server: &str, result: &serde_json::Value, method: &str) -> Result<()> {
     let validate = |entry: &serde_json::Value| -> Result<()> {
-        let entry: bitrouter_ai::protocol::mcp_skills::SkillEntry =
-            serde_json::from_value(entry.clone())
-                .map_err(|error| upstream(server, format!("{method}: invalid entry: {error}")))?;
+        let entry: crate::skills::wire::SkillEntry = serde_json::from_value(entry.clone())
+            .map_err(|error| upstream(server, format!("{method}: invalid entry: {error}")))?;
         entry
             .validate_metadata()
             .map_err(|error| upstream(server, format!("{method}: {error}")))
     };
-    if method == bitrouter_ai::protocol::mcp_skills::SKILLS_LIST_METHOD {
+    if method == crate::skills::wire::SKILLS_LIST_METHOD {
         let entries = result
             .get("skills")
             .and_then(|value| value.as_array())
@@ -1115,7 +1112,7 @@ async fn dispatch(
                 params => Some(params.clone()),
             };
             let mut result = send_custom_request(peer, server, relayed, params).await?;
-            if relayed == bitrouter_ai::protocol::mcp_skills::SKILLS_LIST_METHOD {
+            if relayed == crate::skills::wire::SKILLS_LIST_METHOD {
                 normalize_cacheable_result_envelope(&mut result, relayed)
                     .map_err(|e| upstream(server, e))?;
                 validate_skills_metadata(server, &result, relayed)?;
@@ -1156,7 +1153,7 @@ async fn dispatch(
                     policy_at = received_at;
                 }
                 super::age_cacheable_result(&mut result, policy_at.elapsed());
-            } else if relayed == bitrouter_ai::protocol::mcp_skills::SKILLS_GET_METHOD {
+            } else if relayed == crate::skills::wire::SKILLS_GET_METHOD {
                 normalize_cacheable_result_envelope(&mut result, relayed)
                     .map_err(|e| upstream(server, e))?;
                 validate_skills_metadata(server, &result, relayed)?;

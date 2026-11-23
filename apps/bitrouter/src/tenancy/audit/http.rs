@@ -32,14 +32,6 @@ pub(super) fn router(archive: Archive, operators: ControlAuth) -> Router {
             "/control/v1/tenants/{tenant_id}/executions/{execution_id}/usage-evidence",
             get(usage_evidence),
         )
-        .route(
-            "/control/v1/tenancy/tenants/{tenant_id}/executions/{execution_id}/v2",
-            get(one_v2),
-        )
-        .route(
-            "/control/v1/tenancy/tenants/{tenant_id}/executions/{execution_id}/usage-evidence/v2",
-            get(usage_evidence_v2),
-        )
         .fallback(|| async { Failure::from(ErrorCode::NotFound) })
         .layer(axum::middleware::from_fn_with_state(
             Auth {
@@ -139,31 +131,6 @@ async fn usage_evidence(
     ))
 }
 
-async fn one_v2(
-    State(archive): State<Archive>,
-    Extension(caller): Extension<Caller>,
-    path: Result<Path<(TenantId, ExecutionId)>, axum::extract::rejection::PathRejection>,
-) -> Result<Response, Failure> {
-    let Path((tenant, id)) = path.map_err(|_| Failure::from(ErrorCode::InvalidRequest))?;
-    Ok(response(
-        archive
-            .read(caller, tenant, read::Request::OneV2(id))
-            .await?,
-    ))
-}
-
-async fn usage_evidence_v2(
-    State(archive): State<Archive>,
-    Extension(caller): Extension<Caller>,
-    path: Result<Path<(TenantId, ExecutionId)>, axum::extract::rejection::PathRejection>,
-) -> Result<Response, Failure> {
-    let Path((tenant, id)) = path.map_err(|_| Failure::from(ErrorCode::InvalidRequest))?;
-    Ok(response(
-        archive
-            .read(caller, tenant, read::Request::UsageEvidenceV2(id))
-            .await?,
-    ))
-}
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Page {

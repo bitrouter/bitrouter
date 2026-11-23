@@ -16,11 +16,6 @@ use crate::metering::shared::MAX_ATTEMPTS;
 #[cfg(test)]
 mod contention_tests;
 
-pub(super) enum TenantLock {
-    Shared,
-    Exclusive,
-}
-
 impl Engine {
     /// Called only after the request's sending future is gone. A lost prepare
     /// acknowledgement can hide an attempt ID, so inspect the durable execution.
@@ -58,7 +53,7 @@ impl Engine {
                     .begin_with_isolation(IsolationLevel::ReadCommitted)
                     .await?;
                 let (_, _, expiry) = self
-                    .authorized_execution(&tx, key_hash, execution_id, TenantLock::Shared)
+                    .authorized_execution(&tx, key_hash, execution_id)
                     .await?;
                 self.live_owner(&tx, false).await?;
                 let now = Store::now(&tx).await?;
@@ -135,7 +130,7 @@ impl Engine {
                     .begin_with_isolation(IsolationLevel::ReadCommitted)
                     .await?;
                 let (tenant, mut execution, principal_expiry) = self
-                    .authorized_execution(&tx, key_hash, execution_id, TenantLock::Shared)
+                    .authorized_execution(&tx, key_hash, execution_id)
                     .await?;
                 inputs.check_identity(
                     execution_id,
@@ -251,7 +246,7 @@ impl Engine {
                     .begin_with_isolation(IsolationLevel::ReadCommitted)
                     .await?;
                 let (_, mut execution, principal_expiry) = self
-                    .authorized_execution(&tx, key_hash, execution_id, TenantLock::Shared)
+                    .authorized_execution(&tx, key_hash, execution_id)
                     .await?;
                 let selected = execution
                     .value
@@ -369,7 +364,7 @@ impl Engine {
         self.store()
             .retry(|| async {
                 // All terminal facts and capacity changes are protected by the
-                // execution/resource/attempt and episode fences below. A stale
+                // execution/resource/attempt fences below. A stale
                 // snapshot must not turn concurrent completions into retries.
                 let tx = self
                     .store()
@@ -460,10 +455,6 @@ impl Engine {
                     "execution is already finalized"
                 );
                 let now = Store::now(&tx).await?;
-                if observation.is_some() {
-                    self.install_projection_fence(&tx, &execution.value, now)
-                        .await?;
-                }
                 attempt.value.view.state = if let Some(observation) = observation {
                     let mut terminal = observation.clone();
                     terminal.recorded_at_ms = now;
@@ -503,25 +494,13 @@ impl Engine {
         tx: &DatabaseTransaction,
         key_hash: &str,
         execution_id: &str,
-        tenant_lock: TenantLock,
     ) -> Result<(Stored<Tenant>, Stored<Execution>, Option<i64>)> {
         let head = self.authority.fence(tx).await?;
         let principal = authenticate(tx, key_hash).await?;
-        // Provider authorization only reads tenant policy. Guarded routing
-        // retains Exclusive because its binding path acquires that lock again;
-        // never introduce a concurrent Shared-to-Exclusive upgrade.
-        let tenant: Stored<Tenant> = match tenant_lock {
-            TenantLock::Shared => {
-                self.store()
-                    .lock_shared(tx, Kind::Tenant, &principal.tenant)
-                    .await?
-            }
-            TenantLock::Exclusive => {
-                self.store()
-                    .lock(tx, Kind::Tenant, &principal.tenant)
-                    .await?
-            }
-        };
+        let tenant: Stored<Tenant> = self
+            .store()
+            .lock_shared(tx, Kind::Tenant, &principal.tenant)
+            .await?;
         let execution: Stored<Execution> =
             self.store().lock(tx, Kind::Execution, execution_id).await?;
         ensure!(

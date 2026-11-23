@@ -3,8 +3,7 @@
 use std::collections::BTreeSet;
 
 use bitrouter_ai::eval::{
-    AdmissionOutcome, EVAL_SCHEMA_VERSION, EvalSnapshot, EvalSubject, PutSubjectReport,
-    StatusReport,
+    AdmissionOutcome, EvalSnapshot, EvalSubject, PutSubjectReport, StatusReport,
 };
 use serde::de::DeserializeOwned;
 
@@ -22,7 +21,23 @@ impl EvalReply for PutSubjectReport {
 
 impl EvalReply for EvalSubject {
     fn validate_reply(&self) -> Result<()> {
-        require(self.schema_version == EVAL_SCHEMA_VERSION)?;
+        require(self.identity.tenant_namespace().is_some())?;
+        if let bitrouter_ai::eval::EvalSubjectIdentity::TenantModelPolicy {
+            policy,
+            name,
+            configuration_revision,
+            execution,
+            ..
+        } = &self.identity
+        {
+            require(
+                policy.resource_kind == bitrouter_ai::tenancy::authority::ResourceKind::Policy,
+            )?;
+            logical_id(name)?;
+            require(execution.as_ref().is_none_or(|execution| {
+                &execution.configuration_revision == configuration_revision
+            }))?;
+        }
         logical_id(&self.eval_id)?;
         logical_id(&self.subject_id)?;
         for decision in &self.decisions {

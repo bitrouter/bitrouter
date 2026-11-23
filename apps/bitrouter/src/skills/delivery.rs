@@ -3,12 +3,13 @@
 
 use crate::commands::agent_options::SkillDeliveryCapabilities as Capabilities;
 use crate::harness::acp::skills::{self, Instructions, Prepared, Target};
+use crate::managed_contract::harness::skills::SkillConstraints;
+use crate::managed_contract::harness::skills::SkillSelector;
+use crate::managed_contract::protocol::{CoreError, ErrorCode};
 use crate::skills::library::SkillDirectory;
 use crate::storage::skills::{SkillCandidate, SkillSource, selection};
 use anyhow::{Result, ensure};
 use async_trait::async_trait;
-use bitrouter_ai::core::protocol::{CoreError, ErrorCode};
-use bitrouter_ai::core::skills::{SkillConstraints, SkillSelector};
 
 use serde::{Deserialize, Serialize};
 

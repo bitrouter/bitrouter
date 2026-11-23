@@ -2,9 +2,9 @@ use super::*;
 use bitrouter::gateway::pipeline::hooks::DenyReason;
 use bitrouter::gateway::pipeline::hooks::HookDecision;
 use bitrouter::gateway::pipeline::hooks::PreRequestHook;
+use bitrouter::managed_contract::evidence::InputTokenCounting;
+use bitrouter::managed_contract::evidence::NativeInputCount;
 use bitrouter::storage::checkpoint::CheckpointBatchExt;
-use bitrouter_ai::core::evidence::InputTokenCounting;
-use bitrouter_ai::core::evidence::NativeInputCount;
 
 struct FailedPreparation {
     calls: AtomicUsize,

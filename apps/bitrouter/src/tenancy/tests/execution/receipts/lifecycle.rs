@@ -83,7 +83,7 @@ async fn unpolled_sse_body_does_not_own_deadline_or_capacity_and_retains_at_most
         )
         .await
         .map_err(failure)?;
-    let evidence: bitrouter_ai::tenancy::usage_evidence::ExecutionUsageEvidenceV1 =
+    let evidence: bitrouter_ai::tenancy::usage_evidence::ExecutionUsageEvidence =
         serde_json::from_slice(&evidence_bytes)?;
     bitrouter_ai::tenancy::validation::Validate::validate(&evidence)?;
     ensure!(

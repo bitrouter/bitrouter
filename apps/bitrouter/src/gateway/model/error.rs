@@ -10,7 +10,7 @@ pub enum ModelError {
     #[error("model conversion incompatible")]
     Incompatible {
         /// Content-free diagnostics retained for the caller's policy/observers.
-        report: bitrouter_ai::conversion::ConversionReport,
+        report: crate::gateway::conversion_report::ConversionReport,
     },
     /// Invalid model configuration or request semantics.
     #[error("invalid model request: {message}")]
@@ -126,14 +126,6 @@ impl ModelError {
     pub fn invalid_credential(message: impl Into<String>) -> Self {
         Self::InvalidCredential {
             message: message.into(),
-        }
-    }
-}
-
-impl From<bitrouter_ai::error::ValidationError> for ModelError {
-    fn from(error: bitrouter_ai::error::ValidationError) -> Self {
-        Self::InvalidRequest {
-            message: error.message,
         }
     }
 }

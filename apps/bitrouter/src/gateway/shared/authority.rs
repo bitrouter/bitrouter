@@ -148,7 +148,7 @@ impl Authority {
         tx: &DatabaseTransaction,
     ) -> Result<(bool, Stored<Head>)> {
         let initial = Head {
-            format: 1,
+            format: 2,
             deployment_key_id: self.key.id().into(),
             config_generation: 0,
             key_generation: 1,
@@ -347,7 +347,7 @@ impl Authority {
     }
 
     pub(super) fn validate_head(&self, head: &Head) -> Result<()> {
-        ensure!(head.format == 1, "unsupported shared authority format");
+        ensure!(head.format == 2, "unsupported shared authority format");
         ensure!(
             head.deployment_key_id == self.key.id(),
             "shared deployment key does not match authority"

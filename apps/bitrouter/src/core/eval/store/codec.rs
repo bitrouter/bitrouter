@@ -83,7 +83,8 @@ impl Decoder<'_> {
                 && crate::storage::evaluation::subject_digest(&subject)? == row.content_digest
                 && subject.subject_id == row.subject_id
                 && scope_name(subject.scope) == row.scope
-                && subject.policy_digest == row.policy_digest
+                && crate::storage::evaluation::identity_digest(&subject.identity)?
+                    == row.identity_digest
                 && subject.holdout == row.holdout,
             "stored eval subject indexed content mismatch"
         );

@@ -14,24 +14,15 @@ use bitrouter_ai::tenancy::{
     identity::{RevisionId, TenantId},
     operation::ErrorCode,
     resources::Definition as PublicDefinition,
-    resources_v2::DefinitionV2,
-    resources_v3::DefinitionV3,
 };
 
 type Result<T> = std::result::Result<T, ErrorCode>;
 
 #[derive(Clone, Copy)]
-enum Content<'a> {
-    V1(&'a PublicDefinition),
-    V2(&'a DefinitionV2),
-    V3(&'a DefinitionV3),
-}
-
-#[derive(Clone, Copy)]
 pub(super) struct Put<'a> {
     pub key: &'a ResourceKey,
     pub expected_revision: &'a Option<RevisionId>,
-    content: Content<'a>,
+    content: &'a PublicDefinition,
 }
 
 pub(super) fn input(command: &Command) -> Option<(&TenantId, Put<'_>)> {
@@ -41,23 +32,7 @@ pub(super) fn input(command: &Command) -> Option<(&TenantId, Put<'_>)> {
             Put {
                 key: &input.key,
                 expected_revision: &input.expected_revision,
-                content: Content::V1(&input.definition),
-            },
-        )),
-        Command::ResourceV3(tenant, input) => Some((
-            tenant,
-            Put {
-                key: &input.key,
-                expected_revision: &input.expected_revision,
-                content: Content::V3(&input.definition),
-            },
-        )),
-        Command::ResourceV2(tenant, input) => Some((
-            tenant,
-            Put {
-                key: &input.key,
-                expected_revision: &input.expected_revision,
-                content: Content::V2(&input.definition),
+                content: &input.definition,
             },
         )),
         _ => None,
@@ -66,79 +41,28 @@ pub(super) fn input(command: &Command) -> Option<(&TenantId, Put<'_>)> {
 
 impl Put<'_> {
     pub(super) fn authorize(self, state: &Snapshot, caller: &Caller) -> Result<()> {
-        let operator_only = match self.content {
-            Content::V1(definition) => matches!(
-                definition,
-                PublicDefinition::AdmissionProfile { .. } | PublicDefinition::ProfiledRoute { .. }
-            ),
-            Content::V2(_) | Content::V3(_) => true,
-        };
+        let operator_only = self.affects_admission();
         if operator_only && !matches!(caller, Caller::Installation(_)) {
             return Err(ErrorCode::Forbidden);
         }
-        match self.content {
-            Content::V1(definition) => state.resource_admission.validate_put(self.key, definition),
-            // Like legacy profiled routes, authority is operator-only above;
-            // the existing prepare transaction validates the exact graph/CAS.
-            Content::V3(_) => Ok(()),
-            Content::V2(DefinitionV2::AdmissionProfileV2 { profile }) => state
-                .resource_admission
-                .validate_shared_put(self.key, profile),
-        }
+        state
+            .resource_admission
+            .validate_put(self.key, self.content)
     }
 
     pub(super) fn affects_admission(self) -> bool {
-        match self.content {
-            Content::V1(definition) => matches!(
-                definition,
-                PublicDefinition::AdmissionProfile { .. } | PublicDefinition::ProfiledRoute { .. }
-            ),
-            Content::V2(_) | Content::V3(_) => true,
-        }
+        matches!(
+            self.content,
+            PublicDefinition::AdmissionProfile { .. } | PublicDefinition::ProfiledRoute { .. }
+        )
     }
 
     pub(super) fn apply(self, state: &mut State, reference: &ResourceRef) {
-        match self.content {
-            Content::V1(definition) => state.apply_put(reference, definition),
-            Content::V3(_) => state.record_profiled_route(reference),
-            Content::V2(DefinitionV2::AdmissionProfileV2 { profile }) => {
-                state.apply_shared_put(reference, profile)
-            }
-        }
+        state.apply_put(reference, self.content);
     }
 
     pub(super) fn definition(self) -> Result<Definition> {
-        let definition = match self.content {
-            Content::V3(DefinitionV3::NativeProfiledRouteV1 {
-                routing,
-                selector,
-                policy,
-                credentials,
-                attachments,
-            }) => {
-                return Ok(Definition::NativeProfiledRouteV1 {
-                    routing: routing.clone(),
-                    selector: selector.clone(),
-                    policy: policy.clone(),
-                    credentials: credentials
-                        .iter()
-                        .map(|binding| CredentialBinding {
-                            provider: binding.provider.clone(),
-                            account: binding.account.clone(),
-                            credential: binding.credential.clone(),
-                        })
-                        .collect(),
-                    attachments: attachments.clone(),
-                });
-            }
-            Content::V1(definition) => definition,
-            Content::V2(DefinitionV2::AdmissionProfileV2 { profile }) => {
-                return Ok(Definition::AdmissionProfileV2 {
-                    profile: profile.clone(),
-                });
-            }
-        };
-        Ok(match definition {
+        Ok(match self.content {
             PublicDefinition::AdmissionProfile { profile } => Definition::AdmissionProfile {
                 profile: profile.clone(),
             },
@@ -196,8 +120,7 @@ impl Put<'_> {
                 name,
                 dependencies,
             } => Definition::Policy {
-                document: serde_json::from_value(document.clone())
-                    .map_err(|_| ErrorCode::InvalidRequest)?,
+                document: document.clone(),
                 name: name.clone(),
                 dependencies: dependencies.clone(),
             },

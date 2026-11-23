@@ -1,26 +1,24 @@
 //! Actual post-parse residual defaults, transport provenance and protected state.
 use super::*;
 use bitrouter_ai::tenancy::generation_defaults::{
-    BODY_MEMBER, ENVELOPE_BODY_MEMBER, GenerationDefaultsEnvelopeV1,
+    ENVELOPE_BODY_MEMBER, GenerationDefaultsEnvelope,
 };
 
 pub(super) mod absence;
 mod edge_cases;
 mod precedence;
-#[cfg(unix)]
-mod predecessor;
 mod refusals;
 
-fn defaults(params: Value) -> Result<GenerationDefaultsEnvelopeV1> {
+fn defaults(params: Value) -> Result<GenerationDefaultsEnvelope> {
     Ok(serde_json::from_value(
-        json!({"schema_version":1,"canonical":{"schema_version":1,"max_tokens":23},"supplemental":params}),
+        json!({"schema_version":2,"configuration_defaults":"apply","canonical":{"schema_version":1,"max_tokens":23},"supplemental":params}),
     )?)
 }
 
 pub(super) async fn invoke(
     harness: &OrderedHarness,
-    binding: &OrderedDispatchBindingV2,
-    defaults: GenerationDefaultsEnvelopeV1,
+    binding: &OrderedDispatchBinding,
+    defaults: GenerationDefaultsEnvelope,
     protocol: GenerationProtocol,
     stream: bool,
     version: HttpVersion,
@@ -120,7 +118,7 @@ async fn harness(wire: &str, retained: Value) -> Result<OrderedHarness> {
 async fn completed(
     harness: &OrderedHarness,
     id: &ExecutionId,
-    binding: &OrderedDispatchBindingV2,
+    binding: &OrderedDispatchBinding,
 ) -> Result<()> {
     let receipt = harness.receipt(id).await?;
     ensure!(receipt.outcome == Outcome::Completed);
@@ -138,14 +136,14 @@ async fn completed(
         receipt.usage.cache_read_tokens == Some(3) && receipt.usage.cache_write_tokens == Some(2)
     );
     ensure!(
-        receipt.accepted_selection.generation_defaults_digest
+        receipt_selection(&receipt)?.generation_defaults_digest
             == binding.selection.generation_defaults_digest
     );
-    ensure!(receipt.accepted_selection.route == binding.selection.route);
-    ensure!(receipt.attempts.len() == 1 && receipt.attempts[0].candidate_index == 0);
+    ensure!(receipt_selection(&receipt)?.route == binding.selection.route);
+    ensure!(receipt.attempts.len() == 1 && receipt.attempts[0].candidate_index == Some(0));
     let evidence = harness
         .control(true, HttpVersion::Http1Only)?
-        .usage_evidence_v2(&receipt)
+        .usage_evidence(&receipt)
         .await?;
     evidence.validate_against(&receipt)?;
     Ok(())
@@ -210,10 +208,7 @@ async fn envelope_three_ingress_three_egress_h1_h2_json_sse_opaque_controls_and_
                             "caller collision {protocol:?}->{wire}"
                         );
                         ensure!(body["model"] == "model-0" && body["stream"] == stream);
-                        ensure!(
-                            body.get(BODY_MEMBER).is_none()
-                                && body.get(ENVELOPE_BODY_MEMBER).is_none()
-                        );
+                        ensure!(body.get(ENVELOPE_BODY_MEMBER).is_none());
                         let headers = harness
                             .observed
                             .lock()

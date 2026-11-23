@@ -3,7 +3,7 @@
 //! bytes even when this consumer's serde_json object representation differs.
 
 use anyhow::{Context, Result, bail, ensure};
-use bitrouter_ai::core::protocol::{
+use bitrouter::managed_contract::protocol::{
     Bind, ClientMessage, Command, HarnessManifest, Limits, OwnershipGrant, Restore, VERSION,
 };
 use serde_json::Value;

@@ -11,12 +11,13 @@ protocol. The official `bro` binary does not link the regex implementation.
 
 ## Register in a custom Rust host
 
-Link `bitrouter-guardrails` with default features. Extension modules register
+Enable the application’s `guardrails` feature and link the rule-only
+`bitrouter-guardrails` package. Extension modules register
 `checker::callback(rules)` through the application's restricted `ExtensionApi`:
 
 ```rust
-use bitrouter::gateway::extensions::registry::ExtensionApi;
-use bitrouter_guardrails::{checker, rules::RuleSet};
+use bitrouter::gateway::extensions::{guardrails::checker, registry::ExtensionApi};
+use bitrouter_guardrails::rules::RuleSet;
 
 fn register(api: &mut ExtensionApi, rules: RuleSet) -> anyhow::Result<()> {
     api.request_check("secret-check", "secret-rules-v1", checker::callback(rules))?;
@@ -60,7 +61,7 @@ A native declaration alone cannot install code into standard `bro`: adding or
 upgrading extension code requires rebuilding the custom host.
 
 All author input, fragment, coverage and decision types live in
-`bitrouter_ai::extension::request_check`. The callback receives `Input` and returns
+`bitrouter::gateway::extensions::request_check`. The callback receives `Input` and returns
 `Decision::Allow` or `Decision::Deny { reason_code }`. Input contains bounded entry
 text and coverage information, without an HTTP envelope. Fragment order and
 newline boundaries are preserved by the regex matcher. Denials return a fixed
@@ -78,7 +79,7 @@ rules:
 ```
 
 ```sh
-cargo run -p bitrouter --example native_regex_checker -- bitrouter.yaml rules.yaml
+cargo run -p bitrouter --features guardrails --example native_regex_checker -- bitrouter.yaml rules.yaml
 ```
 
 Set `server.listen: 127.0.0.1:4356` (or another free loopback port) in the
@@ -171,7 +172,7 @@ the explicit `.plugin(...)` call in the custom executable.
 
 The host registration API is
 `bitrouter::gateway::extensions::registry::ExtensionApi`. Callback inputs and decisions have moved to
-`bitrouter_ai::extension::request_check`; use those contracts directly. HTTP
+`bitrouter::gateway::extensions::request_check`; use those contracts directly. HTTP
 checker declarations remain unsupported.
 
 ## Verification

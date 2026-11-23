@@ -47,8 +47,8 @@ pub(crate) struct Summary {
     pub(crate) observations: usize,
 }
 
-/// Off does no discovery. Observe and passive Explore share this reference-only
-/// path; no judge job, paid reservation, route activation or cost coverage claim.
+/// Freeze reference-only evidence when observation is enabled. This path starts
+/// no judge job, paid reservation, route activation or cost coverage claim.
 pub(crate) async fn freeze_in(
     tx: &DatabaseTransaction,
     association: &Association,

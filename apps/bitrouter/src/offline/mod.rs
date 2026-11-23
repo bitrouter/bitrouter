@@ -4,8 +4,6 @@
 //! or authorization to release ingress or complete cutover.
 pub(crate) mod audit;
 pub(crate) mod engine;
-#[cfg(feature = "core")]
-pub(crate) mod evaluation;
 mod files;
 pub(crate) mod format;
 mod inventory;
@@ -31,27 +29,6 @@ impl Default for ValidationBudget {
     }
 }
 
-/// Upgrade one stopped legacy count-saturated authority with durable replay.
-///
-/// # Errors
-/// Refuses identity/revision conflicts, missing acknowledgment, invalid storage,
-/// insufficient working capacity, or unconfirmed transaction/worker cleanup.
-pub async fn upgrade_capacity(
-    database: &std::path::Path,
-    expected_installation: &str,
-    expected_authority_revision: u64,
-    operation_id: &str,
-    acknowledge_legacy_count_saturation: bool,
-    budget: ValidationBudget,
-) -> anyhow::Result<impl crate::output::CliReport> {
-    let request = crate::tenancy::audit::upgrade::Request {
-        installation: expected_installation.try_into()?,
-        revision: expected_authority_revision.try_into()?,
-        operation: operation_id.try_into()?,
-        acknowledge_legacy_count_saturation,
-    };
-    recovery::upgrade::run(database, request, budget).await
-}
 mod schema;
 
 use crate::{output::CliReport, tenancy::ownership};
@@ -473,13 +450,6 @@ async fn read_bundle_work(
         .copy
         .as_mut()
         .ok_or_else(|| anyhow::anyhow!("copy unavailable"))?;
-    #[cfg(feature = "core")]
-    let actual = if action.starts_with("eval-") {
-        inventory::inspect_eval(db, &key).await
-    } else {
-        inventory::inspect(db, &key).await
-    };
-    #[cfg(not(feature = "core"))]
     let actual = inventory::inspect(db, &key).await;
     connections.close().await?;
     connections.check()?;
@@ -606,69 +576,6 @@ pub async fn map(
     mapping::run(bundle, evidence_digest, manifest, report).await.map_err(|_| failure(
         "offline mapping validation failed: require a private bounded M0 manifest, matching evidence snapshot and a new report directory; no source rows were backfilled or authority granted",
     ))
-}
-
-/// Partition a verified Legacy Eval graph into explicit owner namespaces.
-///
-/// # Errors
-/// Refuses mixed ownership, corrupt graphs, bounds or insecure evidence/output.
-#[cfg(feature = "core")]
-pub async fn eval_inventory(
-    bundle: &Path,
-    evidence_digest: &str,
-    source_kind: &str,
-    report: &Path,
-) -> Result<impl CliReport> {
-    evaluation::inventory(bundle,evidence_digest,source_kind,report).await.map_err(|_|failure(
-        "offline Eval inventory failed: require exact Legacy ownership, a complete bounded graph and matching private evidence"))
-}
-
-/// Inspect the bounded selected Eval graph in complete v1/v2 database evidence.
-///
-/// # Errors
-/// Refuses invalid evidence, ownership/graph mismatch or insufficient capacity.
-#[cfg(feature = "core")]
-pub async fn eval_inventory_with_options(
-    bundle: &Path,
-    evidence_digest: &str,
-    source_kind: &str,
-    report: &Path,
-    options: large::Options,
-) -> Result<impl CliReport> {
-    evaluation::inventory_with_options(bundle, evidence_digest, source_kind, report, options).await
-        .map_err(|_| failure("offline Eval inventory failed: evidence or selected graph is invalid or working capacity is insufficient"))
-}
-
-/// Import a bounded four-table Legacy Eval graph into a stopped fresh authority.
-///
-/// # Errors
-/// Refuses any mapping/evidence/target mismatch, collision, unsupported state or
-/// unconfirmed SQL outcome. Failure never proves no-write; retain INCOMPLETE and
-/// reconcile before restarting. This command does not authorize cutover.
-#[cfg(feature = "core")]
-pub async fn eval_backfill(
-    plan: &Path,
-    plan_digest: &str,
-    report: &Path,
-) -> Result<impl CliReport> {
-    evaluation::backfill(plan,plan_digest,report).await.map_err(|_|failure(
-        "offline Eval backfill failed or outcome is unconfirmed: retain the incomplete packet and stopped destination for reconciliation; do not retry or activate"))
-}
-
-/// Import a bounded Eval graph into a fresh authority proven by streamed v2 evidence.
-///
-/// # Errors
-/// Refuses changed inputs, invalid target proof or unconfirmed SQL outcome.
-/// Preserve incomplete evidence and the stopped target on every failure.
-#[cfg(feature = "core")]
-pub async fn eval_backfill_with_options(
-    plan: &Path,
-    plan_digest: &str,
-    report: &Path,
-    options: large::Options,
-) -> Result<impl CliReport> {
-    evaluation::backfill_with_options(plan, plan_digest, report, options).await
-        .map_err(|_| failure("offline Eval backfill failed or outcome is unconfirmed: preserve incomplete evidence and the stopped target; do not retry or activate"))
 }
 
 /// Verify an explicitly retired archive and freshly provisioned stopped target.

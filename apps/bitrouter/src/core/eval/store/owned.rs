@@ -100,9 +100,9 @@ impl EvalStore {
                 // An operator may provision this literal principal name. Its
                 // spelling must not mint the private built-in evaluator proof.
                 || (result.evaluator.authority_id
-                    == crate::trajectory::evaluation::TRAJECTORY_EVALUATOR_AUTHORITY_ID
+                    == "bitrouter.builtin"
                     && result.evaluator.evaluator_id
-                        == crate::trajectory::evaluation::TRAJECTORY_EVALUATOR_ID)
+                        == "bitrouter.trajectory-operational")
             {
                 return Err(OwnedError::Rejected(ErrorCode::Forbidden).into());
             }
@@ -171,7 +171,7 @@ impl EvalStore {
             .filter(|record| record.latest.status == AdmissionStatus::Admitted)
             .map(|record| &record.result)
             .collect::<Vec<_>>();
-        let decision = crate::core::eval::admission::decide(result, subject.holdout, &admitted);
+        let decision = crate::eval::admission::decide(result, subject.holdout, &admitted);
         let result_id = crate::storage::evaluation::result_digest(result)?;
         let response = AdmissionOutcome {
             result_id: result_id.clone(),
@@ -318,6 +318,7 @@ impl EvalStore {
                 })
                 .collect::<Vec<_>>();
             let snapshot = EvalSnapshot {
+                spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
                 evidence_root: self.snapshot_root(None, frozen_at, &entries)?,
                 frozen_at: frozen_at.into(),
                 entries,

@@ -14,8 +14,8 @@ use bitrouter::gateway::pipeline::native_context::metadata;
 use bitrouter::gateway::pipeline::native_continuation::{CONTINUATION_FIELD, REQUIRED_STATE_FIELD};
 use bitrouter::gateway::pipeline::routing::StaticRoutingTable;
 use bitrouter::gateway::pipeline::types::RoutingTarget;
-use bitrouter_ai::core::evidence::InputTokenCounting;
-use bitrouter_ai::core::evidence::{
+use bitrouter::managed_contract::evidence::InputTokenCounting;
+use bitrouter::managed_contract::evidence::{
     ContinuationFailure, NativeContinuationInput, NativeContinuationOutput,
 };
 use bitrouter_ai::types::{ApiProtocol, FinishReason};
@@ -69,7 +69,7 @@ fn configured_app(
             chat_supports_store: None,
             chat_supports_stream_options: None,
             reasoning_effort: None,
-            model_constraints: bitrouter_ai::core::evidence::NativeRouteConstraints {
+            model_constraints: bitrouter::managed_contract::evidence::NativeRouteConstraints {
                 input_token_counting: counting.then_some(InputTokenCounting::Responses),
                 ..Default::default()
             },

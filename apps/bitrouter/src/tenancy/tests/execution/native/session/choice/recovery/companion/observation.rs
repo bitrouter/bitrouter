@@ -120,9 +120,9 @@ async fn startup(root: &Path) -> Result<()> {
     };
     let startup_sink = sink.clone();
     let opening = tokio::spawn(async move {
-        // Same consuming constructor as open_owned_profile_observed; only the
+        // Same consuming constructor as open_owned_bro_profile_observed; only the
         // per-instance test scheduler differs. It receives the real OwnedDatabase.
-        Service::open_owned_profile_observed_startup(
+        Service::open_owned_bro_profile_observed_startup(
             owned,
             &config(),
             &crate::config::ContinuationConfig::default(),
@@ -204,7 +204,7 @@ async fn startup(root: &Path) -> Result<()> {
     // The default-off constructor consumes a fresh acquisition of the same file.
     let database = database(root).await?;
     let db = database.database().clone();
-    let disabled = Service::open_owned_profile(
+    let disabled = Service::open_owned_bro_profile(
         database,
         &config(),
         &crate::config::ContinuationConfig::default(),
@@ -223,7 +223,7 @@ async fn refusal(root: &Path, mode: &str) -> Result<()> {
     if mode == "observation-refused-bound" {
         let first = database(root).await?;
         let db = first.database().clone();
-        let service = Service::open_owned_profile_observed(
+        let service = Service::open_owned_bro_profile_observed(
             first,
             &config(),
             &crate::config::ContinuationConfig::default(),
@@ -240,7 +240,7 @@ async fn refusal(root: &Path, mode: &str) -> Result<()> {
     let before = sink.capacity_for_test().context("observer")?.collect()[0];
     let next = database(root).await?;
     let db = next.database().clone();
-    let opened = Service::open_owned_profile_observed(
+    let opened = Service::open_owned_bro_profile_observed(
         next,
         &config(),
         &crate::config::ContinuationConfig::default(),
@@ -263,7 +263,7 @@ async fn refusal(root: &Path, mode: &str) -> Result<()> {
     wait_file(root).await?;
     let next = database(root).await?;
     let db = next.database().clone();
-    let fresh = Service::open_owned_profile(
+    let fresh = Service::open_owned_bro_profile(
         next,
         &config(),
         &crate::config::ContinuationConfig::default(),

@@ -20,9 +20,9 @@ async fn archive_case(envelope: bool) -> Result<()> {
     let binding = harness
         .binding((0..9).rev().collect(), GenerationProtocol::ChatCompletions)
         .await?;
-    let values: bitrouter_ai::tenancy::generation_defaults::GenerationDefaultsEnvelopeV1 =
+    let values: bitrouter_ai::tenancy::generation_defaults::GenerationDefaultsEnvelope =
         serde_json::from_value(
-            json!({"schema_version":1,"supplemental":{"vendor_knob":"request-only-secret"}}),
+            json!({"schema_version":2,"configuration_defaults":"apply","supplemental":{"vendor_knob":"request-only-secret"}}),
         )?;
     let id = if envelope {
         let binding = binding.with_generation_defaults_envelope(&values)?;
@@ -48,7 +48,7 @@ async fn archive_case(envelope: bool) -> Result<()> {
     };
     let receipt = harness.receipt(&id).await?;
     if envelope {
-        ensure!(receipt.accepted_selection.generation_defaults_digest == Some(values.digest()?));
+        ensure!(receipt_selection(&receipt)?.generation_defaults_digest == Some(values.digest()?));
         ensure!(!serde_json::to_string(&receipt)?.contains("request-only-secret"));
     }
     verify_archive(harness, receipt).await
@@ -57,14 +57,14 @@ async fn archive_case(envelope: bool) -> Result<()> {
 #[tokio::test]
 async fn envelope_v2_choice_digest_survives_archive_without_payload_or_dispatch() -> Result<()> {
     let harness = OrderedHarness::new(9, 64, None).await?;
-    let values: bitrouter_ai::tenancy::generation_defaults::GenerationDefaultsEnvelopeV2 =
+    let values: bitrouter_ai::tenancy::generation_defaults::GenerationDefaultsEnvelope =
         serde_json::from_value(
             json!({"schema_version":2,"supplemental":{"vendor_knob":"request-only-secret"},"configuration_defaults":"preserve_absence"}),
         )?;
     let binding = harness
         .binding((0..9).rev().collect(), GenerationProtocol::ChatCompletions)
         .await?
-        .with_generation_defaults_envelope_v2(&values)?;
+        .with_generation_defaults_envelope(&values)?;
     let id = super::envelope::absence::invoke(
         &harness,
         &binding,
@@ -76,7 +76,7 @@ async fn envelope_v2_choice_digest_survives_archive_without_payload_or_dispatch(
     )
     .await?;
     let receipt = harness.receipt(&id).await?;
-    ensure!(receipt.accepted_selection.generation_defaults_digest == Some(values.digest()?));
+    ensure!(receipt_selection(&receipt)?.generation_defaults_digest == Some(values.digest()?));
     let encoded = serde_json::to_string(&receipt)?;
     ensure!(
         !encoded.contains("request-only-secret") && !encoded.contains("configuration_defaults")
@@ -84,11 +84,11 @@ async fn envelope_v2_choice_digest_survives_archive_without_payload_or_dispatch(
     verify_archive(harness, receipt).await
 }
 
-async fn verify_archive(harness: OrderedHarness, receipt: ExecutionReceiptV2) -> Result<()> {
+async fn verify_archive(harness: OrderedHarness, receipt: ExecutionReceipt) -> Result<()> {
     let id = receipt.execution_id.clone();
     let evidence = harness
         .control(false, HttpVersion::Http1Only)?
-        .usage_evidence_v2(&receipt)
+        .usage_evidence(&receipt)
         .await?;
     harness.fixture.service.shutdown().await?;
     let directory = tempfile::tempdir()?;
@@ -148,18 +148,17 @@ async fn verify_archive(harness: OrderedHarness, receipt: ExecutionReceiptV2) ->
             };
             let sdk = TenancyClient::with_options(&endpoint, OPERATOR, options.clone())?;
             let actual = sdk
-                .execution_v2(&receipt.installation_id, &receipt.tenant_id, &id)
+                .execution(&receipt.installation_id, &receipt.tenant_id, &id)
                 .await?;
             ensure!(serde_json::to_value(&actual)? == serde_json::to_value(&receipt)?);
             ensure!(
-                serde_json::to_value(sdk.usage_evidence_v2(&actual).await?)?
+                serde_json::to_value(sdk.usage_evidence(&actual).await?)?
                     == serde_json::to_value(&evidence)?
             );
-            ensure!(
-                sdk.execution(&receipt.installation_id, &receipt.tenant_id, &id)
-                    .await
-                    .is_err()
-            );
+            let reread = sdk
+                .execution(&receipt.installation_id, &receipt.tenant_id, &id)
+                .await?;
+            ensure!(serde_json::to_value(&reread)? == serde_json::to_value(&receipt)?);
             let page = sdk
                 .executions(
                     &receipt.installation_id,
@@ -173,7 +172,7 @@ async fn verify_archive(harness: OrderedHarness, receipt: ExecutionReceiptV2) ->
             let scoped = TenancyClient::with_options(&endpoint, harness.token()?, options)?;
             ensure!(
                 scoped
-                    .execution_v2(&receipt.installation_id, &receipt.tenant_id, &id)
+                    .execution(&receipt.installation_id, &receipt.tenant_id, &id)
                     .await
                     .is_err()
             );
@@ -185,9 +184,9 @@ async fn verify_archive(harness: OrderedHarness, receipt: ExecutionReceiptV2) ->
                 builder.http1_only()
             };
             let client = builder.build()?;
-            for suffix in ["v2", "usage-evidence/v2"] {
+            for suffix in ["", "/usage-evidence"] {
                 let url = format!(
-                    "{endpoint}/control/v1/tenancy/tenants/{}/executions/{id}/{suffix}",
+                    "{endpoint}/control/v1/tenants/{}/executions/{id}{suffix}",
                     receipt.tenant_id
                 );
                 let reply = client
@@ -227,6 +226,21 @@ async fn verify_archive(harness: OrderedHarness, receipt: ExecutionReceiptV2) ->
                     .send()
                     .await?;
                 ensure!(!head.status().is_success());
+            }
+            for suffix in ["v2", "usage-evidence/v2"] {
+                let reply = client
+                    .get(format!(
+                        "{endpoint}/control/v1/tenancy/tenants/{}/executions/{id}/{suffix}",
+                        receipt.tenant_id
+                    ))
+                    .bearer_auth(OPERATOR)
+                    .header(
+                        "bitrouter-installation-id",
+                        receipt.installation_id.as_str(),
+                    )
+                    .send()
+                    .await?;
+                ensure!(reply.status() == StatusCode::NOT_FOUND);
             }
             Ok::<_, anyhow::Error>(())
         }

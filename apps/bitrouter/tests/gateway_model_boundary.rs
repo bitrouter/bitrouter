@@ -258,12 +258,14 @@ fn invocation_failures_retain_sdk_policy_and_cancellation_does_not_fallback() {
 #[test]
 fn conversion_errors_keep_reports_and_project_request_vs_output_status()
 -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use bitrouter::gateway::conversion_report::{
+        ConversionDisposition, ConversionLocation, ConversionStage,
+    };
     use bitrouter::gateway::model::conversion::request_admission;
     use bitrouter::gateway::model::error::ModelError;
     use bitrouter::gateway::model::protocol::chat_completions::ChatCompletionsAdapter;
     use bitrouter::gateway::model::protocol::responses::ResponsesAdapter;
     use bitrouter::gateway::model::protocol::{InboundAdapter, OutboundAdapter};
-    use bitrouter_ai::conversion::{ConversionDisposition, ConversionLocation, ConversionStage};
     let native = serde_json::json!({"type":"reasoning","id":"rs-secret","summary":[],"encrypted_content":"opaque-secret"});
     let source = ResponsesAdapter
         .parse_request(serde_json::json!({"model":"fixture","input":[native.clone()]}))?;

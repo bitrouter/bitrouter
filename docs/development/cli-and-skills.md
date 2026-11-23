@@ -96,7 +96,38 @@ SDK decision_model 配置、typed executor、模型路由评估、provider Decis
 MCP 部分失败仍保留已保存 Router 配置并阻止 Finish；setup 不授予来源许可。
 CLI reference、AGENTS、分发主 skill/引用和三个 plugin manifests 同步。
 
-## 8. 验收
+## 8. M0 Policy 与访问控制命令边界
+
+以下是 M0 的 CLI 约定；格式由
+[Policy](../specs/policy/README.md)、
+[Configuration](../specs/configuration/README.md) 和
+[Service API](../specs/service-api/README.md) 定义。
+
+Policy init/check/show/status/diff、显式 publish/rollback 使用同一公共 source。
+默认查看所选实例 active；disk/check 是显式离线操作，远端失败不能用本地文件
+替代。show 返回完整、可重新提交的 source，身份和来源在报告外层。publish
+显式提供 CAS，不从旧 parent_digest 猜测。rollback 只激活当前契约的旧 revision，
+保留原子替换、冲突拒绝和失败恢复，不恢复旧 lock snapshot。
+
+默认文件是 policy.yaml；显式 policy.path 内容也只能是新 source。显式文件缺失或
+无效时失败，不发现旧 lock 或回退默认。删除 policy.mode 及别名、presets/variants、
+旧 --preset/路由地址/迁移入口。compile/evolve/verify --evidence 离开成熟 Policy
+命令；保留算法只能由明确 BRO harness 入口持有。ACL 创建移到明确的
+access-policy 命名空间，移除 policy create 的旧重载；现有鉴权继续保留。
+
+控制客户端按 protocol2 和逐 action descriptor 校验，不回退旧 actions。
+Policy status/show、models、route、reload descriptor2；其余 action 版本见规范表。
+全部 SDK 路径都校验，不能只在 CLI 预检。CLI 帮助、schema、默认/模板、分发
+skill 和 plugin manifests 随真实实现同步，不能只换输出字段而保留旧执行链。
+
+Eval 由客户端针对确切修订推理/评估，然后提交冻结事实。租户模型 Policy、
+无 Policy 租户评估和 gateway 评估使用封闭、独立的 schema2 身份 profile。
+提交、freeze 和草稿不激活配置；新 source 的 revision 创建与授权/CAS 激活独立。
+新程序只打开当前格式数据，不提供旧 paid recovery；旧任务由旧部署处理。
+当前 BRO 本地义务的 producer/reader 必须成对保留或移交，不能借此获得租户服务
+入口。独立 BRO session/技能恢复不因 Policy 切换被按版本号一并删除。
+
+## 9. 验收
 
 1. 实际 CLI 在外部准备的目录上完成 list/show/read/write，无安装索引/版本库。
 2. 同名可区分；非法 frontmatter 写入不破坏原文；路径/符号链接不能越界。

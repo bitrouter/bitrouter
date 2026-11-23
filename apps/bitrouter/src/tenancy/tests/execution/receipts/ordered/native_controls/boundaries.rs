@@ -1,5 +1,5 @@
 use super::*;
-use bitrouter_ai::tenancy::{admission::AdmissionProfileV1, operation::DispatchState};
+use bitrouter_ai::tenancy::{admission::AdmissionProfile, operation::DispatchState};
 
 mod authority;
 
@@ -135,9 +135,9 @@ async fn native_profiled_duplicate_projections_keep_original_ordinals_and_skip_w
 -> Result<()> {
     let profiles = (0..4)
         .map(|index| {
-            serde_json::from_value::<AdmissionProfileV1>(json!({
+            serde_json::from_value::<AdmissionProfile>(json!({
         "schema_version":1,"rate":{"rate_group_id":format!("native-group-{index}"),
-        "member_rpm":if index == 2 {0} else {100}},"health":null,
+        "member_rpm":if index == 2 {0} else {100}},"health":null,"health_group_id":null,
         "fallback":"ordered_terminal_rejections_v1"}))
         })
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -199,7 +199,7 @@ async fn native_profiled_duplicate_projections_keep_original_ordinals_and_skip_w
     let binding = control.ordered_capabilities().await?.bind(
         h.revision.revision_id.clone(),
         "native-ordinals".try_into()?,
-        OrderedCandidateSelectionV1 {
+        OrderedCandidateSelection {
             schema_version: 1,
             admission_mode: manifest.admission_mode,
             route: h.route.clone(),
@@ -216,12 +216,12 @@ async fn native_profiled_duplicate_projections_keep_original_ordinals_and_skip_w
     )
     .await?;
     let receipt = h.receipt(&id).await?;
-    ensure!(receipt.accepted_selection.candidate_indices == [1, 3, 2, 0]);
+    ensure!(receipt_selection(&receipt)?.candidate_indices == [1, 3, 2, 0]);
     ensure!(
         receipt
             .attempts
             .iter()
-            .map(|a| a.candidate_index)
+            .filter_map(|a| a.candidate_index)
             .collect::<Vec<_>>()
             == [3, 0]
     );
@@ -230,7 +230,9 @@ async fn native_profiled_duplicate_projections_keep_original_ordinals_and_skip_w
         ensure!(
             serde_json::to_value(attempt.target.as_ref().context("actual target")?)?
                 == serde_json::to_value(
-                    &manifest.candidates[usize::from(attempt.candidate_index)].target
+                    &manifest.candidates
+                        [usize::from(attempt.candidate_index.context("ordered ordinal")?)]
+                    .target
                 )?
         );
     }
@@ -263,7 +265,7 @@ async fn native_control_envelope_digest_mutation_refuses_before_send() -> Result
     let binding = h
         .binding(vec![0], GenerationProtocol::Responses)
         .await?
-        .with_generation_defaults_envelope_v2(&envelope)?;
+        .with_generation_defaults_envelope(&envelope)?;
     let mut headers = caller_timeout::ordered_headers(&h, &binding)?;
     headers.insert(HEADER, PROVIDER_NATIVE_V1.parse()?);
     let mut body = json!({"model":MODEL,"input":"next",

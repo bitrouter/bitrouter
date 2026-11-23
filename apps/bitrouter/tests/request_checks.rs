@@ -5,8 +5,8 @@ use std::time::Duration;
 use anyhow::{Context, Result, ensure};
 use axum_test::TestServer;
 use bitrouter::config;
+use bitrouter::gateway::extensions::request_check::{Callback, Decision};
 use bitrouter::gateway::http::{AppState, build_router};
-use bitrouter_ai::extension::request_check::{Callback, Decision};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use wiremock::matchers::{method, path};
@@ -416,9 +416,11 @@ fn native_config(config: &mut config::Config, id: &str, revision: &str) {
     );
 }
 
+#[cfg(feature = "guardrails")]
 #[tokio::test]
 async fn regex_extensions_preserve_decisions_and_router_bindings() -> Result<()> {
-    use bitrouter_guardrails::{checker, config::InputGuardrailConfig};
+    use bitrouter::gateway::extensions::guardrails::checker;
+    use bitrouter_guardrails::config::InputGuardrailConfig;
 
     let rules: InputGuardrailConfig = serde_json::from_value(json!({
         "scope": "input", "rules": [{"name": "secret", "pattern": "secret-\\n[0-9]+", "action": "block"}]
@@ -469,7 +471,7 @@ async fn regex_extensions_preserve_decisions_and_router_bindings() -> Result<()>
 async fn unified_entry_preserves_router_binding_order_and_leaves_unbound_checks_inert() -> Result<()>
 {
     use bitrouter::config::router::RouterRequestCheck;
-    use bitrouter_ai::extension::request_check::{
+    use bitrouter::gateway::extensions::request_check::{
         Callback as CheckCallback, Decision as CheckDecision,
     };
     use std::sync::{Arc, mpsc};
@@ -601,7 +603,7 @@ async fn undeclared_registrations_stay_inactive_with_sorted_startup_diagnostics(
 
 #[tokio::test]
 async fn unified_entry_registration_failure_precedes_database_startup() -> Result<()> {
-    use bitrouter_ai::extension::request_check::Decision as CheckDecision;
+    use bitrouter::gateway::extensions::request_check::Decision as CheckDecision;
     use std::sync::Arc;
 
     let directory = tempfile::tempdir()?;
@@ -667,7 +669,7 @@ async fn unified_entry_registration_failure_precedes_database_startup() -> Resul
 
 #[tokio::test]
 async fn unified_entry_binding_failures_precede_database_startup() -> Result<()> {
-    use bitrouter_ai::extension::request_check::Decision as CheckDecision;
+    use bitrouter::gateway::extensions::request_check::Decision as CheckDecision;
     use std::sync::Arc;
 
     for (case, diagnostic, bound) in [
@@ -717,10 +719,10 @@ async fn unified_entry_binding_failures_precede_database_startup() -> Result<()>
 
 #[tokio::test]
 async fn native_failures_and_unbound_registration_never_dispatch_unintended_work() -> Result<()> {
-    use bitrouter::request_checks::RequestCheckRuntime;
-    use bitrouter_ai::extension::request_check::{
+    use bitrouter::gateway::extensions::request_check::{
         Callback as CheckCallback, Decision as CheckDecision,
     };
+    use bitrouter::request_checks::RequestCheckRuntime;
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},

@@ -25,7 +25,7 @@ impl Resources {
         );
         let manifest: Manifest = serde_json::from_slice(approved)?;
         ensure!(
-            manifest.format == 1
+            (manifest.format == 1 || manifest.format == 4)
                 && manifest.installation_id == self.installation
                 && manifest.resources.len() <= MAX_RESOURCES,
             "approved static manifest identity"
@@ -138,11 +138,8 @@ impl Resources {
                 "configuration readback changed"
             );
             ensure!(
-                matches!(
-                    stored.revision.document.learning.mode,
-                    bitrouter_ai::tenancy::configuration::LearningMode::Off
-                ) && stored.revision.document.learning.max_evaluations == 0,
-                "recovery first profile excludes automatic learning"
+                !stored.revision.document.eval_publication,
+                "static recovery excludes evaluation publication"
             );
             let validated = validation::compiled_with_operation(self, &stored, Some(budget))?;
             validated

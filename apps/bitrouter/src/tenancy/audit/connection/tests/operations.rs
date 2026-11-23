@@ -10,7 +10,6 @@ use bitrouter_ai::tenancy::{
 };
 use chrono::Utc;
 use sea_orm::TransactionTrait;
-use sea_orm_migration::{MigratorTrait, SchemaManager};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 struct Counted<'a> {
@@ -55,19 +54,7 @@ impl ConnectionTrait for Counted<'_> {
 
 async fn seed(url: &str, count: usize, wide: bool) -> Result<()> {
     let db = crate::db::connect(url).await?;
-    let manager = SchemaManager::new(&db);
-    for migration in crate::db::migration::Migrator::migrations() {
-        if [
-            "m20240101_000028_",
-            "m20240101_000029_",
-            "m20240101_000039_",
-        ]
-        .iter()
-        .any(|prefix| migration.name().starts_with(prefix))
-        {
-            migration.up(&manager).await?;
-        }
-    }
+    crate::db::run_migrations(&db).await?;
     let mut state = Snapshot::from_header(&AuthorityHeader {
         installation: if wide {
             "i".repeat(128).try_into()?
@@ -81,8 +68,8 @@ async fn seed(url: &str, count: usize, wide: bool) -> Result<()> {
         created_at: "2026-01-01T00:00:00Z".into(),
     });
     db.execute(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
-        "INSERT INTO tenancy_installation(singleton,installation_id,schema_version,authority_revision,operation_ids,safety_operation_ids,saturated,created_at) VALUES(1,?,2,10,0,0,0,'2026-01-01T00:00:00Z')",
-        [state.installation.as_str().into()],
+        "INSERT INTO tenancy_installation(singleton,installation_id,schema_version,authority_revision,operation_ids,safety_operation_ids,saturated,created_at) VALUES(1,?,?,10,0,0,0,'2026-01-01T00:00:00Z')",
+        [state.installation.as_str().into(), crate::tenancy::AUTHORITY_SCHEMA_VERSION.into()],
     )).await?;
     let principal = PrincipalId::for_control_credential(&if wide {
         "p".repeat(119)

@@ -47,29 +47,6 @@ pub struct GenerationDefaults {
     pub temperature: f64,
 }
 
-/// Learning behavior selected by a tenant configuration.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LearningMode {
-    /// Do not initiate learning work.
-    Off,
-    /// Record observations without exploration.
-    Observe,
-    /// Permit bounded exploration under current grants.
-    Explore,
-}
-
-/// Bounded learning settings, enforced by the service's scheduling feature.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Learning {
-    /// Selected learning behavior.
-    pub mode: LearningMode,
-    /// Maximum evaluation work, at most 100,000.
-    #[serde(deserialize_with = "super::number::integer")]
-    pub max_evaluations: u32,
-}
-
 /// Technical tenant admission limits, further bounded by installation limits.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -80,9 +57,6 @@ pub struct Limits {
     /// At most 256 queued work items.
     #[serde(deserialize_with = "super::number::integer")]
     pub queued_work: u16,
-    /// At most eight learning jobs.
-    #[serde(deserialize_with = "super::number::integer")]
-    pub learning_jobs: u8,
 }
 
 /// Tenant framework settings; no arbitrary URL, path, environment or executable fields.
@@ -96,8 +70,8 @@ pub struct Configuration {
     pub policy: Option<ResourceRef>,
     /// Generation defaults for this revision.
     pub generation_defaults: GenerationDefaults,
-    /// Learning settings for this revision.
-    pub learning: Learning,
+    /// Publish evaluation subjects for executions bound to this revision.
+    pub eval_publication: bool,
     /// Requested technical admission limits.
     pub limits: Limits,
 }
@@ -202,11 +176,8 @@ impl Validate for Configuration {
                 && (0.0..=2.0).contains(&self.generation_defaults.temperature),
             "generation bounds",
         )?;
-        require(self.learning.max_evaluations <= 100_000, "learning bound")?;
         require(
-            self.limits.active_executions <= 128
-                && self.limits.queued_work <= 256
-                && self.limits.learning_jobs <= 8,
+            self.limits.active_executions <= 128 && self.limits.queued_work <= 256,
             "admission bounds",
         )?;
         bytes(self, 1_048_576)

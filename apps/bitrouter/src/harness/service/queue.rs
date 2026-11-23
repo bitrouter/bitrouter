@@ -16,14 +16,14 @@ use super::unknown_turn;
 use crate::harness::agent::Agent;
 use crate::harness::storage::{AcceptedKey, ExecutionRecord};
 use crate::harness::thread::ThreadTarget;
-use bitrouter_ai::harness::runtime::ErrorCode;
-use bitrouter_ai::harness::thread::ThreadSnapshot;
-use bitrouter_ai::harness::thread::ThreadStatus;
-use bitrouter_ai::harness::turn::TurnEvent;
-use bitrouter_ai::harness::turn::TurnEventPayload;
-use bitrouter_ai::harness::turn::TurnReceipt;
-use bitrouter_ai::harness::turn::TurnStatus;
-use bitrouter_ai::harness::turn::VerificationStatus;
+use crate::managed_contract::harness::runtime::ErrorCode;
+use crate::managed_contract::harness::thread::ThreadSnapshot;
+use crate::managed_contract::harness::thread::ThreadStatus;
+use crate::managed_contract::harness::turn::TurnEvent;
+use crate::managed_contract::harness::turn::TurnEventPayload;
+use crate::managed_contract::harness::turn::TurnReceipt;
+use crate::managed_contract::harness::turn::TurnStatus;
+use crate::managed_contract::harness::turn::VerificationStatus;
 
 impl ThreadService {
     pub async fn cancel_queued_turn(

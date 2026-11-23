@@ -196,9 +196,9 @@ pub(crate) async fn review_in(
     budget: &OperationBudget<'_>,
 ) -> Result<(String, Summary, i64, EvidencePacket)> {
     use crate::storage::{operation_budget::Error, scope::KeyDomain};
-    use bitrouter_ai::tenancy::{configuration::LearningMode, operation::ErrorCode};
+    use bitrouter_ai::tenancy::operation::ErrorCode;
     ensure!(
-        association.descriptor().mode != LearningMode::Off,
+        association.descriptor().mode,
         Error::Rejected(ErrorCode::NotFound)
     );
     let (_, state) = association.connection_in(tx, budget).await?;

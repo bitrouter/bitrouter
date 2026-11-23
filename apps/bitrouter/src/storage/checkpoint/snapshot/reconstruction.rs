@@ -2,7 +2,7 @@
 //! Scheduling and execution transitions are implemented by core.
 
 use crate::gateway::pipeline::native_projection::ProjectionRecord;
-use bitrouter_ai::core::protocol::CoreError;
+use crate::managed_contract::protocol::CoreError;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

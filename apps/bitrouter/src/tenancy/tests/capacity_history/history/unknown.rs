@@ -66,6 +66,8 @@ pub(super) async fn seed(h: &Harness, reference: &ResourceRef) -> Result<Retaine
             receipt.state = ReceiptState::Incomplete;
             receipt.outcome = Outcome::Failed;
             receipt.attempts.push(Attempt {
+                candidate_index: None,
+                observed_http_status: None,
                 attempt_id: "uncertain-attempt".try_into()?,
                 target: None,
                 outcome: Outcome::Unknown,

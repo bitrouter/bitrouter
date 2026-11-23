@@ -2,42 +2,18 @@
 //! classifier quality claim or an alternative production routing algorithm.
 use bitrouter::config::Config;
 use bitrouter::config::decision::DecisionModelConfig;
-use bitrouter::policy_lock::{
-    CertificateSource, PolicyCertificate, PolicyLock, PromotionVerdict, RouteOwner,
-};
+use bitrouter_ai::policy::Document;
 use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
-pub fn certify_routes(lock: &mut PolicyLock) {
-    for (name, policy) in &mut lock.policies {
-        if !policy.routes.is_empty() {
-            policy.predictor = Some(
-                bitrouter::gateway::routing::workflow::predictive::compiled_predictor_contract(),
-            );
-        }
-        for (key, tier) in &policy.routes {
-            lock.certificates.entry(name.clone()).or_default().insert(
-                key.clone(),
-                PolicyCertificate {
-                    classifier_digest: None,
-                    owner: RouteOwner::Operator,
-                    selected_tier: tier.clone(),
-                    baseline_tier: policy.default_tier.clone(),
-                    source: CertificateSource::Operator,
-                    eligible_episodes: 0,
-                    independent_tasks: 0,
-                    quality: None,
-                    economics: None,
-                    latency: None,
-                    critical_violations: 0,
-                    verdict: PromotionVerdict::Retain,
-                    evaluator_config_digest: None,
-                    compiler_config_digest: format!("sha256:{}", "0".repeat(64)),
-                    evidence_digest: format!("sha256:{}", "0".repeat(64)),
-                },
-            );
-        }
+/// Pin only the installed classifier identity; public source has no certificates.
+/// Callers author the source's class keys directly, without an IR-key prefix.
+pub fn pin_classifier(source: &mut Document) {
+    let digest = bitrouter::gateway::routing::workflow::predictive::compiled_predictor_contract()
+        .config_digest;
+    for policy in source.policies.values_mut() {
+        policy.classifier_digest = (!policy.routes.is_empty()).then(|| digest.clone());
     }
 }
 

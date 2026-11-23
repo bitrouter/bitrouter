@@ -3,11 +3,9 @@ use super::m20240101_000028_resource_tenancy::{identity, payload};
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 use sea_orm_migration::prelude::*;
 
-#[derive(DeriveMigrationName)]
-pub struct Migration;
 const INTENTS: &str = "tenancy_dispatch_intents";
 
-fn intent_table(backend: DatabaseBackend) -> TableCreateStatement {
+pub(super) fn intent_table(backend: DatabaseBackend) -> TableCreateStatement {
     let mut table = Table::create();
     table.table(Alias::new(INTENTS));
     if backend == DatabaseBackend::MySql {
@@ -91,45 +89,6 @@ async fn sqlite_indexes(db: &impl ConnectionTrait, table: &str) -> Result<(), Db
 }
 fn incompatible() -> DbErr {
     DbErr::Custom("incompatible ordered receipt storage".into())
-}
-#[async_trait::async_trait]
-impl MigrationTrait for Migration {
-    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        let db = manager.get_connection();
-        let backend = manager.get_database_backend();
-        if manager.has_table(INTENTS).await?
-            || manager
-                .has_column("tenancy_execution_receipts", "receipt_format")
-                .await?
-        {
-            return Err(incompatible());
-        }
-        let invalid = Query::select()
-            .from(Alias::new("tenancy_installation"))
-            .expr(Expr::val(1))
-            .and_where(Expr::col(Alias::new("schema_version")).is_not_in([1, 2]))
-            .limit(1)
-            .to_owned();
-        if db.query_one(backend.build(&invalid)).await?.is_some() {
-            return Err(incompatible());
-        }
-        manager
-            .alter_table(
-                Table::alter()
-                    .table(Alias::new("tenancy_execution_receipts"))
-                    .add_column(format_column())
-                    .to_owned(),
-            )
-            .await?;
-        manager.create_table(intent_table(backend)).await?;
-        manager.create_index(directory_index()).await?;
-        validate(db).await
-    }
-    async fn down(&self, _: &SchemaManager) -> Result<(), DbErr> {
-        Err(DbErr::Custom(
-            "ordered receipt storage requires verified-backup rollback".into(),
-        ))
-    }
 }
 
 /// SQLite production and archive readers verify immutable storage before decoding.

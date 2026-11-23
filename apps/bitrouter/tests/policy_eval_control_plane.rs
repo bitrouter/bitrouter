@@ -1,541 +1,160 @@
+//! Mature gateway exchange. Client-driven tenant Policy updates are exercised in
+//! tenancy::tests::execution::model_policy, including real revision-bound inference.
+use bitrouter::eval::{EvalService, admission::SubmissionPrincipal, store::EvalStore};
+use bitrouter_ai::eval::{
+    EvalScope, EvalSubject, EvalSubjectIdentity, EvalVerdict, EvaluationResult, EvaluatorIdentity,
+    EvaluatorKind, FreezeRequest,
+};
+use bitrouter_sdk::gateway::GatewayClient;
 use std::collections::{BTreeMap, BTreeSet};
+use tokio_util::task::AbortOnDropHandle;
 
-use bitrouter::core::eval::EvalService;
-use bitrouter::core::eval::admission::SubmissionPrincipal;
-use bitrouter::core::eval::compiler::EvalEvidenceSnapshot;
-use bitrouter::core::eval::settlement::EvalSettlementRecorder;
-use bitrouter::core::eval::store::EvalStore;
-use bitrouter::core::policy::{CompileInput, compile_candidate};
-use bitrouter::gateway::caller::CallerContext;
-use bitrouter::gateway::model::target::AuthScheme;
-use bitrouter::gateway::observability::decision::{
-    EvalInvocation, PendingEvalDecision, PendingEvalDecisionStore,
-};
-use bitrouter::gateway::observability::event::EventBus;
-use bitrouter::gateway::observability::prediction::PredictiveResponseObserver;
-use bitrouter::gateway::pipeline::context::PipelineContext;
-use bitrouter::gateway::pipeline::hooks::{HopOutcome, ObserveHook};
-use bitrouter::gateway::pipeline::settlement::{SettlementContext, SettlementRecorder};
-use bitrouter::gateway::pipeline::types::{ExecutionResult, PipelineRequest, RoutingTarget};
-use bitrouter::policy_lock::{PolicyDefinition, PolicyLock, deterministic_yaml, semantic_digest};
-use bitrouter_ai::types::{
-    ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Prompt, UsageOrigin,
-};
-use {
-    bitrouter::storage::evaluation::evidence_digest, bitrouter_ai::eval::EVAL_SCHEMA_VERSION,
-    bitrouter_ai::eval::EvalDecisionRef, bitrouter_ai::eval::EvalScope,
-    bitrouter_ai::eval::EvalSubject, bitrouter_ai::eval::EvalVerdict,
-    bitrouter_ai::eval::EvaluationResult, bitrouter_ai::eval::EvaluatorIdentity,
-    bitrouter_ai::eval::EvaluatorKind,
-};
-
-fn base_lock() -> PolicyLock {
-    PolicyLock {
-        policies: BTreeMap::from([(
-            "auto".to_string(),
-            PolicyDefinition {
-                tiers: BTreeMap::from([
-                    ("economy".to_string(), "vendor:economy".into()),
-                    ("strong".to_string(), "vendor:strong".into()),
-                ]),
-                default_tier: Some("strong".to_string()),
-                tool_use_tier: Some("strong".to_string()),
-                tool_safe_tiers: vec!["strong".to_string(), "economy".to_string()],
-                ..PolicyDefinition::default()
-            },
-        )]),
-        ..Default::default()
-    }
-}
-
-#[test]
-fn policy_publish_cli_promotes_the_exact_compiled_candidate() -> anyhow::Result<()> {
-    let directory = tempfile::tempdir()?;
-    let config_path = directory.path().join("bitrouter.yaml");
-    let active_path = directory.path().join("policy-lock.yaml");
-    let candidate_path = directory.path().join("candidate.yaml");
-    std::fs::write(
-        &config_path,
-        r#"policy:
-  mode: adaptive
-presets:
-  auto:
-    model: vendor:strong
-    policy: auto
-"#,
-    )?;
-    let active = base_lock();
-    std::fs::write(&active_path, deterministic_yaml(&active)?)?;
-    let candidate = compile_candidate(CompileInput {
-        current: &active,
-        parent_digest: Some(&semantic_digest(&active)?),
-        snapshot_time_unix_ms: 1_785_369_600_000,
-        eval: None,
-        proposed_progress_guards: None,
-    })?
-    .document;
-    std::fs::write(&candidate_path, deterministic_yaml(&candidate)?)?;
-
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_bro"))
-        .args([
-            "policy",
-            "publish",
-            candidate_path
-                .to_str()
-                .ok_or_else(|| anyhow::anyhow!("candidate path is not UTF-8"))?,
-            "--config",
-            config_path
-                .to_str()
-                .ok_or_else(|| anyhow::anyhow!("config path is not UTF-8"))?,
-        ])
-        .output()?;
-
-    assert!(
-        output.status.success(),
-        "publish failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let published: PolicyLock = serde_saphyr::from_str(&std::fs::read_to_string(active_path)?)?;
-    assert_eq!(semantic_digest(&published)?, semantic_digest(&candidate)?);
-    Ok(())
-}
-
-#[test]
-fn frozen_policy_rejects_candidate_without_touching_active_bytes() -> anyhow::Result<()> {
-    let directory = tempfile::tempdir()?;
-    let config_path = directory.path().join("bitrouter.yaml");
-    let active_path = directory.path().join("policy-lock.yaml");
-    let candidate_path = directory.path().join("candidate.yaml");
-    std::fs::write(
-        &config_path,
-        "policy:\n  mode: frozen\npresets:\n  auto:\n    model: vendor:strong\n    policy: auto\n",
-    )?;
-    let active = base_lock();
-    let active_bytes = deterministic_yaml(&active)?;
-    std::fs::write(&active_path, &active_bytes)?;
-    std::fs::write(&candidate_path, deterministic_yaml(&compile(&active)?)?)?;
-
-    let output = publish_command(&candidate_path, &config_path)?;
-
-    assert!(!output.status.success());
-    assert_eq!(std::fs::read_to_string(active_path)?, active_bytes);
-    Ok(())
+fn subject() -> anyhow::Result<EvalSubject> {
+    Ok(EvalSubject {
+        spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
+        identity: EvalSubjectIdentity::GatewayGeneric {},
+        eval_id: "client-eval".into(),
+        scope: EvalScope::Task,
+        subject_id: "client-task".into(),
+        cohort: None,
+        holdout: false,
+        decisions: Vec::new(),
+        requested_dimensions: BTreeSet::new(),
+        evidence: Vec::new(),
+        evidence_digest: bitrouter::storage::evaluation::evidence_digest(&[])?,
+        observed_at: "2026-11-18T00:00:00Z".into(),
+    })
 }
 
 #[tokio::test]
-async fn stale_candidate_loses_compare_and_swap_without_touching_active_bytes() -> anyhow::Result<()>
-{
-    let directory = tempfile::tempdir()?;
-    let config_path = directory.path().join("bitrouter.yaml");
-    let active_path = directory.path().join("policy-lock.yaml");
-    let candidate_path = directory.path().join("candidate.yaml");
-    std::fs::write(
-        &config_path,
-        "policy:\n  mode: adaptive\npresets:\n  auto:\n    model: vendor:strong\n    policy: auto\n",
-    )?;
-    let original = base_lock();
-    std::fs::write(&candidate_path, deterministic_yaml(&compile(&original)?)?)?;
-    let mut newer = original;
-    newer
-        .policies
-        .get_mut("auto")
-        .ok_or_else(|| anyhow::anyhow!("base fixture must contain the auto policy"))?
-        .default_tier = Some("economy".into());
-    let newer_bytes = deterministic_yaml(&newer)?;
-    std::fs::write(&active_path, &newer_bytes)?;
-
-    let error =
-        bitrouter::core::policy::files::publish_candidate_file(&config_path, &candidate_path)
-            .await
-            .err()
-            .ok_or_else(|| anyhow::anyhow!("stale publication unexpectedly succeeded"))?;
-
-    assert_eq!(std::fs::read_to_string(active_path)?, newer_bytes);
-    assert!(error.to_string().contains("parent digest"));
-    Ok(())
-}
-
-#[test]
-fn concurrent_publishers_allow_exactly_one_parent_transition() -> anyhow::Result<()> {
-    let directory = tempfile::tempdir()?;
-    let active_path = directory.path().join("policy-lock.yaml");
-    let history_path = directory.path().join("history");
-    let active = base_lock();
-    let candidate = compile(&active)?;
-    let parent_digest = semantic_digest(&active)?;
-    std::fs::write(&active_path, deterministic_yaml(&active)?)?;
-    let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
-
-    let publishers = (0..2)
-        .map(|_| {
-            let active_path = active_path.clone();
-            let history_path = history_path.clone();
-            let candidate = candidate.clone();
-            let parent_digest = parent_digest.clone();
-            let barrier = barrier.clone();
-            std::thread::spawn(move || {
-                barrier.wait();
-                bitrouter::policy_lock::publish_candidate(
-                    &active_path,
-                    &parent_digest,
-                    &candidate,
-                    &history_path,
-                )
-            })
-        })
-        .collect::<Vec<_>>();
-    barrier.wait();
-
-    let mut successes = 0;
-    let mut failures = Vec::new();
-    for publisher in publishers {
-        match publisher.join() {
-            Ok(Ok(_)) => successes += 1,
-            Ok(Err(error)) => failures.push(error.to_string()),
-            Err(_) => anyhow::bail!("publisher thread panicked"),
-        }
-    }
-
-    assert_eq!(successes, 1);
-    assert_eq!(failures.len(), 1);
-    assert!(failures[0].contains("policy lock changed"));
-    let published: PolicyLock = serde_saphyr::from_str(&std::fs::read_to_string(active_path)?)?;
-    assert_eq!(semantic_digest(&published)?, semantic_digest(&candidate)?);
-    Ok(())
-}
-
-fn compile(active: &PolicyLock) -> anyhow::Result<PolicyLock> {
-    Ok(compile_candidate(CompileInput {
-        current: active,
-        parent_digest: Some(&semantic_digest(active)?),
-        snapshot_time_unix_ms: 1_785_369_600_000,
-        eval: None,
-        proposed_progress_guards: None,
-    })?
-    .document)
-}
-
-#[tokio::test]
-async fn policy_eval_control_plane_records_observed_action_without_quality_reward()
+async fn gateway_sdk_exchange_preserves_current_versions_and_refuses_tenant_profiles()
 -> anyhow::Result<()> {
     let db = bitrouter::db::connect("sqlite::memory:").await?;
     bitrouter::db::run_migrations(&db).await?;
-    let store = EvalStore::new(db);
-    let pending = PendingEvalDecisionStore::default();
-    let invocation = EvalInvocation::new("local");
-    pending.insert(
-        &invocation,
-        PendingEvalDecision {
-            request_id: "request-observed".into(),
-            decision_id: "decision-observed".into(),
-            policy: "auto:cost".into(),
-            policy_digest:
-                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
-            route_projection: "semantic_route/v1|unknown|implement|normal".into(),
-            request_key: "semantic_route/v1|unknown|implement|normal".into(),
-            selected_tier: "economy".into(),
-            selected_effort: None,
-            baseline_tier: Some("strong".into()),
-            baseline_effort: None,
-            experiment: None,
-            route_measurement: None,
-            preset: Some("auto:cost".into()),
-            holdout: false,
-            continuation_proposed_tier: None,
-            continuation_proposed_model: None,
-            continuation_proposed_effort: None,
-            continuation_adjustment: None,
-            predicted_role: Some("implement".into()),
-            predicted_task_family: None,
-            predicted_action: Some("mutate".into()),
-            prediction_confidence_ppm: Some(900_000),
-            task_family_confidence_ppm: None,
-            task_family_reason_codes: Vec::new(),
-            predictor_contract_digest: Some(
-                "sha256:7483fb5fa02c0141f568b82287234895c666fef426789e32783bdd3a00cea3ec".into(),
-            ),
-            prediction_confidence_kind: Some("heuristic_margin".into()),
-            observation: None,
-            observed_at: "2026-08-08T00:00:00Z".into(),
-        },
-    );
-    let observer = PredictiveResponseObserver::new(pending.clone());
-    let mut context = PipelineContext::new(PipelineRequest {
-        extensions: http::Extensions::new(),
-        request_id: "request-observed".into(),
-        original_model: "model".into(),
-        model: "model".into(),
-        caller: CallerContext::local(),
-        headers: http::HeaderMap::new(),
-        input: bitrouter::gateway::pipeline::types::PipelineInput::Generation(Box::new(Prompt {
-            model: "model".into(),
-            system: None,
-            system_provider_metadata: BTreeMap::new(),
-            messages: Vec::new(),
-            tools: Vec::new(),
-            params: GenerationParams::default(),
-            response_format: None,
-            tool_choice: None,
-            stream: false,
-        })),
-        inbound_protocol: Some(ApiProtocol::Responses),
-    });
-    context.emit(invocation.clone());
-    context.insert_extension(std::sync::Arc::new(invocation.clone()));
-    let execution = ExecutionResult {
-        provider_id: "provider".into(),
-        model_id: "model".into(),
-        account_label: None,
-        result: (GenerateResult {
-            content: vec![Content::ToolCall {
-                id: "call-1".into(),
-                name: "apply_patch".into(),
-                arguments: r#"{"private":"never-persist"}"#.into(),
-                provider_executed: false,
-                dynamic: false,
-                provider_metadata: BTreeMap::new(),
-            }],
-            usage: None,
-            finish_reason: Some(FinishReason::Stop),
-            response_id: None,
-            stop_details: None,
-            provider_metadata: BTreeMap::new(),
-        })
-        .into(),
-        request_duration_ms: 1,
-        upstream_duration_ms: Some(1),
-        server_tool_calls: Vec::new(),
-    };
-    observer
-        .on_hop_end(
-            &context,
-            &RoutingTarget {
-                registry: None,
-                provider_name: "provider".into(),
-                service_id: "model".into(),
-                api_base: "https://example.invalid".into(),
-                api_key: String::new(),
-                api_protocol: ApiProtocol::Responses,
-                chat_token_limit_field: None,
-                chat_supports_store: None,
-                chat_supports_stream_options: None,
-                chat_google_extensions: false,
-                reasoning_effort: None,
-                model_constraints: Default::default(),
-                account_label: None,
-                api_key_override: None,
-                api_base_override: None,
-                auth_scheme: AuthScheme::XApiKey,
-                headers: Vec::new(),
+    let store = EvalStore::new(db.clone());
+    let service = EvalService::new(store.clone(), bitrouter::config::EvalConfig::default());
+    let router = bitrouter::eval::api::router(service, db.clone(), true);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let endpoint = format!("http://{}", listener.local_addr()?);
+    let server =
+        AbortOnDropHandle::new(tokio::spawn(
+            async move { axum::serve(listener, router).await },
+        ));
+    let checked: anyhow::Result<()> = async {
+        let client = GatewayClient::new(&endpoint, None)?;
+        let input = subject()?;
+        client.put_eval_subject(&input).await?;
+        assert_eq!(client.eval_subject(&input.eval_id).await?, input);
+        let result = EvaluationResult {
+            spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
+            eval_id: input.eval_id.clone(),
+            evidence_digest: input.evidence_digest.clone(),
+            evaluator: EvaluatorIdentity {
+                authority_id: "client".into(),
+                evaluator_id: "external-check".into(),
+                kind: EvaluatorKind::Generic,
+                version: "1".into(),
+                config_digest: format!("sha256:{}", "a".repeat(64)),
             },
-            HopOutcome::Generated(&execution),
-        )
-        .await;
-    let recorder = EvalSettlementRecorder::new(store.clone(), pending);
-    let mut settlement = SettlementContext {
-        operation: bitrouter_ai::types::ModelOperation::Generation,
-        request_id: "request-observed".into(),
-        caller: CallerContext::local(),
-        target: None,
-        model_id: "model".into(),
-        reasoning_effort: None,
-        provider_id: "provider".into(),
-        account_label: None,
-        prompt_tokens: 10,
-        completion_tokens: 5,
-        reasoning_tokens: 0,
-        cache_read_tokens: 0,
-        cache_write_tokens: 0,
-        usage_origin: UsageOrigin::ProviderReported,
-        raw_usage: None,
-        web_search_count: 0,
-        media_input_count: 0,
-        media_output_count: 0,
-        server_tool_calls: Vec::new(),
-        streamed: false,
-        request_duration_ms: 123,
-        upstream_duration_ms: Some(100),
-        ttft_ms: None,
-        generation_duration_ms: None,
-        first_token_kind: None,
-        finish_reason: Some(FinishReason::Stop),
-        error: None,
-        events: EventBus::default(),
-    };
-    settlement.emit(invocation);
-
-    recorder.record(&mut settlement).await?;
-
-    let subject = store
-        .subject("request:request-observed")
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("request eval subject missing"))?;
-    let evidence = subject
-        .evidence
-        .iter()
-        .find(|evidence| evidence.evidence_id == "request-outcome")
-        .ok_or_else(|| anyhow::anyhow!("request outcome evidence missing"))?;
-    assert_eq!(
-        evidence
-            .attributes
-            .get("observed_action")
-            .map(String::as_str),
-        Some("mutate")
-    );
-    assert_eq!(
-        evidence.attributes.get("action_match").map(String::as_str),
-        Some("true")
-    );
-    assert_eq!(
-        evidence
-            .attributes
-            .get("observation_confidence_ppm")
-            .map(String::as_str),
-        Some("850000")
-    );
-    assert_eq!(
-        evidence
-            .attributes
-            .get("observation_reason_code")
-            .map(String::as_str),
-        Some("canonical_response_signal")
-    );
-    assert_eq!(
-        evidence
-            .attributes
-            .get("predictor_contract_digest")
-            .map(String::as_str),
-        Some("sha256:7483fb5fa02c0141f568b82287234895c666fef426789e32783bdd3a00cea3ec")
-    );
-    assert_eq!(
-        evidence
-            .attributes
-            .get("prediction_confidence_kind")
-            .map(String::as_str),
-        Some("heuristic_margin")
-    );
-    assert!(!evidence.attributes.contains_key("quality.pass"));
-    assert!(!serde_json::to_string(&subject)?.contains("never-persist"));
+            verdict: EvalVerdict::Pass,
+            metrics: BTreeMap::new(),
+            hard_violations: Vec::new(),
+            confidence_ppm: None,
+            evidence_refs: Vec::new(),
+            decision_credit: BTreeMap::new(),
+            idempotency_key: "client-result".into(),
+            submitted_at: "2026-11-18T00:01:00Z".into(),
+        };
+        assert_eq!(
+            client.submit_eval_result(&result).await?.status,
+            bitrouter_ai::eval::AdmissionStatus::Admitted
+        );
+        let frozen = client
+            .freeze_eval_snapshot(&FreezeRequest::default())
+            .await?;
+        assert_eq!(frozen.entries.len(), 1);
+        assert_eq!(client.eval_snapshot(&frozen.evidence_root).await?, frozen);
+        let exported =
+            bitrouter::eval::compiler::EvalEvidenceSnapshot::load(&store, &frozen.evidence_root)
+                .await?;
+        assert_eq!(
+            exported.records[0].subject.identity,
+            EvalSubjectIdentity::GatewayGeneric {}
+        );
+        let http = reqwest::Client::builder().no_proxy().build()?;
+        let mut old = serde_json::to_value(&input)?;
+        old["schema_version"] = 1.into();
+        assert!(
+            http.post(format!("{endpoint}/v1/evals/subjects"))
+                .json(&old)
+                .send()
+                .await?
+                .status()
+                .is_client_error()
+        );
+        let mut tenant = input.clone();
+        tenant.eval_id = "wrong-endpoint".into();
+        tenant.identity = EvalSubjectIdentity::TenantGeneric {
+            installation_id: "installation".try_into()?,
+            tenant_id: "tenant".try_into()?,
+            execution: None,
+        };
+        assert_eq!(
+            http.post(format!("{endpoint}/v1/evals/subjects"))
+                .json(&tenant)
+                .send()
+                .await?
+                .status(),
+            reqwest::StatusCode::BAD_REQUEST
+        );
+        assert_eq!(client.eval_status().await?.subjects, 1);
+        Ok(())
+    }
+    .await;
+    server.abort();
+    let stopped = server.await;
+    checked?;
+    anyhow::ensure!(stopped.is_err_and(|error| error.is_cancelled()));
+    db.close().await?;
     Ok(())
 }
 
-fn publish_command(
-    candidate_path: &std::path::Path,
-    config_path: &std::path::Path,
-) -> anyhow::Result<std::process::Output> {
-    Ok(std::process::Command::new(env!("CARGO_BIN_EXE_bro"))
-        .args([
-            "policy",
-            "publish",
-            candidate_path
-                .to_str()
-                .ok_or_else(|| anyhow::anyhow!("candidate path is not UTF-8"))?,
-            "--config",
-            config_path
-                .to_str()
-                .ok_or_else(|| anyhow::anyhow!("config path is not UTF-8"))?,
-        ])
-        .output()?)
-}
-
 #[tokio::test]
-async fn snapshot_compile_publish_preserves_exact_eval_lineage() -> anyhow::Result<()> {
-    let directory = tempfile::tempdir()?;
-    let config_path = directory.path().join("bitrouter.yaml");
-    let active_path = directory.path().join("policy-lock.yaml");
-    let candidate_path = directory.path().join("candidate.yaml");
-    std::fs::write(
-        &config_path,
-        "policy:\n  mode: adaptive\npresets:\n  auto:\n    model: vendor:strong\n    policy: auto\n",
-    )?;
-    let active = base_lock();
-    std::fs::write(&active_path, deterministic_yaml(&active)?)?;
+async fn generic_results_only_freeze_their_own_immutable_subject() -> anyhow::Result<()> {
     let db = bitrouter::db::connect("sqlite::memory:").await?;
     bitrouter::db::run_migrations(&db).await?;
-    let store = EvalStore::new(db);
-    let service = EvalService::new(store.clone(), Default::default());
-    let evidence = Vec::new();
-    let subject = EvalSubject {
-        schema_version: EVAL_SCHEMA_VERSION,
-        eval_id: "eval-publication".into(),
-        scope: EvalScope::Task,
-        subject_id: "task-publication".into(),
-        policy_digest: semantic_digest(&active)?,
-        preset: Some("auto".into()),
-        cohort: None,
-        holdout: false,
-        decisions: vec![EvalDecisionRef {
-            decision_id: "decision-publication".into(),
-            policy: "auto".into(),
-            route_projection: "semantic_route/v1|unknown|implement|normal".into(),
-            request_key: "semantic_route/v1|unknown|implement|normal".into(),
-            selected_tier: "economy".into(),
-            selected_effort: None,
-            baseline_tier: Some("strong".into()),
-            baseline_effort: None,
-            policy_digest: semantic_digest(&active)?,
-            experiment: None,
-            route_measurement: None,
-        }],
-        requested_dimensions: BTreeSet::from(["quality.pass".into()]),
-        evidence_digest: evidence_digest(&evidence)?,
-        evidence,
-        observed_at: "2026-07-30T00:00:00Z".into(),
+    let store = EvalStore::new(db.clone());
+    let service = EvalService::new(store.clone(), bitrouter::config::EvalConfig::default());
+    let input = subject()?;
+    store.insert_subject(&input).await?;
+    let result = EvaluationResult {
+        spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
+        eval_id: input.eval_id.clone(),
+        evidence_digest: input.evidence_digest.clone(),
+        evaluator: EvaluatorIdentity {
+            authority_id: "client".into(),
+            evaluator_id: "external-check".into(),
+            kind: EvaluatorKind::Generic,
+            version: "1".into(),
+            config_digest: format!("sha256:{}", "a".repeat(64)),
+        },
+        verdict: EvalVerdict::Pass,
+        metrics: BTreeMap::new(),
+        hard_violations: Vec::new(),
+        confidence_ppm: None,
+        evidence_refs: Vec::new(),
+        decision_credit: BTreeMap::new(),
+        idempotency_key: "generic-result".into(),
+        submitted_at: "2026-11-18T00:01:00Z".into(),
     };
-    store.insert_subject(&subject).await?;
     service
-        .submit(
-            EvaluationResult {
-                schema_version: EVAL_SCHEMA_VERSION,
-                eval_id: subject.eval_id.clone(),
-                evidence_digest: subject.evidence_digest.clone(),
-                evaluator: EvaluatorIdentity {
-                    authority_id: "task-native".into(),
-                    evaluator_id: "terminal-bench".into(),
-                    kind: EvaluatorKind::TaskNative,
-                    version: "1".into(),
-                    config_digest: semantic_digest(&active)?,
-                },
-                verdict: EvalVerdict::Pass,
-                metrics: BTreeMap::new(),
-                hard_violations: Vec::new(),
-                confidence_ppm: Some(1_000_000),
-                evidence_refs: Vec::new(),
-                decision_credit: BTreeMap::new(),
-                idempotency_key: "result-publication".into(),
-                submitted_at: "2026-07-30T00:01:00Z".into(),
-            },
-            SubmissionPrincipal::LocalOperator,
-        )
+        .submit(result, SubmissionPrincipal::LocalOperator)
         .await?;
-    let manifest = store
-        .freeze_snapshot_for_owner("2026-07-30T00:02:00Z", "local")
-        .await?;
-    let eval = EvalEvidenceSnapshot::load(&store, &manifest.evidence_root).await?;
-    let candidate = compile_candidate(CompileInput {
-        current: &active,
-        parent_digest: Some(&semantic_digest(&active)?),
-        snapshot_time_unix_ms: 1_785_369_600_000,
-        eval: Some(&eval),
-        proposed_progress_guards: None,
-    })?
-    .document;
-    std::fs::write(&candidate_path, deterministic_yaml(&candidate)?)?;
-
-    bitrouter::core::policy::files::publish_candidate_file(&config_path, &candidate_path).await?;
-
-    let published: PolicyLock = serde_saphyr::from_str(&std::fs::read_to_string(active_path)?)?;
-    assert_eq!(semantic_digest(&published)?, semantic_digest(&candidate)?);
-    assert_eq!(
-        published
-            .artifact
-            .as_ref()
-            .and_then(|artifact| artifact.eval_snapshot_root.as_deref()),
-        Some(manifest.evidence_root.as_str())
-    );
-    assert_eq!(
-        published.policies["auto"].routes["semantic_route/v1|unknown|implement|normal"],
-        "economy"
-    );
+    let frozen = store.freeze_snapshot("2026-11-18T00:02:00Z").await?;
+    assert_eq!(frozen.entries.len(), 1);
+    let export =
+        bitrouter::eval::compiler::EvalEvidenceSnapshot::from_manifest(&store, frozen).await?;
+    assert_eq!(export.records[0].subject, input);
+    db.close().await?;
     Ok(())
 }

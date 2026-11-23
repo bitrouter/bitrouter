@@ -3,8 +3,8 @@
 
 use super::SessionSnapshot;
 use super::allocation::ContextSource;
-use bitrouter_ai::core::protocol::TaskInput;
-use bitrouter_ai::harness::inspection::AgentStatus;
+use crate::managed_contract::harness::inspection::AgentStatus;
+use crate::managed_contract::protocol::TaskInput;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};

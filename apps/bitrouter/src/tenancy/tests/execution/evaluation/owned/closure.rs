@@ -99,7 +99,7 @@ fn private_history(continuation: bool) -> Prompt {
 #[tokio::test]
 async fn managed_history_rejection_after_real_entry_has_no_observation_obligation() -> Result<()> {
     tokio::time::timeout(BOUND, async {
-        for mode in [LearningMode::Observe, LearningMode::Explore] {
+        for mode in [true, true] {
             for continuation in [false, true] {
                 let upstream = wiremock::MockServer::start().await;
                 let (fixture, revision) =
@@ -167,18 +167,12 @@ impl ModelSelector for LostDecision {
     async fn prepare_selection(
         &self,
         policy: &str,
-        variant: Option<&str>,
         ctx: &mut PipelineContext,
     ) -> GatewayResult<()> {
-        self.inner.prepare_selection(policy, variant, ctx).await
+        self.inner.prepare_selection(policy, ctx).await
     }
-    async fn select_variant(
-        &self,
-        policy: &str,
-        variant: Option<&str>,
-        ctx: &mut PipelineContext,
-    ) -> GatewayResult<()> {
-        self.inner.select_variant(policy, variant, ctx).await?;
+    async fn select_policy(&self, policy: &str, ctx: &mut PipelineContext) -> GatewayResult<()> {
+        self.inner.select_policy(policy, ctx).await?;
         let invocation = ctx
             .extension::<EvalInvocation>()
             .ok_or_else(|| BitrouterError::internal("real selector emitted no invocation"))?;
@@ -309,8 +303,7 @@ impl ObserveHook for TerminalProbe {
 
 async fn missing_completion(selected: bool, terminal: Terminal) -> Result<()> {
     let upstream = wiremock::MockServer::start().await;
-    let (fixture, revision) =
-        policy_fixture(&format!("{}/v1", upstream.uri()), LearningMode::Observe).await?;
+    let (fixture, revision) = policy_fixture(&format!("{}/v1", upstream.uri()), true).await?;
     let key = fixture.issue("missing-observation").await?;
     fixture
         .service

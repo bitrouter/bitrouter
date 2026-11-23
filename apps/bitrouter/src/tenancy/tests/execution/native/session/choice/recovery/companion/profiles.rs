@@ -24,6 +24,7 @@ pub(super) async fn case(root: &Path, mode: &str) -> Result<()> {
                 &generation,
                 root,
                 true,
+                Some(KEY),
             )
             .await?;
         let revision = draft(&fixture, &route, "count-recovery-profile", 25).await?;

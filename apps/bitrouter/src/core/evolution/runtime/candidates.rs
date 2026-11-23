@@ -294,11 +294,8 @@ impl EvolutionRuntime {
                     }
                     routes.insert(model.id, can_match);
                 }
-                for preset in config.presets.keys() {
-                    routes.insert(format!("@{preset}"), true);
-                    for variant in config.variants.keys() {
-                        routes.insert(format!("@{preset}:{variant}"), true);
-                    }
+                for router in config.routers.keys() {
+                    routes.insert(format!("bitrouter/{router}"), true);
                 }
                 let reserved_matchers = state
                     .blocks

@@ -66,8 +66,7 @@ pub(in crate::tenancy) async fn validate_revision(
         .context("Block paid provenance absent")?;
     ensure!(
         recovery.seed.descriptor.as_ref() == Some(a.descriptor())
-            && recovery.seed.connection.as_deref() == Some(a.connection())
-            && recovery.seed.native.is_none(),
+            && recovery.seed.connection.as_deref() == Some(a.connection()),
         "Block paid capture source changed"
     );
     ensure!(

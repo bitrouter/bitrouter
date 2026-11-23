@@ -5,7 +5,7 @@ use crate::tenancy::resources::{Envelope, SHARED_HEALTH_COMPILER_VERSION};
 pub(super) fn shared(name: &str, rpm: u32) -> Result<Value> {
     Ok(
         json!({"reference":reference(ResourceKind::Policy,name,"v1")?,
-        "definition":{"kind":"admission_profile_v2","profile":{"schema_version":2,
+        "definition":{"kind":"admission_profile","profile":{"schema_version":1,
             "rate":{"rate_group_id":"shared","member_rpm":rpm},
             "health":{"rules":"availability_v1","failure_threshold":3,
                 "transient_cooldown_seconds":10,"persistent_cooldown_seconds":30,"probe_lease_seconds":5},
@@ -13,7 +13,7 @@ pub(super) fn shared(name: &str, rpm: u32) -> Result<Value> {
     )
 }
 
-pub(super) async fn import_v2(
+pub(super) async fn import_current(
     resources: &Resources,
     db: &DatabaseConnection,
     rows: Vec<Value>,
@@ -22,7 +22,7 @@ pub(super) async fn import_v2(
         .import_bytes(
             db,
             &serde_json::to_vec(
-                &json!({"format":2,"installation_id":resources.installation,"resources":rows}),
+                &json!({"format":1,"installation_id":resources.installation,"resources":rows}),
             )?,
         )
         .await
@@ -50,7 +50,7 @@ async fn group_rule_conflict_is_order_independent_and_import_is_atomic() -> Resu
                 rows.reverse();
             }
             ensure!(
-                import_v2(&resources, &db, rows).await.is_err(),
+                import_current(&resources, &db, rows).await.is_err(),
                 "{field} reverse={reverse}"
             );
             ensure!(storage::references(&db).await?.is_empty());
@@ -61,7 +61,7 @@ async fn group_rule_conflict_is_order_independent_and_import_is_atomic() -> Resu
         if reverse {
             rows.reverse();
         }
-        import_v2(&resources, &db, rows.clone()).await?;
+        import_current(&resources, &db, rows.clone()).await?;
         let restarted = Resources::with_key(resources.installation.clone(), key)?;
         restarted.authenticate_retained(&db).await?;
         let observed = state(&restarted, &db).await?;
@@ -70,7 +70,7 @@ async fn group_rule_conflict_is_order_independent_and_import_is_atomic() -> Resu
             let reference: ResourceRef = serde_json::from_value(row["reference"].clone())?;
             let retained = observed.profile(&reference).context("retained")?;
             ensure!(
-                u64::from(View::from(retained).rate().context("rate")?.member_rpm)
+                u64::from(retained.rate.as_ref().context("rate")?.member_rpm)
                     == row["definition"]["profile"]["rate"]["member_rpm"]
                         .as_u64()
                         .context("rpm")?
@@ -81,27 +81,24 @@ async fn group_rule_conflict_is_order_independent_and_import_is_atomic() -> Resu
 }
 
 #[tokio::test]
-async fn format_one_never_accepts_shared_profile_and_profile_families_cannot_reinterpret_history()
--> Result<()> {
+async fn current_profile_import_preserves_immutable_health_membership() -> Result<()> {
     let (db, resources) = fixture().await?;
+    import(&resources, &db, vec![shared("profile", 1)?]).await?;
     ensure!(
-        import(&resources, &db, vec![shared("profile", 1)?])
-            .await
-            .is_err()
-    );
-    ensure!(storage::references(&db).await?.is_empty());
-    import_v2(&resources, &db, vec![shared("profile", 1)?]).await?;
-    ensure!(
-        import(&resources, &db, vec![profile("legacy")?])
+        import(&resources, &db, vec![profile("replacement")?])
             .await
             .is_err()
     );
     ensure!(storage::references(&db).await?.len() == 1);
     let (db, resources) = fixture().await?;
-    import(&resources, &db, vec![profile("v1")?]).await?;
+    import(&resources, &db, vec![profile("initial")?]).await?;
     let mut replacement = shared("profile", 1)?;
     replacement["reference"]["revision_id"] = json!("shared");
-    ensure!(import_v2(&resources, &db, vec![replacement]).await.is_err());
+    ensure!(
+        import_current(&resources, &db, vec![replacement])
+            .await
+            .is_err()
+    );
     ensure!(storage::references(&db).await?.len() == 1);
     Ok(())
 }
@@ -126,7 +123,7 @@ async fn mixed_profile_closure_uses_authenticated_format_five_and_rejects_downgr
     {
         attachment["profile"]["resource_id"] = json!("sibling-profile");
     }
-    import_v2(
+    import_current(
         &resources,
         &db,
         vec![
@@ -143,8 +140,8 @@ async fn mixed_profile_closure_uses_authenticated_format_five_and_rejects_downgr
     let document = serde_json::from_value(
         json!({"routes":[reference(ResourceKind::Route,"route","local")?,reference(ResourceKind::Route,"shared-route","shared")?,reference(ResourceKind::Route,"sibling-route","shared")?],"policy":null,
         "generation_defaults":{"max_output_tokens":128,"temperature":0.5},
-        "learning":{"mode":"off","max_evaluations":0},
-        "limits":{"active_executions":1,"queued_work":1,"learning_jobs":0}}),
+        "eval_publication": false,
+        "limits":{"active_executions":1,"queued_work":1}}),
     )?;
     let tenant = "tenant".try_into()?;
     let revision = "config-v1".try_into()?;
@@ -178,7 +175,7 @@ async fn mixed_profile_closure_uses_authenticated_format_five_and_rejects_downgr
         .open_execution(&row)
         .map_err(|e| anyhow::anyhow!("readback: {e:?}"))?;
     let baseline = serde_json::to_value(&envelope)?;
-    for case in ["format", "family", "health_rules", "binding"] {
+    for case in ["format", "missing_group", "health_rules", "binding"] {
         let mut changed = baseline.clone();
         let index = changed["artifacts"]
             .as_array()
@@ -188,7 +185,7 @@ async fn mixed_profile_closure_uses_authenticated_format_five_and_rejects_downgr
             .context("profile")?;
         match case {
             "format" => changed["format"] = json!(4),
-            "family" => {
+            "missing_group" => {
                 changed["artifacts"][index]["definition"]["kind"] = json!("admission_profile");
                 let fields = changed["artifacts"][index]["definition"]["profile"]
                     .as_object_mut()
@@ -210,19 +207,10 @@ async fn mixed_profile_closure_uses_authenticated_format_five_and_rejects_downgr
         reseal(&resources, &mut corrupt, &changed)?;
         // Re-sealing removes the crypto failure so this checks closed-shape and
         // cross-member validation, rather than merely corrupt ciphertext.
-        if case == "family" {
-            // Both families can coexist. A valid new local profile is separately
-            // representable; immutable catalog history forbids this replacement.
-            let original = state(&resources, &db).await?;
-            let artifact: Artifact = serde_json::from_value(changed["artifacts"][index].clone())?;
-            let mut history = original.clone();
-            ensure!(history.insert(&artifact).is_err());
-        } else {
-            ensure!(
-                resources.open_execution(&corrupt).is_err(),
-                "accepted {case}"
-            );
-        }
+        ensure!(
+            resources.open_execution(&corrupt).is_err(),
+            "accepted {case}"
+        );
     }
     let mut wrong_compiler = row.clone();
     wrong_compiler.revision.compiler_version =
@@ -234,17 +222,24 @@ async fn mixed_profile_closure_uses_authenticated_format_five_and_rejects_downgr
 #[tokio::test]
 async fn shared_retained_loader_rejects_missing_heads_and_authenticated_conflicting_history()
 -> Result<()> {
-    for case in ["missing_head", "conflicting_rules", "changed_family"] {
+    for case in ["missing_head", "conflicting_rules", "disabled_health"] {
         let key = rand::random();
         let (db, resources) = fixture_with_key(key).await?;
         let original = shared("profile", 1)?;
-        import_v2(&resources, &db, vec![original.clone()]).await?;
+        import_current(&resources, &db, vec![original.clone()]).await?;
         let mut reimport = original.clone();
         if case == "missing_head" {
-            db.execute_unprepared("DELETE FROM tenancy_resource_lifecycle")
+            // Keep the current producer's exact lifecycle record, but remove
+            // its head designation to isolate admission's missing-head check.
+            db.execute_unprepared("UPDATE tenancy_resource_lifecycle SET is_head=0")
                 .await?;
+            let reference = serde_json::from_value(original["reference"].clone())?;
+            let exact = lifecycle::exact(&db, &resources.installation, &reference)
+                .await?
+                .context("current lifecycle metadata missing")?;
+            ensure!(!exact.is_head);
         } else {
-            let mut invalid = if case == "changed_family" {
+            let mut invalid = if case == "disabled_health" {
                 profile("local-replacement")?
             } else {
                 shared("conflicting", 3)?
@@ -286,7 +281,9 @@ async fn shared_retained_loader_rejects_missing_heads_and_authenticated_conflict
         ensure!(state(&restarted, &db).await.is_err(), "accepted {case}");
         let references = storage::references(&db).await?;
         ensure!(
-            import_v2(&restarted, &db, vec![reimport]).await.is_err(),
+            import_current(&restarted, &db, vec![reimport])
+                .await
+                .is_err(),
             "repaired {case}"
         );
         ensure!(storage::references(&db).await? == references);

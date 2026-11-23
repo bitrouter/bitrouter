@@ -1,8 +1,8 @@
 use super::*;
+use bitrouter::managed_contract::checkpoint::ToolStartFence;
+use bitrouter::managed_contract::protocol::{ToolObservation, ToolStatus};
 use bitrouter::storage::checkpoint::CheckpointBatchExt;
 use bitrouter::storage::checkpoint::snapshot::steering::SteeringDisposition;
-use bitrouter_ai::core::checkpoint::ToolStartFence;
-use bitrouter_ai::core::protocol::{ToolObservation, ToolStatus};
 
 struct Barrier {
     seen: Semaphore,
@@ -512,7 +512,7 @@ async fn steering_provisional_fence_does_not_reject_another_agents_admitted_atte
                 .as_ref()
                 .ok_or("child")?
                 .status,
-            bitrouter_ai::harness::inspection::AgentStatus::Completed
+            bitrouter::managed_contract::harness::inspection::AgentStatus::Completed
         );
         assert_eq!(
             done.steering.contains_key("steer"),
@@ -743,7 +743,7 @@ async fn steering_receipt_and_application_have_separate_ack_barriers() -> TestRe
         let receipt = receiving.await??;
         assert_eq!(
             receipt.disposition,
-            bitrouter_ai::core::protocol::OperationDisposition::Accepted
+            bitrouter::managed_contract::protocol::OperationDisposition::Accepted
         );
         let driving = tokio::spawn({
             let session = session.clone();

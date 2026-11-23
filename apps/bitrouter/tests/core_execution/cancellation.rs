@@ -4,7 +4,7 @@
 mod start_fences;
 
 use super::*;
-use bitrouter_ai::harness::inspection::AgentStatus;
+use bitrouter::managed_contract::harness::inspection::AgentStatus;
 use std::collections::BTreeMap;
 
 struct HeldCall {

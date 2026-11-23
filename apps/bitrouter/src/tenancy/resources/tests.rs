@@ -8,11 +8,22 @@ use super::*;
 mod bounds;
 mod checkpoint;
 mod core_choice;
+#[cfg(unix)]
+mod cutover;
 mod execution;
 mod format;
 mod native_generate_content;
 mod routing;
 pub(in crate::tenancy::resources) mod validation;
+
+// Independent readers in restart tests must reuse the generated wrapping key.
+static WRAPPING_KEY: std::sync::LazyLock<[u8; 32]> = std::sync::LazyLock::new(rand::random);
+
+fn wrong_wrapping_key() -> [u8; 32] {
+    let mut key = *WRAPPING_KEY;
+    key[0] ^= 1;
+    key
+}
 
 fn reference(owner: &str, kind: ResourceKind, name: &str) -> Result<ResourceRef> {
     Ok(ResourceRef {
@@ -27,7 +38,7 @@ fn reference(owner: &str, kind: ResourceKind, name: &str) -> Result<ResourceRef>
 async fn fixture() -> Result<(DatabaseConnection, Resources)> {
     let db = crate::db::connect("sqlite::memory:").await?;
     crate::db::run_migrations(&db).await?;
-    let resources = Resources::with_key("installation".to_owned().try_into()?, [7; 32])?;
+    let resources = Resources::with_key("installation".to_owned().try_into()?, *WRAPPING_KEY)?;
     crate::tenancy::store::initial_header(&db, chrono::Utc::now()).await?;
     db.execute(Statement::from_sql_and_values(
         DatabaseBackend::Sqlite,
@@ -61,7 +72,7 @@ async fn import(resources: &Resources, db: &DatabaseConnection, rows: Vec<Value>
         .provision_bytes(
             db,
             &serde_json::to_vec(&json!({
-                "format":1, "installation_id":resources.installation, "resources":rows
+                "format": if rows.iter().any(|row| row["definition"]["kind"] == "policy" || !row["definition"]["policy"].is_null()) { 4 } else { 1 }, "installation_id":resources.installation, "resources":rows
             }))?,
         )
         .await
@@ -71,8 +82,8 @@ fn document(routes: Vec<ResourceRef>, policy: Option<ResourceRef>) -> Result<Con
     Ok(serde_json::from_value(
         json!({"routes":routes, "policy":policy,
         "generation_defaults":{"max_output_tokens":128,"temperature":0.5},
-        "learning":{"mode":"off","max_evaluations":0},
-        "limits":{"active_executions":1,"queued_work":1,"learning_jobs":0}}),
+        "eval_publication": false,
+        "limits":{"active_executions":1,"queued_work":1}}),
     )?)
 }
 
@@ -103,7 +114,7 @@ fn decrypt(
         &resources.installation,
         &tenant,
         &revision,
-        COMPILER_VERSION,
+        compiled.compiler_version.as_str(),
         document,
         &compiled.dependencies,
     );
@@ -145,7 +156,7 @@ async fn retained_source_is_encrypted_immutable_and_survives_restart_without_man
         .await
         .is_err()
     );
-    let reopened = Resources::with_key(resources.installation.clone(), [7; 32])?;
+    let reopened = Resources::with_key(resources.installation.clone(), *WRAPPING_KEY)?;
     let document = document(vec![reference], None)?;
     let compiled = compile(&reopened, &db, &document).await?;
     assert_eq!(compiled.dependencies.len(), 2);
@@ -320,7 +331,7 @@ async fn authenticated_metadata_and_storage_failures_have_distinct_error_classes
     )?;
     let tenant: TenantId = "tenant".to_owned().try_into()?;
     let revision: RevisionId = "r".to_owned().try_into()?;
-    let wrong = Resources::with_key(resources.installation.clone(), [8; 32])?;
+    let wrong = Resources::with_key(resources.installation.clone(), wrong_wrapping_key())?;
     assert!(matches!(
         wrong.compile(&db, &tenant, &revision, &doc).await,
         Err(ErrorCode::AuthorityUnavailable)
@@ -394,25 +405,13 @@ async fn configuration_ciphertext_binds_full_ids_revision_document_and_dependenc
 }
 
 fn policy(owner: &str, id: &str) -> Result<Value> {
-    let mut document = crate::policy_lock::PolicyLock::default();
-    document.policies.insert(
-        "selected".into(),
-        crate::policy_lock::PolicyDefinition {
-            tiers: [
-                (
-                    "economy".into(),
-                    bitrouter_ai::routing::PolicyModelTarget::model_only("fixture:cheap".into()),
-                ),
-                (
-                    "strong".into(),
-                    bitrouter_ai::routing::PolicyModelTarget::model_only("fixture:strong".into()),
-                ),
-            ]
-            .into(),
-            default_tier: Some("economy".into()),
-            ..Default::default()
-        },
-    );
+    policy_with_economy(owner, id, "fixture:cheap")
+}
+
+fn policy_with_economy(owner: &str, id: &str, economy: &str) -> Result<Value> {
+    let document = crate::model_policy::parse(
+        &json!({"spec_version":"policy/1.0.0-beta.1", "policies":{"selected":{"tiers":{"economy":{"model":economy},"strong":{"model":"fixture:strong"}},"default_tier":"economy"}}}),
+    )?;
     Ok(
         json!({"reference":reference(owner, ResourceKind::Policy, id)?,
         "definition":{"kind":"policy", "name":"selected", "document":document}}),
@@ -574,7 +573,7 @@ async fn wrong_startup_key_cannot_import_rows_before_rejecting_the_old_catalog()
         }))?,
     )
     .await?;
-    let wrong = Resources::with_key(resources.installation.clone(), [8; 32])?;
+    let wrong = Resources::with_key(resources.installation.clone(), wrong_wrapping_key())?;
     assert!(wrong.initialize_catalog(&db, Some(&path)).await.is_err());
     assert_eq!(storage::references(&db).await?.len(), 1);
     resources.initialize_catalog(&db, None).await?;

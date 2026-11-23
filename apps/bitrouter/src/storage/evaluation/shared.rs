@@ -1,35 +1,23 @@
-//! Namespace-scoped evaluation persistence for trusted request/trajectory producers.
+//! Namespace-scoped evaluation persistence for trusted request producers.
 //!
 //! Every operation borrows a Serializable transaction. The caller owns timeout,
-//! rollback, whole-transaction retry and gateway/episode locks. This module has
+//! rollback, whole-transaction retry and gateway locks. This module has
 //! no pool, worker, transport or generic admission-authority API.
 
 mod write;
 
 use anyhow::{Context, Result, ensure};
-use bitrouter_ai::eval::{AdmissionStatus, EvalSubject, EvaluationResult};
+use bitrouter_ai::eval::{EvalSubject, EvalSubjectIdentity};
 use sea_orm::{
     ConnectionTrait, DatabaseBackend, DatabaseTransaction, QueryResult, Statement, Value,
 };
-use serde::{Deserialize, Serialize};
 
-use super::{result_digest, subject_digest, validate_identifier, validate_result_for_subject};
+use super::{subject_digest, validate_identifier};
 
 const MAX_JSON_BYTES: usize = 1024 * 1024;
 
 pub(crate) struct SharedEvaluation {
     namespace: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct SharedAdmission {
-    pub sequence: i64,
-    pub result_id: String,
-    pub status: AdmissionStatus,
-    pub reason: String,
-    pub authority_id: String,
-    pub created_at: String,
 }
 
 impl SharedEvaluation {
@@ -58,105 +46,72 @@ impl SharedEvaluation {
             "SELECT namespace,owner_user_id,octet_length(subject_json) AS bytes FROM gateway_shared_eval_subjects
              WHERE namespace=$1 AND owner_user_id=$2 AND eval_id=$3",
             "SELECT * FROM gateway_shared_eval_subjects WHERE namespace=$1 AND owner_user_id=$2 AND eval_id=$3").await?;
-        row.map(|row| {
-            let body: String = row.try_get("", "subject_json")?;
-            let subject: EvalSubject = serde_json::from_str(&body)?;
-            let digest = subject_digest(&subject)?;
-            ensure!(
-                serde_json::to_string(&subject)? == body
-                    && subject.eval_id == row.try_get::<String>("", "eval_id")?
-                    && subject.subject_id == row.try_get::<String>("", "subject_id")?
-                    && scope_name(subject.scope) == row.try_get::<String>("", "scope")?
-                    && subject.policy_digest == row.try_get::<String>("", "policy_digest")?
-                    && subject.holdout == row.try_get::<bool>("", "holdout")?
-                    && digest == row.try_get::<String>("", "content_digest")?,
-                "shared eval subject differs from immutable evidence"
-            );
-            validate_timestamp(&row.try_get::<String>("", "created_at")?)?;
-            Ok(subject)
-        })
-        .transpose()
+        row.map(|row| self.decode_subject(&row)).transpose()
     }
 
-    pub async fn result_in(
+    /// Validate every standalone subject before a worker can acquire authority.
+    /// Each keyset page transfers at most eight bounded JSON bodies. No row is
+    /// selected by schema version, execution linkage, status or active revision.
+    pub(crate) async fn validate_retained_subjects_in(
         &self,
         tx: &DatabaseTransaction,
-        owner: &str,
-        id: &str,
-    ) -> Result<Option<EvaluationResult>> {
+    ) -> Result<()> {
         check_transaction(tx).await?;
-        let row = self.bounded_row(tx, owner, id,
-            "SELECT namespace,owner_user_id,octet_length(result_json) AS bytes FROM gateway_shared_eval_results
-             WHERE namespace=$1 AND owner_user_id=$2 AND result_id=$3",
-            "SELECT * FROM gateway_shared_eval_results WHERE namespace=$1 AND owner_user_id=$2 AND result_id=$3").await?;
-        let Some(row) = row else {
-            return Ok(None);
-        };
-        let body: String = row.try_get("", "result_json")?;
-        let result: EvaluationResult = serde_json::from_str(&body)?;
-        let digest = result_digest(&result)?;
+        let mut after = String::new();
+        loop {
+            // C collation gives the same UTF-8 byte order as the cursor check.
+            // Bound cells in SQL before the driver materializes untrusted data.
+            let rows = tx.query_all(self.statement(tx,
+                "SELECT namespace,
+                    CASE WHEN octet_length(eval_id)<=512 THEN eval_id ELSE NULL END AS eval_id,
+                    CASE WHEN octet_length(owner_user_id)<=512 THEN owner_user_id ELSE NULL END AS owner_user_id,
+                    CASE WHEN octet_length(subject_id)<=512 THEN subject_id ELSE NULL END AS subject_id,
+                    CASE WHEN octet_length(scope)<=32 THEN scope ELSE NULL END AS scope,
+                    CASE WHEN octet_length(policy_digest)<=128 THEN policy_digest ELSE NULL END AS policy_digest,
+                    holdout,
+                    CASE WHEN octet_length(content_digest)<=128 THEN content_digest ELSE NULL END AS content_digest,
+                    CASE WHEN octet_length(subject_json)<=$3 THEN subject_json ELSE NULL END AS subject_json,
+                    CASE WHEN octet_length(created_at)<=64 THEN created_at ELSE NULL END AS created_at
+                 FROM gateway_shared_eval_subjects
+                 WHERE namespace=$1 AND ($2='' OR eval_id COLLATE \"C\">$2 COLLATE \"C\")
+                 ORDER BY eval_id COLLATE \"C\" LIMIT 8",
+                vec![after.as_str().into(), i64::try_from(MAX_JSON_BYTES)?.into()])?).await?;
+            if rows.is_empty() {
+                return Ok(());
+            }
+            for row in rows {
+                let subject = self.decode_subject(&row)?;
+                ensure!(subject.eval_id > after, "shared eval subject key order");
+                after = subject.eval_id;
+            }
+        }
+    }
+
+    fn decode_subject(&self, row: &QueryResult) -> Result<EvalSubject> {
+        let owner: String = row.try_get("", "owner_user_id")?;
+        let id: String = row.try_get("", "eval_id")?;
+        validate_scope(&owner, &id)?;
+        self.check_row(row, &owner)?;
+        let body: String = row.try_get("", "subject_json")?;
         ensure!(
-            serde_json::to_string(&result)? == body
-                && digest == row.try_get::<String>("", "result_id")?
-                && digest == row.try_get::<String>("", "content_digest")?
-                && result.eval_id == row.try_get::<String>("", "eval_id")?
-                && result.idempotency_key == row.try_get::<String>("", "idempotency_key")?
-                && result.evaluator.authority_id == row.try_get::<String>("", "authority_id")?
-                && format!("{:?}", result.evaluator.kind).to_ascii_lowercase()
-                    == row.try_get::<String>("", "evaluator_kind")?,
-            "shared eval result differs from immutable evidence"
+            body.len() <= MAX_JSON_BYTES,
+            "shared eval payload byte limit exceeded"
+        );
+        let subject: EvalSubject = serde_json::from_str(&body)?;
+        let digest = gateway_subject_digest(&subject)?;
+        ensure!(
+            serde_json::to_string(&subject)? == body
+                && subject.eval_id == id
+                && subject.subject_id == row.try_get::<String>("", "subject_id")?
+                && scope_name(subject.scope) == row.try_get::<String>("", "scope")?
+                && crate::storage::evaluation::identity_digest(&subject.identity)?
+                    == row.try_get::<String>("", "policy_digest")?
+                && subject.holdout == row.try_get::<bool>("", "holdout")?
+                && digest == row.try_get::<String>("", "content_digest")?,
+            "shared eval subject differs from immutable evidence"
         );
         validate_timestamp(&row.try_get::<String>("", "created_at")?)?;
-        let subject = self
-            .subject_in(tx, owner, &result.eval_id)
-            .await?
-            .context("shared eval result lost its owned subject")?;
-        validate_result_for_subject(&result, &subject)?;
-        Ok(Some(result))
-    }
-
-    pub async fn latest_admission_in(
-        &self,
-        tx: &DatabaseTransaction,
-        owner: &str,
-        result_id: &str,
-    ) -> Result<Option<SharedAdmission>> {
-        check_transaction(tx).await?;
-        validate_scope(owner, result_id)?;
-        // Filter namespace/owner before ordering. Select the latest state before
-        // examining status; an old Admitted row must not hide a later dispute.
-        // https://www.postgresql.org/docs/current/queries-order.html
-        let row = tx.query_one(self.statement(tx,
-            "SELECT a.*,r.owner_user_id FROM gateway_shared_eval_results r
-             JOIN gateway_shared_eval_admission_events a ON a.namespace=r.namespace AND a.result_id=r.result_id
-             WHERE r.namespace=$1 AND r.owner_user_id=$2 AND r.result_id=$3 ORDER BY a.sequence DESC LIMIT 1",
-            vec![owner.into(), result_id.into()])?).await?;
-        row.map(|row| {
-            self.check_row(&row, owner)?;
-            let admission = SharedAdmission {
-                sequence: row.try_get("", "sequence")?,
-                result_id: row.try_get("", "result_id")?,
-                status: match row.try_get::<String>("", "status")?.as_str() {
-                    "admitted" => AdmissionStatus::Admitted,
-                    "rejected" => AdmissionStatus::Rejected,
-                    "held_out" => AdmissionStatus::HeldOut,
-                    "disputed" => AdmissionStatus::Disputed,
-                    _ => anyhow::bail!("unknown shared eval admission status"),
-                },
-                reason: row.try_get("", "reason")?,
-                authority_id: row.try_get("", "authority_id")?,
-                created_at: row.try_get("", "created_at")?,
-            };
-            ensure!(
-                admission.sequence > 0 && admission.result_id == result_id,
-                "invalid shared eval admission identity"
-            );
-            validate_identifier(&admission.reason, "admission reason")?;
-            validate_identifier(&admission.authority_id, "admission authority")?;
-            validate_timestamp(&admission.created_at)?;
-            Ok(admission)
-        })
-        .transpose()
+        Ok(subject)
     }
 
     async fn bounded_row(
@@ -216,6 +171,14 @@ impl SharedEvaluation {
         );
         Ok(())
     }
+}
+
+fn gateway_subject_digest(subject: &EvalSubject) -> Result<String> {
+    ensure!(
+        matches!(subject.identity, EvalSubjectIdentity::GatewayGeneric {}),
+        "shared eval requires gateway_generic identity"
+    );
+    subject_digest(subject)
 }
 
 fn validate_scope(owner: &str, id: &str) -> Result<()> {

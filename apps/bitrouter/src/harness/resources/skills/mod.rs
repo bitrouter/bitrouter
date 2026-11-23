@@ -1,11 +1,11 @@
 //! Local skills are harness resources. Discovery publishes metadata; activation
 //! and instruction placement are decisions of the managed core.
 
-use bitrouter_ai::harness::resources::SkillMetadata;
+use crate::managed_contract::harness::resources::SkillMetadata;
 use std::path::PathBuf;
 
 use super::sha256;
-use bitrouter_ai::harness::resources::MaterialRef;
+use crate::managed_contract::harness::resources::MaterialRef;
 
 use crate::skills::format::{self, Error, Result, read_skill};
 

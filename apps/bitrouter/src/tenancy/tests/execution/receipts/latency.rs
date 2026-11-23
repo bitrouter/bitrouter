@@ -88,27 +88,30 @@ fn actual_receipt_latency_transport_and_lifecycle() -> Result<()> {
         .worker_threads(2)
         .enable_all()
         .build()?
-        .block_on(async {
-            positive_after_run_export("").await?;
+        // Box each phase before awaiting it: boxing only this outer future
+        // still constructs the inline phase state machines on the test stack.
+        // Process and production worker stack limits remain unchanged.
+        .block_on(Box::pin(async {
+            Box::pin(positive_after_run_export("")).await?;
             #[cfg(feature = "otel-http")]
             for endpoint_path in ["/", "/v1/metrics", "/v1/metrics?source=receipt-test"] {
-                positive_after_run_export(endpoint_path).await?;
+                Box::pin(positive_after_run_export(endpoint_path)).await?;
             }
-            queued_and_sql_boundaries().await?;
-            rollback_retry_keeps_original_ready().await?;
-            caller_disconnect_does_not_ack_or_reset().await?;
-            receiver_failure_is_cached().await?;
-            uncertain_commit_is_not_success(false).await?;
-            uncertain_commit_is_not_success(true).await?;
-            capacity::durable_unknown_and_incomplete_restart().await?;
+            Box::pin(queued_and_sql_boundaries()).await?;
+            Box::pin(rollback_retry_keeps_original_ready()).await?;
+            Box::pin(caller_disconnect_does_not_ack_or_reset()).await?;
+            Box::pin(receiver_failure_is_cached()).await?;
+            Box::pin(uncertain_commit_is_not_success(false)).await?;
+            Box::pin(uncertain_commit_is_not_success(true)).await?;
+            Box::pin(capacity::durable_unknown_and_incomplete_restart()).await?;
             #[cfg(feature = "otel-http")]
-            callback_schedule::real_callbacks_contend_and_straddle_seal().await?;
-            capacity::queued_cancel_and_unknown_length_ingress().await?;
-            capacity::aggregate_cross_tenant_capacity().await?;
+            Box::pin(callback_schedule::real_callbacks_contend_and_straddle_seal()).await?;
+            Box::pin(capacity::queued_cancel_and_unknown_length_ingress()).await?;
+            Box::pin(capacity::aggregate_cross_tenant_capacity()).await?;
             #[cfg(unix)]
-            capacity::sealed_gauges_do_not_retain_file_owner().await?;
+            Box::pin(capacity::sealed_gauges_do_not_retain_file_owner()).await?;
             Ok::<_, anyhow::Error>(())
-        })?;
+        }))?;
     use std::io::Write;
     let marker = std::env::var_os(MARKER).context("child completion path")?;
     let mut file = std::fs::OpenOptions::new()
@@ -143,7 +146,7 @@ pub(in crate::tenancy::tests::execution) fn exporter(
     Ok((exporter, sink))
 }
 async fn harness(sink: Sink, gate: Option<Arc<Semaphore>>) -> Result<Harness> {
-    Harness::with_observer(
+    Box::pin(Harness::with_observer(
         "chat_completions",
         StatusCode::OK,
         serde_json::to_string(&json_response(
@@ -154,7 +157,7 @@ async fn harness(sink: Sink, gate: Option<Arc<Semaphore>>) -> Result<Harness> {
         gate,
         false,
         sink,
-    )
+    ))
     .await
 }
 pub(in crate::tenancy::tests::execution) async fn flush(

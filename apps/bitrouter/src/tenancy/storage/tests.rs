@@ -20,7 +20,7 @@ fn fixture() -> (Arc<Admission>, Arc<AtomicBool>, Arc<Proof>, Budget) {
 #[tokio::test]
 async fn statement_refusal_requires_typed_constraint_without_integrity_or_health_failure()
 -> Result<()> {
-    use crate::core::eval::store::OwnedError;
+    use crate::eval::store::OwnedError;
     use anyhow::Context;
 
     let db = crate::db::connect("sqlite::memory:").await?;
@@ -292,7 +292,6 @@ async fn queued_execution_wakes_when_writer_charge_is_released_without_new_arriv
     let limits = Limits {
         active_executions: 1,
         queued_work: 1,
-        learning_jobs: 0,
     };
 
     for commit in [false, true] {

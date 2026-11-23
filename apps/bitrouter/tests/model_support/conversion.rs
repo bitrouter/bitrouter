@@ -1,11 +1,11 @@
 //! Shared setup and refusal checks for the conversion integration suites.
 
+use bitrouter::gateway::conversion_report::{ConversionReport, ConversionStage};
 use bitrouter::gateway::model::error::ModelError;
 use bitrouter::gateway::model::protocol::chat_completions::ChatCompletionsAdapter;
 use bitrouter::gateway::model::protocol::messages::MessagesAdapter;
 use bitrouter::gateway::model::protocol::responses::ResponsesAdapter;
 use bitrouter::gateway::model::protocol::{InboundAdapter, OutboundAdapter};
-use bitrouter_ai::conversion::{ConversionReport, ConversionStage};
 use bitrouter_ai::types::{ApiProtocol, Prompt};
 use serde_json::json;
 

@@ -5,11 +5,11 @@ use bitrouter::gateway::pipeline::native_accounting::NativeCostEstimator;
 use bitrouter::gateway::pipeline::native_accounting::NativeCostObservation;
 use bitrouter::gateway::pipeline::native_accounting::NativeCostScope;
 use bitrouter::gateway::pipeline::native_accounting::NativeCostSource;
+use bitrouter::managed_contract::evidence::NativeAttemptReport;
+use bitrouter::managed_contract::evidence::NativeTokenCost;
+use bitrouter::managed_contract::evidence::NativeTokenRates;
 use bitrouter::storage::checkpoint::CheckpointBatchExt;
 use bitrouter::storage::checkpoint::snapshot::accounting::work::{CostWorkKind, CostWorkState};
-use bitrouter_ai::core::evidence::NativeAttemptReport;
-use bitrouter_ai::core::evidence::NativeTokenCost;
-use bitrouter_ai::core::evidence::NativeTokenRates;
 use bitrouter_ai::types::UsageOrigin;
 
 pub(super) struct FixtureCost;

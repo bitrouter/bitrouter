@@ -128,28 +128,21 @@ impl CliReport for PolicyReport {
     fn render(&self, human: &mut Human<'_>) -> std::io::Result<()> {
         human.line(&format!("policy {}", policy_view(self.view)))?;
         human.field("availability", &self.availability)?;
-        if let Some(digest) = &self.digest {
-            human.field("digest", digest)?;
+        if let Some(digest) = &self.source_digest {
+            human.field("source digest", digest)?;
         }
-        human.field("mode", &self.mode)?;
         if !self.policies.is_empty() {
             human.field("policies", self.policies.join(", "))?;
         }
-        for (preset, policy) in &self.bindings {
-            human.line(&format!("  @{preset} -> {policy}"))?;
+        for (router, policy) in &self.bindings {
+            human.line(&format!("  bitrouter/{router} -> {policy}"))?;
         }
-        if !self.definitions.is_empty() {
+        if let Some(source) = &self.source {
             human.blank()?;
-            let mut table = Table::new(["POLICY", "TIERS", "ROUTES", "CERTIFICATES"]);
-            for (name, detail) in &self.definitions {
-                table.push([
-                    name.clone(),
-                    detail.tiers.keys().cloned().collect::<Vec<_>>().join(", "),
-                    detail.routes.len().to_string(),
-                    detail.certificates.len().to_string(),
-                ]);
+            let rendered = serde_saphyr::to_string(source).map_err(std::io::Error::other)?;
+            for line in rendered.lines() {
+                human.line(line)?;
             }
-            human.table(&table)?;
         }
         Ok(())
     }

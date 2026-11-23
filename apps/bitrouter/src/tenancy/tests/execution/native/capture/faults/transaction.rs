@@ -3,7 +3,7 @@ use super::*;
 pub(super) async fn exercise(root: &Path, mode: &str) -> Result<()> {
     let provider = Provider::start(false).await?;
     let (fixture, route) = file_fixture(&provider, root).await?;
-    let (headers, _) = prepared(&fixture, &route, LearningMode::Observe).await?;
+    let (headers, _) = prepared(&fixture, &route, true).await?;
     let marker = root.join("never-spawned.json");
     if mode == "commit-error" {
         // DML succeeds; the actual consuming COMMIT encounters a deferred FK.

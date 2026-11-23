@@ -357,7 +357,6 @@ async fn exercise(disconnect: Disconnect) -> Result<()> {
         let limits = Limits {
             active_executions: 1,
             queued_work: 0,
-            learning_jobs: 0,
         };
         ensure!(
             matches!(

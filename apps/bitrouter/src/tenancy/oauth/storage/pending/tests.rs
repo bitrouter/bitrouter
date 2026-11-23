@@ -189,11 +189,3 @@ async fn complete_slot_pages_detect_hidden_and_oversized_pending_projections() -
     }
     Ok(())
 }
-
-/// Canonical synthetic row in the exact pre043 columns for migration fixtures.
-pub(in crate::tenancy) async fn insert_legacy(db: &impl ConnectionTrait, row: &Row) -> Result<()> {
-    db.execute(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
-        "INSERT INTO tenancy_oauth_slots (slot_key,installation_id,owner_kind,owner_id,credential_resource_id,authority_revision,generation,state,metadata_json,payload_json,content_digest) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-        [row.metadata.slot.clone().into(),row.metadata.installation.as_str().into(),owner(&row.metadata.reference)?.into(),row.metadata.reference.owner_id.as_str().into(),row.metadata.reference.resource_id.as_str().into(),row.metadata.reference.revision_id.as_str().into(),i64::try_from(row.metadata.generation)?.into(),row.metadata.state.name().into(),row.json.clone().into(),row.payload.clone().into(),row.digest.clone().into()])).await?;
-    Ok(())
-}

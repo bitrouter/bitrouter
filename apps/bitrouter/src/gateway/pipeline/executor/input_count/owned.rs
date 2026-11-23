@@ -3,12 +3,12 @@ use super::{
     HttpExecutor, PipelineContext, Result, RoutingTarget, count_payload, generation_stream,
     invalid, request_digest, semantic_headers,
 };
+use crate::managed_contract::evidence::NativeInputCount;
 use crate::{
     gateway::model::protocol::{Transport, responses::ResponsesTransport},
     tenancy::{execution::TenantExecution, receipts::auxiliary::count::Permit},
 };
 use bitrouter_ai::{
-    core::evidence::NativeInputCount,
     tenancy::operation::ErrorCode,
     types::{ApiProtocol, Prompt},
 };

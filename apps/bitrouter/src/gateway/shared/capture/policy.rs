@@ -13,19 +13,16 @@ impl Capture {
         snapshot: &PolicyRoutingSnapshot,
     ) -> Result<()> {
         identifier(name)?;
-        let definition = snapshot
+        let _definition = snapshot
             .document()
             .and_then(|document| document.policies.get(name))
             .context("captured policy is absent from frozen document")?;
-        ensure!(
-            definition.progress_guard.is_some() == guarded,
-            "captured guard differs from frozen policy"
-        );
+        ensure!(!guarded, "model policy cannot activate a trajectory guard");
         let digest = snapshot
             .digest()
             .context("frozen policy digest is missing")?;
         validate_digest(digest)?;
-        let mut treatment = pending
+        let treatment = pending
             .map(|pending| {
                 ensure!(
                     pending.policy == name && pending.policy_digest == digest,
@@ -55,14 +52,17 @@ impl Capture {
                         decision_id: pending.decision_id.clone(),
                         policy: pending.policy.clone(),
                         policy_digest: pending.policy_digest.clone(),
-                        route_projection: pending.route_projection.clone(),
-                        request_key: pending.request_key.clone(),
+                        route_projection: pending.route_projection.parse()?,
+                        request_key: pending.request_key.parse()?,
                         selected_tier: pending.selected_tier.clone(),
                         selected_effort: pending.selected_effort,
                         baseline_tier: pending.baseline_tier.clone(),
                         baseline_effort: pending.baseline_effort,
-                        experiment: pending.experiment.clone(),
-                        route_measurement: pending.route_measurement.clone(),
+
+                        route_measurement: pending
+                            .route_measurement
+                            .clone()
+                            .filter(|_| pending.experiment.is_none()),
                     },
                     preset: pending.preset.clone(),
                     holdout: pending.holdout,
@@ -74,20 +74,9 @@ impl Capture {
             })
             .transpose()?;
         self.update(|input| {
-            if guarded && let (Some(treatment), Some(pending)) = (&mut treatment, pending) {
-                // Guarded evaluation refers to the durable route event, whose
-                // identity was derived with the episode's retained key. The
-                // optional local cache uses a separate request/policy ID.
-                treatment.decision.decision_id = crate::trajectory::correlation::stable_id(
-                    "route-intent",
-                    &input.owner,
-                    &pending.request_id,
-                );
-            }
             input.policy = Policy::Evaluated {
                 policy: name.into(),
                 digest: digest.into(),
-                guarded,
                 treatment,
             };
             Ok(())

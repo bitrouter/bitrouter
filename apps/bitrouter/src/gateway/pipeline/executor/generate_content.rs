@@ -25,7 +25,7 @@ impl HttpExecutor {
         input: &Input,
         stream: bool,
         ctx: &PipelineContext,
-    ) -> Result<bitrouter_ai::conversion::ConversionReport> {
+    ) -> Result<crate::gateway::conversion_report::ConversionReport> {
         let execution = tenancy::execution(ctx).ok_or(BitrouterError::UpstreamUnavailable)?;
         let PipelineInput::GenerateContent(attached) = ctx.input() else {
             return Err(BitrouterError::UpstreamUnavailable);

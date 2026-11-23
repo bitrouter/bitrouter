@@ -1,6 +1,6 @@
 [package]
 name = "bitrouter-ai"
-description = "Lightweight public contracts for BitRouter clients and extensions"
+description = "Lightweight public contracts shared by BitRouter products"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,14 +9,18 @@ repository.workspace = true
 rust-version.workspace = true
 exclude = ["public-api-deps.txt"]
 
+[[example]]
+name = "policy_schema"
+required-features = ["schema"]
+
+[[example]]
+name = "eval_schema"
+required-features = ["schema"]
+
 [features]
 default = []
-# Pure observation-schema helpers for exporter conformance suites.
-testing = []
 # Public contract schemas without a service/runtime dependency.
 schema = ["dep:schemars"]
-# Optional HTTP boundary bindings; no listener or runtime features.
-axum = ["dep:axum", "dep:futures-core", "dep:futures-util"]
 
 [dependencies]
 serde.workspace = true
@@ -31,12 +35,8 @@ serde_json = { workspace = true, features = ["float_roundtrip", "preserve_order"
 thiserror.workspace = true
 sha2.workspace = true
 schemars = { workspace = true, optional = true }
-axum = { version = "0.8", default-features = false, features = ["json"], optional = true }
-futures-core = { workspace = true, optional = true }
-futures-util = { version = "0.3", default-features = false, features = ["alloc"], optional = true }
 
 [dev-dependencies]
+jsonschema = { version = "0.47.0", default-features = false }
 tokio = { workspace = true, features = ["macros", "rt", "sync"] }
-http-body-util = "0.1"
-tower = { workspace = true, features = ["util"] }
 toml.workspace = true

@@ -1,10 +1,10 @@
 //! Checks against the live connection's authenticated ownership grant.
 //! Shared durable-record validation lives in application storage.
 
-use crate::storage::checkpoint::serialized_bytes;
-use bitrouter_ai::core::protocol::{
+use crate::managed_contract::protocol::{
     ClientMessage, Command, CoreError, ErrorCode, Limits, OwnershipGrant, VERSION, validate_id,
 };
+use crate::storage::checkpoint::serialized_bytes;
 
 /// Application checks against the connection's authenticated grant and limits.
 /// Passing these checks alone does not authorize an operation or commit state.

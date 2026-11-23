@@ -13,7 +13,6 @@ mod tests;
 mod write;
 
 use anyhow::{Context, Result, ensure};
-use bitrouter_ai::tenancy::configuration::LearningMode;
 use sea_orm::{
     ColumnTrait, Condition, DatabaseTransaction, EntityTrait, QueryFilter, QuerySelect, Select,
 };
@@ -58,7 +57,7 @@ pub(crate) struct Descriptor {
     pub(crate) source: String,
     pub(crate) model: String,
     pub(crate) revision: String,
-    pub(crate) mode: LearningMode,
+    pub(crate) mode: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) block_link: Option<ProviderLink>,
 }
@@ -111,7 +110,7 @@ impl Association {
         source: String,
         revision: String,
         model: String,
-        mode: LearningMode,
+        mode: bool,
     ) -> Result<Self> {
         let metadata = scope.metadata(&provenance)?;
         let principal = metadata

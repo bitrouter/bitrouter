@@ -65,10 +65,10 @@ use crate::gateway::pipeline::stream::StreamInterest;
 use crate::gateway::pipeline::types::{ExecutionResult, RoutingTarget};
 use bitrouter_ai::types::{ApiProtocol, Content, Prompt, StreamPart};
 
+use crate::gateway::observability::span_attributes::SpanAttributes;
 use crate::telemetry::cardinality::CardinalityLimiter;
 use crate::telemetry::config::{ContentCaptureMode, OtelConfig, SamplerKind};
 use crate::telemetry::processor_runtime::ProcessorRuntime;
-use bitrouter_ai::observe::span_attributes::SpanAttributes;
 
 /// HTTP header extractor for W3C trace context propagation
 /// (<https://www.w3.org/TR/trace-context/>). Used on inbound headers.
@@ -1146,7 +1146,7 @@ impl ObserveHook for OtelExporter {
             // Generic by design — the emitter names the keys, we just stamp.
             //
             // Generic, but not unbounded: the schema's own vocabulary is
-            // reserved (`bitrouter_ai::observe::schema::ExtensionRegion`). A
+            // reserved (`crate::gateway::observability::schema::ExtensionRegion`). A
             // deployment that stamped `bitrouter.*` or `gen_ai.*` from here
             // would make the span schema deployment-dependent, which is the one
             // property it exists to have. Reserved keys are dropped rather than
@@ -1154,7 +1154,7 @@ impl ObserveHook for OtelExporter {
             // the first, since the loop below iterates all of them.
             for extra in ctx.get_events::<SpanAttributes>() {
                 for (key, value) in &extra.0 {
-                    if bitrouter_ai::observe::schema::is_reserved_attribute_key(key) {
+                    if crate::gateway::observability::schema::is_reserved_attribute_key(key) {
                         // DEBUG, not WARN: this is per-request and on the hot
                         // path, and a deployment that trips it trips it on
                         // every request. The pinned target is how an operator
@@ -3204,7 +3204,7 @@ pub(crate) mod hop_tests {
     /// it can be exercised completely.
     #[test]
     fn the_resource_conforms_to_the_committed_schema() {
-        use bitrouter_ai::observe::schema::{Requirement, SCHEMA};
+        use crate::gateway::observability::schema::{Requirement, SCHEMA};
 
         // Default config, so `resource_attributes` is empty and what remains
         // is exactly what this crate stamps unconditionally.
@@ -3222,14 +3222,14 @@ pub(crate) mod hop_tests {
                 .find(|attr| attr.key == key)
                 .unwrap_or_else(|| {
                     panic!(
-                        "the resource carries `{key}`, which otel::schema does not declare —                          declare it (and regenerate crates/bitrouter-ai/span-schema.json) or                          stop stamping it"
+                        "the resource carries `{key}`, which otel::schema does not declare —                          declare it (and regenerate apps/bitrouter/span-schema.json) or                          stop stamping it"
                     )
                 });
             let value = resource
                 .get(&opentelemetry::Key::from(key.clone()))
                 .expect("a key the resource just yielded");
             assert!(
-                bitrouter_ai::observe::schema::value_type_matches(
+                crate::gateway::observability::schema::value_type_matches(
                     declared.ty,
                     observed_type(&value)
                 ),
@@ -3280,7 +3280,9 @@ pub(crate) mod hop_tests {
     }
 
     fn assert_conforms_to_span_schema(spans: &[SpanData]) {
-        use bitrouter_ai::observe::schema::{Requirement, SpanKind as SchemaKind, span_def_for};
+        use crate::gateway::observability::schema::{
+            Requirement, SpanKind as SchemaKind, span_def_for,
+        };
 
         assert!(
             !spans.is_empty(),
@@ -3312,13 +3314,13 @@ pub(crate) mod hop_tests {
                     .unwrap_or_else(|| {
                         panic!(
                             "`{}` carries `{}`, which otel::schema does not declare on it — \
-                             declare it (and regenerate crates/bitrouter-ai/span-schema.json) \
+                             declare it (and regenerate apps/bitrouter/span-schema.json) \
                              or stop emitting it",
                             def.name, kv.key
                         )
                     });
                 assert!(
-                    bitrouter_ai::observe::schema::value_type_matches(
+                    crate::gateway::observability::schema::value_type_matches(
                         declared.ty,
                         observed_type(&kv.value)
                     ),

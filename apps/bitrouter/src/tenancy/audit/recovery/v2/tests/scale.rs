@@ -83,7 +83,7 @@ fn document(index: u64) -> Result<bitrouter_ai::tenancy::configuration::Configur
     Ok(serde_json::from_value(
         json!({"routes":routes,"policy":null,
         "generation_defaults":{"max_output_tokens":128,"temperature":0.2},
-        "learning":{"mode":"off","max_evaluations":0},"limits":{"active_executions":1,"queued_work":1,"learning_jobs":0}}),
+        "eval_publication": false,"limits":{"active_executions":1,"queued_work":1}}),
     )?)
 }
 fn extra_resource() -> Result<Value> {

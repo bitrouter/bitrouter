@@ -42,8 +42,8 @@ async fn source(home: &Path) -> Result<(producer::Provision, ConfigurationRevisi
             operation_id:"draft".try_into()?,expected_authority_revision:provision.authority,
             installation_id:provision.installation.clone(),
             document:serde_json::from_value(json!({"routes":[manifest["resources"][1]["reference"]],"policy":null,
-                "generation_defaults":{"max_output_tokens":128,"temperature":0.2},"learning":{"mode":"off","max_evaluations":0},
-                "limits":{"active_executions":1,"queued_work":1,"learning_jobs":0}}))?,
+                "generation_defaults":{"max_output_tokens":128,"temperature":0.2},"eval_publication": false,
+                "limits":{"active_executions":1,"queued_work":1}}))?,
         }).await?;
         let draft = client.operation(&provision.installation,&"draft".try_into()?).await?;
         client.activate(&tenant,&Activation {

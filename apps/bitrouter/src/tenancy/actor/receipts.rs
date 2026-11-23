@@ -88,8 +88,6 @@ impl Worker {
             execution: candidate.facts().execution.clone(),
         };
         let write = async {
-            #[cfg(all(feature = "core", feature = "harness"))]
-            store::reserve_experiment_write(&budget)?;
             let checked = control.check_read();
             #[cfg(test)]
             self.proof
@@ -113,14 +111,6 @@ impl Worker {
             let inserted = staged.inserted();
             if let store::format::Terminal::V1(legacy) = candidate.as_ref() {
                 crate::tenancy::receipts::auxiliary_store::insert(&transaction, legacy).await?;
-                #[cfg(all(feature = "core", feature = "harness"))]
-                crate::tenancy::experiment::store::terminal::receipt(
-                    &transaction,
-                    owner,
-                    legacy,
-                    &budget,
-                )
-                .await?;
             }
             let change = staged
                 .reconcile(&|rows, bytes| budget.charge(rows, bytes).map_err(Into::into))

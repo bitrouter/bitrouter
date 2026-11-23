@@ -10,8 +10,8 @@ use super::read::read_page;
 use super::read::{directory_name, sort_directory_entries};
 use super::*;
 use crate::harness::agent::RunEvent;
-use bitrouter_ai::harness::agent::ToolMode;
-use bitrouter_ai::harness::runtime::EffectStatus;
+use crate::managed_contract::harness::agent::ToolMode;
+use crate::managed_contract::harness::runtime::EffectStatus;
 
 fn success(output: ToolResultOutput) -> Result<ToolResultOutput, String> {
     if let ToolResultOutput::ErrorJson { value } = &output {

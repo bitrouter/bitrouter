@@ -13,7 +13,7 @@ mod companion;
 mod faults;
 mod marker;
 
-const KEY: &str = "BITROUTER_TEST_STOPPED_NATIVE_KEY";
+pub(super) const KEY: &str = "BITROUTER_TEST_STOPPED_NATIVE_KEY";
 const ROOT: &str = "BITROUTER_TEST_STOPPED_NATIVE_ROOT";
 const MODE: &str = "BITROUTER_TEST_STOPPED_NATIVE_MODE";
 const DIAGNOSTICS: &str = "BITROUTER_TEST_STOPPED_NATIVE_DIAGNOSTICS";
@@ -90,7 +90,7 @@ impl Spec {
                 && Path::new(&mains[0]).canonicalize()? == file,
             "connector did not open the actual leased file"
         );
-        let service = Service::open_owned_profile_observed(
+        let service = Service::open_owned_bro_profile_observed(
             database,
             &crate::config::tenancy::TenancyConfig {
                 enabled: true,
@@ -114,6 +114,7 @@ impl Spec {
             })
             .collect::<Result<HeaderMap>>()?;
         let fixture = Fixture {
+            wrapping_key: Fixture::wrapping_key_from_env(KEY)?,
             db,
             service,
             operator: crate::tenancy::model::Caller::Installation(
@@ -256,6 +257,13 @@ impl Child {
                 "cumulative",
             );
         }
+        let key = match std::env::var(KEY) {
+            Ok(key) => key,
+            Err(std::env::VarError::NotPresent) => {
+                base64::engine::general_purpose::STANDARD.encode(rand::random::<[u8; 32]>())
+            }
+            Err(error) => return Err(error.into()),
+        };
         let mut child = command
             .args([
                 "--ignored",
@@ -266,10 +274,7 @@ impl Child {
             ])
             .env(ROOT, root)
             .env(MODE, mode)
-            .env(
-                KEY,
-                base64::engine::general_purpose::STANDARD.encode([29u8; 32]),
-            )
+            .env(KEY, key)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

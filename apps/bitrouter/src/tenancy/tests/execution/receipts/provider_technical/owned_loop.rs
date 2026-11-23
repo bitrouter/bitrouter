@@ -12,7 +12,7 @@ use crate::gateway::pipeline::{
     types::{PipelineInput, PipelineRequest},
 };
 use bitrouter_ai::{
-    tenancy::provider_technical_facts_v2::{HopProfile, ProviderTechnicalFactsV2},
+    tenancy::provider_technical_facts::{HopProfile, ProviderTechnicalFacts},
     types::{ApiProtocol, Content, StreamPart, Tool, ToolResultOutput},
 };
 use futures::StreamExt;
@@ -123,6 +123,7 @@ async fn real_two_turn_json_and_merged_sse_keep_context_operation_and_first_last
             &base,
             "chat_completions",
             &mut |_| {},
+            None,
             (
                 crate::telemetry::receipt_latency::Sink::default(),
                 Some(owner),
@@ -154,8 +155,8 @@ async fn real_two_turn_json_and_merged_sse_keep_context_operation_and_first_last
             let raw=fixture.service.read_receipt(fixture.operator.clone(),fixture.tenant.clone(),read::Request::One(id.clone())).await.map_err(failure)?;
             let receipt:ExecutionReceipt=serde_json::from_slice(&raw)?;
             ensure!(receipt.attempts.len()==2 && receipt.attempts[0].attempt_id!=receipt.attempts[1].attempt_id);
-            let bytes=fixture.service.read_receipt(fixture.operator.clone(),fixture.tenant.clone(),read::Request::ProviderTechnicalV2(id.clone())).await.map_err(failure)?;
-            let facts:Option<ProviderTechnicalFactsV2>=serde_json::from_slice(&bytes)?;let facts=facts.context("real durable owning scope")?;
+            let bytes=fixture.service.read_receipt(fixture.operator.clone(),fixture.tenant.clone(),read::Request::ProviderTechnical(id.clone())).await.map_err(failure)?;
+            let facts:Option<ProviderTechnicalFacts>=serde_json::from_slice(&bytes)?;let facts=facts.context("real durable owning scope")?;
             facts.validate_against(&receipt)?;
             ensure!(facts.operations.len()==2 && facts.hop_observations.len()==2);
             ensure!(facts.operations[0].selected_attempt_id.is_none() && facts.operations[1].selected_attempt_id.as_ref()==Some(&receipt.attempts[1].attempt_id));
@@ -176,7 +177,7 @@ async fn real_two_turn_json_and_merged_sse_keep_context_operation_and_first_last
             ensure!(calls.load(Ordering::SeqCst)==2 && tools.load(Ordering::SeqCst)==1);
             // Repeated original protected reads neither replay the loop nor add usage.
             ensure!(fixture.service.read_receipt(fixture.operator.clone(),fixture.tenant.clone(),read::Request::One(id.clone())).await.map_err(failure)?==raw);
-            ensure!(fixture.service.read_receipt(fixture.operator.clone(),fixture.tenant.clone(),read::Request::ProviderTechnicalV2(id)).await.map_err(failure)?==bytes);
+            ensure!(fixture.service.read_receipt(fixture.operator.clone(),fixture.tenant.clone(),read::Request::ProviderTechnical(id)).await.map_err(failure)?==bytes);
             ensure!(calls.load(Ordering::SeqCst)==2 && tools.load(Ordering::SeqCst)==1);
             Ok(())
         }.await;

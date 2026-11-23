@@ -109,7 +109,6 @@ fn current_capabilities(state: &ControlState, caller: &ControlCaller) -> Capabil
         protocol: "bitrouter-control".into(),
         protocol_version: PROTOCOL_VERSION,
         server_version: crate::VERSION.into(),
-        actions: rows.iter().map(|row| row.legacy_name.into()).collect(),
         action_descriptors: rows
             .iter()
             .map(|row| {
@@ -491,7 +490,7 @@ async fn control_state(
             })
             .await
             .map_err(ControlError::internal)?
-            .digest
+            .source_digest
     } else {
         None
     };
@@ -1260,7 +1259,7 @@ providers:
     }
 
     #[tokio::test]
-    async fn old_server_capabilities_support_only_legacy_reads() -> anyhow::Result<()> {
+    async fn old_server_capabilities_refuse_all_control_reads() -> anyhow::Result<()> {
         let router = Router::new()
             .route("/control/v1/capabilities", get(|| async {
                 Json(serde_json::json!({
@@ -1280,9 +1279,9 @@ providers:
         });
         let client =
             HttpControlClient::from_token(&format!("http://{address}"), TOKEN.into(), "test")?;
-        assert!(client.can_action("list_models").await?);
-        assert!(client.can_action("route").await?);
-        assert!(!client.can_action("providers_list").await?);
+        assert!(client.can_action("list_models").await.is_err());
+        assert!(client.can_action("route").await.is_err());
+        assert!(client.can_action("providers_list").await.is_err());
         let _ = stop_tx.send(());
         task.await??;
         Ok(())
@@ -1319,13 +1318,22 @@ providers:
         let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
         let report: CapabilitiesReport = serde_json::from_slice(&bytes)?;
         assert_eq!(report.protocol_version, PROTOCOL_VERSION);
+        let wire: serde_json::Value = serde_json::from_slice(&bytes)?;
+        assert!(wire.get("actions").is_none());
+        assert_eq!(wire["action_descriptors"]["list_models"]["version"], 2);
+        assert_eq!(wire["action_descriptors"]["route"]["version"], 2);
+        assert_eq!(wire["action_descriptors"]["status"]["version"], 1);
         assert_eq!(
-            report.actions,
+            report
+                .action_descriptors
+                .keys()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>(),
             inventory::ACTIONS
                 .iter()
                 .filter(|row| !row.requires_administration && !row.requires_reload)
-                .map(|row| row.legacy_name.to_string())
-                .collect::<Vec<_>>()
+                .map(|row| row.id.to_string())
+                .collect::<std::collections::BTreeSet<_>>()
         );
         Ok(())
     }

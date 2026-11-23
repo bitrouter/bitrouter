@@ -72,8 +72,8 @@ pub struct ProviderHop {
 /// Present only on the config paths ([`ResolvedVia::Config`] /
 /// [`ResolvedVia::ZeroConfig`]) and only when a policy table is configured. The
 /// `static_*` fields are what the table declares for the request key; the
-/// `selected_*` fields are what it actually chose, which can differ when a
-/// route is pinned, locked, or under trial.
+/// `selected_*` fields describe the effective model and reasoning effort after
+/// applying routing preferences and tool-use constraints.
 ///
 /// The informative, secret-free subset of the router's own decision: enough for
 /// a reader to see *why* the effective model differs from the requested one,
@@ -103,12 +103,6 @@ pub struct PolicySelection {
     /// The reasoning effort actually selected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected_effort: Option<ReasoningEffort>,
-    /// Whether the route is pinned to its current selection.
-    pub pinned: bool,
-    /// Whether the selection is locked against further movement.
-    pub locked: bool,
-    /// Whether this request is part of an exploratory trial.
-    pub trialed: bool,
 }
 
 /// A per-token rate bracket. The base rates live on [`EstimatedCost`]; this is
@@ -186,8 +180,7 @@ pub struct RouteReport {
     /// Stable identity of the named router resolved during Stage 0.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub router: Option<crate::routing::RouterRequestIdentity>,
-    /// Whether the router came from canonical configuration or legacy preset
-    /// compatibility syntax.
+    /// Whether the router came from explicit configuration or a product default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub router_source: Option<crate::control::models::RouterSource>,
     /// Dynamic policy bound to the named router, when present.

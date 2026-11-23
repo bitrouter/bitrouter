@@ -11,6 +11,8 @@ use chrono::Utc;
 
 use super::{Service, command::Command, model::Caller, store::StoredResponse};
 
+#[cfg(all(unix, feature = "core", feature = "harness"))]
+mod assembly_scope;
 mod authority;
 mod authority_ingress;
 mod capacity_directory;
@@ -19,11 +21,9 @@ mod capacity_history;
 mod configuration;
 mod conformance;
 mod directory;
-#[cfg(feature = "core")]
 mod eval;
 pub(in crate::tenancy) mod execution;
 mod http;
-mod learning_startup;
 #[cfg(not(feature = "core"))]
 mod no_core;
 mod resources;
@@ -377,6 +377,7 @@ async fn failed_assembly_does_not_leave_a_detached_authority() -> Result<()> {
 }
 
 struct Fixture {
+    wrapping_key: [u8; 32],
     service: Service,
     db: sea_orm::DatabaseConnection,
     operator: Caller,
@@ -473,6 +474,15 @@ fn expiry() -> Result<bitrouter_ai::tenancy::identity::Timestamp> {
 }
 
 impl Fixture {
+    fn wrapping_key_from_env(name: &str) -> Result<[u8; 32]> {
+        base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            std::env::var(name)?.trim(),
+        )?
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("fixture wrapping key must be exactly 32 bytes"))
+    }
+
     async fn new() -> Result<Self> {
         let db = crate::db::connect("sqlite::memory:").await?;
         Self::with_database(db, &mut |_| {}).await
@@ -551,6 +561,7 @@ impl Fixture {
                 .map_err(failure)?,
         )?;
         Ok(Self {
+            wrapping_key: rand::random(),
             service,
             db,
             operator,

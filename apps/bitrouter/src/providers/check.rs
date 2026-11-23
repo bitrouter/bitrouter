@@ -108,9 +108,9 @@ pub async fn check_document<F>(
 where
     F: Fn(&str) -> Option<String>,
 {
-    let config = crate::config::parse_with(yaml, |name| {
-        Some(lookup(name).unwrap_or_else(|| unresolved_marker(name)))
-    })?;
+    let document =
+        crate::config::substitute_with_missing(yaml, lookup, |name| Ok(unresolved_marker(name)))?;
+    let config = crate::config::parse_resolved(&document)?;
     check_loaded(&config, provider_id, account).await
 }
 
@@ -149,16 +149,28 @@ pub async fn check_loaded(
 }
 
 fn unresolved_marker(name: &str) -> String {
-    format!("{UNRESOLVED_MARKER}{name}")
+    let label = if name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+        name
+    } else {
+        ""
+    };
+    format!("{UNRESOLVED_MARKER}{label}")
 }
 
 fn unresolved_reference(value: &str) -> Option<&str> {
-    let rest = value.split(UNRESOLVED_MARKER).nth(1)?;
+    let (_, rest) = value.split_once(UNRESOLVED_MARKER)?;
     let end = rest
         .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
         .unwrap_or(rest.len());
-    let name = &rest[..end];
-    if name.is_empty() { None } else { Some(name) }
+    Some(&rest[..end])
+}
+
+fn reference_error(field: &str, name: &str) -> String {
+    if name.is_empty() {
+        format!("{field} reference could not be resolved")
+    } else {
+        format!("{field} reference '${{{name}}}' could not be resolved")
+    }
 }
 
 fn connections(
@@ -230,6 +242,12 @@ fn static_headers(provider: &ProviderConfig) -> Result<http::HeaderMap> {
     let mut headers = http::HeaderMap::new();
     for rule in provider.outbound_headers()? {
         if let Some(value) = rule.default() {
+            if let Some(name) = std::str::from_utf8(value.as_bytes())
+                .ok()
+                .and_then(unresolved_reference)
+            {
+                return Err(BitrouterError::bad_request(reference_error("header", name)));
+            }
             headers.insert(rule.name().clone(), value.clone());
         }
     }
@@ -242,23 +260,21 @@ async fn probe(
     timeouts: HttpTimeouts,
 ) -> ProviderConnectionCheck {
     if let Some(name) = unresolved_reference(&slot.api_base) {
-        return failed_row(
-            &slot.id,
-            "",
-            "",
-            &format!("endpoint reference '${{{name}}}' could not be resolved"),
-        );
+        return failed_row(&slot.id, "", "", &reference_error("endpoint", name));
     }
     if slot.api_base.is_empty() {
         return failed_row(&slot.id, "", "", "endpoint is not configured");
     }
     let protocol = slot.protocol.as_str();
+    if !probe_endpoint_allowed(&slot.api_base) {
+        return failed_row(&slot.id, "", protocol, "endpoint is not allowed");
+    }
     if let Some(name) = unresolved_reference(&slot.api_key) {
         return failed_row(
             &slot.id,
             &slot.api_base,
             protocol,
-            &format!("credential reference '${{{name}}}' could not be resolved"),
+            &reference_error("credential", name),
         );
     }
     let target = ModelTarget {
@@ -272,7 +288,7 @@ async fn probe(
         auth_scheme: AuthScheme::default(),
         compatibility: ModelCompatibility::default(),
     };
-    let client = match ModelClient::new(timeouts) {
+    let client = match ModelClient::for_model_list_probe(timeouts) {
         Ok(client) => client,
         Err(error) => {
             return failed_row(
@@ -302,6 +318,16 @@ async fn probe(
     }
 }
 
+fn probe_endpoint_allowed(endpoint: &str) -> bool {
+    crate::config::url_validator::validate_upstream_url(endpoint).is_ok()
+        && url::Url::parse(endpoint).is_ok_and(|url| {
+            url.username().is_empty()
+                && url.password().is_none()
+                && url.query().is_none()
+                && url.fragment().is_none()
+        })
+}
+
 fn failed_row(id: &str, endpoint: &str, protocol: &str, error: &str) -> ProviderConnectionCheck {
     ProviderConnectionCheck {
         id: id.to_string(),
@@ -315,6 +341,12 @@ fn failed_row(id: &str, endpoint: &str, protocol: &str, error: &str) -> Provider
 
 fn public_failure(error: &ModelError, api_key: &str) -> String {
     let text = match error {
+        ModelError::HttpResponse {
+            status: status @ (401 | 403),
+            ..
+        } if api_key.is_empty() => format!(
+            "endpoint returned HTTP {status}. Use a configured API key or static authentication header for this check."
+        ),
         ModelError::HttpResponse { status, .. } => format!("endpoint returned HTTP {status}"),
         ModelError::Decode { message } | ModelError::Configuration { message } => message.clone(),
         ModelError::Timeout => "timed out before the endpoint answered".into(),

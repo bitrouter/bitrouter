@@ -3,7 +3,7 @@
 //! one versioned row, so no partial combination can become execution authority.
 
 use crate::harness::resources::managed::store::{MAX_STORE_BYTES, NativeStore};
-use bitrouter_ai::core::protocol::{CoreError, ErrorCode};
+use crate::managed_contract::protocol::{CoreError, ErrorCode};
 use sea_orm::{
     AccessMode, ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseBackend,
     DatabaseConnection, EntityTrait, IsolationLevel, QueryFilter, QuerySelect, Set,

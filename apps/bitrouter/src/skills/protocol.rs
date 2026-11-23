@@ -1,5 +1,5 @@
 //! Application validation and namespace policy for MCP skills.
-//! Public wire records live in [`bitrouter_ai::protocol::mcp_skills`].
+//! Public wire records live in [`crate::skills::wire`].
 //! Content format parsing lives in [`crate::skills::format`].
 //!
 //! The gateway prefixes skill URIs with the member label without changing
@@ -7,13 +7,18 @@
 //! See [SEP-2640](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2640)
 //! and the [Agent Skills specification](https://agentskills.io/specification).
 
-use bitrouter_ai::protocol::mcp_skills::{
-    DYNAMIC_RESOURCES, GetSkillResult, ListSkillsResult, MAX_SKILL_RESOURCES,
-    MAX_SKILL_TOTAL_BYTES, SKILL_SCHEME, SkillEntry, SkillResources, SkillsCacheScope,
-    SkillsResultType,
-};
+use crate::skills::wire::DYNAMIC_RESOURCES;
+use crate::skills::wire::GetSkillResult;
+use crate::skills::wire::ListSkillsResult;
+use crate::skills::wire::MAX_SKILL_RESOURCES;
+use crate::skills::wire::MAX_SKILL_TOTAL_BYTES;
+use crate::skills::wire::SKILL_SCHEME;
+use crate::skills::wire::SkillEntry;
+use crate::skills::wire::SkillResources;
+use crate::skills::wire::SkillsCacheScope;
+use crate::skills::wire::SkillsResultType;
 #[cfg(test)]
-use bitrouter_ai::protocol::mcp_skills::{
+use crate::skills::wire::{
     GetSkillParams, RESOURCES_DIRECTORY_READ_METHOD, SKILLS_EXTENSION_ID, SKILLS_GET_METHOD,
     SKILLS_LIST_METHOD, SkillResource,
 };

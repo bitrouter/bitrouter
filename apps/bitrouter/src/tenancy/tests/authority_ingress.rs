@@ -86,10 +86,6 @@ async fn saturated_read_does_not_prepare_payload_and_releases_failed_preparation
 
 struct Ready {
     fixture: Fixture,
-    #[cfg(all(feature = "core", feature = "harness"))]
-    route: ResourceRef,
-    #[cfg(all(feature = "core", feature = "harness"))]
-    slot: ResourceRef,
     credential: CredentialIssued,
     headers: http::HeaderMap,
 }
@@ -206,10 +202,6 @@ impl Ready {
         );
         Ok(Self {
             fixture,
-            #[cfg(all(feature = "core", feature = "harness"))]
-            route,
-            #[cfg(all(feature = "core", feature = "harness"))]
-            slot,
             credential,
             headers,
         })
@@ -306,134 +298,4 @@ async fn paid_delivery_keeps_admitted_grant_but_denies_authority_fence() -> Resu
     drop((owner, execution));
     tokio::time::timeout(TIMEOUT, service.shutdown()).await??;
     Ok(())
-}
-
-#[cfg(all(feature = "core", feature = "harness"))]
-mod assessment {
-    use super::*;
-    use crate::tenancy::{
-        learning::source::Binding,
-        oauth::{
-            exchange::{Exchange, Operation},
-            storage,
-        },
-    };
-
-    fn arm(
-        exchange: Arc<Exchange>,
-        request: reqwest::Request,
-    ) -> Result<(
-        std::result::Result<(), ErrorCode>,
-        std::result::Result<(), ErrorCode>,
-    )> {
-        let (send, receive) = std::sync::mpsc::channel();
-        let worker = std::thread::spawn(move || {
-            let revalidated = exchange.execution.revalidate();
-            // Always exercise the real arm, even when the owner check failed.
-            let armed = exchange.execution.arm_oauth(&exchange, &request);
-            send.send((revalidated, armed))
-                .map_err(|_| anyhow::anyhow!("arm observer disconnected"))
-        });
-        // A recursive lock on the aliased owner/child lease must fail with a
-        // bounded timeout rather than hang the test runtime's worker shutdown.
-        let result = receive
-            .recv_timeout(TIMEOUT)
-            .context("OAuth arm deadlocked")?;
-        worker
-            .join()
-            .map_err(|_| anyhow::anyhow!("arm thread failed"))??;
-        Ok(result)
-    }
-
-    async fn check(closed: bool) -> Result<()> {
-        let ready = Ready::new(true).await?;
-        let service = &ready.fixture.service;
-        let authority = service
-            .session_authority(&ready.headers, "ingress-owner")
-            .await
-            .map_err(failure)?;
-        let descriptor = authority.descriptor().clone();
-        let grant = bitrouter_ai::core::protocol::OwnershipGrant {
-            session_id: descriptor.session.clone(),
-            harness_id: descriptor.harness.clone(),
-            core_instance_id: "ingress-core".into(),
-            execution_epoch: 1,
-        };
-        let binding = authority
-            .bind(descriptor, grant)
-            .map_err(|error| anyhow::anyhow!("native binding: {error:?}"))?;
-        // admit_assessment clones this host's Submission, so owner and child
-        // share one live lease. This is the real aliased construction path.
-        let execution = authority
-            .host()
-            .admit_assessment(Binding::Native(binding.clone()), &ready.route)
-            .await
-            .map_err(failure)?;
-        let target = target(&execution).await?;
-        let row = storage::load(&ready.fixture.db, &ready.fixture.installation, &ready.slot)
-            .await?
-            .context("OAuth seed")?;
-        let request = reqwest::Client::new()
-            .post(&row.metadata.profile.token_endpoint)
-            .form(&[
-                ("grant_type", "refresh_token"),
-                ("refresh_token", "seed-refresh"),
-                ("client_id", row.metadata.profile.client_id.as_str()),
-            ])
-            .build()?;
-        let exchange = Exchange::new(execution.clone(), target, row).map_err(code)?;
-        exchange.reserve().map_err(code)?;
-        tokio::time::timeout(TIMEOUT, exchange.submit(Operation::Start))
-            .await?
-            .map_err(code)?;
-        ensure!(!exchange.armed.load(Ordering::Acquire));
-        if closed {
-            binding
-                .close_new_work()
-                .map_err(|error| anyhow::anyhow!("close: {error:?}"))?;
-        }
-        let (revalidated, observed) = arm(exchange.clone(), request)?;
-        ensure!(
-            revalidated
-                == if closed {
-                    Err(ErrorCode::AuthorityUnavailable)
-                } else {
-                    Ok(())
-                }
-        );
-        // Native assessment authority can be valid while its retained route
-        // remains outside the supported Wire(Messages) OAuth consumer profile.
-        ensure!(
-            observed
-                == if closed {
-                    Err(ErrorCode::AuthorityUnavailable)
-                } else {
-                    Err(ErrorCode::CapabilityMismatch)
-                }
-        );
-        ensure!(!exchange.armed.load(Ordering::Acquire));
-        tokio::time::timeout(TIMEOUT, exchange.submit(Operation::Release))
-            .await?
-            .map_err(code)?;
-        let owner = execution.receipt_owner()?.clone();
-        tokio::time::timeout(TIMEOUT, owner.finish_or_join(Outcome::Cancelled))
-            .await?
-            .map_err(code)?;
-        owner.release_active().map_err(code)?;
-        drop((exchange, execution, owner, binding, authority));
-        tokio::time::timeout(TIMEOUT, service.shutdown()).await??;
-        Ok(())
-    }
-
-    /// UT: healthy aliased authority revalidates; native OAuth remains unsupported.
-    #[tokio::test]
-    async fn healthy_assessment_revalidates_aliased_lease_but_refuses_native_oauth() -> Result<()> {
-        check(false).await
-    }
-
-    /// UT: closing after durable Start prevents OAuth refresh arm on that lease.
-    #[tokio::test]
-    async fn closed_assessment_after_oauth_start_cannot_arm() -> Result<()> {
-        check(true).await
-    }
 }

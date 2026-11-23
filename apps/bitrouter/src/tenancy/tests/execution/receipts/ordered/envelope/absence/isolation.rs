@@ -28,11 +28,11 @@ async fn envelope_v2_real_overlap_isolates_layer_choice_and_unextended_control()
                     let first_binding = harness
                         .binding(vec![0], protocol)
                         .await?
-                        .with_generation_defaults_envelope_v2(&first)?;
+                        .with_generation_defaults_envelope(&first)?;
                     let second_binding = harness
                         .binding(vec![0], protocol)
                         .await?
-                        .with_generation_defaults_envelope_v2(&second)?;
+                        .with_generation_defaults_envelope(&second)?;
                     ensure!(
                         first_binding.selection.generation_defaults_digest
                             != second_binding.selection.generation_defaults_digest
@@ -166,7 +166,7 @@ async fn envelope_v2_fallback_preserves_per_hop_absence_and_unknown_never_resend
     let binding = harness
         .binding(vec![1, 0], GenerationProtocol::ChatCompletions)
         .await?
-        .with_generation_defaults_envelope_v2(&values)?;
+        .with_generation_defaults_envelope(&values)?;
     let id = invoke(
         &harness,
         &binding,
@@ -183,11 +183,11 @@ async fn envelope_v2_fallback_preserves_per_hop_absence_and_unknown_never_resend
         receipt
             .attempts
             .iter()
-            .map(|attempt| attempt.candidate_index)
+            .filter_map(|attempt| attempt.candidate_index)
             .collect::<Vec<_>>()
             == [1, 0]
     );
-    ensure!(receipt.accepted_selection.generation_defaults_digest == Some(values.digest()?));
+    ensure!(receipt_selection(&receipt)?.generation_defaults_digest == Some(values.digest()?));
     let observed = bodies(&harness)?;
     ensure!(observed.len() == 2);
     matrix::assert_wire(&observed[0], "messages", None, None)?;
@@ -207,7 +207,7 @@ async fn envelope_v2_fallback_preserves_per_hop_absence_and_unknown_never_resend
     let binding = harness
         .binding(vec![1, 0], GenerationProtocol::ChatCompletions)
         .await?
-        .with_generation_defaults_envelope_v2(&values)?;
+        .with_generation_defaults_envelope(&values)?;
     ensure!(
         invoke(
             &harness,
@@ -236,10 +236,10 @@ async fn envelope_v2_fallback_preserves_per_hop_absence_and_unknown_never_resend
     let receipt = harness.receipt(&page.execution_ids[0]).await?;
     ensure!(receipt.state == ReceiptState::Unknown && receipt.outcome == Outcome::Unknown);
     ensure!(
-        receipt.accepted_selection.generation_defaults_digest
+        receipt_selection(&receipt)?.generation_defaults_digest
             == binding.selection.generation_defaults_digest
     );
-    ensure!(receipt.attempts.len() == 1 && receipt.attempts[0].candidate_index == 1);
+    ensure!(receipt.attempts.len() == 1 && receipt.attempts[0].candidate_index == Some(1));
     harness.fixture.service.shutdown().await?;
     Ok(())
 }

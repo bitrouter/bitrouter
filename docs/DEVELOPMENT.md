@@ -5,6 +5,25 @@ Read the [project introduction](../README.md), then the
 [development documentation index](development/README.md) for the current source
 layout, implementation ownership and operational boundaries.
 
+## Software versions
+
+Workspace crates and agent plugins share the `1.0.0-beta.N` software release
+line starting at `1.0.0-beta.1`. Increment the beta number for subsequent beta
+releases and keep the `1.0.0` base. Published formats and service contracts use
+the versions defined in their own specifications.
+
+Prepare beta versions explicitly in the release PR. The previous independently
+versioned SDK can still rank highest in the registry, so the automated version
+proposal can compare against that older SDK release.
+
+Sync the workspace dependency requirements, both plugin manifests, the
+standalone SDK consumer lockfiles and version-pinned installation examples.
+Regenerate the configuration schema with
+`cargo run --locked -p dist-helper -- generate-schema` and put the release
+notes under the matching version in `CHANGELOG.md`.
+Distribution installers are built from the matching `v1.0.0-beta.N` tag for
+the published release.
+
 ## Documentation policy
 
 Keep three kinds of maintained material distinct:

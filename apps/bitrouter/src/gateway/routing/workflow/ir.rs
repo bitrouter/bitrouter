@@ -1,3 +1,4 @@
+use bitrouter_ai::policy::Risk;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -43,20 +44,6 @@ pub enum WorkflowStateKind {
 }
 
 impl fmt::Display for WorkflowStateKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&enum_key(self))
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RouteRisk {
-    Normal,
-    Context,
-    Guarded,
-}
-
-impl fmt::Display for RouteRisk {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&enum_key(self))
     }
@@ -143,7 +130,7 @@ impl Default for CapabilityConstraints {
 pub struct RouteProjection {
     pub schema_version: u8,
     pub state_kind: WorkflowStateKind,
-    pub risk: RouteRisk,
+    pub risk: Risk,
 }
 
 impl RouteProjection {
@@ -171,10 +158,7 @@ impl RouteProjection {
             "agent_trace/v2" => 2,
             _ => return None,
         };
-        let risk = parse_route_risk(risk)?;
-        if schema_version == 1 && risk == RouteRisk::Context {
-            return None;
-        }
+        let risk = Risk::parse_key(risk)?;
         Some(Self {
             schema_version,
             state_kind: parse_workflow_state_kind(state)?,
@@ -210,15 +194,6 @@ fn parse_workflow_state_kind(value: &str) -> Option<WorkflowStateKind> {
         "recovery" => Some(WorkflowStateKind::Recovery),
         "subagent_dispatch" => Some(WorkflowStateKind::SubagentDispatch),
         "finalization" => Some(WorkflowStateKind::Finalization),
-        _ => None,
-    }
-}
-
-pub(crate) fn parse_route_risk(value: &str) -> Option<RouteRisk> {
-    match value {
-        "normal" => Some(RouteRisk::Normal),
-        "context" => Some(RouteRisk::Context),
-        "guarded" => Some(RouteRisk::Guarded),
         _ => None,
     }
 }
@@ -407,14 +382,9 @@ impl WorkflowStateIR {
             || hard_guarded_state
             || hard_guarded_constraint
         {
-            RouteRisk::Guarded
-        } else if matches!(
-            self.capability_constraints.context_pressure,
-            RequirementLevel::High
-        ) {
-            RouteRisk::Context
+            Risk::Guarded
         } else {
-            RouteRisk::Normal
+            Risk::Normal
         };
 
         RouteProjection {
@@ -645,7 +615,7 @@ mod tests {
                     context_pressure: RequirementLevel::High,
                     ..CapabilityConstraints::default()
                 },
-                "agent_trace/v2|edit|context",
+                "agent_trace/v2|edit|normal",
             ),
             (
                 RecoverySignal::None,
@@ -690,7 +660,7 @@ mod tests {
         long_context_edit.capability_constraints.context_pressure = RequirementLevel::High;
         assert_eq!(
             long_context_edit.route_projection().key(),
-            "agent_trace/v2|edit|context"
+            "agent_trace/v2|edit|normal"
         );
 
         long_context_edit
@@ -703,10 +673,7 @@ mod tests {
     }
 
     #[test]
-    fn route_projection_rejects_retired_trace_v1_keys() {
-        let parsed = RouteProjection::parse_key("agent_trace/v2|edit|context")
-            .expect("canonical v2 context projection");
-        assert_eq!(parsed.risk, RouteRisk::Context);
-        assert!(RouteProjection::parse_key("agent_trace/v1|edit|context").is_none());
+    fn route_projection_rejects_unknown_risk() {
+        assert!(RouteProjection::parse_key("agent_trace/v2|edit|context").is_none());
     }
 }

@@ -38,16 +38,16 @@ impl SseFrame {
     ///
     /// # Errors
     /// Rejects invalid SSE fields and output beyond the gateway wire bound.
-    pub fn to_wire(&self) -> Result<String, bitrouter_ai::wire::Error> {
+    pub fn to_wire(&self) -> Result<String, crate::gateway::wire::Error> {
         match self {
-            SseFrame::Event { event, data } => bitrouter_ai::wire::Frame::Event {
+            SseFrame::Event { event, data } => crate::gateway::wire::Frame::Event {
                 event: event.as_deref(),
                 id: None,
                 data,
             },
-            SseFrame::Comment(text) => bitrouter_ai::wire::Frame::Comment(text),
+            SseFrame::Comment(text) => crate::gateway::wire::Frame::Comment(text),
         }
-        .encode(bitrouter_ai::wire::DEFAULT_JSON_LIMIT)
+        .encode(crate::gateway::wire::DEFAULT_JSON_LIMIT)
     }
 }
 
@@ -56,7 +56,7 @@ mod tests {
     use super::SseFrame;
 
     #[test]
-    fn sse_frame_wire_format() -> Result<(), bitrouter_ai::wire::Error> {
+    fn sse_frame_wire_format() -> Result<(), crate::gateway::wire::Error> {
         assert_eq!(
             SseFrame::Event {
                 event: None,

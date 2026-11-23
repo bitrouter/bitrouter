@@ -125,7 +125,7 @@ pub(super) async fn exercise(root: &Path, mode: &str) -> Result<()> {
         .await??
         .err()
         .context("expired restoring opener returned a session")?;
-    ensure!(error.commit_status == bitrouter_ai::core::protocol::CommitStatus::Committed);
+    ensure!(error.commit_status == crate::managed_contract::protocol::CommitStatus::Committed);
     if mode == "journal-exact" {
         tokio::time::timeout(TIMEOUT, async {
             while fixture.service.host_slots_for_test() == 0 {

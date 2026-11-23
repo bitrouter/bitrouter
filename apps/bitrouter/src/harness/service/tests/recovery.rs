@@ -18,27 +18,29 @@ use crate::harness::thread::ThreadHistoryRequest;
 use crate::harness::turn::ApprovalAnswer;
 use crate::harness::turn::CancelTurnRequest;
 use crate::harness::turn::SteeringRequest;
-use bitrouter_ai::harness::runtime::ErrorCode;
-use bitrouter_ai::harness::runtime::RuntimeLimits;
-use bitrouter_ai::harness::thread::PermissionProfile;
-use bitrouter_ai::harness::thread::RecoveryBlocker;
-use bitrouter_ai::harness::thread::ThreadObservation;
-use bitrouter_ai::harness::thread::ThreadStatus;
-use bitrouter_ai::harness::turn::SteeringStatus;
-use bitrouter_ai::harness::turn::TurnStatus;
+use crate::managed_contract::harness::runtime::ErrorCode;
+use crate::managed_contract::harness::runtime::RuntimeLimits;
+use crate::managed_contract::harness::thread::PermissionProfile;
+use crate::managed_contract::harness::thread::RecoveryBlocker;
+use crate::managed_contract::harness::thread::ThreadObservation;
+use crate::managed_contract::harness::thread::ThreadStatus;
+use crate::managed_contract::harness::turn::SteeringStatus;
+use crate::managed_contract::harness::turn::TurnStatus;
 #[cfg(unix)]
-use bitrouter_ai::harness::turn::VerificationStatus;
+use crate::managed_contract::harness::turn::VerificationStatus;
 
 fn recovery_request(
-    view: &bitrouter_ai::harness::thread::ThreadView,
+    view: &crate::managed_contract::harness::thread::ThreadView,
     key: &str,
-) -> Result<bitrouter_ai::harness::thread::ThreadRecoveryRequest, String> {
+) -> Result<crate::managed_contract::harness::thread::ThreadRecoveryRequest, String> {
     let report = view.recovery.as_ref().ok_or("recovery report missing")?;
-    Ok(bitrouter_ai::harness::thread::ThreadRecoveryRequest {
-        source_server_instance_id: report.source_server_instance_id.clone(),
-        source_cursor: report.source_cursor,
-        idempotency_key: key.into(),
-    })
+    Ok(
+        crate::managed_contract::harness::thread::ThreadRecoveryRequest {
+            source_server_instance_id: report.source_server_instance_id.clone(),
+            source_cursor: report.source_cursor,
+            idempotency_key: key.into(),
+        },
+    )
 }
 
 #[tokio::test]
@@ -409,24 +411,24 @@ impl ExecutionStore for RecoveryCommitFault {
     async fn claim_owner(
         &self,
         id: &str,
-    ) -> Result<bitrouter_ai::harness::runtime::OwnerClaim, String> {
+    ) -> Result<crate::managed_contract::harness::runtime::OwnerClaim, String> {
         self.memory.claim_owner(id).await
     }
     async fn read_owner(
         &self,
         id: &str,
-    ) -> Result<Option<bitrouter_ai::harness::runtime::ExecutionOwner>, String> {
+    ) -> Result<Option<crate::managed_contract::harness::runtime::ExecutionOwner>, String> {
         self.memory.read_owner(id).await
     }
     async fn stop_owner(
         &self,
-        owner: &bitrouter_ai::harness::runtime::ExecutionOwner,
-    ) -> Result<bitrouter_ai::harness::runtime::ExecutionOwner, String> {
+        owner: &crate::managed_contract::harness::runtime::ExecutionOwner,
+    ) -> Result<crate::managed_contract::harness::runtime::ExecutionOwner, String> {
         self.memory.stop_owner(owner).await
     }
     async fn commit_owned(
         &self,
-        owner: &bitrouter_ai::harness::runtime::ExecutionOwner,
+        owner: &crate::managed_contract::harness::runtime::ExecutionOwner,
         id: &str,
         version: u64,
         records: &[ExecutionRecord],
@@ -716,7 +718,7 @@ async fn settled_turn_recovery_finishes_original_outcome_without_model_or_verifi
         // This is an acknowledged journal-prefix fixture, not process-crash proof.
         // The genuine source service was joined and its effects are already known.
         let memory = Arc::new(MemoryExecutionStore::default());
-        let bitrouter_ai::harness::runtime::OwnerClaim::Acquired { owner } =
+        let crate::managed_contract::harness::runtime::OwnerClaim::Acquired { owner } =
             memory.claim_owner(&source.inner.instance_id).await?
         else {
             return Err("prefix source claim failed".into());
@@ -734,7 +736,8 @@ async fn settled_turn_recovery_finishes_original_outcome_without_model_or_verifi
                     turn_id: first.turn_id.clone(),
                     fact: Box::new(ExecutionRecord::TurnLifecycle {
                         turn_id: first.turn_id.clone(),
-                        lifecycle: bitrouter_ai::harness::turn::TurnLifecycle::CancelRequested,
+                        lifecycle:
+                            crate::managed_contract::harness::turn::TurnLifecycle::CancelRequested,
                     }),
                 }],
                 None,
@@ -869,7 +872,7 @@ async fn continuation_checkpoint_keeps_the_turn_budget_and_confirmed_results_wit
         // The source really joined; this prefix tests checkpoint continuation,
         // not abrupt-owner retirement or real process-crash recovery.
         let memory = Arc::new(MemoryExecutionStore::default());
-        let bitrouter_ai::harness::runtime::OwnerClaim::Acquired { owner } =
+        let crate::managed_contract::harness::runtime::OwnerClaim::Acquired { owner } =
             memory.claim_owner(&source.inner.instance_id).await?
         else {
             return Err("prefix source claim failed".into());
@@ -993,7 +996,7 @@ async fn pending_steering_at_checkpoint_keeps_its_target_and_is_applied_once_aft
         ExecutionRecord::TurnRecord { fact, .. } if matches!(fact.as_ref(), ExecutionRecord::RunCheckpoint { model_steps: 1, tool_calls: 0, .. })
     )).ok_or("pending-steering checkpoint missing")? + 1;
     let memory = Arc::new(MemoryExecutionStore::default());
-    let bitrouter_ai::harness::runtime::OwnerClaim::Acquired { owner } =
+    let crate::managed_contract::harness::runtime::OwnerClaim::Acquired { owner } =
         memory.claim_owner(&source.inner.instance_id).await?
     else {
         return Err("prefix source claim failed".into());
@@ -1178,25 +1181,25 @@ impl ExecutionStore for PrefixStore {
     async fn claim_owner(
         &self,
         id: &str,
-    ) -> Result<bitrouter_ai::harness::runtime::OwnerClaim, String> {
+    ) -> Result<crate::managed_contract::harness::runtime::OwnerClaim, String> {
         self.memory.claim_owner(id).await
     }
     async fn read_owner(
         &self,
         id: &str,
-    ) -> Result<Option<bitrouter_ai::harness::runtime::ExecutionOwner>, String> {
+    ) -> Result<Option<crate::managed_contract::harness::runtime::ExecutionOwner>, String> {
         self.memory.read_owner(id).await
     }
     async fn stop_owner(
         &self,
-        owner: &bitrouter_ai::harness::runtime::ExecutionOwner,
-    ) -> Result<bitrouter_ai::harness::runtime::ExecutionOwner, String> {
+        owner: &crate::managed_contract::harness::runtime::ExecutionOwner,
+    ) -> Result<crate::managed_contract::harness::runtime::ExecutionOwner, String> {
         self.memory.stop_owner(owner).await
     }
 
     async fn commit_owned(
         &self,
-        _owner: &bitrouter_ai::harness::runtime::ExecutionOwner,
+        _owner: &crate::managed_contract::harness::runtime::ExecutionOwner,
         _id: &str,
         _version: u64,
         _records: &[ExecutionRecord],
@@ -1270,19 +1273,19 @@ impl ExecutionStore for ReaderGateStore {
     async fn claim_owner(
         &self,
         id: &str,
-    ) -> Result<bitrouter_ai::harness::runtime::OwnerClaim, String> {
+    ) -> Result<crate::managed_contract::harness::runtime::OwnerClaim, String> {
         self.memory.claim_owner(id).await
     }
     async fn read_owner(
         &self,
         id: &str,
-    ) -> Result<Option<bitrouter_ai::harness::runtime::ExecutionOwner>, String> {
+    ) -> Result<Option<crate::managed_contract::harness::runtime::ExecutionOwner>, String> {
         self.memory.read_owner(id).await
     }
     async fn stop_owner(
         &self,
-        owner: &bitrouter_ai::harness::runtime::ExecutionOwner,
-    ) -> Result<bitrouter_ai::harness::runtime::ExecutionOwner, String> {
+        owner: &crate::managed_contract::harness::runtime::ExecutionOwner,
+    ) -> Result<crate::managed_contract::harness::runtime::ExecutionOwner, String> {
         self.memory.stop_owner(owner).await
     }
 
@@ -1297,7 +1300,7 @@ impl ExecutionStore for ReaderGateStore {
 
     async fn commit_owned(
         &self,
-        owner: &bitrouter_ai::harness::runtime::ExecutionOwner,
+        owner: &crate::managed_contract::harness::runtime::ExecutionOwner,
         id: &str,
         version: u64,
         records: &[ExecutionRecord],
@@ -1503,7 +1506,7 @@ async fn later_writer_epoch_checkpoint_rebuilds_status_and_preserves_historical_
         .await?;
     source.shutdown().await;
     let second_epoch = "second-checkpoint-writer";
-    let bitrouter_ai::harness::runtime::OwnerClaim::Acquired { owner } =
+    let crate::managed_contract::harness::runtime::OwnerClaim::Acquired { owner } =
         memory.claim_owner(second_epoch).await?
     else {
         return Err("clean source did not release writer ownership".into());
@@ -1528,14 +1531,16 @@ async fn later_writer_epoch_checkpoint_rebuilds_status_and_preserves_historical_
                     messages: Vec::new(),
                 },
                 ExecutionRecord::ThreadEvent {
-                    event: bitrouter_ai::harness::thread::ThreadEvent {
+                    event: crate::managed_contract::harness::thread::ThreadEvent {
                         server_instance_id: second_epoch.into(),
                         thread_id: original.thread_id.clone(),
                         seq: checkpoint.cursor,
                         timestamp_ms: 1,
-                        changes: vec![bitrouter_ai::harness::thread::ThreadChange::Checkpoint {
-                            snapshot: checkpoint.clone(),
-                        }],
+                        changes: vec![
+                            crate::managed_contract::harness::thread::ThreadChange::Checkpoint {
+                                snapshot: checkpoint.clone(),
+                            },
+                        ],
                     },
                 },
             ],
@@ -2674,7 +2679,8 @@ async fn native_large_checkpoint_keeps_next_turn_admissible_after_cold_recovery(
         turn_id: &str,
         deadline: tokio::time::Instant,
         phase: &str,
-    ) -> Result<bitrouter_ai::harness::turn::TurnSnapshot, Box<dyn std::error::Error>> {
+    ) -> Result<crate::managed_contract::harness::turn::TurnSnapshot, Box<dyn std::error::Error>>
+    {
         Ok(tokio::time::timeout_at(deadline, async {
             loop {
                 let snapshot = service.read(turn_id)?;

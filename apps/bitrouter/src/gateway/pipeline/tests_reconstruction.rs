@@ -7,7 +7,7 @@ struct RebuildTable(Arc<AtomicUsize>);
 impl RoutingTable for RebuildTable {
     async fn resolve_model(&self, model: &str) -> Result<ModelResolution> {
         self.0.fetch_add(1, Ordering::SeqCst);
-        let mut resolved = PresetAwareRoutingTable.resolve_model(model).await?;
+        let mut resolved = NamedRoutingTable.resolve_model(model).await?;
         resolved.request_checks = vec![request_checks::RequestCheckBinding {
             checker_id: "history-checker".into(),
             binding_digest: "history-v1".into(),
@@ -23,12 +23,10 @@ impl RoutingTable for RebuildTable {
         prefs: &RoutingPrefs,
         caller: &CallerContext,
     ) -> Result<Vec<RoutingTarget>> {
-        let mut routes = PresetAwareRoutingTable
-            .route_chain(model, prefs, caller)
-            .await?;
+        let mut routes = NamedRoutingTable.route_chain(model, prefs, caller).await?;
         for route in &mut routes {
             route.model_constraints.input_token_counting =
-                Some(bitrouter_ai::core::evidence::InputTokenCounting::Responses);
+                Some(crate::managed_contract::evidence::InputTokenCounting::Responses);
         }
         Ok(routes)
     }
@@ -142,7 +140,7 @@ impl native::NativeExecutionControl for RebuildControl {
     async fn before_attempt(&self, _: &str, _: u32) -> Result<()> {
         Ok(())
     }
-    async fn after_attempt(&self, _: bitrouter_ai::core::evidence::NativeAttemptReport) {}
+    async fn after_attempt(&self, _: crate::managed_contract::evidence::NativeAttemptReport) {}
 }
 
 #[derive(Default)]
@@ -158,13 +156,15 @@ impl Executor for RebuildExecutor {
         _: &RoutingTarget,
         prompt: &Prompt,
         _: &PipelineContext,
-    ) -> Result<bitrouter_ai::core::evidence::NativeInputCount> {
+    ) -> Result<crate::managed_contract::evidence::NativeInputCount> {
         self.counts.lock().await.push(prompt.clone());
-        Ok(bitrouter_ai::core::evidence::NativeInputCount::Counted {
-            input_tokens: 100,
-            request_sha256: "fixture".into(),
-            source: "fixture".into(),
-        })
+        Ok(
+            crate::managed_contract::evidence::NativeInputCount::Counted {
+                input_tokens: 100,
+                request_sha256: "fixture".into(),
+                source: "fixture".into(),
+            },
+        )
     }
     async fn execute(
         &self,
@@ -188,7 +188,7 @@ impl Executor for RebuildExecutor {
 }
 
 fn rebuild_request() -> Result<PipelineRequest> {
-    let mut req = request_for_model("@adaptive:preferred");
+    let mut req = request_for_model("bitrouter/adaptive");
     req.input
         .generation_prompt_mut()
         .ok_or_else(|| BitrouterError::internal("generation fixture"))?
@@ -290,7 +290,7 @@ async fn managed_rebuild_cannot_rewrite_or_reorder_prepared_messages() -> Result
         let control = Arc::new(RebuildControl::new(Some(replacement), false));
         let mut builder = PipelineBuilder::new();
         builder
-            .routing_table(Arc::new(PresetAwareRoutingTable))
+            .routing_table(Arc::new(NamedRoutingTable))
             .executor(executor.clone());
         assert!(
             Arc::new(builder.build()?)
@@ -319,7 +319,7 @@ async fn managed_rebuild_cannot_repeat_or_bypass_mutable_hooks_and_continuation(
         let control = Arc::new(RebuildControl::new(None, true));
         let mut builder = PipelineBuilder::new();
         builder
-            .routing_table(Arc::new(PresetAwareRoutingTable))
+            .routing_table(Arc::new(NamedRoutingTable))
             .executor(executor.clone());
         let mut req = rebuild_request()?;
         match restriction {

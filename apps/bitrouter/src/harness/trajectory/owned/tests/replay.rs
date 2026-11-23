@@ -67,7 +67,7 @@ async fn accepts_without_repair(
 #[tokio::test]
 async fn duplicate_append_refuses_null_required_edge_with_or_without_session_row() -> Result<()> {
     for missing_session in [false, true] {
-        let (db, association, last) = recorded(LearningMode::Observe).await?;
+        let (db, association, last) = recorded(true).await?;
         let changed = db.execute_unprepared("UPDATE acp_capture_events SET session_key = NULL, session_sequence = NULL WHERE sequence = 8").await?;
         assert_eq!(changed.rows_affected(), 1);
         if missing_session {
@@ -85,7 +85,7 @@ async fn duplicate_append_refuses_null_required_edge_with_or_without_session_row
 
 #[tokio::test]
 async fn duplicate_append_refuses_same_controller_equal_head_sibling_edge() -> Result<()> {
-    let (db, association, native_last) = recorded(LearningMode::Observe).await?;
+    let (db, association, native_last) = recorded(true).await?;
     let mut last = None;
     for (index, mut observation) in observations().into_iter().skip(1).enumerate() {
         observation.call_id = observation.call_id.map(|id| id + 3);
@@ -150,7 +150,7 @@ async fn duplicate_append_refuses_same_controller_equal_head_sibling_edge() -> R
 
 #[tokio::test]
 async fn duplicate_disconnect_refuses_an_edge_where_correlation_requires_null() -> Result<()> {
-    let (db, association, _) = recorded(LearningMode::Observe).await?;
+    let (db, association, _) = recorded(true).await?;
     let last = append(
         &db,
         &association,

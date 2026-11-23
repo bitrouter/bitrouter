@@ -1,16 +1,16 @@
-//! Actual private ingress, explicit resource-v3 publication and paired mixed sends.
+//! Actual private ingress, current resource publication and paired mixed sends.
 //! Loopback peers implement the operator contract; this is not a provider-cloud test.
 use super::*;
+use crate::managed_contract::private_adapter::{
+    ATTEMPT_DOMAIN, ATTEMPT_HEADER, Attempt, Disposition, OUTCOME_DOMAIN, OUTCOME_HEADER,
+    Outcome as AdapterOutcome,
+};
 use axum::{body::Body as HttpBody, extract::Request, http::Version};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use bitrouter_ai::tenancy::{
     generate_content::{MIME, OrderedGenerateContentRequestV1},
-    generation_defaults::GenerationDefaultsEnvelopeV2,
-    private_adapter::{
-        ATTEMPT_DOMAIN, ATTEMPT_HEADER, Attempt, Disposition, OUTCOME_DOMAIN, OUTCOME_HEADER,
-        Outcome as AdapterOutcome,
-    },
-    resources_v3::ResourcePutV3,
+    generation_defaults::GenerationDefaultsEnvelope,
+    resources::ResourcePut,
     usage_evidence::{Protocol, Source},
 };
 use hmac::{Hmac, KeyInit, Mac};
@@ -19,6 +19,7 @@ use sha2::{Digest, Sha256};
 mod boundaries;
 
 struct NativePeer {
+    key: [u8; 32],
     ordinal: usize,
     reject: AtomicBool,
     bad_mac: AtomicBool,
@@ -54,7 +55,7 @@ async fn reply(peer: &NativePeer, request: Request) -> Result<Response> {
     let (payload, tag) = wire.split_once('.').context("claim envelope")?;
     let tag = URL_SAFE_NO_PAD.decode(tag)?;
     let payload = URL_SAFE_NO_PAD.decode(payload)?;
-    let mut mac = Hmac::<Sha256>::new_from_slice(&private_adapter::KEY)?;
+    let mut mac = Hmac::<Sha256>::new_from_slice(&peer.key)?;
     mac.update(ATTEMPT_DOMAIN);
     mac.update(&payload);
     mac.verify_slice(&tag)
@@ -121,7 +122,7 @@ async fn reply(peer: &NativePeer, request: Request) -> Result<Response> {
         retry_after,
     };
     let payload = serde_json::to_vec(&outcome)?;
-    let mut mac = Hmac::<Sha256>::new_from_slice(&private_adapter::KEY)?;
+    let mut mac = Hmac::<Sha256>::new_from_slice(&peer.key)?;
     mac.update(OUTCOME_DOMAIN);
     mac.update(&tag);
     mac.update(&payload);
@@ -203,6 +204,7 @@ impl Harness {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let base = format!("http://{}/v1", listener.local_addr()?);
         let peer = Arc::new(NativePeer {
+            key: rand::random(),
             ordinal: native_ordinal,
             reject: AtomicBool::new(native_ordinal == 1),
             bad_mac: AtomicBool::new(false),
@@ -222,20 +224,14 @@ impl Harness {
         let transport = if h2 {
             #[cfg(feature = "http2")]
             {
-                crate::tenancy::execution::private_adapter::Peer::for_test_h2(
-                    endpoint,
-                    private_adapter::KEY,
-                )?
+                crate::tenancy::execution::private_adapter::Peer::for_test_h2(endpoint, peer.key)?
             }
             #[cfg(not(feature = "http2"))]
             {
                 anyhow::bail!("h2 test requires feature")
             }
         } else {
-            crate::tenancy::execution::private_adapter::Peer::for_test(
-                endpoint,
-                private_adapter::KEY,
-            )?
+            crate::tenancy::execution::private_adapter::Peer::for_test(endpoint, peer.key)?
         };
         ordered.fixture.service.private_adapter = Some(Arc::new(transport));
         // Install the same real service with its exact paired peer before capability observation.
@@ -267,7 +263,7 @@ impl Harness {
         let control = ordered.control(true, HttpVersion::Http1Only)?;
         ensure!(
             control
-                .resource_capabilities_v3(&ordered.fixture.installation)
+                .resource_capabilities(&ordered.fixture.installation)
                 .await
                 .context("native resource capability")?
                 .provisioning_enabled
@@ -291,7 +287,7 @@ impl Harness {
             .take()
             .context("captured route")?;
         let mut definition = definition;
-        definition["kind"] = "native_profiled_route_v1".into();
+        definition["kind"] = "profiled_route".into();
         for index in 0..2 {
             let name = format!("provider-{index}");
             definition["routing"]["providers"][&name]["api_protocol"] = if index == native_ordinal {
@@ -326,11 +322,11 @@ impl Harness {
             )
             .await
             .context("native resource status")?;
-        let command: ResourcePutV3 = serde_json::from_value(
-            json!({"format":3,"operation_id":"native-publish","installation_id":ordered.fixture.installation,"key":ordered.route.key(),"expected_revision":status.head_revision,"definition":definition}),
+        let command: ResourcePut = serde_json::from_value(
+            json!({"format":1,"operation_id":"native-publish","installation_id":ordered.fixture.installation,"key":ordered.route.key(),"expected_revision":status.head_revision,"definition":definition}),
         )?;
         let published = control
-            .put_resource_v3(&ordered.fixture.tenant, &command)
+            .put_resource(&ordered.fixture.tenant, &command)
             .await
             .map_err(|error| match &error {
                 bitrouter_sdk::error::Error::Tenancy(failure) => anyhow::anyhow!(
@@ -376,10 +372,10 @@ impl Harness {
             .ordered
             .binding(vec![1, 0], GenerationProtocol::GenerateContent)
             .await?;
-        let defaults: GenerationDefaultsEnvelopeV2 = serde_json::from_value(
+        let defaults: GenerationDefaultsEnvelope = serde_json::from_value(
             json!({"schema_version":2,"canonical":{"schema_version":1,"max_tokens":17},"supplemental":{},"configuration_defaults":"preserve_absence"}),
         )?;
-        let binding = binding.with_generation_defaults_envelope_v2(&defaults)?;
+        let binding = binding.with_generation_defaults_envelope(&defaults)?;
         let control = self.ordered.control(true, version)?;
         let capabilities = control
             .ordered_generate_content_capabilities()
@@ -402,7 +398,7 @@ impl Harness {
         let reply = gateway
             .ordered_tenant(self.ordered.token()?, &binding)?
             .with_generate_content(&capabilities)?
-            .with_generation_defaults_envelope_v2(defaults)?
+            .with_generation_defaults_envelope(defaults)?
             .generate_content_reply(&request)
             .await?;
         let id = reply.metadata.execution_id.context("execution id")?;
@@ -489,9 +485,9 @@ async fn native_generate_content_actual_mixed_json_sse_original_order_and_counte
                     let receipt = harness.ordered.receipt(&id).await?;
                     ensure!(receipt.outcome == Outcome::Completed && receipt.attempts.len() == 2);
                     ensure!(
-                        receipt.accepted_selection.inbound_protocol
+                        receipt_selection(&receipt)?.inbound_protocol
                             == GenerationProtocol::GenerateContent
-                            && receipt.accepted_selection.candidate_indices == [1, 0]
+                            && receipt_selection(&receipt)?.candidate_indices == [1, 0]
                     );
                     ensure!(harness.ordered.observed()? == ["model-1", "model-0"]);
                     {
@@ -523,7 +519,7 @@ async fn native_generate_content_actual_mixed_json_sse_original_order_and_counte
                         );
                     }
                     let control = harness.ordered.control(false, version)?;
-                    let evidence = control.usage_evidence_v2(&receipt).await?;
+                    let evidence = control.usage_evidence(&receipt).await?;
                     ensure!(evidence.extractor_version == 2);
                     if !stream {
                         ensure!(
@@ -628,7 +624,7 @@ async fn native_generate_content_failed_json_never_asserts_estimator_non_use() -
         let evidence = harness
             .ordered
             .control(false, HttpVersion::Http1Only)?
-            .usage_evidence_v2(&receipt)
+            .usage_evidence(&receipt)
             .await?;
         ensure!(
             evidence.estimation == bitrouter_ai::tenancy::usage_evidence::Estimation::NotCaptured,

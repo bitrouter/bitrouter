@@ -6,8 +6,9 @@ use axum::{
     response::Response,
 };
 use bitrouter_ai::tenancy::{
-    identity::{ExecutionId, InstallationId, TenantId},
-    usage_evidence::{Capture, MAX_BYTES, UsageEvidenceCapabilitiesV1},
+    execution::ExecutionReceipt,
+    identity::InstallationId,
+    usage_evidence::{Capture, UsageEvidenceCapabilities},
 };
 use bitrouter_sdk::{
     error::Error,
@@ -15,11 +16,17 @@ use bitrouter_sdk::{
 };
 use serde_json::json;
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
+const MAX_BYTES: usize = 256 * 1024;
+fn receipt() -> TestResult<ExecutionReceipt> {
+    Ok(serde_json::from_value(
+        json!({"dispatch":{"mode":"strict"},"installation_id":"installation","tenant_id":"tenant","principal_id":"principal","execution_id":"execution","correlation_id":"correlation","execution_revision":"revision","state":"unknown","outcome":"unknown","attempts":[],"usage":{"input_tokens":null,"output_tokens":null,"cache_read_tokens":null,"cache_write_tokens":null,"reasoning_tokens":null,"provenance":"unknown","complete":false},"recorded_at":"2026-11-02T00:00:00Z"}),
+    )?)
+}
 const TOKEN: &str = "fixture-tenancy-token-0123456789abcdef";
 
 fn padded_evidence(size: usize, chunked: bool) -> TestResult<Response> {
     let mut bytes = serde_json::to_vec(
-        &json!({"schema_version":1,"installation_id":"installation","tenant_id":"tenant","execution_id":"execution","capture":"not_captured","extractor_version":1,"estimation":"not_captured","estimate":null,"parent_execution_id":null,"child_execution_ids":[],"attempts":[],"frames":[],"truncated":false,"dropped_frames":0}),
+        &json!({"dispatch":{"mode":"strict"},"installation_id":"installation","tenant_id":"tenant","execution_id":"execution","capture":"captured","extractor_version":1,"estimation":"not_captured","estimate":null,"parent_execution_id":null,"child_execution_ids":[],"attempts":[],"frames":[],"truncated":false,"dropped_frames":0}),
     )?;
     assert!(bytes.len() < size);
     bytes.resize(size, b' ');
@@ -41,9 +48,7 @@ fn padded_evidence(size: usize, chunked: bool) -> TestResult<Response> {
 
 #[tokio::test]
 async fn original_body_limit_includes_whitespace_for_sized_and_chunked_responses() -> TestResult {
-    let installation: InstallationId = "installation".try_into()?;
-    let tenant: TenantId = "tenant".try_into()?;
-    let execution: ExecutionId = "execution".try_into()?;
+    let receipt = receipt()?;
     for chunked in [false, true] {
         let replies = vec![
             Some(padded_evidence(MAX_BYTES, chunked)?),
@@ -62,15 +67,10 @@ async fn original_body_limit_includes_whitespace_for_sized_and_chunked_responses
                 },
             )?;
             assert_eq!(
-                client
-                    .usage_evidence(&installation, &tenant, &execution)
-                    .await?
-                    .capture,
-                Capture::NotCaptured
+                client.usage_evidence(&receipt).await?.capture,
+                Capture::Captured
             );
-            let error = client
-                .usage_evidence(&installation, &tenant, &execution)
-                .await;
+            let error = client.usage_evidence(&receipt).await;
             let Err(Error::Tenancy(failure)) = error else {
                 return Err("oversized raw body was not rejected before decoding".into());
             };
@@ -85,15 +85,14 @@ async fn original_body_limit_includes_whitespace_for_sized_and_chunked_responses
 #[tokio::test]
 async fn separate_routes_validate_all_bindings_and_reject_unknown_fields() -> TestResult {
     let installation: InstallationId = "installation".try_into()?;
-    let tenant: TenantId = "tenant".try_into()?;
-    let execution: ExecutionId = "execution".try_into()?;
-    let evidence = json!({"schema_version":1,"installation_id":"installation","tenant_id":"tenant","execution_id":"execution","capture":"not_captured","extractor_version":1,"estimation":"not_captured","estimate":null,"parent_execution_id":null,"child_execution_ids":[],"attempts":[],"frames":[],"truncated":false,"dropped_frames":0});
+    let receipt = receipt()?;
+    let evidence = json!({"dispatch":{"mode":"strict"},"installation_id":"installation","tenant_id":"tenant","execution_id":"execution","capture":"unavailable","extractor_version":1,"estimation":"not_captured","estimate":null,"parent_execution_id":null,"child_execution_ids":[],"attempts":[],"frames":[],"truncated":false,"dropped_frames":0});
     let mut wrong = evidence.clone();
     wrong["tenant_id"] = json!("foreign");
     let mut extra = evidence.clone();
     extra["raw"] = json!({});
     let replies = vec![
-        serde_json::to_value(UsageEvidenceCapabilitiesV1::new(installation.clone()))?,
+        serde_json::to_value(UsageEvidenceCapabilities::new(installation.clone()))?,
         evidence,
         wrong,
         extra,
@@ -111,24 +110,14 @@ async fn separate_routes_validate_all_bindings_and_reject_unknown_fields() -> Te
         1
     );
     assert_eq!(
-        client
-            .usage_evidence(&installation, &tenant, &execution)
-            .await?
-            .capture,
-        Capture::NotCaptured
+        client.usage_evidence(&receipt).await?.capture,
+        Capture::Unavailable
     );
     assert!(matches!(
-        client
-            .usage_evidence(&installation, &tenant, &execution)
-            .await,
+        client.usage_evidence(&receipt).await,
         Err(Error::Response(_))
     ));
-    assert!(
-        client
-            .usage_evidence(&installation, &tenant, &execution)
-            .await
-            .is_err()
-    );
+    assert!(client.usage_evidence(&receipt).await.is_err());
     let records = server.records.lock().await;
     assert_eq!(records.len(), 4);
     assert_eq!(

@@ -7,10 +7,10 @@ use super::ServiceError;
 use super::ThreadService;
 use super::unknown_turn;
 use crate::harness::storage::ExecutionRecord;
-use bitrouter_ai::harness::runtime::EffectStatus;
-use bitrouter_ai::harness::runtime::ErrorCode;
-use bitrouter_ai::harness::runtime::ExecutionOwner;
-use bitrouter_ai::harness::runtime::OwnerClaim;
+use crate::managed_contract::harness::runtime::EffectStatus;
+use crate::managed_contract::harness::runtime::ErrorCode;
+use crate::managed_contract::harness::runtime::ExecutionOwner;
+use crate::managed_contract::harness::runtime::OwnerClaim;
 
 impl ThreadService {
     /// Initialize native execution authority. Read-only recovery and observation
@@ -160,7 +160,7 @@ fn uncertain_cleanup(record: &ExecutionRecord) -> bool {
         | ExecutionRecord::VerificationResult { effect, .. } => *effect == EffectStatus::Unknown,
         ExecutionRecord::TurnLifecycle { lifecycle, .. } => matches!(
             lifecycle,
-            bitrouter_ai::harness::turn::TurnLifecycle::Finished {
+            crate::managed_contract::harness::turn::TurnLifecycle::Finished {
                 unknown_effect: true,
                 ..
             }

@@ -12,7 +12,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::gateway::routing::workflow::ir::WorkflowIdentity;
-use {bitrouter_ai::eval::EvalExperimentRef, bitrouter_ai::eval::RouteDecisionMeasurement};
+use {
+    crate::gateway::routing::exploration::RouteAssignment,
+    bitrouter_ai::eval::RouteDecisionMeasurement,
+};
 
 pub const POLICY_DECISION_JSONL_ENV: &str = "BITROUTER_POLICY_DECISION_JSONL";
 
@@ -97,7 +100,7 @@ pub struct PolicyDecisionRecord {
     #[serde(default)]
     pub task_family_reason_codes: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub experiment: Option<EvalExperimentRef>,
+    pub experiment: Option<RouteAssignment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route_measurement: Option<RouteDecisionMeasurement>,
     #[serde(default)]

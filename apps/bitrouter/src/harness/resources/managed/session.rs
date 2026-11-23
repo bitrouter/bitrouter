@@ -1,7 +1,6 @@
 //! One CoreSession drives the native harness. Workspace tools and approvals
 //! remain local, with their start ledger serialized against checkpoint fences.
 
-pub mod assessment;
 pub(crate) mod owned;
 
 use crate::storage::checkpoint::CheckpointBatchExt;
@@ -19,16 +18,16 @@ use super::store::{MAX_STORE_BYTES, NativeStore};
 use super::{super::HarnessConfig, NativeResources};
 use crate::core::session::{CoreSession, HarnessPort};
 use crate::harness::service::workspace::WorkspaceFence;
-use crate::storage::checkpoint::sha256;
-use crate::storage::checkpoint::snapshot::{RunStatus, SessionSnapshot};
-use bitrouter_ai::core::checkpoint::{DurableHead, ToolStartFence};
-use bitrouter_ai::core::protocol::{
+use crate::managed_contract::checkpoint::{DurableHead, ToolStartFence};
+use crate::managed_contract::harness::agent::ToolMode;
+use crate::managed_contract::harness::runtime::ExecutionOwner;
+use crate::managed_contract::protocol::{
     Bind, Capabilities, CoreError, ErrorCode, OperationReceipt, OwnershipGrant, Restore,
     ServerMessage, TaskInput, ToolEffect, ToolExecute, ToolObservation, ToolOutcome, ToolResult,
     ToolStatus, VERSION,
 };
-use bitrouter_ai::harness::agent::ToolMode;
-use bitrouter_ai::harness::runtime::ExecutionOwner;
+use crate::storage::checkpoint::sha256;
+use crate::storage::checkpoint::snapshot::{RunStatus, SessionSnapshot};
 
 #[async_trait]
 pub trait NativeApproval: Send + Sync {
@@ -36,7 +35,7 @@ pub trait NativeApproval: Send + Sync {
     /// Generic command approval is never blanket consent for an MCP skill.
     async fn approve_skill(
         &self,
-        _request: &bitrouter_ai::core::skills::SkillConsentRequest,
+        _request: &crate::managed_contract::skills::SkillConsentRequest,
     ) -> Result<bool, CoreError> {
         Ok(false)
     }
@@ -619,29 +618,6 @@ impl NativeSession {
         self.port.clone()
     }
 
-    /// Assess one frozen Eval root against this authenticated handle's retained
-    /// experiment route. This local read starts no model work and takes no
-    /// execution lease. Current tenant-wide ResourceRead and the original
-    /// credential/binding ceilings are required through delivery.
-    ///
-    /// # Errors
-    /// Rejects Legacy, a busy owner, unsupported retained policy, unqualified
-    /// external evidence, revoked authority or an exceeded bounded read budget.
-    /// Built-in operational evidence does not imply a quality pass or promotion.
-    pub async fn experiment_cohort(
-        &self,
-        model: &str,
-        evidence_root: &str,
-    ) -> Result<crate::core::optimization::cohort::CohortAssessment, CoreError> {
-        let handle = self.owned_handle.as_ref().ok_or_else(|| {
-            CoreError::rejected(
-                ErrorCode::UnauthorizedScope,
-                "native cohort requires an authenticated session",
-            )
-        })?;
-        handle.cohort(model, evidence_root).await
-    }
-
     pub async fn run(
         &mut self,
         input: TaskInput,
@@ -871,7 +847,7 @@ async fn cancel_current_run(core: &CoreSession) -> Result<(), CoreError> {
             Err(err)
                 if err.code == ErrorCode::StaleRevision
                     && err.commit_status
-                        == bitrouter_ai::core::protocol::CommitStatus::NotCommitted =>
+                        == crate::managed_contract::protocol::CommitStatus::NotCommitted =>
             {
                 continue;
             }

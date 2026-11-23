@@ -19,36 +19,20 @@
 
 use sea_orm_migration::prelude::*;
 
-#[derive(DeriveMigrationName)]
-pub struct Migration;
-
-#[async_trait::async_trait]
-impl MigrationTrait for Migration {
-    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager
-            .alter_table(
-                Table::alter()
-                    .table(Requests::Table)
-                    .add_column(ColumnDef::new(Requests::RouteScopeId).string().to_owned())
-                    .to_owned(),
-            )
-            .await
-    }
-
-    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager
-            .alter_table(
-                Table::alter()
-                    .table(Requests::Table)
-                    .drop_column(Requests::RouteScopeId)
-                    .to_owned(),
-            )
-            .await
-    }
-}
-
 #[derive(DeriveIden)]
 enum Requests {
     Table,
     RouteScopeId,
+}
+
+/// DDL-only component of the fresh current baseline; never accepts an old dataset.
+pub(super) async fn initialize_current(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
+    manager
+        .alter_table(
+            Table::alter()
+                .table(Requests::Table)
+                .add_column(ColumnDef::new(Requests::RouteScopeId).string().to_owned())
+                .to_owned(),
+        )
+        .await
 }

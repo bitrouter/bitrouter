@@ -5,6 +5,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
+use crate::gateway::observability::event::PipelineEvent;
 use crate::gateway::pipeline::context::PipelineContext;
 use crate::gateway::pipeline::hooks::RouteHook;
 use crate::gateway::pipeline::settlement::SettlementContext;
@@ -13,7 +14,6 @@ use crate::gateway::pipeline::stream::{
 };
 use crate::gateway::pipeline::types::RoutingTarget;
 use async_trait::async_trait;
-use bitrouter_ai::event::PipelineEvent;
 use bitrouter_ai::types::{ApiProtocol, Usage, UsageOrigin};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -814,7 +814,7 @@ mod registry_tests {
         let pricing = Arc::new(PricingTable::new());
         assert!(pricing.snapshot(&route).tariff.guarantees_known_price());
         let mut prompt: bitrouter_ai::types::Prompt = serde_json::from_value(
-            json!({"model":"org/model","messages":[],"tools":[],"params":{"extra":{"service_tier":"priority"}},"stream":false}),
+            json!({"model":"org/model","messages":[],"tools":[],"params":{"extra_protocol":"chat_completions","extra":{"service_tier":"priority"}},"stream":false}),
         )?;
         let mut context =
             PipelineContext::new(crate::gateway::pipeline::types::PipelineRequest::new(

@@ -1,4 +1,4 @@
-//! Private, versioned DB evidence; deliberately not a MigrationManifest.
+//! Private, versioned SQLite snapshot evidence.
 use serde::{Deserialize, Serialize};
 
 pub(super) const FORMAT_V2: &str = "bitrouter.offline.sqlite-evidence.v2";
@@ -87,7 +87,6 @@ impl Evidence {
             &self.snapshot_digest,
             &self.inspector.version,
             &self.inspector.target,
-            &self.inspector.handoff_build_id,
             &self.inventory.encoding,
             &self.inventory.schema_digest,
         ] {
@@ -184,7 +183,6 @@ impl Evidence {
             "unsupported offline evidence profile"
         );
         for digest in [
-            &self.inspector.handoff_build_id,
             &self.selected_path_digest,
             &self.key_id,
             &self.snapshot_digest,

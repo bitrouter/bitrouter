@@ -3,8 +3,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use bitrouter::storage::checkpoint::sha256;
 
-use bitrouter_ai::core::checkpoint::{CheckpointAck, CheckpointBatch, DurableHead, ToolStartFence};
-use bitrouter_ai::core::protocol::{ArtifactRef, CoreError, ErrorCode, Limits, OwnershipGrant};
+use bitrouter::managed_contract::checkpoint::{
+    CheckpointAck, CheckpointBatch, DurableHead, ToolStartFence,
+};
+use bitrouter::managed_contract::protocol::{
+    ArtifactRef, CoreError, ErrorCode, Limits, OwnershipGrant,
+};
 
 /// Deterministic fake durable authority. Cloning models a process restart with
 /// the same committed store. The local tool ledger is separate from core events.

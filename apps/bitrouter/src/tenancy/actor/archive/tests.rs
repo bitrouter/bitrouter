@@ -23,6 +23,7 @@ async fn seeded() -> Result<(DatabaseConnection, Candidate)> {
     let header = crate::tenancy::store::initial_header(&db, chrono::Utc::now()).await?;
     let candidate = Candidate::new(
         ExecutionReceipt {
+            dispatch: bitrouter_ai::tenancy::execution::Dispatch::Strict,
             installation_id: header.installation,
             tenant_id: "tenant".try_into()?,
             principal_id: "principal".try_into()?,
@@ -101,7 +102,6 @@ async fn live_owner_blocks_relocation_until_actual_release() -> Result<()> {
             &Limits {
                 active_executions: 1,
                 queued_work: 0,
-                learning_jobs: 0,
             },
         )
         .await

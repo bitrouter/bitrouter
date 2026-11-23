@@ -358,7 +358,6 @@ mod tests {
         let mut target = current.clone();
         target.version = "9.9.9".into();
         target.source_revision = Some("verified-new-revision".into());
-        target.handoff_build_id = "verified-new-build".into();
         let mut report =
             UpdateReport::updated(current.version.clone(), target.version.clone(), None)
                 .with_current_artifact(current.clone());

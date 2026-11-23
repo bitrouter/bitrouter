@@ -38,7 +38,6 @@
             "route",
             "policy",
             "credential",
-            "checkpoint",
             "configuration",
             "execution"
           ]
@@ -394,28 +393,6 @@
           ],
           "additionalProperties": false
         },
-        "learning": {
-          "type": "object",
-          "properties": {
-            "mode": {
-              "enum": [
-                "off",
-                "observe",
-                "explore"
-              ]
-            },
-            "max_evaluations": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 100000
-            }
-          },
-          "required": [
-            "mode",
-            "max_evaluations"
-          ],
-          "additionalProperties": false
-        },
         "limits": {
           "type": "object",
           "properties": {
@@ -428,26 +405,23 @@
               "type": "integer",
               "minimum": 0,
               "maximum": 256
-            },
-            "learning_jobs": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 8
             }
           },
           "required": [
             "active_executions",
-            "queued_work",
-            "learning_jobs"
+            "queued_work"
           ],
           "additionalProperties": false
+        },
+        "eval_publication": {
+          "type": "boolean"
         }
       },
       "required": [
         "routes",
         "policy",
         "generation_defaults",
-        "learning",
+        "eval_publication",
         "limits"
       ],
       "additionalProperties": false,
@@ -1019,6 +993,30 @@
             "$ref": "#/$defs/NumericUsage"
           },
           "maxItems": 32
+        },
+        "candidate_index": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observed_http_status": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 200,
+              "maximum": 599
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -1026,7 +1024,9 @@
         "target",
         "outcome",
         "usage",
-        "native_usage"
+        "native_usage",
+        "candidate_index",
+        "observed_http_status"
       ],
       "additionalProperties": false,
       "allOf": [
@@ -1042,6 +1042,18 @@
             "properties": {
               "target": {
                 "$ref": "#/$defs/Target"
+              },
+              "observed_http_status": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 200,
+                    "maximum": 299
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
             }
           }
@@ -1089,16 +1101,20 @@
           "items": {
             "$ref": "#/$defs/Attempt"
           },
-          "maxItems": 8
+          "maxItems": 64
         },
         "usage": {
           "$ref": "#/$defs/Usage"
         },
         "recorded_at": {
           "$ref": "#/$defs/Time"
+        },
+        "dispatch": {
+          "$ref": "#/$defs/Dispatch"
         }
       },
       "required": [
+        "dispatch",
         "installation_id",
         "tenant_id",
         "principal_id",
@@ -1135,8 +1151,84 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "attempts": {
+                "contains": {
+                  "properties": {
+                    "outcome": {
+                      "type": "string",
+                      "const": "unknown"
+                    }
+                  }
+                }
+              },
+              "dispatch": {
+                "properties": {
+                  "mode": {
+                    "const": "ordered"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "state": {
+                "type": "string",
+                "const": "unknown"
+              },
+              "outcome": {
+                "type": "string",
+                "const": "unknown"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "dispatch": {
+                "properties": {
+                  "mode": {
+                    "const": "strict"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "attempts": {
+                "maxItems": 8,
+                "items": {
+                  "properties": {
+                    "candidate_index": {
+                      "type": "null"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "attempts": {
+                "items": {
+                  "properties": {
+                    "candidate_index": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
-      ]
+      ],
+      "$comment": "Maximum encoded size 1 MiB. Runtime validation enforces accepted count <= attempt_limit, actual attempts as a unique selected subsequence, no attempt after unknown/cancelled/completed, tenant ownership and conservative aggregate usage. Missing usage alone may leave a completed receipt incomplete."
     },
     "ExecutionPage": {
       "type": "object",
@@ -1241,7 +1333,6 @@
             "route",
             "policy",
             "credential",
-            "checkpoint",
             "configuration",
             "execution"
           ]
@@ -1459,6 +1550,134 @@
         "Bitrouter-Receipt-Mode"
       ],
       "additionalProperties": false
+    },
+    "Dispatch": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "const": "strict"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "const": "ordered"
+            },
+            "accepted_selection": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "route",
+                "inbound_protocol",
+                "candidate_indices",
+                "admission_mode"
+              ],
+              "properties": {
+                "route": {
+                  "type": "object",
+                  "properties": {
+                    "owner_kind": {
+                      "enum": [
+                        "tenant",
+                        "operator_pool"
+                      ]
+                    },
+                    "owner_id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128,
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                    },
+                    "resource_kind": {
+                      "type": "string",
+                      "const": "route"
+                    },
+                    "resource_id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128,
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                    },
+                    "revision_id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128,
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                    }
+                  },
+                  "required": [
+                    "owner_kind",
+                    "owner_id",
+                    "resource_kind",
+                    "resource_id",
+                    "revision_id"
+                  ],
+                  "additionalProperties": false
+                },
+                "inbound_protocol": {
+                  "type": "string",
+                  "enum": [
+                    "chat_completions",
+                    "messages",
+                    "responses",
+                    "generate_content"
+                  ]
+                },
+                "candidate_indices": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 64,
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 255
+                  }
+                },
+                "admission_mode": {
+                  "type": "string",
+                  "enum": [
+                    "unprofiled",
+                    "profiled"
+                  ]
+                },
+                "generation_defaults_digest": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            },
+            "attempt_limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 64
+            }
+          },
+          "required": [
+            "mode",
+            "accepted_selection",
+            "attempt_limit"
+          ],
+          "additionalProperties": false
+        }
+      ]
     }
   }
 }

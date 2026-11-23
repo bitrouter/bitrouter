@@ -21,21 +21,21 @@ pub(super) const MAX_BYTES: usize = 32 * 1024 * 1024;
 
 /// Bounds serialized SQL cells across one operation, not decoded allocator overhead.
 pub(super) struct Budget<'a> {
-    shared: Option<&'a crate::storage::operation_budget::OperationBudget<'a>>,
     tenant: bool,
     physical_bytes: Option<usize>,
     bytes: usize,
+    limit_bytes: usize,
     rows: usize,
     check: Option<&'a (dyn Fn() -> std::result::Result<(), ErrorCode> + Sync)>,
 }
 impl<'a> Budget<'a> {
     pub(super) fn new(store: &EvalStore) -> Self {
         Self {
-            shared: None,
             tenant: !store.scope.is_legacy(),
             physical_bytes: (store.scope.is_legacy() && store.storage_budget.is_some())
                 .then_some(0),
             bytes: 0,
+            limit_bytes: MAX_BYTES,
             rows: MAX_ROWS,
             check: None,
         }
@@ -45,26 +45,24 @@ impl<'a> Budget<'a> {
         check: &'a (dyn Fn() -> std::result::Result<(), ErrorCode> + Sync),
     ) -> Self {
         Self {
-            shared: None,
             tenant: !store.scope.is_legacy(),
             physical_bytes: None,
             bytes: 0,
+            limit_bytes: MAX_BYTES,
             rows: MAX_OWNED_ROWS,
             check: Some(check),
         }
     }
-    pub(super) fn trajectory(
-        store: &EvalStore,
-        shared: &'a crate::storage::operation_budget::OperationBudget<'a>,
-    ) -> Self {
-        Self {
-            shared: Some(shared),
-            tenant: !store.scope.is_legacy(),
+    pub(super) fn retained(bytes: usize) -> Result<Self> {
+        ensure!(bytes > 0, Capacity("retained byte"));
+        Ok(Self {
+            tenant: true,
             physical_bytes: None,
             bytes: 0,
-            rows: MAX_ROWS,
+            limit_bytes: bytes.min(MAX_BYTES),
+            rows: 1,
             check: None,
-        }
+        })
     }
     pub(super) fn physical_write(&self) -> bool {
         self.physical_bytes.is_some()
@@ -79,9 +77,6 @@ impl<'a> Budget<'a> {
         Ok(())
     }
     pub(super) fn check(&self) -> Result<()> {
-        if let Some(shared) = self.shared {
-            shared.check()?;
-        }
         if let Some(check) = self.check {
             check().map_err(OwnedError::Rejected)?;
         }
@@ -89,15 +84,12 @@ impl<'a> Budget<'a> {
     }
     pub(super) fn charge(&mut self, rows: usize, bytes: usize) -> Result<()> {
         self.check()?;
-        if let Some(shared) = self.shared {
-            return Ok(shared.charge(rows, bytes)?);
-        }
         if self.tenant {
             let next = self.bytes.checked_add(bytes).ok_or(Capacity("byte"))?;
             if rows > self.rows {
                 return Err(Capacity("row").into());
             }
-            if next > MAX_BYTES {
+            if next > self.limit_bytes {
                 return Err(Capacity("byte").into());
             }
             self.bytes = next;

@@ -1,9 +1,9 @@
 //! Accepted tool history must survive rejection of a later model attempt.
 
 use super::*;
+use bitrouter::managed_contract::checkpoint::ToolStartFence;
+use bitrouter::managed_contract::protocol::OperationReceipt;
 use bitrouter::storage::checkpoint::snapshot::accounting::work::{CostWorkKind, CostWorkState};
-use bitrouter_ai::core::checkpoint::ToolStartFence;
-use bitrouter_ai::core::protocol::OperationReceipt;
 use bitrouter_ai::types::ToolResultOutput;
 
 #[path = "later_prompt/expanded.rs"]

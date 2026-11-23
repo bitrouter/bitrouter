@@ -1,192 +1,135 @@
 # BitRouter Eval Exchange Reference
 
-Use this reference to build evaluator-owned packets for the current BitRouter
-Eval Exchange. It is a wire contract, not a policy-authoring interface.
+Evaluate outcomes in a client or external evaluator. The service validates,
+stores, queries and freezes facts; it does not run an evaluation job or publish
+Policy automatically. See the [Eval contract](../../../docs/specs/eval/README.md)
+for payloads and the [Service API](../../../docs/specs/service-api/README.md#eval-exchange-api)
+for endpoints, authorization and retry semantics.
 
-## Subject and sealing contract
+## Subject identity and sealing
 
-An `EvalSubject` has these required fields:
+Set `spec_version: "eval/1.0.0-beta.1"` on each subject and result. A frozen
+snapshot carries the same required version. Subjects use one closed `identity`:
+
+| `identity.profile` | Required identity | Endpoint |
+| --- | --- | --- |
+| `tenant_model_policy` | `installation_id`, `tenant_id`, `configuration_revision`, full `policy` ResourceRef and literal `name` | Tenant Eval |
+| `tenant_generic` | `installation_id`, `tenant_id`; no Policy fields | Tenant Eval |
+| `gateway_generic` | No tenant, configuration or Policy fields | Gateway Eval |
+
+A model-policy identity may include `source_digest` and `classifier_digest` as
+additional evidence. Digests do not replace resource revisions or grant authority.
+A tenant profile may include `execution: {execution_id, configuration_revision}`;
+the service verifies the original receipt in that tenant. Do not derive execution
+identity from a correlation ID or a caller-assigned subject ID.
+
+The service checks model-policy tuples against the authenticated immutable
+configuration and its real route binding. Preserve the literal selected name:
+`auto` and `auto:cost` are separate names. A Policy-free tenant evaluation uses
+`tenant_generic`. Generic evidence cannot justify a different Policy revision.
+Tenant profiles are rejected by Gateway Eval, and gateway profiles are rejected
+by Tenant Eval. Mixed or unknown identity fields are rejected.
+
+Common subject fields retain these meanings:
 
 | Field | Meaning |
-|---|---|
-| `schema_version` | Integer `1`. |
-| `eval_id`, `subject_id` | Non-empty bounded identifiers. `eval_id` identifies the immutable evaluation attempt; `subject_id` identifies the logical request, episode, or task within its caller-defined namespace. |
-| `scope` | `request`, `episode`, or `task`. Select the smallest scope containing the outcome. |
-| `policy_digest` | The exact `sha256:<64 lowercase hex>` policy digest observed by the router. |
-| `preset`, `cohort` | Optional evaluator metadata. Do not use them to reconstruct policy identity. |
-| `holdout` | Boolean. A held-out subject cannot become training evidence. |
-| `decisions` | Zero or more router-authored decision references. |
-| `requested_dimensions` | Namespaced metric ids the evaluator may submit. |
-| `evidence` | Redacted evidence items only. |
-| `evidence_digest` | Canonical digest of `evidence`; leave this empty in a draft and let `subject seal` populate it. |
-| `observed_at` | RFC 3339 timestamp. |
+| --- | --- |
+| `eval_id` | Immutable evaluation-attempt identity. |
+| `subject_id` | Logical request, episode or task identity in its explicit namespace. |
+| `scope` | `request`, `episode`, or `task`; select the outcome boundary actually observed. |
+| `cohort` | Optional evaluator metadata. |
+| `holdout` | Held-out facts remain outside admitted update evidence. |
+| `decisions` | Router-authored references; empty when no exact decision attribution is available. |
+| `requested_dimensions` | Namespaced metric IDs the evaluator may submit. |
+| `evidence` | Redacted, content-addressed evidence items with safe string attributes. |
+| `evidence_digest` | Canonical evidence digest; let the sealing command calculate it. |
+| `observed_at` | RFC 3339 observation timestamp. |
 
-Choose `scope` from the evidence packet's observable boundary:
+Use `request` for a request-local outcome, `episode` for a bounded workflow or
+conversation, and `task` for an externally defined task with a terminal task or
+verifier outcome. Multiple decisions alone do not establish task scope. Give
+repeated attempts distinct evaluation/result/evidence identities while keeping
+the logical task identity stable within its run and source namespace.
 
-| Observable boundary | Scope |
-|---|---|
-| The verdict concerns one request-local outcome. | `request` |
-| The verdict concerns a bounded workflow or conversation spanning multiple requests. | `episode` |
-| The verdict concerns an externally defined task with a task identity and terminal task or verifier outcome. | `task` |
+Copy decision fields from router evidence, including exact selected/baseline
+tiers and efforts, `route_projection`, `request_key`, diagnostic `policy_digest`,
+and any route measurement. Both route classifications are exact
+[Policy class keys](../../../docs/specs/policy/README.md#model-selection), such
+as `code:debugging|verify|guarded`. A measured candidate identifies its tier,
+model, optional effort and logging probability. These probabilities describe
+the router's distribution. Record task quality from the observed outcome.
 
-Decision count and evaluator organization do not determine scope. For example,
-a bounded multi-request enterprise workflow is an `episode` unless its packet
-names an externally defined task and terminal task outcome.
-
-For repeated evaluations of one task, keep each attempt's `eval_id`, result,
-and evidence distinct while keeping `subject_id` stable inside the same
-run/source/policy namespace. The route compiler uses `subject_id` to deduplicate
-independent tasks; attempt-specific subject ids would incorrectly turn retries
-into independent evidence. Include enough namespace in the subject identity to
-avoid collision with an unrelated run or policy population.
-
-Each `decisions[]` entry is exactly:
-
-```json
-{
-  "decision_id": "router-decision-id",
-  "policy": "auto",
-  "route_projection": "semantic_route/v1|code:generation|implement|normal",
-  "request_key": "semantic_route/v1|unknown|implement|normal",
-  "selected_tier": "economy",
-  "baseline_tier": "strong",
-  "policy_digest": "sha256:...",
-  "experiment": {
-    "experiment_id": "sha256:...",
-    "arm": "challenger",
-    "assignment_unit": "task",
-    "assignment_id_digest": "sha256:...",
-    "challenger_propensity_ppm": 100000
-  }
-}
-```
-
-Copy every decision field from router evidence. `selected_tier` is the actual
-route; `baseline_tier` is the router's comparator. Never infer either from a
-preset or rewrite a known baseline. `experiment` is optional for backward
-compatibility. When present, it is router-authored signed assignment evidence:
-copy the whole object verbatim. Evaluators must never invent or edit an
-experiment id, arm, assignment unit, assignment-id digest, or challenger
-propensity. The evaluator-owned top-level `cohort` string is metadata and never
-determines optimizer cohort membership.
-
-Each `evidence[]` entry contains `evidence_id`, namespaced lowercase `kind`,
-`digest` (`sha256:<64 lowercase hex>`), `redacted: true`, and optional safe
-string `attributes`. Attributes must not contain credential-shaped material.
-Keep raw private materials outside this object.
+Keep raw prompts, code, tool arguments and evaluator output in the evaluator's
+private source. Evidence items contain `evidence_id`, namespaced `kind`, a
+`sha256:<64 lowercase hex>` digest, `redacted: true`, and optional safe attributes.
+Never include credentials or raw private material.
 
 Seal a JSON or YAML draft locally:
 
 ```bash
-bro eval subject seal subject-draft.yaml --output subject.json
+bitrouter eval subject seal subject-draft.json --output subject.json
 ```
 
-The command sorts evidence by `evidence_id`, calculates BitRouter's canonical
-digest, validates the resulting subject, and writes deterministic pretty JSON.
-It does not open or mutate the evidence ledger. If validation fails, correct the
-draft and seal a new file; do not invent a digest.
+The command sorts evidence, computes the canonical digest, validates the subject
+and writes deterministic JSON. It does not open the ledger or grant tenant authority.
 
 ## Result contract and units
 
-An `EvaluationResult` requires:
+The result inherits identity from the validated subject:
 
 ```text
-schema_version: 1
-eval_id: exact sealed subject id
-evidence_digest: exact sealed subject digest
+spec_version: "eval/1.0.0-beta.1"
+eval_id: exact sealed subject ID
+evidence_digest: exact sealed evidence digest
 evaluator: { authority_id, evaluator_id, kind, version, config_digest }
 verdict: pass | fail | inconclusive
 metrics: { metric_id: { value, unit } }
 hard_violations: [metric_id]
-confidence_ppm: optional integer 0..1000000
+confidence_ppm: integer 0..1000000 or null
 evidence_refs: [subject evidence_id]
 decision_credit: { decision_id: { weight_ppm, metric_ids } }
-idempotency_key: stable non-empty identifier
+idempotency_key: stable nonempty identifier
 submitted_at: RFC 3339 timestamp
 ```
 
-Copy `evaluator.kind` from the actual evaluation source:
+For gateway authorities, use the evaluator kind that matches the configured
+source: `task_native`, `human`, `enterprise`, `agentic`, or `generic`. The initial
+tenant manual profile requires `kind: generic`, the authenticated principal's
+exact `authority_id`, and no `hard_violations`. Host EvalConfig cannot grant a
+tenant evaluator trusted rank or permission.
 
-| Actual source | `evaluator.kind` |
-|---|---|
-| Task-native verifier | `task_native` |
-| Human reviewer | `human` |
-| Private enterprise evaluator | `enterprise` |
-| Agentic judge | `agentic` |
-| Genuinely uncategorized evaluator | `generic` |
+`config_digest` describes the fixed evaluator rubric and credit policy. Preserve
+it, evaluator identity, evidence and idempotency key for an equivalent retry.
+`confidence_ppm` measures confidence that the verdict is correct; it is not a
+quality score. Use `null` when the rubric supplies no verdict confidence.
 
-`config_digest` is a SHA-256 digest of the fixed evaluator rubric and credit
-policy. Keep evaluator identity, configuration digest, and idempotency key
-stable for an equivalent retry.
-
-`confidence_ppm` represents the evaluator's confidence that its `verdict` is
-correct. It is not a quality score, star rating, rubric score, or conversion of
-an illustrative value. Use `null` when the evaluator or fixed rubric does not
-supply verdict confidence.
-
-Metric ids must be lowercase namespaced identifiers. Units have exact values:
-
-| Unit | Valid values |
-|---|---|
+| Unit | Valid value |
+| --- | --- |
 | `boolean` | `0` or `1` |
 | `ppm` | Integer `0..1000000` |
-| `micro_usd` | Non-negative integer USD micro-units |
-| `milliseconds` | Non-negative integer milliseconds |
-| `count` | Non-negative integer |
+| `micro_usd` | Nonnegative integer USD micro-units |
+| `milliseconds` | Nonnegative integer milliseconds |
+| `count` | Nonnegative integer |
 | `scalar_micros` | Signed integer scalar micro-units |
 
-The current route compiler consumes credited `quality.pass` (`boolean`),
-`cost.usd_micros` (`micro_usd`), `latency.ms` (`milliseconds`), and credited
-hard violations. Other requested metrics remain immutable records but do not
-become route evidence. Submit only requested dimensions; absence means
-unsupported, while zero is an observed value.
+Submit only requested metrics. Absence means unsupported; zero is an observed
+value. For task/episode cost, report the complete unit cost, not a single request's
+price. Transport success or low cost does not establish task success. Use
+`inconclusive` when evidence does not justify pass or fail.
 
-For optimizer quality and cost gates, only complete `task` or `episode`
-subjects qualify. Submit `cost.usd_micros` as the cost of the complete task or
-episode, not one request. BitRouter prefers complete trajectory cost when it is
-available and otherwise accepts evaluator-authored complete cost with the
-`micro_usd` unit. Request subjects can rank optimization opportunities but do
-not enter the quality or cost gate.
+Decision credit must follow a fixed, evidence-supported attribution policy.
+For one decision, empty credit means implicit full credit; use an explicit
+zero weight to withhold attribution. For multiple decisions without an exact
+mapping, use `{}`. Positive weights range up to 1,000,000 ppm and may name only
+submitted metrics, declared violations or `quality.pass`. An empty `metric_ids`
+set applies credit to every present metric. Do not duplicate a terminal task
+reward across all its request decisions. Cost, latency and reliability remain
+separate observations from task quality.
 
-`inconclusive` is a quality firewall. Even if an old or malformed packet gives
-positive credit to `quality.pass` or a hard violation, the route compiler does
-not increase eligible episodes, independent tasks, pass/fail weight, total
-quality weight, or critical-violation evidence. Explicitly credited cost and
-latency remain independent observations and may aggregate.
+## Authenticated submission and ownership
 
-For one decision, omitted `decision_credit` means full credit. To deliberately
-withhold attribution from a one-decision inconclusive result, include that
-decision with `weight_ppm: 0`; an empty map would activate implicit full credit.
-For two or more decisions, use the fixed evaluator credit policy:
-
-| Policy result | Concrete `decision_credit` |
-| --- | --- |
-| Exact decision/metric mappings are supported | Emit only those configured mappings and weights. |
-| No policy or no exact mapping | Use `{}` or omit the serde-defaulted field. No decision receives credit, so the result produces no per-route evidence. |
-
-For emitted mappings, `weight_ppm` is `0..1000000`; `metric_ids` must name a
-metric in `metrics`, a declared hard violation, or `quality.pass`. An empty
-`metric_ids` applies that credit to every present metric, so use it only when
-the fixed policy intentionally attributes every present metric. Keep
-hypothetical or illustrative weights outside submit-ready JSON.
-
-A task- or episode-level terminal score is not automatically request-level
-evidence. Do not duplicate it across the subject's decisions. A fixed
-counterfactual policy may credit a route family when a matched baseline differs
-only on that family; shared candidate/baseline failure is inconclusive, not
-negative evidence. If several route families changed and the evaluator cannot
-separate their effects, submit no positive-weight decision credit.
-
-When a provider or transport request fails but the task later obtains an
-authoritative terminal reward, preserve that terminal outcome as the task
-record. Withhold quality credit from the failed request. If contamination makes
-the task-to-route attribution ambiguous, use explicit zero credit for a
-single-decision result or no positive mapping for a multi-decision result;
-reliability, cost, and latency stay separate.
-
-## Authority, submission, and ownership
-
-Authenticated REST evaluators must match an operator-configured authority:
+Gateway Eval uses the gateway credential boundary and its configured evaluator
+authorities. For example:
 
 ```yaml
 eval:
@@ -199,131 +142,77 @@ eval:
       allow_hard_fail: false
 ```
 
-`kind` must match the submitted evaluator kind. `api_key_ids` or `user_ids`
-must bind the authenticated principal; `allowed_metrics` accepts exact ids,
-namespace wildcards such as `quality.*`, or `*`. Keep `allow_hard_fail: false`
-for a remote authority. Set it to `true` only when that authority's explicit
-contract permits hard-violation reports. Local CLI submission is a local
-operator action and does not consult an authority binding.
-
-Use these CLI operations:
+Kind, principal binding, metric scope and hard-violation permission must match.
+Local CLI submission is an explicit local operator operation; it does not confer
+remote tenant authority. Current CLI operations address that gateway ledger:
 
 ```bash
-bro eval subject seal subject-draft.json --output subject.json
-bro eval subject put subject.json --config bitrouter.yaml
-bro eval subject get eval-1 --config bitrouter.yaml
-bro eval subject list --config bitrouter.yaml
-bro eval result submit result.json --config bitrouter.yaml
-bro eval status --config bitrouter.yaml
+bitrouter eval subject put subject.json --config bitrouter.yaml
+bitrouter eval subject get eval-1 --config bitrouter.yaml
+bitrouter eval subject list --config bitrouter.yaml
+bitrouter eval result submit result.json --config bitrouter.yaml
+bitrouter eval status --config bitrouter.yaml
 ```
 
-The authenticated REST equivalents are:
+Gateway endpoints use `/v1/evals`. Tenant endpoints use
+`/control/v1/tenants/{tenant_id}/evals`, with a tenant bearer credential and exactly
+one `Bitrouter-Installation-Id` header. The body identity and addressed namespace
+must agree. The SDK exposes these through `GatewayClient` and `TenancyClient`
+respectively.
 
-```text
-POST /v1/evals/subjects       GET /v1/evals/subjects
-GET  /v1/evals/subjects/{eval_id}
-POST /v1/evals/results
-POST /v1/evals/snapshots      GET /v1/evals/snapshots/{evidence_root}
-GET  /v1/evals/status
-```
+Both offer subjects (POST/GET), subjects/{eval_id} (GET), results (POST),
+snapshots (POST), snapshots/{evidence_root} (GET), and status (GET).
+Tenant subject/result submission requires `evaluation.submit`; reads require
+`resource.read`; freeze requires both. Results cannot reference another tenant's
+subject. A frozen snapshot commits immutable subject and result content, including
+the subject's complete identity. Query and freeze do not activate a Policy.
 
-CLI rows belong to owner `local`. REST rows belong to the authenticated virtual
-key's owning user. The owner is storage metadata, not a wire field; do not add
-tenant fields to the JSON contract. A snapshot is owner-domain-separated and
-commits subject and result content digests.
+An interrupted mutation is not proof of rollback. Preserve the packet and
+recover its observed state; never treat a network failure as permission to
+rewrite it or retry with different identities.
 
-## Admission and stop conditions
+## Admission and explicit update
 
-The submit response reports one of these admission states:
+| Status | Handling |
+| --- | --- |
+| `admitted` | Preserve the immutable packet and admission receipt. |
+| `held_out` | Preserve held-out facts outside update evidence. |
+| `rejected` | Preserve rejection evidence; correct the adapter with a new immutable result identity. |
+| `disputed` | Preserve conflicting facts; do not average verdicts. |
 
-| State | Evaluator action |
-|---|---|
-| `admitted` | Hand off the immutable packet as eligible evidence, then stop. |
-| `held_out` | Preserve it as held-out evidence; it cannot train. |
-| `rejected` | Preserve rejection evidence and correct the adapter in a new immutable result identity. |
-| `disputed` | Preserve conflicting evidence; it cannot train. |
+An evaluator's authorized handoff ends after submission unless the task also
+explicitly requests freezing or updating Policy.
 
-Rejection can result from a digest mismatch, unknown subject, invalid schema,
-unrequested metric, unknown decision/evidence reference, unauthorized
-authority, kind mismatch, metric scope, or disallowed hard violation. A
-conflict with an equal or higher authority becomes `disputed`; do not average
-verdicts. The evaluator stops at admission in every state: never freeze,
-compile, diff, publish, or invoke `optimize run`. A later explicit
-`bro optimize run` is separate authorization for one autonomous
-controller step and needs no evaluator review or publication approval.
+The explicit client-driven update flow is: infer against an exact retained
+configuration, evaluate its actual output, submit/freeze the bound facts, then
+independently author a public `policy::Document`, create immutable resource and
+configuration revisions, and activate with the required authority and CAS.
+Result admission, freeze and a draft never change the active configuration.
+Keep original facts bound to their original tuple after activation.
 
-## Complete multi-decision example
+## Gateway packet example
 
-This task-level packet records an independently verified quality outcome for
-one decision and a settled-cost observation for another. Its fixed evaluator
-credit policy permits exactly the mappings below, so they belong in the
-submit-ready result.
+This gateway packet deliberately claims no tenant Policy authority. Fill the
+redacted verifier digest with a digest of actual private evidence, then seal it:
 
 ```json
-// subject-draft.json
 {
-  "schema_version": 1,
+  "spec_version": "eval/1.0.0-beta.1",
+  "identity": {"profile": "gateway_generic"},
   "eval_id": "task-run-42",
   "scope": "task",
   "subject_id": "work-item-42",
-  "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  "preset": "auto:cost",
   "cohort": "evaluation",
   "holdout": false,
-  "decisions": [
-    {"decision_id":"decision-edit","policy":"auto","route_projection":"semantic_route/v1|code:generation|implement|normal","request_key":"semantic_route/v1|unknown|implement|normal","selected_tier":"economy","baseline_tier":"strong","policy_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
-    {"decision_id":"decision-review","policy":"auto","route_projection":"semantic_route/v1|code:review|verify|normal","request_key":"semantic_route/v1|code:review|verify|normal","selected_tier":"strong","baseline_tier":"strong","policy_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
-  ],
-  "requested_dimensions": ["quality.pass", "cost.usd_micros", "latency.ms"],
-  "evidence": [
-    {"evidence_id":"verifier","kind":"task.verifier","digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","redacted":true,"attributes":{"result":"pass"}},
-    {"evidence_id":"settlement","kind":"billing.settlement","digest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","redacted":true,"attributes":{"state":"settled"}}
-  ],
+  "decisions": [],
+  "requested_dimensions": ["quality.pass"],
+  "evidence": [{"evidence_id":"verifier","kind":"task.verifier","digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","redacted":true,"attributes":{"result":"pass"}}],
   "evidence_digest": "",
-  "observed_at": "2026-07-31T00:00:00Z"
+  "observed_at": "2026-11-18T00:00:00Z"
 }
 ```
 
-```bash
-bro eval subject seal subject-draft.json --output subject.json
-```
-
-```json
-// result.json; copy evidence_digest from subject.json
-{
-  "schema_version": 1,
-  "eval_id": "task-run-42",
-  "evidence_digest": "sha256:<digest from subject.json>",
-  "evaluator": {"authority_id":"task-verifier","evaluator_id":"verify-v2","kind":"task_native","version":"2","config_digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},
-  "verdict": "pass",
-  "metrics": {
-    "quality.pass": {"value":1,"unit":"boolean"},
-    "cost.usd_micros": {"value":420,"unit":"micro_usd"},
-    "latency.ms": {"value":315,"unit":"milliseconds"}
-  },
-  "hard_violations": [],
-  "confidence_ppm": null,
-  "evidence_refs": ["verifier", "settlement"],
-  "decision_credit": {
-    "decision-edit": {"weight_ppm":1000000,"metric_ids":["quality.pass"]},
-    "decision-review": {"weight_ppm":1000000,"metric_ids":["cost.usd_micros", "latency.ms"]}
-  },
-  "idempotency_key": "task-run-42-v2",
-  "submitted_at": "2026-07-31T00:05:00Z"
-}
-```
-
-Insert `subject.json`, submit `result.json`, require `admitted`, and hand the
-packet to the operator. Do not publish a policy from this evaluator workflow.
-
-## Unified semantic routing
-
-Policy locks use version 4 and structured `{model, effort?, context}` actions.
-Route measurement schema 2 includes context strategy in candidate identity.
-Semantic evaluations must preserve the frozen candidate catalog and
-`routing.assessment` / `routing.plan` receipts from exported subjects. Never
-replace semantic probabilities with action propensities or task quality.
-A changed classifier backend, rubric or threshold is a different evidence cohort;
-compiled certificates cannot be reused across those cohorts. Request-level
-completion alone is not an independent task success. Task and overlapping episode
-credit, and repeated observations of one assignment unit, count once.
+A corresponding result uses the same `spec_version`, repeats the sealed `eval_id` and
+`evidence_digest`, uses its actual authorized evaluator identity, and cites
+`verifier`. For model-policy evidence, instead supply the complete authenticated
+`tenant_model_policy` tuple and submit through Tenant Eval.

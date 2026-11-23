@@ -1170,49 +1170,6 @@ impl std::str::FromStr for ReasoningEffort {
     }
 }
 
-/// Exact qualitative reasoning-effort support for one provider/model route.
-///
-/// Absence means unknown rather than unsupported. Policy-owned effort targets
-/// require this positive declaration; ordinary caller-authored parameters keep
-/// their existing pass-through behavior when support is unknown.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub struct ReasoningEffortConfig {
-    /// Effort values accepted by this exact provider/model route.
-    pub levels: Vec<ReasoningEffort>,
-    /// Provider default when the request omits an effort value.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default: Option<ReasoningEffort>,
-}
-
-impl ReasoningEffortConfig {
-    /// Validate the internal capability declaration.
-    pub fn validate(&self) -> Result<(), crate::error::ValidationError> {
-        if self.levels.is_empty() {
-            return Err(crate::error::ValidationError::new(
-                "reasoning_effort.levels must not be empty",
-            ));
-        }
-        let mut unique = std::collections::BTreeSet::new();
-        for level in &self.levels {
-            if !unique.insert(*level) {
-                return Err(crate::error::ValidationError::new(format!(
-                    "reasoning_effort.levels contains duplicate '{level}'"
-                )));
-            }
-        }
-        if let Some(default) = self.default
-            && !self.levels.contains(&default)
-        {
-            return Err(crate::error::ValidationError::new(format!(
-                "reasoning_effort.default '{default}' must be listed in levels"
-            )));
-        }
-        Ok(())
-    }
-}
-
 impl Capability {
     /// The stable token string (e.g. `"structured_outputs"`), equal to this
     /// enum's serde representation.
@@ -1386,10 +1343,7 @@ pub struct GenerationParams {
     /// any other outbound adapter.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chat_stream_options: Option<ChatStreamOptions>,
-    /// The inbound wire that owns [`Self::extra`]. `None` preserves the legacy
-    /// behavior for callers that construct a canonical prompt directly. This
-    /// provenance is serialized with the canonical prompt so an internal
-    /// queue/cache round trip cannot accidentally make raw fields unscoped.
+    /// Protocol owning request extensions. Unscoped request extensions are excluded from outbound provider requests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extra_protocol: Option<ApiProtocol>,
     /// Extra defaults added after inbound parsing (for example by a preset).

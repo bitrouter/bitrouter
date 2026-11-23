@@ -1,12 +1,12 @@
 //! Joint native provider-state and core allocation conformance through real HTTP.
 
 use super::*;
+use bitrouter::managed_contract::evidence::ContinuationFailure;
 use bitrouter::storage::checkpoint::CheckpointBatchExt;
 use bitrouter::storage::checkpoint::snapshot::SessionSnapshot;
 use bitrouter::storage::checkpoint::snapshot::allocation::ContextKind;
 use bitrouter::storage::checkpoint::snapshot::collaboration::{Action, Work};
 use bitrouter::storage::checkpoint::validation::HarnessManifestExt;
-use bitrouter_ai::core::evidence::ContinuationFailure;
 
 #[derive(Clone)]
 struct Wire {

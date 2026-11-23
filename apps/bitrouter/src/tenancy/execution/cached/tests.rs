@@ -14,8 +14,8 @@ fn stored() -> Result<StoredConfiguration> {
             "compiler_version":"compiler", "content_digest":"a".repeat(64),
             "document": {"routes":[], "policy":null,
                 "generation_defaults":{"max_output_tokens":25,"temperature":0.5},
-                "learning":{"mode":"off","max_evaluations":0},
-                "limits":{"active_executions":1,"queued_work":0,"learning_jobs":0}}
+                "eval_publication": false,
+                "limits":{"active_executions":1,"queued_work":0}}
         }))?,
         compiled: json!({"kind":"sealed", "sealed":{
             "format":1, "key_id":"key", "nonce":"nonce", "ciphertext":"ciphertext"}}),
@@ -78,7 +78,8 @@ fn control_keys_compare_all_stored_facts_and_separate_dispatch_and_authority() -
             != ExecutionKey::Dispatch {
                 authority_revision: 1,
                 tenant: "tenant".into(),
-                revision: "revision".into()
+                revision: "revision".into(),
+                binding: execution_cache_binding(&original)?,
             }
     );
     Ok(())

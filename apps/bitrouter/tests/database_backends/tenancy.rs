@@ -1,6 +1,6 @@
 //! Storage-boundary regressions, not authorization-server claims.
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 use bitrouter::db::migration::Migrator;
 use bitrouter_ai::tenancy::{
     authority::{GrantScope, OwnerKind, ResourceKey, ResourceKind},
@@ -10,7 +10,7 @@ use sea_orm::{
     ConnectionTrait, DatabaseConnection, Value,
     sea_query::{Alias, Expr, Query},
 };
-use sea_orm_migration::{MigratorTrait, SchemaManager};
+use sea_orm_migration::MigratorTrait;
 
 async fn insert(
     db: &DatabaseConnection,
@@ -135,16 +135,19 @@ pub(super) async fn exercise(db: &DatabaseConnection) -> Result<()> {
         scope(db, &lower, &binding).await? == r#"{"kind":"tenant"}"#,
         "case-distinct owner was merged"
     );
-    let migrations = Migrator::migrations();
-    let migration = migrations
-        .iter()
-        .find(|m| m.name() == "m20240101_000028_resource_tenancy")
-        .context("resource tenancy migration absent")?;
-    // Simulate DDL having committed before its migration-ledger update.
-    migration.up(&SchemaManager::new(db)).await?;
+    let ledger = Migrator::get_migration_models(db).await?;
+    bitrouter::db::run_migrations(db).await?;
+    ensure!(
+        Migrator::get_migration_models(db).await? == ledger,
+        "current baseline validation changed the ledger"
+    );
     ensure!(
         scope(db, &upper, &binding).await? == wire,
-        "migration resume changed retained scope"
+        "current baseline restart changed retained scope"
+    );
+    ensure!(
+        scope(db, &lower, &binding).await? == r#"{"kind":"tenant"}"#,
+        "current baseline restart merged case-distinct owners"
     );
     Ok(())
 }

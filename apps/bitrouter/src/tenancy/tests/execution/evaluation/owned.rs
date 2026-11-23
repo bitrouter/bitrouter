@@ -12,12 +12,10 @@ use crate::gateway::{
         native_preparation::{NativePreparationWorkKind, NativePreparationWorkReport},
     },
 };
+use crate::managed_contract::evidence::NativeAttemptReport;
 use crate::tenancy::transaction::{JobTarget, Phase};
 use async_trait::async_trait;
-use bitrouter_ai::{
-    core::evidence::NativeAttemptReport,
-    types::{Message, Prompt, Role},
-};
+use bitrouter_ai::types::{Message, Prompt, Role};
 
 #[derive(Default)]
 struct PlanGate {
@@ -100,8 +98,7 @@ async fn rejected_entry_outcome_can_prove_no_decision_but_rejected_policy_plan_m
 -> Result<()> {
     tokio::time::timeout(TIMEOUT, async {
         for early in [true, false] {
-            let (fixture, revision) =
-                policy_fixture("https://example.invalid/v1", LearningMode::Observe).await?;
+            let (fixture, revision) = policy_fixture("https://example.invalid/v1", true).await?;
             let issued = fixture.issue("observation-rejection").await?;
             fixture
                 .service
@@ -149,7 +146,7 @@ async fn rolled_back_required_observation_is_retained_as_failed_without_retry() 
         }
     }
     tokio::time::timeout(TIMEOUT, async {
-        let (fixture, revision) = policy_fixture("https://example.invalid/v1", LearningMode::Observe).await?;
+        let (fixture, revision) = policy_fixture("https://example.invalid/v1", true).await?;
         let issued = fixture.issue("observation-storage-failure").await?;
         fixture.service.dispatch_test_ready.store(true, Ordering::Release);
         fixture.db.execute_unprepared("CREATE TRIGGER reject_observation BEFORE INSERT ON eval_subjects BEGIN SELECT RAISE(ABORT, 'fixture required observation failure'); END").await?;
@@ -207,8 +204,7 @@ async fn full_observation_lane(expire: bool) -> Result<()> {
             self.0.release.notify_one();
         }
     }
-    let (fixture, revision) =
-        policy_fixture("https://example.invalid/v1", LearningMode::Observe).await?;
+    let (fixture, revision) = policy_fixture("https://example.invalid/v1", true).await?;
     let issued = fixture.issue("observation-queue").await?;
     fixture
         .service

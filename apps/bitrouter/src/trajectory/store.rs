@@ -19,7 +19,10 @@ use super::types::{
     validate_event, validate_keyed_component, validate_outbox_payload,
 };
 use crate::gateway::routing::workflow::ir::RouteProjection;
-use {bitrouter_ai::eval::EvalExperimentRef, bitrouter_ai::eval::RouteDecisionMeasurement};
+use {
+    crate::gateway::routing::exploration::RouteAssignment,
+    bitrouter_ai::eval::RouteDecisionMeasurement,
+};
 
 pub(super) mod episode_entity {
     use sea_orm::entity::prelude::*;
@@ -134,9 +137,6 @@ pub(super) mod outbox_entity {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
-#[cfg(feature = "core")]
-pub(crate) mod owned;
-
 fn legacy_scope(table: &str) -> sea_orm::sea_query::Condition {
     use sea_orm::sea_query::Alias;
     let mut condition = sea_orm::sea_query::Condition::all();
@@ -225,7 +225,7 @@ pub(crate) struct GuardedRouteInput {
     pub projection: RouteProjection,
     pub candidate_tier: Option<String>,
     pub policy_digest: String,
-    pub experiment: Option<EvalExperimentRef>,
+    pub experiment: Option<RouteAssignment>,
     pub route_measurement: Option<RouteDecisionMeasurement>,
     pub policy: ProgressGuardPolicy,
     pub carries_tools: bool,
@@ -2410,16 +2410,16 @@ pub(super) fn build_guarded_route_batch(
         categorical.insert(
             "route.experiment_arm".to_owned(),
             match experiment.arm {
-                bitrouter_ai::eval::ExperimentArm::Control => "control",
-                bitrouter_ai::eval::ExperimentArm::Challenger => "challenger",
+                crate::gateway::routing::exploration::AssignmentArm::Control => "control",
+                crate::gateway::routing::exploration::AssignmentArm::Challenger => "challenger",
             }
             .to_owned(),
         );
         categorical.insert(
             "route.experiment_assignment_unit".to_owned(),
             match experiment.assignment_unit {
-                bitrouter_ai::eval::ExperimentAssignmentUnit::Task => "task",
-                bitrouter_ai::eval::ExperimentAssignmentUnit::Episode => "episode",
+                crate::gateway::routing::exploration::AssignmentUnit::Task => "task",
+                crate::gateway::routing::exploration::AssignmentUnit::Episode => "episode",
             }
             .to_owned(),
         );
@@ -3343,15 +3343,10 @@ mod tests {
 
     use super::*;
     use crate::gateway::routing::workflow::ir::RouteProjection;
-    use crate::trajectory::evaluation::build_operational_evaluation;
     use crate::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
     #[cfg(feature = "core")]
     use crate::trajectory::replay::replay_episode;
     use crate::trajectory::types::*;
-    use {
-        bitrouter_ai::eval::EvalExperimentRef, bitrouter_ai::eval::ExperimentArm,
-        bitrouter_ai::eval::ExperimentAssignmentUnit,
-    };
 
     const POLICY_DIGEST: &str =
         "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -3862,66 +3857,6 @@ mod tests {
             clause.clause_id == "tool_safety.floor"
                 && clause.disposition == RouteIntentClauseDisposition::Applied
         }));
-        Ok(())
-    }
-
-    #[test]
-    fn guarded_route_producer_emits_complete_experiment_evidence() -> anyhow::Result<()> {
-        let start = guarded_start("request-1", 1)?;
-        let mut input = guarded_route_input("route-experiment", "guard-experiment");
-        input.experiment = Some(EvalExperimentRef {
-            experiment_id: POLICY_DIGEST.into(),
-            arm: ExperimentArm::Challenger,
-            assignment_unit: ExperimentAssignmentUnit::Task,
-            assignment_id_digest:
-                "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".into(),
-            challenger_propensity_ppm: 100_000,
-        });
-
-        let batch = build_guarded_route_batch(&[], &start, HistoryCompleteness::Complete, &input)?;
-        let evidence = &batch.route_event.evidence;
-        assert_eq!(
-            evidence.categorical.get("route.experiment_id"),
-            Some(&POLICY_DIGEST.into())
-        );
-        assert_eq!(
-            evidence.categorical.get("route.experiment_arm"),
-            Some(&"challenger".into())
-        );
-        assert_eq!(
-            evidence.categorical.get("route.experiment_assignment_unit"),
-            Some(&"task".into())
-        );
-        assert_eq!(
-            evidence.digests.get("route.experiment_assignment_id"),
-            Some(&"sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".into())
-        );
-        assert_eq!(
-            evidence
-                .structural
-                .get("route.experiment_challenger_propensity_ppm"),
-            Some(&100_000)
-        );
-        let guard = batch
-            .guard_event
-            .ok_or_else(|| anyhow::anyhow!("fixture must trigger the configured progress guard"))?;
-        let settlement = settlement_at("episode-1", "request-1", 4, "settled-experiment");
-        let envelope =
-            build_operational_evaluation(&[start, batch.route_event, guard, settlement.event])?;
-        let experiment = envelope.subject.decisions[0]
-            .experiment
-            .as_ref()
-            .ok_or_else(|| {
-                anyhow::anyhow!("evaluation must retain producer experiment evidence")
-            })?;
-        assert_eq!(experiment.experiment_id, POLICY_DIGEST);
-        assert_eq!(experiment.arm, ExperimentArm::Challenger);
-        assert_eq!(experiment.assignment_unit, ExperimentAssignmentUnit::Task);
-        assert_eq!(
-            experiment.assignment_id_digest,
-            "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
-        );
-        assert_eq!(experiment.challenger_propensity_ppm, 100_000);
         Ok(())
     }
 
@@ -4533,7 +4468,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn store_rejects_settlement_before_intent_without_persisting() -> anyhow::Result<()> {
+    async fn store_rejects_settlement_of_unstarted_request_without_persisting() -> anyhow::Result<()>
+    {
         let store = store().await?;
         store
             .begin_request("owner-a", begin("episode-1", "request-1"))
@@ -4543,7 +4479,7 @@ mod tests {
             store
                 .settle_request(
                     "owner-a",
-                    settlement_at("episode-1", "request-1", 2, "event-settle-1")
+                    settlement_at("episode-1", "unstarted-request", 2, "event-settle-1")
                 )
                 .await
                 .is_err()
@@ -5907,7 +5843,7 @@ mod tests {
             route_event_id: route_event_id.into(),
             guard_event_id: guard_event_id.into(),
             policy_name: "auto:cost".into(),
-            route_projection: "semantic_route/v1|code:generation|implement|normal".into(),
+            route_projection: "code:generation|implement|normal".into(),
             request_key: "agent_trace/v2|edit|normal".into(),
             baseline_tier: Some("reference".into()),
             baseline_effort: None,

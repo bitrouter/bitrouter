@@ -12,12 +12,12 @@ use super::{ServiceError, ThreadService, unknown_turn};
 use crate::harness::agent::ApprovalRequest;
 use crate::harness::storage::ExecutionRecord;
 use crate::harness::tools::WorkspaceTools;
-use bitrouter_ai::harness::item::CallOrigin;
-use bitrouter_ai::harness::item::CallRecord;
-use bitrouter_ai::harness::runtime::EffectStatus;
-use bitrouter_ai::harness::thread::PermissionProfile;
-use bitrouter_ai::harness::turn::VerificationEvidence;
-use bitrouter_ai::harness::turn::VerificationStatus;
+use crate::managed_contract::harness::item::CallOrigin;
+use crate::managed_contract::harness::item::CallRecord;
+use crate::managed_contract::harness::runtime::EffectStatus;
+use crate::managed_contract::harness::thread::PermissionProfile;
+use crate::managed_contract::harness::turn::VerificationEvidence;
+use crate::managed_contract::harness::turn::VerificationStatus;
 
 fn verification_evidence(command: String, result: &ToolResultOutput) -> VerificationEvidence {
     let mut evidence = VerificationEvidence {

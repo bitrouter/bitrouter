@@ -208,7 +208,7 @@ impl crate::gateway::pipeline::native::NativeExecutionControl for NativeControl 
     async fn before_attempt(&self, _: &str, _: u32) -> crate::gateway::error::Result<()> {
         Ok(())
     }
-    async fn after_attempt(&self, _: bitrouter_ai::core::evidence::NativeAttemptReport) {
+    async fn after_attempt(&self, _: crate::managed_contract::evidence::NativeAttemptReport) {
         self.attempts.fetch_add(1, Ordering::SeqCst);
     }
 }

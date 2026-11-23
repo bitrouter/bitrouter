@@ -9,9 +9,9 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::managed_contract::protocol::CoreError;
 use crate::storage::checkpoint::snapshot::RunStatus;
 use anyhow::{Context, Result, ensure};
-use bitrouter_ai::core::protocol::CoreError;
 use bitrouter_ai::types::ReasoningEffort;
 use tokio_util::sync::CancellationToken;
 
@@ -30,7 +30,7 @@ pub struct Options {
     pub max_output_tokens: Option<u32>,
     pub request_id: Option<String>,
     pub server_instance: Option<String>,
-    pub skills: Option<bitrouter_ai::core::skills::SkillConstraints>,
+    pub skills: Option<crate::managed_contract::harness::skills::SkillConstraints>,
 }
 
 #[derive(Debug, Clone, clap::Args)]

@@ -65,8 +65,8 @@ fn document(routes: Vec<ResourceRef>) -> TestResult<Configuration> {
     Ok(serde_json::from_value(json!({
         "routes": routes, "policy": null,
         "generation_defaults": {"max_output_tokens":128,"temperature":0.5},
-        "learning": {"mode":"off","max_evaluations":0},
-        "limits": {"active_executions":1,"queued_work":1,"learning_jobs":0}
+        "eval_publication": false,
+        "limits": {"active_executions":1,"queued_work":1}
     }))?)
 }
 
@@ -113,6 +113,75 @@ fn basic(name: &str) -> TestResult<Import> {
     )
 }
 
+// Author a current model-policy fixture when several independent native chains
+// are needed. Experimental route members are never persisted by this producer.
+fn bind_tiers(input: &mut Import, models: Vec<String>) -> TestResult<Artifact> {
+    let policy_ref = reference(ResourceKind::Policy, "native-test-policy")?;
+    let Definition::Route {
+        routing,
+        selector,
+        policy,
+        ..
+    } = &mut input.definition
+    else {
+        anyhow::bail!("ordinary test route required");
+    };
+    let old = selector.clone();
+    let name = old
+        .strip_prefix("bitrouter/")
+        .unwrap_or("native-test-route")
+        .to_owned();
+    let base = routing["routers"][&name]["selection"]["model"]
+        .as_str()
+        .unwrap_or(&old)
+        .to_owned();
+    let preferences = routing["routers"][&name]["selection"]["routing"].clone();
+    routing["routers"][&name]["selection"] =
+        json!({"kind":"policy","policy":"selected","base_model":base});
+    if !preferences.is_null() {
+        routing["routers"][&name]["selection"]["routing"] = preferences;
+    }
+    *selector = format!("bitrouter/{name}");
+    *policy = Some(policy_ref.clone());
+    let tiers: std::collections::BTreeMap<_, _> = models
+        .into_iter()
+        .enumerate()
+        .map(|(i, model)| {
+            (
+                format!("tier-{i:03}"),
+                bitrouter_ai::policy::Target {
+                    model,
+                    effort: None,
+                },
+            )
+        })
+        .collect();
+    let document = bitrouter_ai::policy::Document {
+        spec_version: bitrouter_ai::policy::SpecVersion::Beta1,
+        policies: [(
+            "selected".into(),
+            bitrouter_ai::policy::Policy {
+                default_tier: "tier-000".into(),
+                tiers,
+                classifier_digest: None,
+                routes: Default::default(),
+                tool_use_tier: None,
+                tool_safe_tiers: Vec::new(),
+            },
+        )]
+        .into(),
+    };
+    Ok(Artifact {
+        reference: policy_ref,
+        envelope: None,
+        definition: Definition::Policy {
+            document,
+            name: "selected".into(),
+            dependencies: Vec::new(),
+        },
+    })
+}
+
 fn envelope(input: &Import, policy: Option<Artifact>) -> TestResult<Envelope> {
     input.validate()?;
     let route = compiler::prepare_route(input, policy.as_ref())?;
@@ -150,7 +219,7 @@ async fn targets(route: &RetainedRoute, model: &str) -> TestResult<Vec<RoutingTa
 }
 
 fn mixed() -> TestResult<Import> {
-    let mut input = input(
+    let input = input(
         "literal:fast",
         "shared",
         json!({
@@ -198,16 +267,15 @@ fn mixed() -> TestResult<Import> {
             ("zeta", "default", "zeta-slot"),
         ],
     )?;
-    if let Definition::Route { exploration, .. } = &mut input.definition {
-        *exploration = vec!["ordered".into(), "cascade".into()];
-    }
     Ok(input)
 }
 
 #[tokio::test]
 async fn canonical_chain_golden_keeps_heads_accounts_endpoints_models_and_wire_proofs_distinct()
 -> TestResult<()> {
-    let view = view(envelope(&mixed()?, None)?)?;
+    let mut source = mixed()?;
+    let policy = bind_tiers(&mut source, vec!["ordered".into(), "cascade".into()])?;
+    let view = view(envelope(&source, Some(policy))?)?;
     let native = checked(view.select_native("literal:fast", ModelOperation::Generation))?;
     let resolved = native.resolve_model("literal:fast").await?;
     ensure!(resolved.prefs.inbound_protocol.is_none());
@@ -362,41 +430,49 @@ async fn canonical_chain_golden_keeps_heads_accounts_endpoints_models_and_wire_p
 }
 
 #[tokio::test]
-async fn base_and_exploration_resolve_once_and_literal_name_can_equal_internal_selector()
--> TestResult<()> {
-    let mut input = basic("fixture:fast:fast")?;
+async fn literal_resource_name_can_equal_a_current_router_target() -> TestResult<()> {
+    const PUBLIC: &str = "fixture:fast:fast";
+    let mut input = basic(PUBLIC)?;
     if let Definition::Route {
-        routing,
-        selector,
-        exploration,
-        ..
+        routing, selector, ..
     } = &mut input.definition
     {
         *selector = "bitrouter/fixed".into();
-        *exploration = vec!["fixture:fast:fast".into()];
-        routing["routers"] = json!({"fixed":{"selection":{"kind":"model","model":"fixture:fast"}}});
-        routing["variants"] = json!({"fast":{}});
-        routing["providers"]["fixture"]["models"] = json!([{"id":"fast"},{"id":"fixture"}]);
+        routing["routers"] = json!({"fixed":{"selection":{"kind":"model","model":PUBLIC}}});
+
+        routing["providers"]["fixture"]["models"] =
+            json!([{"id":"fast:fast"},{"id":"fast"},{"id":"fixture"}]);
     }
     let view = view(envelope(&input, None)?)?;
-    let native = checked(view.select_native("fixture:fast:fast", ModelOperation::Generation))?;
-    assert_eq!(
-        native.resolve_model("fixture:fast:fast").await?.clean_model,
-        "bitrouter/fixed"
-    );
+    let native = checked(view.select_native(PUBLIC, ModelOperation::Generation))?;
+    let resolution = native.resolve_model(PUBLIC).await?;
+    assert_eq!(resolution.clean_model, "bitrouter/fixed");
     for chain in [
-        targets(&native, "fixture:fast:fast").await?,
+        targets(&native, PUBLIC).await?,
         native
             .route_resolved(
-                "fixture:fast:fast",
+                &resolution.clean_model,
                 &RoutingPrefs::default(),
                 &CallerContext::local(),
             )
             .await?,
     ] {
         ensure!(chain.len() == 1);
-        assert_eq!(chain.first().context("candidate")?.service_id, "fast");
+        let target = chain.first().context("candidate")?;
+        assert_eq!(target.service_id, "fast:fast");
+        assert_eq!(
+            checked(native.match_candidate(target))?,
+            reference(ResourceKind::Credential, "slot")?
+        );
     }
+    // A public resource identifier is accepted at ingress, not as an alias for
+    // the retained internal selector at the already-resolved stage.
+    ensure!(
+        native
+            .route_resolved(PUBLIC, &RoutingPrefs::default(), &CallerContext::local())
+            .await
+            .is_err()
+    );
     Ok(())
 }
 
@@ -404,22 +480,20 @@ async fn base_and_exploration_resolve_once_and_literal_name_can_equal_internal_s
 async fn same_selector_and_exact_credential_are_required_even_when_another_chain_approves_target()
 -> TestResult<()> {
     let mut input = basic("literal")?;
-    if let Definition::Route { exploration, .. } = &mut input.definition {
-        exploration.push("fixture:other".into());
-    }
-    let original = envelope(&input, None)?;
+    let policy = bind_tiers(&mut input, vec!["fixture:other".into()])?;
+    let original = envelope(&input, Some(policy.clone()))?;
     let mut changed: Envelope = serde_json::from_value(serde_json::to_value(&original)?)?;
     let route = changed.routes.first_mut().context("route")?;
     let base_target = route
         .chains
         .iter()
-        .find(|c| c.selector == "fixture:model" && c.inbound == ApiProtocol::Messages)
+        .find(|c| c.selector == "bitrouter/native-test-route" && c.inbound == ApiProtocol::Messages)
         .and_then(|c| c.targets.first())
         .context("base target")?
         .clone();
     // The preferred native target now exists only under a different selector.
     for chain in &mut route.chains {
-        if chain.selector == "fixture:model" {
+        if chain.selector == "bitrouter/native-test-route" {
             for target in &mut chain.targets {
                 target.target["model"] = json!("different");
             }
@@ -443,7 +517,7 @@ async fn same_selector_and_exact_credential_are_required_even_when_another_chain
     );
 
     // A different immutable ref cannot be substituted for a matching projection.
-    let mut changed = envelope(&input, None)?;
+    let mut changed = envelope(&input, Some(policy))?;
     let data = retained::decode(serde_json::from_value(serde_json::to_value(&changed)?)?)?;
     let data = data.routes.get("literal").context("typed route")?;
     let source = changed.artifacts.first_mut().context("artifact")?;
@@ -540,19 +614,11 @@ async fn policy_tier_equal_to_public_resource_id_keeps_its_internal_native_chain
             "selection":{"kind":"policy","policy":"selected","base_model":"fixture:base"}
         }});
     }
-    let mut lock = crate::policy_lock::PolicyLock::default();
-    lock.policies.insert(
-        "selected".into(),
-        crate::policy_lock::PolicyDefinition {
-            tiers: [(
-                "economy".into(),
-                bitrouter_ai::routing::PolicyModelTarget::model_only("fixture:cheap".into()),
-            )]
-            .into(),
-            default_tier: Some("economy".into()),
-            ..Default::default()
-        },
-    );
+    let lock = crate::model_policy::parse(&json!({
+        "spec_version":"policy/1.0.0-beta.1", "policies":{"selected":{
+            "tiers":{"economy":{"model":"fixture:cheap"}},"default_tier":"economy"
+        }}
+    }))?;
     let artifact = Artifact {
         reference: policy_ref.clone(),
         envelope: None,

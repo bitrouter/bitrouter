@@ -145,7 +145,7 @@ async fn choice_crossing_parent_total_keeps_both_receipts_and_error_outcome_ack(
 async fn evidence(
     bound: &Bound,
     id: &str,
-) -> Result<bitrouter_ai::tenancy::usage_evidence::ExecutionUsageEvidenceV1> {
+) -> Result<bitrouter_ai::tenancy::usage_evidence::ExecutionUsageEvidence> {
     let bytes = bound
         .fixture
         .service

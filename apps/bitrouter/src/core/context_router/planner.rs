@@ -2,11 +2,11 @@
 
 use bitrouter_ai::types::Prompt;
 
+use crate::managed_contract::protocol::{CoreError, ErrorCode, HarnessManifest};
 use crate::storage::checkpoint::snapshot::context::view::{
     ContextRepresentation, ContextView, SourceRevision,
 };
 use crate::storage::checkpoint::snapshot::context::{ContextStore, digest, invalid};
-use bitrouter_ai::core::protocol::{CoreError, ErrorCode, HarnessManifest};
 
 #[cfg(test)]
 mod tests;

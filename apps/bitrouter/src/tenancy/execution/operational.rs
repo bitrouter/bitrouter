@@ -27,7 +27,7 @@ impl TenantExecution {
     }
 
     pub(crate) fn profiled(&self) -> bool {
-        self.route.admission_mode() == AdmissionMode::ProfiledV1
+        self.route.admission_mode() == AdmissionMode::Profiled
     }
 
     pub(crate) fn reached_hop(

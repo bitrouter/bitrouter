@@ -109,19 +109,15 @@ archive compression does not prove space was returned to the filesystem.
 Monitor real disk/WAL growth and maintain headroom: other filesystem users and
 SQLite write amplification can still cause ENOSPC after an admission probe.
 
-The format-2 store has no lifetime directory/history count quota. Startup walks
-all retained pages before serving; an insufficient validation working budget
-never authorizes a partial scan. Healthy legacy stores upgrade during validated
-startup. A verified legacy count-saturation latch requires the explicit stopped
-`tenancy offline upgrade-capacity` procedure in
-[the CLI reference](cli.md#local-db-only-offline-evidence); it is not a general
-fence-clearing command. Do not delete history or choose new operation IDs to
-work around uncertain outcomes.
+The current store has no lifetime directory or history count quota. Startup
+walks all retained pages before serving. Allow enough working capacity for
+complete validation. Keep retained history and operation IDs when an outcome
+is uncertain.
 
 Submission bounds upload and admission, not the lifetime of an admitted stream.
-`ordered_attempt_limit` bounds explicit ordered v2 submissions to 1–64 candidates
+`ordered_attempt_limit` bounds explicit ordered submissions to 1–64 candidates
 (default 8). Hosts serving longer reviewed fallback chains can opt into 64;
-ordinary v1 submissions keep their eight-attempt bound. This work budget does
+ordinary submissions keep their eight-attempt bound. This work budget does
 not limit the number of tenants or retained routes. An oversized selection is
 rejected before dispatch rather than truncated.
 
@@ -132,25 +128,27 @@ endpoint requires a profiled ordered generation request and a peer that
 authenticates and consumes each attempt before sending it upstream. See the
 [configuration contract](../../../docs/specs/configuration/README.md#private-generation-adapter).
 
-Ordered selections require an explicit `admission_mode` (`legacy` or
-`profiled_v1`), matching the retained root; missing mode is not a default.
+Ordered selections require an explicit `admission_mode` (`unprofiled` or
+`profiled`), matching the retained root; missing mode is not a default.
 Installation authority alone can provision admission profiles or profiled
 routes through the existing resource API. Profiles use explicit rate/health
 rules; zero RPM is valid local refusal. A profiled route permanently protects
-its key, including old revisions and configurations. Do not downgrade a denied
-profiled request to legacy or v1. V1 profiles keep local health. For explicit
-shared health across distinct members, verify enabled V2 resource discovery and
-use format-two profile puts with `health_group_id`; never downgrade unsupported
-V2 writes. Group rules and membership remain immutable, including revoked history.
-New authority stores use format six. Supported upgrades preserve the historical
-writer fences through formats three, four, and five before enabling the permanent
-admission index at six. Startup backfills older retained resources in resumable
-pages and verifies every admission witness before readiness. History size does
-not impose a retained-profile quota. Predecessor binaries refuse the upgraded
-store; rollback requires the compatible pre-upgrade backup.
-Retain a compatible stopped-writer backup
-before changing binaries. See the [service contract](../../../docs/specs/service-api/README.md#resource-provisioning)
+its key, including old revisions and configurations. Use the current resource
+capabilities endpoint and format-one puts. Every profile has a required nullable
+`health_group_id`; health rules and the group are enabled or disabled together.
+Use distinct group IDs for isolated circuits or the same ID for shared health
+within one operator pool. Group rules and membership remain immutable, including
+revoked history. Only a member's RPM ceiling can rotate.
+
+The current SQLite tenant baseline uses a format-6 authority header and a
+persistent admission index. Publication and import record the index witnesses
+with the resource revisions. Startup authenticates all retained definitions
+and checks their witnesses through read-only validation before readiness. A
+missing or inconsistent witness prevents startup. Retain a compatible
+stopped-writer backup before changing binaries.
+See the [service contract](../../../docs/specs/service-api/README.md#resource-provisioning)
 for exact profile, import-head and protection semantics.
+
 Use `observe_rate_group_id` only for an explicit same-owner read-only association.
 It can expose a measured shared count while `rate:null` remains uncharged;
 absence is unavailable, never an assumed zero. Read through the existing operator
@@ -167,8 +165,11 @@ has a fixed 30-second budget; cancellation/shutdown has a separate 30-second
 producer-join budget so unread output does not spend cleanup time in advance.
 Repeated cancellation does not renew either budget. Late confirmed joins can
 release capacity, but genuine cleanup failure keeps admission fenced. Unknown
-effects remain unknown and inference is never replayed. Successful delivery
-still waits for durable receipt acknowledgement.
+effects remain unknown and inference is never replayed. With exclusive startup
+custody, the service settles retained ordered intents as unknown before
+dispatch becomes available. An interrupted startup leaves uncommitted intents
+for the next startup, while committed receipts keep their execution identities.
+Successful delivery still waits for durable receipt acknowledgement.
 
 `resource_origins` defaults to empty, which keeps tenant-managed route
 provisioning disabled. Installation operators remain trusted. An enabled host
@@ -215,11 +216,8 @@ read authority. Correlation is not an idempotency key: do not automatically
 refresh the binding and resend the inference request.
 
 Controlled native turns use the same tenant credential and dispatch binding as
-HTTP turns. Caller labels, host inspection credentials and local harness metadata
-cannot bypass the dispatch capability fence. Historical evaluation rows remain
-legacy records after schema upgrades; enabling tenancy does not assign them to a
-tenant. Signed experiments also require qualified tenant exploration admission;
-an Observe configuration does not authorize an active experiment.
+HTTP turns. Dispatch checks the tenant credential and binding for requests
+that carry caller labels, host inspection credentials or local harness metadata.
 
 ## Tenant configuration commands
 
@@ -305,9 +303,10 @@ bro --context workstation requests --limit 50 --provider openai \
   --since 2026-09-07T00:00:00Z --until 2026-09-08T00:00:00Z
 ```
 
-Remote policy reads default to `active`; local policy reads retain their disk
-view unless `--view active` is explicit. The disk view shows host files waiting
-to be applied. Agent listing is passive and never starts an agent. Remote
+Policy reads default to `active` for every target. Select `--disk` or
+`--view disk` explicitly for host files waiting to be applied. `show` returns
+the complete resubmittable document in `source`; `source_digest`, view,
+availability and router bindings remain separate report metadata. Agent listing is passive and never starts an agent. Remote
 `agents list --remote` is rejected because that flag selects an external registry.
 
 Request intervals require both RFC3339 bounds, span at most seven days, and use
@@ -345,7 +344,7 @@ means the outcome is unknown, not that the earlier reload did not happen.
 ## Saved versus running configuration
 
 `status.config_state` is computed by the target daemon, including independently
-loaded policy-lock and access-policy evidence. Missing/invalid files, unknown
+loaded model-policy source and access-policy evidence. Missing/invalid files, unknown
 older-daemon capabilities, partial reloads, and restart-only changes are explicit;
 clients never substitute local config or credentials. Local IPC, SIGHUP, and
 remote reload now share startup-field rejection rules. Read `running` and the

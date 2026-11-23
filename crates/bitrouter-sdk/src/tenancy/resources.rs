@@ -7,101 +7,50 @@ use bitrouter_ai::tenancy::{
     identity::{InstallationId, TenantId},
     operation::OperationResult,
     resources::{ResourceCapabilities, ResourcePut, ResourceRevoke, ResourceStatus},
-    resources_v2::{ResourceCapabilitiesV2, ResourcePutV2},
-    resources_v3::{ResourceCapabilitiesV3, ResourcePutV3},
 };
 use reqwest::Method;
 
 impl TenancyClient {
-    /// Discover explicit native-route provisioning without widening v1 or v2.
+    /// Discover the exact policy contract and serving classification digest.
     ///
     /// # Errors
-    /// Returns validation, authentication, installation or transport errors.
-    pub async fn resource_capabilities_v3(
+    /// Returns authority, unsupported-contract, transport or installation errors.
+    pub async fn policy_capabilities(
         &self,
         installation: &InstallationId,
-    ) -> Result<ResourceCapabilitiesV3> {
-        let result: ResourceCapabilitiesV3 = self
-            .get("tenancy/resource-capabilities/v3", Some(installation))
+    ) -> Result<bitrouter_ai::tenancy::resources::PolicyCapabilities> {
+        let capabilities: bitrouter_ai::tenancy::resources::PolicyCapabilities = self
+            .get("tenancy/policy-capabilities", Some(installation))
             .await?;
-        if &result.installation_id != installation {
-            return Err(Error::Response("resource capability installation mismatch"));
+        if &capabilities.installation_id != installation {
+            return Err(Error::Response("policy capability installation mismatch"));
         }
-        Ok(result)
+        Ok(capabilities)
     }
 
-    /// Provision an explicit native route using the existing managed-head CAS.
+    /// Read model-only policy source with exact resource-read authority.
     ///
     /// # Errors
-    /// Returns validation, authorization, CAS or uncertain-operation errors.
-    /// Never retries or downgrades the native attachments to a legacy format.
-    pub async fn put_resource_v3(
-        &self,
-        tenant: &TenantId,
-        input: &ResourcePutV3,
-    ) -> Result<OperationResult> {
-        let result = self
-            .mutate(
-                Method::POST,
-                &format!("tenants/{tenant}/resources"),
-                &input.installation_id,
-                &input.operation_id,
-                input,
-            )
-            .await?;
-        transport::operation_result(
-            result,
-            &input.operation_id,
-            Some(input.key.resource_id.as_str()),
-            None,
-        )
-    }
-
-    /// Discover explicit shared-health profile provisioning without changing v1 discovery.
-    ///
-    /// # Errors
-    /// Returns authentication, unsupported contract, installation or transport errors.
-    pub async fn resource_capabilities_v2(
+    /// Returns authorization, unsupported-policy, transport or identity errors.
+    pub async fn policy_source(
         &self,
         installation: &InstallationId,
-    ) -> Result<ResourceCapabilitiesV2> {
-        let result: ResourceCapabilitiesV2 = self
-            .get("tenancy/resource-capabilities/v2", Some(installation))
-            .await?;
-        if &result.installation_id != installation {
-            return Err(Error::Response("resource capability installation mismatch"));
-        }
-        Ok(result)
-    }
-
-    /// Provision a shared-health member with explicit managed-head CAS.
-    ///
-    /// # Errors
-    /// Returns validation, authorization, CAS or uncertain-operation errors.
-    /// Never retries as v1 or removes an unsupported health-group binding.
-    pub async fn put_resource_v2(
-        &self,
         tenant: &TenantId,
-        input: &ResourcePutV2,
-    ) -> Result<OperationResult> {
-        let result = self
-            .mutate(
-                Method::POST,
-                &format!("tenants/{tenant}/resources"),
-                &input.installation_id,
-                &input.operation_id,
-                input,
-            )
-            .await?;
-        transport::operation_result(
-            result,
-            &input.operation_id,
-            Some(input.key.resource_id.as_str()),
-            None,
-        )
+        reference: &ResourceRef,
+    ) -> Result<bitrouter_ai::tenancy::resources::PolicySource> {
+        let request = self
+            .http
+            .get(self.url(&format!("tenants/{tenant}/resources/policy"))?)
+            .header("Bitrouter-Installation-Id", installation.as_str())
+            .query(reference);
+        let source: bitrouter_ai::tenancy::resources::PolicySource = self.send(request).await?;
+        if &source.status.installation_id != installation || &source.status.reference != reference {
+            return Err(Error::Response("policy source identity mismatch"));
+        }
+        Ok(source)
     }
 
-    /// Discover the independently versioned dynamic resource contract.
+    /// Discover current resource provisioning capabilities.
     ///
     /// # Errors
     /// Returns authentication, installation, transport or contract errors.

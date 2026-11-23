@@ -40,19 +40,14 @@ pub(crate) async fn request_compatible(
         let document = policies
             .document()
             .context("named policy snapshot is unavailable")?;
-        let variant_name = resolution
-            .variant
-            .as_ref()
-            .map(|variant| format!("{policy}:{variant}"));
-        let definition = variant_name
-            .as_ref()
-            .and_then(|name| document.policies.get(name))
-            .or_else(|| document.policies.get(policy))
+        let definition = document
+            .policies
+            .get(policy)
             .context("named policy is unavailable")?;
         models = definition
             .tiers
             .values()
-            .map(|target| target.model().to_owned())
+            .map(|target| target.model.clone())
             .collect();
     }
     let mut stable = config.clone();
@@ -140,22 +135,16 @@ pub(crate) async fn route_contract(
         let document = policies
             .document()
             .context("named policy snapshot is unavailable")?;
-        let variant_name = resolution
-            .variant
-            .as_ref()
-            .map(|variant| format!("{policy}:{variant}"));
-        let (name, definition) = variant_name
-            .as_ref()
-            .and_then(|name| document.policies.get_key_value(name))
-            .or_else(|| document.policies.get_key_value(policy))
+        let (name, definition) = document
+            .policies
+            .get_key_value(policy)
             .context("route references an unavailable named policy")?;
         models = definition
             .tiers
             .values()
-            .map(|target| (target.model().to_owned(), target.effort()))
+            .map(|target| (target.model.clone(), target.effort))
             .collect();
-        policy_contract = json!({"name": name, "definition": definition,
-            "certificates": document.certificates.get(name), "mode": config.policy.mode});
+        policy_contract = json!({"name": name, "definition": definition});
     }
     let mut chains = BTreeMap::new();
     for (model, effort) in models {

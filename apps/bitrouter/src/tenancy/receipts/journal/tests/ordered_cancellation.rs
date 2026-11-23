@@ -13,7 +13,7 @@ use crate::tenancy::{
 };
 use bitrouter_ai::tenancy::{
     configuration::Limits,
-    ordered::{AcceptedSelectionV2, GenerationProtocol},
+    ordered::{AcceptedSelection, GenerationProtocol},
 };
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 use std::time::Duration;
@@ -57,7 +57,6 @@ async fn owner_with_deadline(
             &Limits {
                 active_executions: 16,
                 queued_work: 32,
-                learning_jobs: 1,
             },
             Instant::now() + Duration::from_secs(10),
         )
@@ -76,9 +75,9 @@ async fn owner_with_deadline(
             correlation,
             revision: "revision".try_into()?,
             ordered: Some((
-                AcceptedSelectionV2 {
+                AcceptedSelection {
                     generation_defaults_digest: None,
-                    admission_mode: bitrouter_ai::tenancy::admission::AdmissionMode::Legacy,
+                    admission_mode: bitrouter_ai::tenancy::admission::AdmissionMode::Unprofiled,
                     route: reference(ResourceKind::Route)?,
                     inbound_protocol: GenerationProtocol::Messages,
                     candidate_indices: vec![0],

@@ -50,7 +50,7 @@ type Submission = AbortOnDropHandle<std::result::Result<(), DispatchError>>;
 
 pub(super) fn submit(
     harness: &OrderedHarness,
-    binding: &OrderedDispatchBindingV2,
+    binding: &OrderedDispatchBinding,
 ) -> Result<Submission> {
     let client = GatewayClient::with_options(
         &harness.endpoint,
@@ -75,7 +75,7 @@ pub(super) fn submit(
     })))
 }
 
-async fn drained_receipt(harness: &OrderedHarness, ordinals: &[u16]) -> Result<ExecutionReceiptV2> {
+async fn drained_receipt(harness: &OrderedHarness, ordinals: &[u16]) -> Result<ExecutionReceipt> {
     tokio::time::timeout(TIMEOUT, harness.fixture.service.admission.wait_drained()).await?;
     let control = harness.control(true, HttpVersion::Http1Only)?;
     let page = control
@@ -89,24 +89,24 @@ async fn drained_receipt(harness: &OrderedHarness, ordinals: &[u16]) -> Result<E
         .await?;
     ensure!(page.execution_ids.len() == 1 && !page.multiple_executions);
     let receipt = control
-        .execution_v2(
+        .execution(
             &harness.fixture.installation,
             &harness.fixture.tenant,
             &page.execution_ids[0],
         )
         .await?;
-    ensure!(receipt.accepted_selection.candidate_indices == [1, 0]);
-    ensure!(receipt.accepted_selection.route == harness.route);
-    ensure!(receipt.accepted_selection.inbound_protocol == GenerationProtocol::ChatCompletions);
+    ensure!(receipt_selection(&receipt)?.candidate_indices == [1, 0]);
+    ensure!(receipt_selection(&receipt)?.route == harness.route);
+    ensure!(receipt_selection(&receipt)?.inbound_protocol == GenerationProtocol::ChatCompletions);
     ensure!(
         receipt
             .attempts
             .iter()
-            .map(|attempt| attempt.candidate_index)
+            .filter_map(|attempt| attempt.candidate_index)
             .collect::<Vec<_>>()
             == ordinals
     );
-    let evidence = control.usage_evidence_v2(&receipt).await?;
+    let evidence = control.usage_evidence(&receipt).await?;
     evidence.validate_against(&receipt)?;
     ensure!(evidence.attempts.len() == ordinals.len() && !evidence.truncated);
     ensure!(
@@ -239,7 +239,7 @@ async fn revocation_between_actual_provider_send_and_fallback_prevents_second_se
         // caller's separate whole-tenant receipt-read grant.
         let rejected = harness
             .control(false, HttpVersion::Http1Only)?
-            .execution_v2(
+            .execution(
                 &harness.fixture.installation,
                 &harness.fixture.tenant,
                 &receipt.execution_id,

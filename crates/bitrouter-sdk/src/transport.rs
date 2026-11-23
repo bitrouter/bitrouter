@@ -74,9 +74,8 @@ pub(crate) fn has_content_type(response: &Response, expected: &str) -> bool {
 pub(crate) fn build_http(
     headers: header::HeaderMap,
     options: &crate::gateway::TransportOptions,
-    http1_only: bool,
 ) -> Result<reqwest::Client> {
-    http_builder(headers, options, http1_only)
+    http_builder(headers, options)
         .build()
         .map_err(Error::transport)
 }
@@ -88,7 +87,7 @@ pub(crate) fn build_operator_http(
     // Keep encoded-body rejection effective even if another dependency enables
     // reqwest decompression features through Cargo feature unification.
     // https://docs.rs/reqwest/latest/reqwest/struct.ClientBuilder.html#method.no_gzip
-    http_builder(headers, options, false)
+    http_builder(headers, options)
         .no_gzip()
         .no_brotli()
         .no_zstd()
@@ -100,7 +99,6 @@ pub(crate) fn build_operator_http(
 fn http_builder(
     headers: header::HeaderMap,
     options: &crate::gateway::TransportOptions,
-    http1_only: bool,
 ) -> reqwest::ClientBuilder {
     // Disable both redirect forwarding and reqwest's protocol-level retry
     // policy: a disconnected mutation/inference call has an unknown outcome.
@@ -120,17 +118,9 @@ fn http_builder(
     if let Some(timeout) = options.request_timeout {
         builder = builder.timeout(timeout);
     }
-    let http_version = if http1_only {
-        // HTTP/1.1 upgrade needs a dedicated pool and ALPN selection even when
-        // ordinary requests explicitly require HTTP/2.
-        // https://docs.rs/reqwest/latest/reqwest/struct.ClientBuilder.html#method.http1_only
-        HttpVersion::Http1Only
-    } else {
-        options.http_version
-    };
     // reqwest owns ALPN and prior-knowledge framing; no probe or replay is needed.
     // https://docs.rs/reqwest/latest/reqwest/struct.ClientBuilder.html#method.http2_prior_knowledge
-    match http_version {
+    match options.http_version {
         #[cfg(feature = "http2")]
         HttpVersion::Auto => builder,
         #[cfg(not(feature = "http2"))]

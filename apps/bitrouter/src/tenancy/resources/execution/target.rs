@@ -1,10 +1,9 @@
 //! Exact, credential-free target codec. Every RoutingTarget field is reviewed.
 
+use crate::gateway::model::capabilities::ReasoningEffortConfig;
+use crate::managed_contract::evidence::NativeRouteConstraints;
 use anyhow::{Result, ensure};
-use bitrouter_ai::{
-    core::evidence::NativeRouteConstraints,
-    types::{ApiProtocol, ChatTokenLimitField, ReasoningEffortConfig},
-};
+use bitrouter_ai::types::{ApiProtocol, ChatTokenLimitField};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

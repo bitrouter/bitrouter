@@ -12,8 +12,11 @@ use bitrouter_ai::eval::{
 use std::time::Duration;
 use tower::ServiceExt;
 
-mod authority;
+pub(in crate::tenancy::tests) mod authority;
+#[cfg(feature = "core")]
 mod custody;
+#[cfg(unix)]
+mod retained;
 mod sdk;
 
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -31,21 +34,89 @@ fn router(fixture: &Fixture) -> Result<Router> {
     )?;
     Ok(crate::tenancy::http::router(fixture.service.clone(), auth))
 }
-fn subject() -> Result<EvalSubject> {
+fn subject(fixture: &Fixture) -> Result<EvalSubject> {
     Ok(serde_json::from_value(serde_json::json!({
-        "schema_version":1,"eval_id":"owned-subject","scope":"request","subject_id":"request-1",
-        "policy_digest":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "spec_version":bitrouter_ai::eval::SPEC_VERSION,"identity":{"profile":"tenant_generic","installation_id":fixture.installation,"tenant_id":fixture.tenant},"eval_id":"owned-subject","scope":"request","subject_id":"request-1",
         "holdout":false,"decisions":[],"requested_dimensions":[],"evidence":[],
         "evidence_digest":crate::storage::evaluation::evidence_digest(&[])?,"observed_at":"2026-10-25T00:00:00Z"
     }))?)
 }
 fn evaluation(fixture: &Fixture, verdict: EvalVerdict, key: &str) -> Result<EvaluationResult> {
-    let subject = subject()?;
+    let subject = subject(fixture)?;
     Ok(serde_json::from_value(serde_json::json!({
-        "schema_version":1,"eval_id":subject.eval_id,"evidence_digest":subject.evidence_digest,
-        "evaluator":{"authority_id":fixture.principal,"evaluator_id":"generic-fixture","kind":"generic","version":"1","config_digest":subject.policy_digest},
+        "spec_version":"eval/1.0.0-beta.1","eval_id":subject.eval_id,"evidence_digest":subject.evidence_digest,
+        "evaluator":{"authority_id":fixture.principal,"evaluator_id":"generic-fixture","kind":"generic","version":"1","config_digest":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"},
         "verdict":verdict,"metrics":{},"hard_violations":[],"evidence_refs":[],"decision_credit":{},"idempotency_key":key,"submitted_at":"2026-10-25T00:01:00Z"
     }))?)
+}
+
+#[tokio::test]
+async fn subject_profiles_refuse_old_mixed_foreign_and_wrong_endpoint_identity_before_writes()
+-> Result<()> {
+    let fixture = Fixture::new().await?;
+    let issued = fixture.issue("profile-key").await?;
+    let secret = issued.secret.as_deref().context("secret")?;
+    let router = router(&fixture)?;
+    let original = serde_json::to_value(subject(&fixture)?)?;
+    let before = fixture.service.current().map_err(failure)?.revision;
+    for probe in [
+        "old",
+        "missing",
+        "gateway",
+        "mixed",
+        "model-tuple",
+        "installation",
+        "tenant",
+    ] {
+        let mut input = original.clone();
+        match probe {
+            "old" => input["spec_version"] = "eval/1.0.0-beta.2".into(),
+            "missing" => {
+                input
+                    .as_object_mut()
+                    .context("subject object")?
+                    .remove("identity");
+            }
+            "gateway" => input["identity"] = serde_json::json!({"profile":"gateway_generic"}),
+            "mixed" => {
+                input["identity"]["policy"] =
+                    serde_json::json!({"resource_id":"not-a-policy-tuple"})
+            }
+            "model-tuple" => input["identity"]["profile"] = "tenant_model_policy".into(),
+            "installation" => input["identity"]["installation_id"] = "foreign-installation".into(),
+            _ => input["identity"]["tenant_id"] = "foreign-tenant".into(),
+        }
+        let response = router
+            .clone()
+            .oneshot(request(
+                &fixture,
+                secret,
+                "POST",
+                "subjects",
+                serde_json::to_vec(&input)?,
+            )?)
+            .await?;
+        let expected = match probe {
+            "installation" => StatusCode::CONFLICT,
+            "tenant" => StatusCode::FORBIDDEN,
+            _ => StatusCode::BAD_REQUEST,
+        };
+        ensure!(
+            response.status() == expected,
+            "{probe}: {}",
+            response.status()
+        );
+    }
+    ensure!(fixture.service.current().map_err(failure)?.revision == before);
+    let status: StatusReport = json(
+        router
+            .oneshot(request(&fixture, secret, "GET", "status", Vec::new())?)
+            .await?,
+    )
+    .await?;
+    ensure!(status.subjects == 0 && status.results == 0);
+    fixture.service.shutdown().await?;
+    Ok(())
 }
 fn request(
     fixture: &Fixture,
@@ -103,7 +174,7 @@ async fn protected_ledger_roundtrips_all_seven_routes_and_preserves_legacy_names
                     secret,
                     "POST",
                     "subjects",
-                    serde_json::to_vec(&subject()?)?,
+                    serde_json::to_vec(&subject(&fixture)?)?,
                 )?)
                 .await?,
         )
@@ -122,7 +193,7 @@ async fn protected_ledger_roundtrips_all_seven_routes_and_preserves_legacy_names
                 .await?,
         )
         .await?;
-        ensure!(found == subject()?);
+        ensure!(found == subject(&fixture)?);
         let listed: Vec<EvalSubject> = json(
             router
                 .clone()
@@ -205,7 +276,7 @@ async fn protected_ledger_roundtrips_all_seven_routes_and_preserves_legacy_names
         );
         ensure!(fixture.service.current().map_err(failure)?.revision == prior_revision);
         ensure!(
-            crate::core::eval::store::EvalStore::new(fixture.db.clone())
+            crate::eval::store::EvalStore::new(fixture.db.clone())
                 .list_subjects()
                 .await?
                 .is_empty()
@@ -355,7 +426,7 @@ async fn response_bodies_retain_ingress_capacity_and_read_only_grants_cannot_wri
                     secret,
                     "POST",
                     "subjects",
-                    serde_json::to_vec(&subject()?)?
+                    serde_json::to_vec(&subject(&fixture)?)?
                 )?)
                 .await?
                 .status()

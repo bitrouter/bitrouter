@@ -9,12 +9,7 @@ mod obligations;
 mod capture;
 mod continuation;
 mod custody;
-#[cfg(feature = "core")]
 mod eval;
-#[cfg(all(feature = "core", feature = "harness"))]
-mod experiment;
-#[cfg(all(feature = "core", feature = "harness"))]
-mod learner;
 #[cfg(all(feature = "core", feature = "harness"))]
 mod learning;
 mod learning_startup;
@@ -23,8 +18,6 @@ pub(in crate::tenancy) mod provider_technical;
 mod receipts;
 #[cfg(all(feature = "core", feature = "harness"))]
 mod session;
-#[cfg(feature = "core")]
-mod trajectory;
 
 #[cfg(test)]
 mod tests;
@@ -34,12 +27,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-#[cfg(feature = "core")]
 use super::transaction::Disposition;
 use bitrouter_ai::tenancy::operation::ErrorCode;
-#[cfg(all(feature = "core", feature = "harness"))]
-use bitrouter_ai::tenancy::operation::{OperationResult, OperationStatus};
-#[cfg(feature = "core")]
 use chrono::Utc;
 use sea_orm::DatabaseConnection;
 use tokio::sync::{OwnedSemaphorePermit, oneshot};
@@ -62,12 +51,6 @@ pub(super) struct Message {
 }
 
 pub(super) enum Job {
-    #[cfg(all(feature = "core", feature = "harness"))]
-    Learner(Box<super::learner::queue::Job>),
-    #[cfg(all(feature = "core", feature = "harness"))]
-    Experiment(Box<super::experiment::queue::Job>),
-    #[cfg(all(feature = "core", feature = "harness"))]
-    ExperimentRead(Box<crate::tenancy::experiment::queue::ReadJob>),
     #[cfg(all(feature = "core", feature = "harness"))]
     Learning(Box<super::learning::queue::Job>),
     #[cfg(all(feature = "core", feature = "harness"))]
@@ -95,14 +78,9 @@ pub(super) enum Job {
     OrderedIntent(super::receipts::ordered::IntentJob),
     ReceiptRead(super::receipts::read::Read),
     Continuation(Box<super::continuation::http::Job>),
-    #[cfg(feature = "core")]
     Eval(Box<super::eval::Job>),
     #[cfg(feature = "core")]
     Settlement(Box<super::eval::Settlement>),
-    #[cfg(feature = "core")]
-    TrajectoryBegin(Box<super::trajectory::Begin>),
-    #[cfg(feature = "core")]
-    TrajectoryTerminal(Box<super::trajectory::Terminal>),
 }
 
 impl From<Message> for Job {
@@ -196,9 +174,7 @@ pub(super) struct Worker {
     #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
     pub observe_capacity: bool,
     pub http_continuation: Arc<crate::continuation::tenant::state::State>,
-    #[cfg(feature = "core")]
     pub eval: Arc<super::eval::State>,
-    #[cfg(feature = "core")]
     pub accepting: Arc<std::sync::Mutex<bool>>,
 }
 

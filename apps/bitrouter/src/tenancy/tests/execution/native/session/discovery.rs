@@ -245,13 +245,13 @@ async fn legacy_openers_reject_tenancy_before_store_workspace_or_mcp_io() -> Res
                 };
                 let denied = opened.err().context("legacy opener accepted tenancy")?;
                 ensure!(
-                    denied.code == bitrouter_ai::core::protocol::ErrorCode::UnauthorizedScope,
+                    denied.code == crate::managed_contract::protocol::ErrorCode::UnauthorizedScope,
                     "cancellable={cancellable}, path={}: workspace or resource work preceded rejection",
                     path.display()
                 );
                 ensure!(
                     denied.commit_status
-                        == bitrouter_ai::core::protocol::CommitStatus::NotCommitted
+                        == crate::managed_contract::protocol::CommitStatus::NotCommitted
                 );
                 ensure!(store.loads.load(Ordering::SeqCst) == 0);
                 ensure!(store.saves.load(Ordering::SeqCst) == 0);

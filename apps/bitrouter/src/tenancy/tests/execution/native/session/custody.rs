@@ -469,7 +469,7 @@ async fn child_diagnostics(task: AbortOnDropHandle<std::io::Result<Vec<u8>>>) ->
                     "retained Core owner missing",
                 ),
                 (
-                    "fence.code == bitrouter_ai::core::protocol::ErrorCode::Busy",
+                    "fence.code == crate::managed_contract::protocol::ErrorCode::Busy",
                     "retained Core fence classification",
                 ),
                 (

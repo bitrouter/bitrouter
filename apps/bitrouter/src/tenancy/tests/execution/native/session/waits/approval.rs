@@ -1,6 +1,6 @@
 //! An affirmative response to an old approval cannot authorize a new MCP effect.
 use super::*;
-use bitrouter_ai::core::protocol::{ToolOutcome, ToolResult, ToolStatus};
+use crate::managed_contract::protocol::{ToolOutcome, ToolResult, ToolStatus};
 
 #[derive(Default)]
 struct HeldApproval {
@@ -195,9 +195,9 @@ async fn native36_approval_wait_rechecks_revocation_and_scope_before_real_mcp_ca
                     .err()
                     .context("changed authority admitted another model step")?;
                 ensure!(
-                    error.code == bitrouter_ai::core::protocol::ErrorCode::UnauthorizedScope
+                    error.code == crate::managed_contract::protocol::ErrorCode::UnauthorizedScope
                         && error.commit_status
-                            == bitrouter_ai::core::protocol::CommitStatus::NotCommitted,
+                            == crate::managed_contract::protocol::CommitStatus::NotCommitted,
                     "{change}: unexpected post-approval failure: {error:?}"
                 );
                 let stopped = core.snapshot().await;

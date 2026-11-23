@@ -4,7 +4,7 @@
 use crate::storage::checkpoint::snapshot::release::ReleaseRecord;
 
 use super::*;
-use bitrouter_ai::core::protocol::OwnershipGrant;
+use crate::managed_contract::protocol::OwnershipGrant;
 
 fn fingerprint(expected_revision: u64) -> Result<String, CoreError> {
     digest(&json!({"type":"session.release","expected_state_revision":expected_revision}))

@@ -2,15 +2,13 @@
 
 use std::sync::Arc;
 
+use crate::managed_contract::private_adapter::{
+    ATTEMPT_DOMAIN, ATTEMPT_HEADER, Attempt, Disposition, MAX_ATTEMPT_LIFETIME_MS,
+    MAX_HEADER_BYTES, OUTCOME_DOMAIN, OUTCOME_HEADER, Outcome,
+};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use bitrouter_ai::tenancy::{
-    configuration::ResourceRef,
-    identity::AttemptId,
-    operation::ErrorCode,
-    private_adapter::{
-        ATTEMPT_DOMAIN, ATTEMPT_HEADER, Attempt, Disposition, MAX_ATTEMPT_LIFETIME_MS,
-        MAX_HEADER_BYTES, OUTCOME_DOMAIN, OUTCOME_HEADER, Outcome,
-    },
+    configuration::ResourceRef, identity::AttemptId, operation::ErrorCode,
 };
 use hmac::{Hmac, KeyInit, Mac};
 use reqwest::{Method, Request, Response, Url};

@@ -145,37 +145,104 @@ fn grant_scope_accepts_exact_byte_limit_and_rejects_one_more_byte_first() -> Tes
     Ok(())
 }
 
-/// UT for canonical and SDK-packaged schemas sharing the broadened shape.
+/// The packaged wire, directory, and Rust schemas accept the same scope shapes.
 #[cfg(feature = "schema")]
 #[test]
 fn grant_scope_schemas_preserve_shapes_without_the_old_cardinality_ceiling() -> TestResult {
-    let schema = serde_json::to_value(schemars::schema_for!(GrantScope))?;
-    for document in [
-        serde_json::from_str::<serde_json::Value>(include_str!(
-            "../../../docs/contracts/resource-tenancy/schema.json"
-        ))?,
-        serde_json::from_str::<serde_json::Value>(include_str!(
-            "../../../docs/specs/service-api/directory.schema.json"
-        ))?,
-    ] {
-        let scope = &document["$defs"]["GrantScope"];
-        assert_eq!(schema["oneOf"].as_array().ok_or("scope variants")?.len(), 2);
-        assert!(
-            scope["oneOf"][0]["properties"]["operator_pools"]
-                .get("maxItems")
-                .is_none()
-        );
-        assert!(
-            scope["oneOf"][1]["properties"]["resources"]
-                .get("maxItems")
-                .is_none()
-        );
-        assert_eq!(scope["oneOf"][1]["properties"]["resources"]["minItems"], 1);
-        assert_eq!(
-            scope["oneOf"][1]["properties"]["resources"]["uniqueItems"],
-            true
-        );
-        assert_eq!(scope["description"], schema["description"]);
+    use serde_json::{Value, json, to_value};
+
+    let scoped = |document: &str| -> Result<Value, serde_json::Error> {
+        let document: Value = serde_json::from_str(document)?;
+        Ok(json!({
+            "$schema": document["$schema"],
+            "$defs": document["$defs"],
+            "$ref": "#/$defs/GrantScope",
+        }))
+    };
+    let schemas = [
+        (
+            "tenancy wire schema",
+            scoped(include_str!("../src/tenancy/wire-schema.json"))?,
+        ),
+        (
+            "service directory schema",
+            scoped(include_str!(
+                "../../../docs/specs/service-api/directory.schema.json"
+            ))?,
+        ),
+        (
+            "GrantScope JsonSchema",
+            to_value(schemars::schema_for!(GrantScope))?,
+        ),
+    ];
+    let pool_key = to_value(keys(1)?.pop().ok_or("key missing")?)?;
+    let mut tenant_key = pool_key.clone();
+    tenant_key["owner_kind"] = json!("tenant");
+    let mut invalid_key = pool_key.clone();
+    invalid_key["resource_id"] = json!("invalid id");
+    let cases = [
+        (
+            "resource scope above the former count limit",
+            to_value(GrantScope::Resources {
+                resources: keys(343)?,
+            })?,
+            true,
+        ),
+        (
+            "tenant scope above the former count limit",
+            to_value(GrantScope::Tenant {
+                operator_pools: keys(343)?,
+            })?,
+            true,
+        ),
+        ("omitted tenant pools", json!({"kind": "tenant"}), true),
+        (
+            "empty tenant pools",
+            json!({"kind": "tenant", "operator_pools": []}),
+            true,
+        ),
+        ("missing resource list", json!({"kind": "resources"}), false),
+        (
+            "empty resource list",
+            json!({"kind": "resources", "resources": []}),
+            false,
+        ),
+        (
+            "duplicate resources",
+            json!({"kind": "resources", "resources": [pool_key, pool_key]}),
+            false,
+        ),
+        (
+            "duplicate operator pools",
+            json!({"kind": "tenant", "operator_pools": [pool_key, pool_key]}),
+            false,
+        ),
+        (
+            "tenant key in resource scope",
+            json!({"kind": "resources", "resources": [tenant_key]}),
+            true,
+        ),
+        (
+            "tenant key in operator pool list",
+            json!({"kind": "tenant", "operator_pools": [tenant_key]}),
+            false,
+        ),
+        (
+            "resource key with an invalid identifier",
+            json!({"kind": "resources", "resources": [invalid_key]}),
+            false,
+        ),
+        (
+            "valid shape above the runtime byte limit",
+            to_value(scope_at_bytes(MAX_GRANT_SCOPE_BYTES + 1, false)?)?,
+            true,
+        ),
+    ];
+    for (source, schema) in schemas {
+        let validator = jsonschema::validator_for(&schema)?;
+        for (case, value, expected) in &cases {
+            assert_eq!(validator.is_valid(value), *expected, "{source}: {case}");
+        }
     }
     Ok(())
 }

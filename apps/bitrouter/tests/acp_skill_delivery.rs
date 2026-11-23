@@ -15,9 +15,10 @@ use bitrouter::gateway::caller::CallerContext;
 use bitrouter::harness::acp::client::{AcpClient, ClientOptions};
 use bitrouter::harness::acp::skills::{self, Instructions, Target};
 use bitrouter::harness::acp::up::AgentProcess;
+use bitrouter::managed_contract::harness::skills::LocalScope;
+use bitrouter::managed_contract::harness::skills::LocalSkill;
 use bitrouter::storage::checkpoint::sha256;
 use bitrouter::storage::skills::SkillSource;
-use bitrouter_ai::harness::skills::{LocalScope, LocalSkill};
 use serde_json::{Value, json};
 
 #[path = "support/example_binary.rs"]
@@ -316,8 +317,11 @@ async fn both_independent_peers_settle_the_original_request_after_cancel() -> Te
 
 #[tokio::test]
 async fn valid_mcp_entries_remain_unsupported_for_both_carriers_without_laundering() -> TestResult {
-    use bitrouter_ai::harness::skills::{HeldMcpSkill, SkillOrigin, SkillScope};
-    use bitrouter_ai::protocol::mcp_skills::{SkillEntry, SkillResources};
+    use bitrouter::managed_contract::harness::skills::HeldMcpSkill;
+    use bitrouter::managed_contract::harness::skills::SkillOrigin;
+    use bitrouter::managed_contract::harness::skills::SkillScope;
+    use bitrouter::skills::wire::SkillEntry;
+    use bitrouter::skills::wire::SkillResources;
     fn canonical(value: Value) -> Value {
         match value {
             Value::Object(map) => Value::Object(

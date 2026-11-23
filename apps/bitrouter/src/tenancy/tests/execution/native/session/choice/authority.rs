@@ -71,8 +71,8 @@ async fn owned_choice_real_credential_wait_rechecks_authority_and_still_acks_cle
             if let Err(error) = outcome {
                 ensure!(matches!(
                     error.code,
-                    bitrouter_ai::core::protocol::ErrorCode::UnauthorizedScope
-                        | bitrouter_ai::core::protocol::ErrorCode::CheckpointUnavailable
+                    crate::managed_contract::protocol::ErrorCode::UnauthorizedScope
+                        | crate::managed_contract::protocol::ErrorCode::CheckpointUnavailable
                 ));
             }
             session.close().await?;
@@ -196,7 +196,7 @@ async fn owned_choice_final_send_rejection_keeps_known_zero_after_claim() -> Res
                 && failed.kind == crate::gateway::model::decision::types::DecisionFailure::Transport,
             "final authority rejection must precede arming, without cancellation hiding the boundary"
         );
-        let view = bitrouter_ai::harness::inspection::Inspection::capture(&state)
+        let view = crate::managed_contract::harness::inspection::Inspection::capture(&state)
             .context("public inspection absent")?;
         ensure!(
             view.decisions.attempts == 1
@@ -279,7 +279,7 @@ async fn owned_choice_transport_failure_after_arm_remains_unknown() -> Result<()
             .err()
             .context("broken socket produced Choice success")?;
         ensure!(failed.may_have_run && failed.usage.is_none());
-        let view = bitrouter_ai::harness::inspection::Inspection::capture(&state)
+        let view = crate::managed_contract::harness::inspection::Inspection::capture(&state)
             .context("public inspection absent")?;
         ensure!(
             view.decisions.input_tokens.is_none()

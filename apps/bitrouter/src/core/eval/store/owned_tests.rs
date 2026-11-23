@@ -195,7 +195,9 @@ async fn owned_collection_limit_is_exact_and_does_not_truncate() -> Result<()> {
                 owner_user_id: Set(store.owner("local")?),
                 subject_id: Set(subject.subject_id.clone()),
                 scope: Set(scope_name(subject.scope).into()),
-                policy_digest: Set(subject.policy_digest.clone()),
+                identity_digest: Set(crate::storage::evaluation::identity_digest(
+                    &subject.identity,
+                )?),
                 holdout: Set(subject.holdout),
                 content_digest: Set(crate::storage::evaluation::subject_digest(&subject)?),
                 subject_json: Set(serde_json::to_string(&subject)?),

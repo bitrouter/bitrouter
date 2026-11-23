@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "EvalSnapshot",
+  "type": "object",
+  "properties": {
+    "spec_version": {
+      "description": "Exact evaluation exchange contract.",
+      "$ref": "#/$defs/SpecVersion"
+    },
+    "evidence_root": {
+      "type": "string"
+    },
+    "frozen_at": {
+      "type": "string"
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/EvalSnapshotEntry"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "spec_version",
+    "evidence_root",
+    "frozen_at",
+    "entries"
+  ],
+  "$defs": {
+    "SpecVersion": {
+      "description": "Closed discriminator for evaluation exchange documents.",
+      "oneOf": [
+        {
+          "description": "The model-routing evaluation exchange.",
+          "type": "string",
+          "const": "eval/1.0.0-beta.1"
+        }
+      ]
+    },
+    "EvalSnapshotEntry": {
+      "type": "object",
+      "properties": {
+        "result_id": {
+          "type": "string"
+        },
+        "content_digest": {
+          "type": "string"
+        },
+        "subject_content_digest": {
+          "type": "string"
+        },
+        "eval_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "result_id",
+        "content_digest",
+        "subject_content_digest",
+        "eval_id"
+      ]
+    }
+  }
+}

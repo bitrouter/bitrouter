@@ -1,6 +1,6 @@
 [package]
 name = "bitrouter-guardrails"
-description = "Compiled regex rules and request-check capability"
+description = "Compiled regex rules for gateway request checks"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,7 +11,6 @@ rust-version.workspace = true
 [features]
 default = []
 [dependencies]
-bitrouter-ai.workspace = true
 serde.workspace = true
 regex.workspace = true
 # Schema support for serialized rule configuration.

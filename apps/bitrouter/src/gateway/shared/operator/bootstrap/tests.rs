@@ -46,10 +46,10 @@ fn plan(principal_id: &str) -> BootstrapPlan {
             },
         }],
         configuration: Publication {
-            format: 1,
+            format: 2,
             routing: json!({"providers":{"fixture":{"api_base":"https://example.com/v1","models":[{"id":"model"}]}}}),
             policies: vec![],
-            policy_lock: None,
+            model_policy: None,
             credentials: vec![CredentialBinding {
                 provider: "fixture".into(),
                 account: "default".into(),

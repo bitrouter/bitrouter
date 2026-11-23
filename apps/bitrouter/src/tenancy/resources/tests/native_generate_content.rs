@@ -1,13 +1,13 @@
 //! Native authority exists only in the explicit current artifact/compiler.
 use super::*;
-use bitrouter_ai::tenancy::{admission::AdmissionProfileV1, ordered::GenerationProtocol};
+use bitrouter_ai::tenancy::{admission::AdmissionProfile, ordered::GenerationProtocol};
 
 fn native_route() -> Result<(manifest::Import, Artifact)> {
     let credential = reference("tenant", ResourceKind::Credential, "slot")?;
     let profile: ResourceRef = serde_json::from_value(json!({"owner_kind":"operator_pool",
         "owner_id":"pool","resource_kind":"policy","resource_id":"profile","revision_id":"v1"}))?;
-    let profile_rules: AdmissionProfileV1 = serde_json::from_value(json!({"schema_version":1,
-        "rate":null,"health":null,"fallback":"ordered_terminal_rejections_v1"}))?;
+    let profile_rules: AdmissionProfile = serde_json::from_value(json!({"schema_version":1,
+        "rate":null,"health":null,"health_group_id":null,"fallback":"ordered_terminal_rejections_v1"}))?;
     let attachments = [
         GenerationProtocol::ChatCompletions,
         GenerationProtocol::Messages,
@@ -22,7 +22,7 @@ fn native_route() -> Result<(manifest::Import, Artifact)> {
     .collect::<Vec<_>>();
     let import = serde_json::from_value(
         json!({"reference":reference("tenant",ResourceKind::Route,"native")?,
-        "definition":{"kind":"native_profiled_route_v1","selector":"fixture:base","policy":null,
+        "definition":{"kind":"profiled_route","selector":"fixture:base","policy":null,
             "routing":{"providers":{"fixture":{"api_base":"https://paired.invalid/v1",
                 "api_protocol":[{"*":["ordered_generate_content","chat_completions","messages","responses"]}],
                 "models":[{"id":"base"}]}}},
@@ -64,7 +64,7 @@ fn native_generate_content_compiler_retains_exact_four_roots_and_new_format() ->
         definition: import.definition,
         envelope: Some(prepared),
     };
-    let resources = Resources::with_key("installation".try_into()?, [7; 32])?;
+    let resources = Resources::with_key("installation".try_into()?, rand::random())?;
     let stored = storage::seal(&resources, &artifact)?;
     assert_eq!(stored.compiler_version, NATIVE_COMPILER_VERSION);
     let restored = storage::authenticate(&resources, stored)?;
@@ -89,7 +89,7 @@ fn native_generate_content_compiler_retains_exact_four_roots_and_new_format() ->
 fn native_generate_content_compiler_never_widens_legacy_or_arbitrary_custom_protocols() -> Result<()>
 {
     let (import, _) = native_route()?;
-    let Definition::NativeProfiledRouteV1 { routing, .. } = &import.definition else {
+    let Definition::ProfiledRoute { routing, .. } = &import.definition else {
         anyhow::bail!("fixture kind")
     };
     assert!(compiler::routing_config(routing).is_err());
@@ -117,7 +117,7 @@ fn native_generate_content_compiler_never_widens_legacy_or_arbitrary_custom_prot
 fn native_generate_content_compiler_selects_ordinary_fallback_before_bridge_filter() -> Result<()> {
     for model_override in [false, true] {
         let (mut import, _) = native_route()?;
-        let Definition::NativeProfiledRouteV1 { routing, .. } = &mut import.definition else {
+        let Definition::ProfiledRoute { routing, .. } = &mut import.definition else {
             anyhow::bail!("native fixture")
         };
         let provider = &mut routing["providers"]["fixture"];
@@ -152,7 +152,7 @@ fn native_generate_content_compiler_selects_ordinary_fallback_before_bridge_filt
         }
     }
     let (mut import, _) = native_route()?;
-    let Definition::NativeProfiledRouteV1 {
+    let Definition::ProfiledRoute {
         routing,
         attachments,
         ..

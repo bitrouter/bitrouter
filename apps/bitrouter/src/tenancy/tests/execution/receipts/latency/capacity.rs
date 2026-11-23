@@ -102,7 +102,7 @@ pub(super) async fn durable_unknown_and_incomplete_restart() -> Result<()> {
                 json!({"prompt_tokens":11,"completion_tokens":7}),
             )?)?
         };
-        let h = Harness::with_observer(
+        let h = Box::pin(Harness::with_observer(
             "chat_completions",
             StatusCode::OK,
             body,
@@ -110,7 +110,7 @@ pub(super) async fn durable_unknown_and_incomplete_restart() -> Result<()> {
             None,
             false,
             sink.clone(),
-        )
+        ))
         .await?;
         let response = h.send(&Harness::client(false)?).send().await?;
         ensure!(response.status() == StatusCode::OK);
@@ -166,13 +166,13 @@ pub(super) async fn durable_unknown_and_incomplete_restart() -> Result<()> {
         let second = Collector::start().await?;
         let (exporter2, sink2) = exporter(&second, 3_600_000, None)?;
         let snapshot = crate::tenancy::store::load(&h.fixture.db, chrono::Utc::now()).await?;
-        let restarted = crate::tenancy::Service::start_resources_with_continuations(
+        let restarted = Box::pin(crate::tenancy::Service::start_resources_with_continuations(
             h.fixture.db.clone(),
             None,
             snapshot,
             Arc::new(crate::tenancy::resources::Resources::with_key(
                 h.fixture.installation.clone(),
-                [29; 32],
+                h.fixture.wrapping_key,
             )?),
             crate::tenancy::Provisioning {
                 import: None,
@@ -182,14 +182,17 @@ pub(super) async fn durable_unknown_and_incomplete_restart() -> Result<()> {
                 config: &crate::config::tenancy::TenancyConfig::default(),
             },
             None,
-        )
+        ))
         .await?;
         let observed = restarted
             .admission
             .observed_capacity()
             .map_err(|_| anyhow::anyhow!("restart snapshot"))?;
         ensure!(observed.accounted == bytes && observed.live_unknown == u64::from(unknown));
-        super::escalation::restored_unknown_keeps_evidence(&h, &restarted, &receipt, bytes).await?;
+        Box::pin(super::escalation::restored_unknown_keeps_evidence(
+            &h, &restarted, &receipt, bytes,
+        ))
+        .await?;
         restarted.shutdown().await?;
         // No new selected execution: timing seal must still fail, even with a real clean capacity seal.
         ensure!(!sink2.seal(true) && flush(&exporter2).await?);
@@ -205,7 +208,7 @@ pub(super) async fn sealed_gauges_do_not_retain_file_owner() -> Result<()> {
     let path = directory.path().join("authority.db");
     let collector = Collector::start().await?;
     let (exporter, sink) = exporter(&collector, 3_600_000, None)?;
-    let h = Harness::with_observed_storage(
+    let h = Box::pin(Harness::with_observed_storage(
         "chat_completions",
         StatusCode::OK,
         serde_json::to_string(&json_response(
@@ -216,7 +219,7 @@ pub(super) async fn sealed_gauges_do_not_retain_file_owner() -> Result<()> {
         None,
         false,
         (sink.clone(), Some(&path)),
-    )
+    ))
     .await?;
     completed(&h).await?;
     let bytes = stored_policy_bytes(&h).await?;
@@ -341,7 +344,7 @@ pub(super) async fn aggregate_cross_tenant_capacity() -> Result<()> {
     };
     let collector = Collector::start().await?;
     let (exporter, sink) = exporter(&collector, 3_600_000, Some("same-correlation"))?;
-    let h = Harness::with_observer(
+    let h = Box::pin(Harness::with_observer(
         "chat_completions",
         StatusCode::OK,
         serde_json::to_string(&json_response(
@@ -352,7 +355,7 @@ pub(super) async fn aggregate_cross_tenant_capacity() -> Result<()> {
         None,
         true,
         sink.clone(),
-    )
+    ))
     .await?;
     let tenant = "tenant-b".try_into()?;
     h.fixture
@@ -401,6 +404,7 @@ pub(super) async fn aggregate_cross_tenant_capacity() -> Result<()> {
         _ => anyhow::bail!("binding"),
     };
     let second = Fixture {
+        wrapping_key: h.fixture.wrapping_key,
         service: h.fixture.service.clone(),
         db: h.fixture.db.clone(),
         operator: h.fixture.operator.clone(),

@@ -307,7 +307,6 @@ mod tests {
     ) -> PolicyDecisionRecord {
         let candidates = vec![
             RouteActionCandidate {
-                context: Default::default(),
                 tier: "economy".into(),
                 model: format!("vendor/economy{model_suffix}"),
                 effort: None,
@@ -318,7 +317,6 @@ mod tests {
                 },
             },
             RouteActionCandidate {
-                context: Default::default(),
                 tier: "strong".into(),
                 model: format!("vendor/strong{model_suffix}"),
                 effort: None,
@@ -340,7 +338,7 @@ mod tests {
             "request_id": request_id,
             "input_model": "inbound",
             "key_strategy": "agent_trace",
-            "request_key": "semantic_route/v1|unknown|implement|normal",
+            "request_key": "unknown|implement|normal",
             "legacy_fingerprint": "opening",
             "trace_state": "opening",
             "selected_tier": selected_tier,
@@ -500,7 +498,6 @@ mod tests {
             "vendor/economy",
             Some(ReasoningEffort::Low),
             vec![RouteActionCandidate {
-                context: Default::default(),
                 tier: "economy".into(),
                 model: "vendor/economy".into(),
                 effort: Some(ReasoningEffort::Low),
@@ -544,14 +541,12 @@ mod tests {
             Some(ReasoningEffort::Low),
             vec![
                 RouteActionCandidate {
-                    context: Default::default(),
                     tier: "economy".into(),
                     model: "vendor/same".into(),
                     effort: Some(ReasoningEffort::Low),
                     logging_probability_ppm: 1_000_000,
                 },
                 RouteActionCandidate {
-                    context: Default::default(),
                     tier: "strong".into(),
                     model: "vendor/same".into(),
                     effort: Some(ReasoningEffort::High),
