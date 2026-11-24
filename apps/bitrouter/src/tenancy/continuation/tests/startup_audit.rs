@@ -1,13 +1,14 @@
 use super::*;
 use sea_orm::TransactionTrait;
 
-/// UT for durable epoch loss refusing bootstrap before an explicit import.
+/// Losing the durable epoch refuses bootstrap before an explicit import.
 #[tokio::test]
 async fn epoch_requirement_survives_deleted_epoch_and_empty_history() -> Result<()> {
     let db = database().await?;
     let initial = store::load(&db, chrono::Utc::now()).await?;
     let installation = initial.installation.clone();
-    let resources = Arc::new(Resources::with_key(installation.clone(), [71; 32])?);
+    let key: [u8; 32] = rand::random();
+    let resources = Arc::new(Resources::with_key(installation.clone(), key)?);
     let service = Service::start_prepared(db.clone(), None, initial, resources.clone()).await?;
     service.shutdown().await?;
     ensure!(crate::db::migration::capacity::epoch_required(&db).await?);
@@ -19,9 +20,11 @@ async fn epoch_requirement_survives_deleted_epoch_and_empty_history() -> Result<
             "definition":{"kind":"credential","credential":{"type":"api_key","data":{"value":"must-not-be-imported"}}}
         }]
     }))?;
-    for key in [71, 72] {
+    let mut other_key = key;
+    other_key[0] ^= 1;
+    for key in [key, other_key] {
         let initial = store::initial_header(&db, chrono::Utc::now()).await?;
-        let resources = Arc::new(Resources::with_key(installation.clone(), [key; 32])?);
+        let resources = Arc::new(Resources::with_key(installation.clone(), key)?);
         ensure!(
             Service::start_resources(
                 db.clone(),
@@ -48,12 +51,15 @@ async fn epoch_requirement_survives_deleted_epoch_and_empty_history() -> Result<
     Ok(())
 }
 
-/// UT for trajectory history inspection remaining explicit and read-only.
+/// Trajectory history inspection remains explicit and read-only.
 #[tokio::test]
 async fn trajectory_history_corruption_refuses_audit_without_blocking_startup() -> Result<()> {
     let db = database().await?;
     let initial = store::initial_header(&db, chrono::Utc::now()).await?;
-    let resources = Arc::new(Resources::with_key(initial.installation.clone(), [73; 32])?);
+    let resources = Arc::new(Resources::with_key(
+        initial.installation.clone(),
+        rand::random(),
+    )?);
     let service = Service::start_prepared(db.clone(), None, initial, resources.clone()).await?;
     let header = service
         .current()

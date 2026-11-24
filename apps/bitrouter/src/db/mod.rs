@@ -53,7 +53,7 @@ impl OwnedDatabase {
     pub(crate) fn database(&self) -> &DatabaseConnection {
         &self.db
     }
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn database_mut_for_test(&mut self) -> &mut DatabaseConnection {
         &mut self.db
     }
