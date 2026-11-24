@@ -82,6 +82,93 @@ fn reused(authority: &Arc<Authority>) -> anyhow::Result<Authenticated> {
 }
 
 #[test]
+fn corruption_clears_soft_reuse_but_keeps_held_invalid_payloads_charged() -> anyhow::Result<()> {
+    let initial = header()?;
+    let authority = authority(&initial)?;
+    let source = authority
+        .register(prepared(&initial, &[])?, 0)
+        .map_err(failure)?;
+    authority
+        .retain_prepared(&caller()?, &source, &[])
+        .map_err(failure)?;
+    let held = reused(&authority)?;
+    let soft = Arc::downgrade(&source.inner);
+    drop(source);
+    let (entries, capacity, reuse_capacity, registry_charge) = {
+        let state = authority
+            .state
+            .read()
+            .map_err(|_| anyhow::anyhow!("state"))?;
+        (
+            state.views.len(),
+            state.views.capacity(),
+            state.reuse.capacity(),
+            state.registry_bytes().map_err(failure)?,
+        )
+    };
+    authority.invalidate_retained_views().map_err(failure)?;
+    assert!(
+        soft.upgrade().is_none(),
+        "the soft-only source should be released"
+    );
+    {
+        let state = authority
+            .state
+            .read()
+            .map_err(|_| anyhow::anyhow!("state"))?;
+        assert!(state.reuse.is_empty());
+        assert_eq!(state.reuse.capacity(), reuse_capacity);
+        assert_eq!(state.views.len(), entries);
+        assert_eq!(state.views.capacity(), capacity);
+        assert_eq!(state.registry_bytes().map_err(failure)?, registry_charge);
+        assert!(
+            state
+                .views
+                .iter()
+                .filter_map(Weak::upgrade)
+                .any(|inner| Arc::ptr_eq(&inner, &held.lease.inner))
+        );
+    }
+    assert!(
+        authority
+            .try_reuse_token(&hash())
+            .map_err(failure)?
+            .is_none()
+    );
+    assert_eq!(
+        authority.retain_prepared(&caller()?, &held.lease, &[]),
+        Err(ErrorCode::AuthorityUnavailable)
+    );
+    authority
+        .prepare(initial.clone(), &[], None)
+        .map_err(failure)?
+        .publish()
+        .map_err(failure)?;
+    assert_eq!(authority.integrity_epoch(), 1);
+    assert_eq!(
+        authority
+            .read()
+            .map_err(failure)?
+            .check(&held.lease, |_| Ok(())),
+        Err(ErrorCode::AuthorityUnavailable)
+    );
+    let healthy = authority
+        .register(prepared(&initial, &[])?, 2)
+        .map_err(failure)?;
+    authority
+        .retain_prepared(&caller()?, &healthy, &[])
+        .map_err(failure)?;
+    let fresh = reused(&authority)?;
+    authority
+        .read()
+        .map_err(failure)?
+        .check(&fresh.lease, |_| Ok(()))
+        .map_err(failure)?;
+    assert_eq!(fresh.observed_revision, initial.revision);
+    Ok(())
+}
+
+#[test]
 fn separate_requests_exact_sets_and_owner_growth_do_not_share_a_template() -> anyhow::Result<()> {
     let initial = header()?;
     let authority = authority(&initial)?;
@@ -223,7 +310,7 @@ fn retained_and_copied_views_observe_denial_and_expiry_without_header_shortcuts(
                 if let Ok(remaining) = (credential.expires.instant - chrono::Utc::now()).to_std() {
                     std::thread::sleep(remaining + std::time::Duration::from_millis(1));
                 }
-                assert_eq!(authority.read().map_err(failure)?.publication(), 0);
+                assert_eq!(authority.read().map_err(failure)?.read_publication(), 0);
                 assert!(matches!(
                     authority.try_reuse_token(&hash()),
                     Err(ErrorCode::Unauthorized)

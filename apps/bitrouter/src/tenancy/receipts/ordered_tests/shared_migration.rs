@@ -63,6 +63,8 @@ async fn current_baseline_preserves_ordered_receipt_evidence_and_digest_bytes() 
         );
         after.evidence.document.validate_against(&after.receipt)?;
     }
+    let audited = store::inventory(&db, &installation).await?;
+    crate::db::migration::capacity::verify(&db, &audited).await?;
     db.close().await?;
     Ok(())
 }

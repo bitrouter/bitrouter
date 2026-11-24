@@ -1,6 +1,7 @@
 use super::*;
 #[cfg(unix)]
 mod quarantine;
+mod startup_audit;
 #[cfg(unix)]
 mod unwind;
 use crate::tenancy::{Service, resources::Resources, store};

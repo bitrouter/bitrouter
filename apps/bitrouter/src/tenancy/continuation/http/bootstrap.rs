@@ -1,6 +1,5 @@
-//! Bounded, read-only preflight in the existing H bootstrap, before any import.
+//! Explicit read-only retained provenance audit; startup checks only the epoch.
 use super::super::{Crypto, has_epoch};
-use crate::tenancy::transaction::Control;
 use anyhow::{Result, ensure};
 use bitrouter_ai::tenancy::identity::InstallationId;
 use sea_orm::{
@@ -32,15 +31,15 @@ async fn exists(db: &impl ConnectionTrait, condition: Condition) -> Result<bool>
 pub(in crate::tenancy) async fn has_owned(db: &impl ConnectionTrait) -> Result<bool> {
     exists(db, any_owned()).await
 }
-pub(in crate::tenancy) async fn validate(
+pub(in crate::tenancy) async fn validate_audit(
     db: &impl ConnectionTrait,
     installation: &InstallationId,
     crypto: Option<&Crypto>,
-    control: &Control,
+    check: &(dyn Fn() -> Result<()> + Sync),
 ) -> Result<()> {
-    control.check_read()?;
+    check()?;
     let owned = has_owned(db).await?;
-    control.check_read()?;
+    check()?;
     if !owned {
         return Ok(());
     }
@@ -48,7 +47,7 @@ pub(in crate::tenancy) async fn validate(
     // Never initialize a replacement epoch around retained HTTP rows, even if
     // resources and the active-configuration catalog happen to be empty.
     ensure!(has_epoch(db).await?, "HTTP continuation epoch missing");
-    control.check_read()?;
+    check()?;
     let incomplete = Condition::any()
         .add(column("installation_id").is_null())
         .add(column("tenant_id").is_null())
@@ -76,6 +75,6 @@ pub(in crate::tenancy) async fn validate(
         !exists(db, Condition::all().add(any_owned()).add(incomplete)).await?,
         "HTTP continuation provenance unavailable"
     );
-    control.check_read()?;
+    check()?;
     Ok(())
 }

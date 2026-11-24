@@ -346,3 +346,77 @@ async fn retained_http_row_rejects_replacement_epoch_before_catalog_import() -> 
     server.close().await?;
     Ok(())
 }
+
+/// UT for corrupted HTTP history being audited explicitly and rejected on use.
+#[tokio::test]
+async fn corrupt_http_history_rejects_audit_and_resume_but_allows_later_fresh_request() -> Result<()>
+{
+    let mut server = Server::start().await?;
+    let mut ready = ready(&server).await?;
+    let (_, bytes) = send(&ready, ready.headers.clone(), body(false, None)).await?;
+    let public = public_id(&bytes, false)?;
+    server.wire().await?;
+    let (_, original) = retained(&ready, &public).await?;
+    ready.fixture.service.shutdown().await?;
+    ready
+        .fixture
+        .db
+        .execute(Statement::from_sql_and_values(
+            ready.fixture.db.get_database_backend(),
+            "UPDATE provider_continuations SET nonce='invalid' WHERE continuation_identity=?",
+            [original.metadata.continuation_identity.into()],
+        ))
+        .await?;
+    let initial =
+        crate::tenancy::store::initial_header(&ready.fixture.db, chrono::Utc::now()).await?;
+    let resources = Arc::new(crate::tenancy::resources::Resources::with_key(
+        ready.fixture.installation.clone(),
+        ready.fixture.wrapping_key,
+    )?);
+    ensure!(
+        crate::tenancy::continuation::audit_in(
+            &ready.fixture.db,
+            &initial.header(),
+            &resources,
+            64 * 1024 * 1024,
+            &|| Ok(())
+        )
+        .await
+        .is_err()
+    );
+    ready.fixture.service =
+        crate::tenancy::Service::start_prepared(ready.fixture.db.clone(), None, initial, resources)
+            .await?;
+    let secret = ready
+        .headers
+        .get("authorization")
+        .context("authorization")?
+        .to_str()?
+        .strip_prefix("Bearer ")
+        .context("bearer token")?
+        .to_owned();
+    ready
+        .fixture
+        .service
+        .dispatch_test_ready
+        .store(true, Ordering::Release);
+    ready.headers = headers(&ready.fixture, &secret, &ready.revision.revision_id)?;
+    let outcome: Result<()> = async {
+        let before = server.state.calls.load(Ordering::SeqCst);
+        let (status, _) = send(&ready, ready.headers.clone(), body(false, Some(&public))).await?;
+        ensure!(!status.is_success());
+        ensure!(server.state.calls.load(Ordering::SeqCst) == before);
+        let (status, _) = send(&ready, ready.headers.clone(), body(false, None)).await?;
+        ensure!(
+            status == StatusCode::OK,
+            "bad retained row fenced healthy HTTP execution"
+        );
+        server.wire().await?;
+        ensure!(server.state.calls.load(Ordering::SeqCst) == before + 1);
+        Ok(())
+    }
+    .await;
+    ready.fixture.service.shutdown().await?;
+    server.close().await?;
+    outcome
+}

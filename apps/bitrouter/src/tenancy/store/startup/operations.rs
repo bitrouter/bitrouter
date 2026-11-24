@@ -1,11 +1,10 @@
 use super::*;
 use crate::tenancy::{
     model::{AuthorityClass, ReadContext},
-    store::{Operation, StoredResponse},
+    store::Operation,
 };
 use bitrouter_ai::tenancy::{
-    identity::{Digest, InstallationId, OperationId, PrincipalId, TenantId},
-    operation::OperationStatus,
+    identity::{InstallationId, OperationId, PrincipalId, TenantId},
     validation::Validate,
 };
 use sea_orm::{DatabaseBackend, Statement};
@@ -82,57 +81,6 @@ fn decode(row: &QueryResult) -> Result<Row> {
         class: super::super::enum_from(row, "authority_class")?,
         operation: super::super::operation_from(row, &principal, &id)?,
     })
-}
-
-fn result(operation: &Operation, header: &AuthorityHeader) -> Result<()> {
-    let result = &operation.result;
-    ensure!(
-        result.operation_id == operation.id
-            && result
-                .authority_revision
-                .is_none_or(|revision| revision <= header.revision),
-        "operation result identity or authority mismatch"
-    );
-    let _: Digest = operation.digest.clone().try_into()?;
-    match &operation.response {
-        StoredResponse::Operation(returned) => ensure!(
-            serde_json::to_value(returned)? == serde_json::to_value(result)?,
-            "operation response differs from result"
-        ),
-        StoredResponse::Issued(issued) => {
-            issued.validate()?;
-            ensure!(
-                issued.secret.is_none()
-                    && issued.operation_id == operation.id
-                    && result.status == OperationStatus::Applied
-                    && Some(issued.authority_revision) == result.authority_revision
-                    && Some(&issued.credential_revision) == result.resource_revision.as_ref()
-                    && result.resource_id.as_ref().map(|id| id.as_str())
-                        == Some(issued.credential_id.as_str()),
-                "issuance response differs from result"
-            );
-        }
-        StoredResponse::Configuration(configuration) => {
-            configuration.validate()?;
-            ensure!(
-                result.status == OperationStatus::Applied
-                    && result.resource_revision.as_ref() == Some(&configuration.revision_id),
-                "configuration response differs from result"
-            );
-        }
-        StoredResponse::Failure(failure) => {
-            failure.validate()?;
-            ensure!(
-                result.status == OperationStatus::Rejected
-                    && failure.operation_id.as_ref() == Some(&operation.id)
-                    && serde_json::to_value(
-                        result.error.as_ref().context("missing rejected result")?
-                    )? == serde_json::to_value(failure)?,
-                "failure response differs from result"
-            );
-        }
-    }
-    Ok(())
 }
 
 fn increment(count: &mut u64) -> Result<()> {
@@ -272,7 +220,7 @@ pub(super) async fn validate_in(
                     "operation history installation mismatch"
                 );
                 let operation = &row.operation;
-                result(operation, header)?;
+                super::super::validate_operation_result(operation, header)?;
                 match &operation.context {
                     ReadContext::Installation => ensure!(
                         row.class == AuthorityClass::Installation && row.tenant.is_none(),

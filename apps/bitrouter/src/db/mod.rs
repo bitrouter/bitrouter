@@ -53,6 +53,10 @@ impl OwnedDatabase {
     pub(crate) fn database(&self) -> &DatabaseConnection {
         &self.db
     }
+    #[cfg(all(test, unix))]
+    pub(crate) fn database_mut_for_test(&mut self) -> &mut DatabaseConnection {
+        &mut self.db
+    }
     /// Apply schema changes before claiming this database for a running Service.
     /// A current ledger is read-only and needs no migration headroom.
     pub(crate) async fn migrate(&self) -> anyhow::Result<()> {
@@ -106,7 +110,7 @@ async fn pending_sqlite_migrations(db: &DatabaseConnection) -> anyhow::Result<bo
         db.get_database_backend() == DatabaseBackend::Sqlite,
         "owned migrations require SQLite"
     );
-    Ok(store_format::inspect(db).await? == store_format::State::Empty)
+    Ok(store_format::inspect(db).await? != store_format::State::Current)
 }
 pub(crate) async fn connect_owned_tenancy(url: &str) -> anyhow::Result<OwnedDatabase> {
     let owner = crate::tenancy::ownership::acquire(url)?;
@@ -155,6 +159,15 @@ async fn connect_inner(
             current_schema::validate(&db).await.map_err(|error| {
                 BitrouterError::bad_request(format!("validating gateway server database: {error}"))
             })?;
+        }
+        if state == store_format::State::Legacy {
+            current_schema::validate_legacy(&db)
+                .await
+                .map_err(|error| {
+                    BitrouterError::bad_request(format!(
+                        "validating legacy gateway server database: {error}"
+                    ))
+                })?;
         }
     }
     if owner.is_none()

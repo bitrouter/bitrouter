@@ -1,11 +1,9 @@
-//! Additive037 private evidence, committed atomically with the unchanged wire receipt.
+//! Private auxiliary evidence committed atomically with its execution receipt.
 use super::{
     auxiliary::{MAX_BYTES, Outcome, Snapshot},
     store::Candidate,
 };
-#[cfg(test)]
-use anyhow::Context;
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use bitrouter_ai::tenancy::{
     execution::ExecutionReceipt,
     identity::{ExecutionId, InstallationId, TenantId},
@@ -213,13 +211,19 @@ pub(in crate::tenancy) async fn insert(
     if backend != DatabaseBackend::MySql {
         insert.on_conflict(OnConflict::new().do_nothing().to_owned());
     }
-    match db.execute(backend.build(&insert)).await {
-        Ok(_) => {}
+    let inserted = match db.execute(backend.build(&insert)).await {
+        Ok(result) => {
+            ensure!(result.rows_affected() <= 1, "auxiliary insert count");
+            result.rows_affected() == 1
+        }
         Err(error)
             if backend == DatabaseBackend::MySql
-                && matches!(error.sql_err(), Some(SqlErr::UniqueConstraintViolation(_))) => {}
+                && matches!(error.sql_err(), Some(SqlErr::UniqueConstraintViolation(_))) =>
+        {
+            false
+        }
         Err(error) => return Err(error.into()),
-    }
+    };
     let mut query = scope(receipt);
     query
         .expr(Expr::val(1))
@@ -231,6 +235,18 @@ pub(in crate::tenancy) async fn insert(
         db.query_one(backend.build(&query)).await?.is_some(),
         "immutable OAuth receipt conflict"
     );
+    if inserted {
+        crate::db::migration::capacity::adjust(
+            db,
+            crate::db::migration::capacity::Delta {
+                live_bytes: i64::try_from(evidence.json.len())?
+                    .checked_add(i64::try_from(super::capacity::ROW_OVERHEAD)?)
+                    .context("auxiliary capacity overflow")?,
+                ..Default::default()
+            },
+        )
+        .await?;
+    }
     Ok(())
 }
 

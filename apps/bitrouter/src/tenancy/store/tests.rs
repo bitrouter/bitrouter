@@ -469,3 +469,6 @@ mod resources;
 
 #[path = "tests/startup.rs"]
 mod startup;
+
+#[path = "tests/point_integrity.rs"]
+mod point_integrity;

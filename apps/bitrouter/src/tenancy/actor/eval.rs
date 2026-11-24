@@ -17,6 +17,15 @@ impl Worker {
         }
     }
 
+    fn eval_read_error(&self, error: OwnedError) -> Failure {
+        match error {
+            // Read content grants no authority and has no required observation
+            // to retain. SQL and transaction-custody failures still fence.
+            OwnedError::Integrity(_) => ErrorCode::AuthorityUnavailable.into(),
+            other => self.eval_error(other),
+        }
+    }
+
     pub(super) async fn execute_eval(
         &self,
         job: &Job,
@@ -82,7 +91,7 @@ impl Worker {
                         &store
                             .subjects_owned_in(&tx, &check)
                             .await
-                            .map_err(|e| self.eval_error(e))?,
+                            .map_err(|e| self.eval_read_error(e))?,
                     )?,
                     false,
                 ),
@@ -91,7 +100,7 @@ impl Worker {
                         &store
                             .subject_owned_in(&tx, id, &check)
                             .await
-                            .map_err(|e| self.eval_error(e))?,
+                            .map_err(|e| self.eval_read_error(e))?,
                     )?,
                     false,
                 ),
@@ -119,7 +128,7 @@ impl Worker {
                         &store
                             .snapshot_owned_in(&tx, root, &check)
                             .await
-                            .map_err(|e| self.eval_error(e))?,
+                            .map_err(|e| self.eval_read_error(e))?,
                     )?,
                     false,
                 ),
@@ -128,7 +137,7 @@ impl Worker {
                         &store
                             .status_owned_in(&tx, &check)
                             .await
-                            .map_err(|e| self.eval_error(e))?,
+                            .map_err(|e| self.eval_read_error(e))?,
                     )?,
                     false,
                 ),

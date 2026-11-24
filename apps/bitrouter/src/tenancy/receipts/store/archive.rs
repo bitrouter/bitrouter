@@ -395,6 +395,16 @@ pub(in crate::tenancy) async fn archive_one(
             == 1,
         "receipt archive marker update count"
     );
+    crate::db::migration::capacity::adjust(
+        tx,
+        crate::db::migration::capacity::Delta {
+            live_bytes: -i64::try_from(prepared.source_bytes())?,
+            history_bytes: i64::try_from(prepared.history_bytes())?,
+            history_rows: 1,
+            ..Default::default()
+        },
+    )
+    .await?;
     charge(0, 0)?;
     Ok(true)
 }

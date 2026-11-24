@@ -136,7 +136,9 @@ impl Authority {
         };
         let (caller, bytes) = {
             let lease = &state.reuse[index].lease;
-            if !std::ptr::eq(lease.owner.as_ptr(), self.as_ref()) {
+            if !std::ptr::eq(lease.owner.as_ptr(), self.as_ref())
+                || lease.inner.invalidated.load(Ordering::Acquire)
+            {
                 return Err(ErrorCode::AuthorityUnavailable);
             }
             let view = lease
@@ -144,7 +146,7 @@ impl Authority {
                 .view
                 .lock()
                 .map_err(|_| ErrorCode::AuthorityUnavailable)?;
-            if view.publication != state.publication {
+            if view.publication != state.read_publication {
                 return Err(ErrorCode::AuthorityUnavailable);
             }
             let Some(credential) = view.facts.credentials.values().next() else {
@@ -202,6 +204,7 @@ impl Authority {
         if !self.live.load(Ordering::Acquire)
             || state.preparing
             || !std::ptr::eq(lease.owner.as_ptr(), self)
+            || lease.inner.invalidated.load(Ordering::Acquire)
         {
             return Err(ErrorCode::AuthorityUnavailable);
         }
@@ -211,7 +214,7 @@ impl Authority {
                 .view
                 .lock()
                 .map_err(|_| ErrorCode::AuthorityUnavailable)?;
-            if view.publication != state.publication {
+            if view.publication != state.read_publication {
                 return Err(ErrorCode::AuthorityUnavailable);
             }
             if !view.covers(dependencies, DependencyIntent::Fresh)?

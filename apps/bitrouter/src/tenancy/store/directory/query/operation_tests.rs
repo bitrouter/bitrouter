@@ -208,11 +208,7 @@ async fn compact_operation_preserves_storage_corruption_and_null_sentinels() -> 
             .context("corrupt storage accepted")?;
             assert!(!decoded.get());
             assert!(!error.is::<super::super::CapacityExceeded>());
-            assert!(
-                error
-                    .to_string()
-                    .contains("invalid directory row storage types")
-            );
+            assert!(format!("{error:#}").contains("invalid directory row storage types"));
         }
     }
     db.close().await?;
@@ -273,11 +269,7 @@ async fn compact_operation_probes_both_indexed_branches_and_rejects_mixed_duplic
         .err()
         .context("duplicate accepted")?;
         assert!(!decoded.get());
-        assert!(
-            error
-                .to_string()
-                .contains("duplicate indexed authority identity")
-        );
+        assert!(format!("{error:#}").contains("duplicate indexed authority identity"));
     }
     db.close().await?;
     Ok(())

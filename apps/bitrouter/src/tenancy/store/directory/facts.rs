@@ -134,10 +134,19 @@ impl CommandFacts {
         self.tenant(db, tenant, budget).await?;
         if let Some(record) = &record {
             self.principal(db, &record.principal, budget).await?;
+            ensure!(
+                self.snapshot.tenants.contains_key(tenant)
+                    && self.snapshot.principals.contains_key(&record.principal),
+                InvalidRecord
+            );
             if let Some(owner) = &record.managed_by
                 && owner.class == AuthorityClass::Tenant
             {
                 self.principal(db, &owner.principal, budget).await?;
+                ensure!(
+                    self.snapshot.principals.contains_key(&owner.principal),
+                    InvalidRecord
+                );
             }
         }
         self.mark(lookup, record.is_some());
@@ -164,8 +173,19 @@ impl CommandFacts {
         if let Some(record) = &record {
             self.tenant(db, &record.tenant, budget).await?;
             self.principal(db, &record.principal, budget).await?;
+            ensure!(
+                self.snapshot.tenants.contains_key(&record.tenant)
+                    && self.snapshot.principals.contains_key(&record.principal),
+                InvalidRecord
+            );
             if let Some(binding) = &record.binding {
                 self.binding(db, &record.tenant, binding, budget).await?;
+                ensure!(
+                    self.snapshot
+                        .bindings
+                        .contains_key(&(record.tenant.clone(), binding.clone())),
+                    InvalidRecord
+                );
             }
         }
         self.mark(lookup, record.is_some());
@@ -199,18 +219,16 @@ impl CommandFacts {
         if let Some(record) = &record {
             ensure!(
                 record.authority_revision <= self.snapshot.revision,
-                "active configuration is outside published authority"
+                InvalidRecord
             );
             let mut query = select(db, Table::Configuration, budget.row_bytes()?)?;
             query
                 .and_where(Expr::col(Alias::new("tenant_id")).eq(tenant.as_str()))
                 .and_where(Expr::col(Alias::new("revision_id")).eq(record.revision.as_str()));
-            let created = one(db, query, active_from)
-                .await?
-                .context("active configuration target missing")?;
+            let created = one(db, query, active_from).await?.context(InvalidRecord)?;
             ensure!(
                 created.authority_revision <= record.authority_revision,
-                "active pointer predates configuration creation"
+                InvalidRecord
             );
         }
         self.mark(lookup, record.is_some());

@@ -153,7 +153,7 @@ impl Service {
         )
         .await
         .map_err(|_| self.unavailable())?
-        .map_err(|_| self.unavailable())?
+        .map_err(|error| self.retained_read_failure(error))?
         .ok_or_else(|| Failure::from(ErrorCode::NotFound))?;
         let mut manifest =
             self.manifest_from_stored(&stored, before.revision, reference, inbound)?;

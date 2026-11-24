@@ -79,6 +79,29 @@ impl Decoder<'_> {
         let subject: EvalSubject =
             serde_json::from_str(&row.subject_json).context("parsing stored eval subject")?;
         ensure!(
+            subject.spec_version == bitrouter_ai::eval::SpecVersion::Beta1,
+            "unsupported stored Eval subject format"
+        );
+        // Bind the document profile to the independently checked SQL namespace;
+        // consistent content digests alone do not establish that relationship.
+        match self.scope.snapshot_namespace() {
+            None => ensure!(
+                matches!(
+                    &subject.identity,
+                    bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {}
+                ),
+                "global stored Eval subject requires gateway_generic profile"
+            ),
+            Some((installation, tenant)) => ensure!(
+                subject.identity.tenant_namespace().is_some_and(
+                    |(actual_installation, actual_tenant)| actual_installation.as_str()
+                        == installation
+                        && actual_tenant.as_str() == tenant
+                ),
+                "stored Eval subject profile or namespace mismatch"
+            ),
+        }
+        ensure!(
             self.key(KeyDomain::EvalSubject, &subject.eval_id)? == row.eval_id
                 && crate::storage::evaluation::subject_digest(&subject)? == row.content_digest
                 && subject.subject_id == row.subject_id

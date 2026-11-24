@@ -131,9 +131,9 @@ async fn configuration_get_authenticates_public_metadata_before_returning_it() -
         .await?;
         ensure!(
             matches!(fixture.service.configuration(&fixture.operator, &fixture.tenant, &revision.revision_id).await,
-            Err(error) if error.0.code == ErrorCode::StorageUnavailable)
+            Err(error) if error.0.code == ErrorCode::AuthorityUnavailable)
         );
-        ensure!(fixture.service.current().is_err());
+        ensure!(fixture.service.current().is_ok());
         fixture.service.shutdown().await?;
     }
     Ok(())
@@ -141,7 +141,7 @@ async fn configuration_get_authenticates_public_metadata_before_returning_it() -
 
 #[cfg(not(feature = "eval-publication"))]
 #[tokio::test]
-async fn gateway_rejects_activation_and_restore_without_eval_publication() -> Result<()> {
+async fn gateway_rejects_activation_and_audit_without_eval_publication() -> Result<()> {
     use sha2::{Digest, Sha256};
     for was_active in [false, true] {
         let fixture = Fixture::new().await?;
@@ -217,7 +217,21 @@ async fn gateway_rejects_activation_and_restore_without_eval_publication() -> Re
             .validate_compiled(&stored)
             .map_err(|code| anyhow::anyhow!("fixture integrity rejected: {code:?}"))?;
         if was_active {
-            ensure!(Service::open(fixture.db.clone(), None).await.is_err());
+            let service = Service::open(fixture.db.clone(), None).await?;
+            let header = super::super::store::initial_header(&fixture.db, Utc::now()).await?;
+            ensure!(
+                super::super::continuation::audit_in(
+                    &fixture.db,
+                    &header.header(),
+                    &service.resources,
+                    64 * 1024 * 1024,
+                    &|| Ok(())
+                )
+                .await
+                .is_err()
+            );
+            ensure!(service.current().is_ok());
+            service.shutdown().await?;
         } else {
             ensure!(
                 matches!(fixture.service.execute(fixture.operator.clone(), Command::Activate(fixture.tenant.clone(), activation)).await,
@@ -240,12 +254,17 @@ async fn gateway_rejects_activation_and_restore_without_eval_publication() -> Re
 }
 
 #[tokio::test]
-async fn invalid_retained_bytes_fence_activation_and_startup() -> Result<()> {
+async fn invalid_retained_bytes_refuse_activation_and_audit_without_fencing() -> Result<()> {
     use sea_orm::{
         ConnectionTrait,
         sea_query::{Alias, Expr, Query},
     };
-    for was_active in [false, true] {
+    for (was_active, invalid) in [
+        (false, r#"{"kind":"empty","binding":null}"#),
+        (true, r#"{"kind":"empty","binding":null}"#),
+        (false, "{"),
+        (true, "{"),
+    ] {
         let fixture = Fixture::new().await?;
         let revision = retained(
             fixture
@@ -280,10 +299,7 @@ async fn invalid_retained_bytes_fence_activation_and_startup() -> Result<()> {
         }
         let update = Query::update()
             .table(Alias::new("tenancy_configurations"))
-            .value(
-                Alias::new("compiled_json"),
-                r#"{"kind":"empty","binding":null}"#,
-            )
+            .value(Alias::new("compiled_json"), invalid)
             .and_where(Expr::col(Alias::new("tenant_id")).eq(fixture.tenant.as_str()))
             .and_where(Expr::col(Alias::new("revision_id")).eq(revision.revision_id.as_str()))
             .to_owned();
@@ -296,7 +312,25 @@ async fn invalid_retained_bytes_fence_activation_and_startup() -> Result<()> {
                 == 1
         );
         if was_active {
-            ensure!(Service::open(fixture.db.clone(), None).await.is_err());
+            let service = Service::open(fixture.db.clone(), None).await?;
+            let header = super::super::store::initial_header(&fixture.db, Utc::now()).await?;
+            ensure!(
+                super::super::continuation::audit_in(
+                    &fixture.db,
+                    &header.header(),
+                    &service.resources,
+                    64 * 1024 * 1024,
+                    &|| Ok(())
+                )
+                .await
+                .is_err()
+            );
+            ensure!(
+                matches!(service.configuration(&fixture.operator, &fixture.tenant, &revision.revision_id).await,
+                Err(error) if error.0.code == ErrorCode::AuthorityUnavailable)
+            );
+            ensure!(service.current().is_ok());
+            service.shutdown().await?;
         } else {
             let result = fixture
                 .service
@@ -308,7 +342,7 @@ async fn invalid_retained_bytes_fence_activation_and_startup() -> Result<()> {
             ensure!(
                 matches!(result, Err(error) if error.0.code == ErrorCode::AuthorityUnavailable)
             );
-            ensure!(fixture.service.current().is_err());
+            ensure!(fixture.service.current().is_ok());
             ensure!(
                 super::super::configuration_store::active_revisions(&fixture.db)
                     .await?
@@ -451,7 +485,7 @@ async fn retained_nonempty_configuration_requires_every_credential_dependency() 
         .map_err(failure)?;
     ensure!(
         matches!(fixture.service.configuration(&caller, &fixture.tenant, &r1.revision_id).await,
-        Err(error) if error.0.code == ErrorCode::StorageUnavailable)
+        Err(error) if error.0.code == ErrorCode::AuthorityUnavailable)
     );
     fixture.service.shutdown().await?;
     Ok(())

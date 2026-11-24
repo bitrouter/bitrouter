@@ -254,19 +254,29 @@ mod consumer {
             "active fixture lost integrity"
         );
         ensure!(resources.validate_executable(&row) == Err(ErrorCode::CapabilityMismatch));
-        let started =
-            Service::start_prepared(db.clone(), Some(owner), initial, Arc::new(resources)).await;
-        match started {
-            Ok(service) => {
-                service.shutdown().await?;
-                anyhow::bail!("unsupported active profile restored");
-            }
-            Err(error) => ensure!(
-                error
-                    .to_string()
-                    .contains("native continuation key initialization failed")
-            ),
-        }
+        ensure!(
+            crate::tenancy::continuation::audit_in(
+                &db,
+                &initial.header(),
+                &resources,
+                64 * 1024 * 1024,
+                &|| Ok(())
+            )
+            .await
+            .is_err(),
+            "audit admitted an unavailable active capability"
+        );
+        let service =
+            Service::start_prepared(db.clone(), Some(owner), initial, Arc::new(resources)).await?;
+        read(&service, &transfer).await?;
+        let candidate = service
+            .execute(
+                operator,
+                activate(&service, &transfer, "unsupported-active-profile")?,
+            )
+            .await;
+        ensure!(matches!(candidate, Err(error) if error.0.code == ErrorCode::CapabilityMismatch));
+        service.shutdown().await?;
         ensure!(active(&db, &transfer.tenant).await? == transfer.revision.revision_id.as_str());
         db.close().await?;
         std::fs::write(

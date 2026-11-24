@@ -498,12 +498,18 @@ async fn final_proof_reads_late_oauth_pages_and_checks_later_witness_bindings() 
     );
     let error = staged.reconcile(FREE).await.err();
     tx.rollback().await?;
+    let error = error.context("late pending corruption was not inspected")?;
+    ensure!(
+        error.is::<crate::tenancy::store::directory::InvalidRecord>(),
+        "{error:#}"
+    );
     ensure!(
         error
-            .context("late pending corruption was not inspected")?
-            .to_string()
-            .contains("OAuth slot projection mismatch")
+            .chain()
+            .any(|cause| cause.to_string() == "OAuth slot projection mismatch"),
+        "{error:#}"
     );
+    empty(&db).await?;
     db.close().await?;
 
     let db = open().await?;
@@ -524,9 +530,15 @@ async fn final_proof_reads_late_oauth_pages_and_checks_later_witness_bindings() 
     }
     let staged = stage_terminal(&tx, &witnessed).await?;
     auxiliary_store::insert(&tx, &witnessed).await?;
-    let refused = staged.reconcile(FREE).await.is_err();
+    let error = staged.reconcile(FREE).await.err();
     tx.rollback().await?;
-    ensure!(refused, "first witnessed slot hid a later binding mismatch");
+    let error = error.context("first witnessed slot hid a later binding mismatch")?;
+    ensure!(
+        error
+            .chain()
+            .any(|cause| cause.to_string() == "pending OAuth receipt binding mismatch"),
+        "{error:#}"
+    );
     empty(&db).await?;
     db.close().await?;
     Ok(())

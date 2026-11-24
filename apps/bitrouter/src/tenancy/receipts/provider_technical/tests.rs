@@ -386,3 +386,52 @@ fn selected_stream_stop_and_intermediate_source_end_keep_distinct_operation_cloc
 }
 
 mod scope;
+
+#[tokio::test]
+async fn optional_capacity_commits_with_payload_and_replay_is_uncharged() -> Result<()> {
+    use sea_orm::TransactionTrait;
+    let db = crate::db::connect("sqlite::memory:").await?;
+    crate::db::run_migrations(&db).await?;
+    crate::db::migration::provider_technical::install(&db).await?;
+    let original = terminal()?;
+    let tx = db.begin().await?;
+    ensure!(super::super::store::insert_terminal(&tx, &original).await?);
+    tx.commit().await?;
+    let prepared = storage::Prepared::new(&facts()?)?;
+    let expected =
+        u64::try_from(prepared.json.len())? + crate::tenancy::receipts::capacity::ROW_OVERHEAD;
+
+    let tx = db.begin().await?;
+    ensure!(storage::insert(&tx, &original, &prepared).await?);
+    ensure!(
+        crate::db::migration::capacity::load(&tx)
+            .await?
+            .technical_bytes
+            == expected
+    );
+    tx.rollback().await?;
+    ensure!(storage::read(&db, &original).await?.is_none());
+    ensure!(
+        crate::db::migration::capacity::load(&db)
+            .await?
+            .technical_bytes
+            == 0
+    );
+
+    ensure!(storage::insert(&db, &original, &prepared).await?);
+    ensure!(
+        crate::db::migration::capacity::load(&db)
+            .await?
+            .technical_bytes
+            == expected
+    );
+    ensure!(!storage::insert(&db, &original, &prepared).await?);
+    ensure!(
+        crate::db::migration::capacity::load(&db)
+            .await?
+            .technical_bytes
+            == expected
+    );
+    db.close().await?;
+    Ok(())
+}

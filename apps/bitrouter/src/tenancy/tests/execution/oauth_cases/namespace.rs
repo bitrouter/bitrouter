@@ -57,7 +57,7 @@ async fn equal_seed_in_distinct_tenant_slots_is_importable_and_rotation_is_physi
 #[tokio::test]
 async fn missing_slot_never_reconstructs_seed_and_new_authority_revision_cannot_rebind_it()
 -> Result<()> {
-    let harness = Harness::new(true).await?;
+    let mut harness = Harness::new(true).await?;
     harness.fixture.service.shutdown().await?;
     let mut other: Value = serde_json::from_slice(&harness.manifest)?;
     other["resources"][0]["reference"]["revision_id"] = json!("r2");
@@ -79,14 +79,26 @@ async fn missing_slot_never_reconstructs_seed_and_new_authority_revision_cannot_
         .db
         .execute_unprepared("DELETE FROM tenancy_oauth_slots")
         .await?;
-    let result = Service::start_prepared(
-        harness.fixture.db.clone(),
-        None,
-        crate::tenancy::store::load(&harness.fixture.db, chrono::Utc::now()).await?,
-        harness.resources.clone(),
-    )
-    .await;
-    ensure!(result.is_err());
+    ensure!(
+        harness
+            .resources
+            .audit_retained_in(&harness.fixture.db, 64 * 1024 * 1024, &|| Ok(()))
+            .await
+            .is_err()
+    );
+    harness.reopen().await?;
+    let response = harness.send(&Harness::client(false)?, false).send().await?;
+    ensure!(!response.status().is_success());
+    response.bytes().await?;
+    ensure!(
+        storage::load(
+            &harness.fixture.db,
+            &harness.fixture.installation,
+            &harness.slot
+        )
+        .await?
+        .is_none()
+    );
     // A direct identical reimport may not repair a missing live slot either.
     ensure!(
         harness
@@ -95,8 +107,12 @@ async fn missing_slot_never_reconstructs_seed_and_new_authority_revision_cannot_
             .await
             .is_err()
     );
-    ensure!(harness.provider.refreshes.load(Ordering::SeqCst) == 0);
-    Ok(())
+    ensure!(
+        harness.provider.refreshes.load(Ordering::SeqCst) == 0
+            && harness.provider.models.load(Ordering::SeqCst) == 0
+    );
+    harness.fixture.service.shutdown().await?;
+    harness.close().await
 }
 
 #[tokio::test]
@@ -116,6 +132,58 @@ async fn swapped_ciphertext_and_generation_cannot_authorize_refresh_or_model() -
     );
     harness.fixture.service.shutdown().await?;
     Ok(())
+}
+
+/// UT for exact OAuth lineage checks replacing startup's full slot traversal.
+#[tokio::test]
+async fn authenticated_but_wrong_seed_lineage_refuses_audit_and_use_after_restart() -> Result<()> {
+    use sea_orm::TransactionTrait;
+    let mut harness = Harness::new(false).await?;
+    let original = harness.row().await?;
+    let crypto = harness.resources.oauth_crypto()?;
+    let token = original.token(&crypto)?;
+    let mut metadata = original.metadata.clone();
+    metadata.seed = "f".repeat(64);
+    let changed = storage::Row::new(&crypto, metadata, &token)?;
+    changed.token(&crypto)?; // AEAD, metadata and projections are internally valid.
+    let tx = harness.fixture.db.begin().await?;
+    storage::replace(&tx, &original, &changed).await?;
+    tx.commit().await?;
+    harness.reopen().await?;
+    ensure!(
+        harness
+            .resources
+            .validate_oauth(&harness.fixture.db)
+            .await
+            .is_err()
+    );
+    harness.provider.model_gate.add_permits(1);
+    let response = harness.send(&Harness::client(false)?, false).send().await?;
+    ensure!(response.status() != StatusCode::OK);
+    response.bytes().await?;
+    ensure!(
+        harness.provider.refreshes.load(Ordering::SeqCst) == 0
+            && harness.provider.models.load(Ordering::SeqCst) == 0
+    );
+    let revision = harness
+        .headers
+        .get("bitrouter-execution-revision")
+        .context("revision")?
+        .to_str()?
+        .try_into()?;
+    harness
+        .fixture
+        .service
+        .configuration(
+            &harness.fixture.operator,
+            &harness.fixture.tenant,
+            &revision,
+        )
+        .await
+        .map_err(failure)?;
+    ensure!(harness.row().await?.same(&changed));
+    harness.fixture.service.shutdown().await?;
+    harness.close().await
 }
 
 #[tokio::test]

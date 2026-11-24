@@ -48,7 +48,7 @@ impl Worker {
         }
         let (header, publication) = {
             let guard = self.authority.read().map_err(Failure::from)?;
-            (guard.header().clone(), guard.publication())
+            (guard.header().clone(), guard.read_publication())
         };
         let bytes = self.authority.load_budget();
         let references = read_dependencies(&self.authority, &read.subject, bytes / 3)?;
@@ -110,10 +110,10 @@ impl Worker {
                     &reference.key(),
                 )
                 .await
-                .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?
+                .map_err(|error| self.directory_failure(error))?
                 {
                     if head.authority_revision > header.revision {
-                        return Err(self.unavailable(ErrorCode::AuthorityUnavailable));
+                        return Err(self.directory_failure(directory::InvalidRecord.into()));
                     }
                     facts.snapshot.resource_lifecycle.insert(head);
                 }
@@ -172,7 +172,7 @@ impl Worker {
                 }
                 let row = oauth::storage::lookup(&transaction, &header.installation, reference)
                     .await
-                    .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
+                    .map_err(|error| self.directory_failure(error))?;
                 oauth.push(OAuthFact {
                     reference: reference.clone(),
                     slot: oauth::storage::slot(&header.installation, reference)
@@ -270,6 +270,14 @@ impl Worker {
     pub(super) fn directory_failure(&self, error: anyhow::Error) -> Failure {
         if error.is::<directory::CapacityExceeded>() {
             ErrorCode::CapacityExceeded.into()
+        } else if error.is::<directory::InvalidRecord>() {
+            // Every caller releases its authority guard before entering SQL.
+            // Mark held views invalid without changing persisted authority or
+            // refunding their still-pinned memory. The caller still owns rollback.
+            if self.authority.invalidate_retained_views().is_err() {
+                return self.unavailable(ErrorCode::AuthorityUnavailable);
+            }
+            ErrorCode::AuthorityUnavailable.into()
         } else {
             self.unavailable(ErrorCode::StorageUnavailable)
         }

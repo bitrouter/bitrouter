@@ -38,9 +38,10 @@ async fn warm_control_manifest_still_reads_bounded_storage_and_rejects_replaced_
     ensure!(
         matches!(fixture.service.candidate_manifest(&fixture.operator,
         &fixture.tenant, &revision.revision_id, &route, GenerationProtocol::ChatCompletions).await,
-        Err(error) if error.0.code == ErrorCode::StorageUnavailable)
+        Err(error) if error.0.code == ErrorCode::AuthorityUnavailable)
     );
-    ensure!(fixture.service.current().is_err());
+    ensure!(fixture.service.current().is_ok());
+    fixture.issue("healthy-after-corrupt-manifest").await?;
     fixture.service.shutdown().await?;
     Ok(())
 }

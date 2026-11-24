@@ -13,7 +13,7 @@ mod tests;
 
 use std::sync::{
     Arc, Mutex, RwLock, RwLockReadGuard, Weak,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 use bitrouter_ai::tenancy::{configuration::ResourceRef, operation::ErrorCode};
@@ -169,6 +169,7 @@ impl View {
 
 struct Inner {
     view: Mutex<View>,
+    invalidated: AtomicBool,
 }
 
 #[derive(Clone)]
@@ -192,7 +193,10 @@ pub(in crate::tenancy) enum DependencyIntent {
 
 struct State {
     header: AuthorityHeader,
+    // A single healthy writer owns this reservation through COMMIT/publication.
     publication: u64,
+    // Source reads become stale on either publication or corruption detection.
+    read_publication: u64,
     views: Vec<Weak<Inner>>,
     reuse: Vec<reuse::Entry>,
     preparing: bool,
@@ -200,6 +204,7 @@ struct State {
 
 pub(in crate::tenancy) struct Authority {
     live: Arc<AtomicBool>,
+    integrity_epoch: AtomicU64,
     max_entries: usize,
     working_bytes: usize,
     state: RwLock<State>,
@@ -221,8 +226,9 @@ impl ReadGuard<'_> {
     pub fn snapshot(&self) -> Snapshot {
         Snapshot::from_header(self.header())
     }
-    pub fn publication(&self) -> u64 {
-        self.state.publication
+    /// Read generation, advanced by both authority publication and invalidation.
+    pub fn read_publication(&self) -> u64 {
+        self.state.read_publication
     }
 
     /// Sequential checks can share this gate, including checks of the same lease.
@@ -230,6 +236,7 @@ impl ReadGuard<'_> {
     pub fn check<T>(&mut self, lease: &Lease, check: impl FnOnce(&View) -> Result<T>) -> Result<T> {
         if !self.owner.live.load(Ordering::Acquire)
             || !std::ptr::eq(lease.owner.as_ptr(), self.owner)
+            || lease.inner.invalidated.load(Ordering::Acquire)
         {
             return Err(ErrorCode::AuthorityUnavailable);
         }
@@ -238,7 +245,7 @@ impl ReadGuard<'_> {
             .view
             .lock()
             .map_err(|_| ErrorCode::AuthorityUnavailable)?;
-        if view.publication != self.state.publication {
+        if view.publication != self.state.read_publication {
             return Err(ErrorCode::AuthorityUnavailable);
         }
         check(&view)
@@ -291,11 +298,13 @@ impl Authority {
         }
         Ok(Arc::new(Self {
             live,
+            integrity_epoch: AtomicU64::new(0),
             max_entries: budget.entries,
             working_bytes,
             state: RwLock::new(State {
                 header,
                 publication: 0,
+                read_publication: 0,
                 views: Vec::new(),
                 reuse: Vec::new(),
                 preparing: false,
@@ -315,6 +324,41 @@ impl Authority {
                 .read()
                 .map_err(|_| ErrorCode::AuthorityUnavailable)?,
         })
+    }
+
+    /// Epoch for cache keys. Ordinary authority publications never advance it.
+    pub fn integrity_epoch(&self) -> u64 {
+        self.integrity_epoch.load(Ordering::Acquire)
+    }
+
+    /// Invalidate retained facts after detected corruption under the send gate.
+    /// Held owners remain registered and charged until their leases are dropped.
+    ///
+    /// # Errors
+    /// Refuses a poisoned gate or exhausted epoch/read-generation counter. The caller
+    /// must fence the authority globally when invalidation cannot be completed.
+    pub fn invalidate_retained_views(&self) -> Result<()> {
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| ErrorCode::AuthorityUnavailable)?;
+        let epoch = self
+            .integrity_epoch()
+            .checked_add(1)
+            .ok_or(ErrorCode::AuthorityUnavailable)?;
+        let read_publication = state
+            .read_publication
+            .checked_add(1)
+            .ok_or(ErrorCode::AuthorityUnavailable)?;
+        for inner in state.views.iter().filter_map(Weak::upgrade) {
+            inner.invalidated.store(true, Ordering::Release);
+        }
+        // This releases soft owners without allocating or discarding the weak
+        // registry. Its retained allocation and all held payloads stay charged.
+        state.reuse.clear();
+        state.read_publication = read_publication;
+        self.integrity_epoch.store(epoch, Ordering::Release);
+        Ok(())
     }
 
     /// Serialize stop/closing flags with final checks without advancing the header.
@@ -356,7 +400,7 @@ impl Authority {
             .write()
             .map_err(|_| ErrorCode::AuthorityUnavailable)?;
         if state.preparing
-            || expected != state.publication
+            || expected != state.read_publication
             || view.facts.installation != state.header.installation
             || view.facts.revision != state.header.revision
         {
@@ -425,9 +469,10 @@ impl Authority {
         mut view: View,
         mut views: Vec<Weak<Inner>>,
     ) -> Lease {
-        view.publish_header(&state.header, state.publication);
+        view.publish_header(&state.header, state.read_publication);
         let inner = Arc::new(Inner {
             view: Mutex::new(view),
+            invalidated: AtomicBool::new(false),
         });
         views.push(Arc::downgrade(&inner));
         state.views = views;
@@ -445,8 +490,9 @@ impl Authority {
             .write()
             .map_err(|_| ErrorCode::AuthorityUnavailable)?;
         if !std::ptr::eq(lease.owner.as_ptr(), self)
+            || lease.inner.invalidated.load(Ordering::Acquire)
             || state.preparing
-            || expected != state.publication
+            || expected != state.read_publication
             || replacement.facts.installation != state.header.installation
             || replacement.facts.revision != state.header.revision
         {
@@ -467,7 +513,7 @@ impl Authority {
             }
             result => result?,
         };
-        replacement.publish_header(&state.header, state.publication);
+        replacement.publish_header(&state.header, state.read_publication);
         *lease
             .inner
             .view
@@ -552,6 +598,7 @@ impl Authority {
             || header.created_at != state.header.created_at
             || header.revision < state.header.revision
             || state.publication == u64::MAX
+            || state.read_publication == u64::MAX
         {
             return Err(ErrorCode::AuthorityUnavailable);
         }
@@ -570,7 +617,9 @@ impl Authority {
                 .view
                 .lock()
                 .map_err(|_| ErrorCode::AuthorityUnavailable)?;
-            let next = if let Some(charge) =
+            let next = if inner.invalidated.load(Ordering::Acquire) {
+                None
+            } else if let Some(charge) =
                 forecast::bytes(&view, changes, oauth, admission.as_deref())?
             {
                 // With distinct changes, a partially updated clone and its
@@ -635,10 +684,12 @@ impl Authority {
                 .view
                 .lock()
                 .map_err(|_| ErrorCode::AuthorityUnavailable)?;
-            memory::add(
-                &mut predicted,
-                forecast::bytes(&view, changes, oauth, admission)?.unwrap_or(view.bytes),
-            )?;
+            let charge = if inner.invalidated.load(Ordering::Acquire) {
+                view.bytes
+            } else {
+                forecast::bytes(&view, changes, oauth, admission)?.unwrap_or(view.bytes)
+            };
+            memory::add(&mut predicted, charge)?;
         }
         if predicted > self.working_bytes {
             return Err(ErrorCode::CapacityExceeded);
@@ -663,7 +714,14 @@ impl Publication {
             .expected
             .checked_add(1)
             .ok_or(ErrorCode::AuthorityUnavailable)?;
+        let read_publication = state
+            .read_publication
+            .checked_add(1)
+            .ok_or(ErrorCode::AuthorityUnavailable)?;
         for staged in &mut self.views {
+            if staged.inner.invalidated.load(Ordering::Acquire) {
+                continue;
+            }
             let mut view = staged
                 .inner
                 .view
@@ -672,10 +730,14 @@ impl Publication {
             if let Some(next) = staged.next.take() {
                 *view = next;
             }
-            view.publish_header(&self.header, publication);
+            view.publish_header(&self.header, read_publication);
         }
         std::mem::swap(&mut state.header, &mut self.header);
         state.publication = publication;
+        state.read_publication = read_publication;
+        // Invalidation may leave unused prepared replacements. Release those
+        // buffers and all staged pins before another writer can reserve memory.
+        drop(std::mem::take(&mut self.views));
         state.preparing = false;
         self.finished = true;
         Ok(())
@@ -688,6 +750,10 @@ impl Drop for Publication {
             && let Ok(mut state) = self.owner.state.write()
             && state.publication == self.expected
         {
+            // Invalidation advances only the read generation, preserving this
+            // writer's authoritative publication reservation through cleanup.
+            // Drop all staged payloads/pins before opening the gate to new work.
+            drop(std::mem::take(&mut self.views));
             state.preparing = false;
         }
     }

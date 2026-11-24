@@ -415,14 +415,15 @@ async fn full_validation_reserves_one_working_envelope_across_all_pending_pages(
     }
     let _change = reconcile(&tx, &installation, &key, FREE).await?;
     let check = || Ok(());
-    let cumulative = OperationBudget::new(&check);
+    let cumulative =
+        OperationBudget::with_limits(&check, validation::WORKING_ROWS, validation::WORKING_BYTES);
     ensure!(
         validate(&tx, &installation, &|rows, bytes| {
             Ok(cumulative.charge(rows, bytes)?)
         })
         .await
         .is_err(),
-        "fixture must exceed a cumulative whole-history allowance"
+        "repeated reader reservations must exceed a single working envelope"
     );
 
     let budget =
@@ -474,6 +475,87 @@ async fn full_validation_reserves_one_working_envelope_across_all_pending_pages(
             .await
             .is_err()
     );
+    tx.rollback().await?;
+    db.close().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn full_audit_exceeds_former_cumulative_limits_and_rejects_last_page_corruption() -> Result<()>
+{
+    use crate::storage::operation_budget::OperationBudget;
+    use std::sync::Mutex;
+
+    let db = open().await?;
+    let installation: InstallationId = "installation".try_into()?;
+    let tx = db.begin().await?;
+    for index in 0..4096 {
+        let value = candidate(
+            installation.as_str(),
+            "tenant",
+            &format!("execution-{index:04}"),
+            "creator",
+        )?;
+        put(&tx, &value).await?;
+    }
+    let last = key("execution-4096")?;
+    put(&tx, &unknown(last.execution.as_str())?).await?;
+    let _change = reconcile(&tx, &installation, &last, FREE).await?;
+
+    let check = || Ok(());
+    let budget = OperationBudget::new(&check);
+    let charged = Mutex::new((0_usize, 0_usize));
+    let inventory = validate(&tx, &installation, &|rows, bytes| {
+        budget.charge(rows, bytes)?;
+        let mut used = charged
+            .lock()
+            .map_err(|_| anyhow::anyhow!("charge observer poisoned"))?;
+        used.0 = used
+            .0
+            .checked_add(rows)
+            .context("row observation overflow")?;
+        used.1 = used
+            .1
+            .checked_add(bytes)
+            .context("byte observation overflow")?;
+        Ok(())
+    })
+    .await?;
+    ensure!(inventory.unknown_count == 1);
+    let charged = charged
+        .into_inner()
+        .map_err(|_| anyhow::anyhow!("charge observer poisoned"))?;
+    ensure!(charged.0 > 4096 && charged.1 > 32 * 1024 * 1024);
+
+    let working =
+        OperationBudget::with_limits(&check, validation::WORKING_ROWS, validation::WORKING_BYTES);
+    ensure!(
+        validate_with_budget(&tx, &installation, &|rows, bytes| {
+            Ok(working.charge(rows, bytes)?)
+        })
+        .await?
+            == inventory
+    );
+    let removed = tx
+        .execute(sql(
+            "DELETE FROM tenancy_unknown_obligations WHERE installation_id=? AND tenant_id=? AND execution_id=?",
+            [
+                installation.as_str().into(),
+                last.tenant.as_str().into(),
+                last.execution.as_str().into(),
+            ],
+        ))
+        .await?;
+    ensure!(removed.rows_affected() == 1);
+    let working =
+        OperationBudget::with_limits(&check, validation::WORKING_ROWS, validation::WORKING_BYTES);
+    let error = validate_with_budget(&tx, &installation, &|rows, bytes| {
+        Ok(working.charge(rows, bytes)?)
+    })
+    .await
+    .err()
+    .context("last-page missing obligation accepted")?;
+    ensure!(error.to_string() == "unknown source coverage mismatch");
     tx.rollback().await?;
     db.close().await?;
     Ok(())

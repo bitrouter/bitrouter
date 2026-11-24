@@ -184,6 +184,16 @@ pub(super) async fn write(
         tx.execute(statement).await?.rows_affected() == 1,
         "unknown projection write conflict"
     );
+    if existed != value.is_some() {
+        crate::db::migration::capacity::adjust(
+            tx,
+            crate::db::migration::capacity::Delta {
+                unknown_count: if value.is_some() { 1 } else { -1 },
+                ..Default::default()
+            },
+        )
+        .await?;
+    }
     charge(0, 0)?;
     Ok(())
 }

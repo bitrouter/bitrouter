@@ -114,7 +114,7 @@ fn full_budget_oauth_patches_positive_negative_and_conflicting_revision_views() 
         .map_err(failure)?;
     {
         let mut guard = authority.read().map_err(failure)?;
-        assert_eq!(guard.publication(), 1);
+        assert_eq!(guard.read_publication(), 1);
         assert_eq!(guard.header().revision, initial.revision);
         for lease in leases.iter().take(2) {
             guard
@@ -135,7 +135,7 @@ fn full_budget_oauth_patches_positive_negative_and_conflicting_revision_views() 
         .publish()
         .map_err(failure)?;
     let mut guard = authority.read().map_err(failure)?;
-    assert_eq!(guard.publication(), 2);
+    assert_eq!(guard.read_publication(), 2);
     assert_eq!(guard.header().revision, initial.revision);
     assert_eq!(authority.staged_clones.load(Ordering::Relaxed), 6);
     for lease in leases.iter().take(2) {
@@ -183,7 +183,7 @@ fn stale_expected_oauth_metadata_rejects_before_cloning_earlier_negative_view() 
     assert_eq!(authority.staged_clones.load(Ordering::Relaxed), 0);
     {
         let mut guard = authority.read().map_err(failure)?;
-        assert_eq!(guard.publication(), 0);
+        assert_eq!(guard.read_publication(), 0);
         guard
             .check(&leases[0], |view| {
                 assert!(view.oauth(&old.reference)?.is_none());

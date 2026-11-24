@@ -216,8 +216,12 @@ impl Worker {
             .map_err(Failure::from)?;
         let previous = store::operation(tx, &old.installation, &principal, command.operation_id())
             .await
-            .map_err(|_| {
-                if control.check_read().is_err() {
+            .map_err(|error| {
+                if error.is::<store::directory::InvalidRecord>() {
+                    self.directory_failure(error)
+                } else if error.is::<store::directory::CapacityExceeded>()
+                    || control.check_read().is_err()
+                {
                     ErrorCode::CapacityExceeded.into()
                 } else {
                     self.unavailable(ErrorCode::StorageUnavailable)
@@ -273,11 +277,14 @@ impl Worker {
             .map_err(|code| {
                 if control.check_read().is_err() {
                     ErrorCode::CapacityExceeded.into()
-                } else if matches!(
-                    code,
-                    ErrorCode::StorageUnavailable | ErrorCode::AuthorityUnavailable
-                ) {
+                } else if code == ErrorCode::StorageUnavailable {
                     self.unavailable(code)
+                } else if code == ErrorCode::AuthorityUnavailable {
+                    if self.authority.invalidate_retained_views().is_err() {
+                        self.unavailable(code)
+                    } else {
+                        code.into()
+                    }
                 } else {
                     code.into()
                 }

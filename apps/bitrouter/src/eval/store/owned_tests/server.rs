@@ -40,7 +40,7 @@ async fn db_server_both_owned_eval_composites_share_rr_transaction_and_scoped_wi
             .await?;
         let outcome = async {
             store
-                .put_owned_in(&tx, &tests::subject()?, &|| Ok(()))
+                .put_owned_in(&tx, &store.subject_fixture()?, &|| Ok(()))
                 .await?;
             let pass = result(EvalVerdict::Pass, "pass");
             let first = store.submit_owned_in(&tx, &pass, &|| Ok(())).await?;

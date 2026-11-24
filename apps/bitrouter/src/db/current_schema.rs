@@ -102,11 +102,21 @@ pub(super) fn statements(backend: DatabaseBackend) -> Result<Vec<String>> {
     definition::statements(backend, expected(backend)?)
 }
 
+pub(super) fn legacy_statements(backend: DatabaseBackend) -> Result<Vec<String>> {
+    let mut tables = expected(backend)?;
+    tables.retain(|t| t.name != crate::db::migration::capacity::TABLE);
+    definition::statements(backend, tables)
+}
+
 pub(super) async fn validate_sqlite_metadata(
     db: &impl ConnectionTrait,
     selected: Option<&[&str]>,
+    legacy: bool,
 ) -> Result<()> {
     for table in expected(DatabaseBackend::Sqlite)? {
+        if legacy && table.name == crate::db::migration::capacity::TABLE {
+            continue;
+        }
         if selected.is_none_or(|names| names.contains(&table.name.as_str())) {
             sqlite::validate(db, &table).await?;
         }
@@ -120,9 +130,14 @@ pub(super) async fn validate_sqlite_metadata(
 /// Rejects incomplete catalogs, altered constraints, identity collations,
 /// mutation hooks, and nontransactional storage engines. Performs no writes.
 pub(crate) async fn validate(db: &impl ConnectionTrait) -> Result<(), DbErr> {
-    validate_inner(db)
+    validate_inner(db, false)
         .await
         .map_err(|error| DbErr::Custom(format!("incompatible current server schema: {error:#}")))
+}
+pub(crate) async fn validate_legacy(db: &impl ConnectionTrait) -> Result<(), DbErr> {
+    validate_inner(db, true)
+        .await
+        .map_err(|error| DbErr::Custom(format!("incompatible legacy server schema: {error:#}")))
 }
 async fn rows(db: &impl ConnectionTrait, sql: &str) -> Result<Vec<QueryResult>> {
     let result = db
@@ -131,13 +146,13 @@ async fn rows(db: &impl ConnectionTrait, sql: &str) -> Result<Vec<QueryResult>> 
     ensure!(result.len() < 8193, "catalog exceeds current schema bound");
     Ok(result)
 }
-async fn validate_inner(db: &impl ConnectionTrait) -> Result<()> {
+async fn validate_inner(db: &impl ConnectionTrait, legacy: bool) -> Result<()> {
     let backend = db.get_database_backend();
     ensure!(
         backend != DatabaseBackend::Sqlite,
         "server catalog required"
     );
-    let expected = expected(backend)?;
+    let mut expected = expected(backend)?;
     let tables = rows(db, catalog::tables(backend)).await?;
     let mut names = BTreeSet::new();
     for row in tables {
@@ -147,6 +162,12 @@ async fn validate_inner(db: &impl ConnectionTrait) -> Result<()> {
             row.try_get::<String>("", "compatible")? == "yes",
             "unsupported table storage or mutation hooks: {name}"
         );
+    }
+    if legacy
+        && !(backend == DatabaseBackend::MySql
+            && names.contains(crate::db::migration::capacity::TABLE))
+    {
+        expected.retain(|t| t.name != crate::db::migration::capacity::TABLE);
     }
     ensure!(
         expected.iter().all(|table| names.contains(&table.name)),
@@ -545,6 +566,12 @@ fn check_matches(backend: DatabaseBackend, expected: &str, observed: &str) -> bo
     // Compare the escaped spelling of the trusted pattern without decoding
     // escapes in an arbitrary catalog expression.
     expected == observed
+        // PostgreSQL deparses this integer IN constraint as a scalar-array
+        // comparison. Recognize only the exact compiled domain and column;
+        // arbitrary ANY/ALL expressions must still fail the catalog check.
+        || (backend == DatabaseBackend::Postgres
+            && expected == "continuation_epoch_requiredin0,1"
+            && observed == "continuation_epoch_required=anyarray[0,1]")
         || (backend == DatabaseBackend::MySql && expected.replace('\'', "\\'") == observed)
 }
 fn rule(backend: DatabaseBackend, value: &str) -> String {

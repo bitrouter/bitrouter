@@ -18,6 +18,48 @@ async fn mysql_current_baseline_catalog_and_refusal() -> Result<()> {
     campaign(DatabaseBackend::MySql).await
 }
 
+#[cfg(feature = "db-mysql")]
+#[tokio::test]
+#[ignore = "requires dedicated MySQL CREATE DATABASE; no fallback"]
+async fn mysql_capacity_upgrade_retries_staged_empty_table_but_refuses_stale_state() -> Result<()> {
+    let fixture = OwnedServer::new(
+        DatabaseBackend::MySql,
+        "BITROUTER_TEST_MIGRATION_DATABASE_URL",
+    )
+    .await?;
+    let checked = async {
+        let db = &fixture.database;
+        super::super::Migrator::up(db, None).await?;
+        db.execute_unprepared("DROP TABLE tenancy_receipt_capacity")
+            .await?;
+        let legacy = sea_orm::sea_query::Query::update()
+            .table(sea_orm::sea_query::Alias::new("seaql_migrations"))
+            .value(
+                sea_orm::sea_query::Alias::new("version"),
+                store_format::LEGACY_GATEWAY_SERVER,
+            )
+            .to_owned();
+        db.execute(DatabaseBackend::MySql.build(&legacy)).await?;
+        // DDL survives a crash before the data transaction starts. The strict
+        // legacy validator must recognize exactly this intermediate schema.
+        super::super::capacity::ensure_table(&SchemaManager::new(db)).await?;
+        crate::db::current_schema::validate_legacy(db).await?;
+        super::super::Migrator::up(db, None).await?;
+        ensure!(store_format::inspect(db).await? == State::Current);
+        ensure!(super::super::capacity::load(db).await?.live_bytes == 0);
+
+        // A stale/nonempty projection under the old marker is never adopted,
+        // reset to zero, or published as a completed upgrade.
+        db.execute(DatabaseBackend::MySql.build(&legacy)).await?;
+        ensure!(super::super::Migrator::up(db, None).await.is_err());
+        ensure!(store_format::inspect(db).await? == State::Legacy);
+        ensure!(super::super::capacity::load(db).await?.live_bytes == 0);
+        Ok(())
+    }
+    .await;
+    fixture.finish(checked).await
+}
+
 async fn campaign(backend: DatabaseBackend) -> Result<()> {
     let fixture = OwnedServer::new(backend, "BITROUTER_TEST_MIGRATION_DATABASE_URL").await?;
     let checked = async {

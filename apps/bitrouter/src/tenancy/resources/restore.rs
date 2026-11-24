@@ -25,30 +25,6 @@ impl Resources {
         Ok(())
     }
 
-    pub(in crate::tenancy) async fn inspect_all_retained_in(
-        &self,
-        db: &impl ConnectionTrait,
-        bytes: usize,
-        check: &(dyn Fn() -> Result<()> + Sync),
-    ) -> Result<()> {
-        let mut after = None;
-        loop {
-            check()?;
-            let page = storage::reference_page(db, after.as_ref()).await?;
-            if page.is_empty() {
-                break;
-            }
-            for reference in page {
-                check()?;
-                self.inspect_retained_resource_in(db, &reference, bytes)
-                    .await?;
-                after = Some(reference);
-            }
-        }
-        self.inspect_all_configurations_in(db, bytes, check).await?;
-        Ok(())
-    }
-
     /// Integrity-only authentication of every retained compiler envelope. Capability
     /// qualification belongs to activation or the explicit current BRO owner.
     pub(in crate::tenancy) async fn inspect_all_configurations_in(

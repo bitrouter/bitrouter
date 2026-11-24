@@ -392,7 +392,7 @@ pub(in crate::tenancy::store) async fn read<T>(
     db.query_all(db.get_database_backend().build(&query))
         .await?
         .iter()
-        .map(|row| guarded(row, &decode))
+        .map(|row| decoded(row, &decode))
         .collect()
 }
 
@@ -406,6 +406,16 @@ fn guarded<T>(row: &QueryResult, decode: &impl Fn(&QueryResult) -> Result<T>) ->
         return Err(super::CapacityExceeded.into());
     }
     decode(row)
+}
+
+fn decoded<T>(row: &QueryResult, decode: &impl Fn(&QueryResult) -> Result<T>) -> Result<T> {
+    guarded(row, decode).map_err(|error| {
+        if error.is::<super::CapacityExceeded>() {
+            error
+        } else {
+            error.context(super::InvalidRecord)
+        }
+    })
 }
 
 pub(in crate::tenancy::store) async fn one<T>(
@@ -427,8 +437,12 @@ pub(in crate::tenancy::store) async fn one_statement<T>(
     let rows = db.query_all(statement).await?;
     // Reject duplicates before creating DTOs: a point decoder reserves one
     // canonical object even though SQL fetches a second row to prove uniqueness.
-    ensure!(rows.len() <= 1, "duplicate indexed authority identity");
-    rows.first().map(|row| guarded(row, &decode)).transpose()
+    if rows.len() > 1 {
+        return Err(
+            anyhow::anyhow!("duplicate indexed authority identity").context(super::InvalidRecord)
+        );
+    }
+    rows.first().map(|row| decoded(row, &decode)).transpose()
 }
 
 #[cfg(test)]

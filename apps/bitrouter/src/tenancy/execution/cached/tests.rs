@@ -63,12 +63,14 @@ fn control_keys_compare_all_stored_facts_and_separate_dispatch_and_authority() -
     metadata.authority_revision = 2_u64.try_into()?;
     ensure!(binding != execution_cache_binding(&metadata)?);
     let control = ExecutionKey::Control {
+        integrity_epoch: 0,
         authority_revision: 1,
         binding: binding.clone(),
     };
     ensure!(
         control
             != ExecutionKey::Control {
+                integrity_epoch: 0,
                 authority_revision: 2,
                 binding
             }
@@ -76,6 +78,7 @@ fn control_keys_compare_all_stored_facts_and_separate_dispatch_and_authority() -
     ensure!(
         control
             != ExecutionKey::Dispatch {
+                integrity_epoch: 0,
                 authority_revision: 1,
                 tenant: "tenant".into(),
                 revision: "revision".into(),

@@ -9,7 +9,7 @@ pub(in crate::tenancy) const ADMISSION_FLOOR: u64 = 768 * 1024 * 1024;
 pub(in crate::tenancy) const MAINTENANCE_FLOOR: u64 = 256 * 1024 * 1024;
 
 #[derive(Clone, Default)]
-pub(in crate::tenancy) struct Inventory {
+pub(crate) struct Inventory {
     /// Independent optional child bytes; never canonical financial receipt bytes.
     pub technical_bytes: u64,
     /// Canonical receipt and auxiliary bytes for repair verification.
@@ -22,7 +22,7 @@ pub(in crate::tenancy) struct Inventory {
     pub history_rows: u64,
     pub oauth_bytes: u64,
     pub unknown_count: u64,
-    /// Complete validated stream digest, retained by the startup/repair caller.
+    /// Complete validated stream digest from explicit full audit or repair.
     pub unknown_digest: [u8; 32],
 }
 
@@ -204,7 +204,7 @@ impl Accounting {
         self.totals.technical_bytes = remaining_logical;
         Ok(())
     }
-    /// Complete startup validation is allowed above current operator budgets.
+    /// Validated durable state is allowed above current operator budgets.
     pub fn initialize(&mut self, inventory: Inventory, free: u64) -> Result<(), ErrorCode> {
         if self.totals.live != 0 || self.totals.reserved != 0 || self.physical_write_reserved != 0 {
             return Err(ErrorCode::AuthorityUnavailable);

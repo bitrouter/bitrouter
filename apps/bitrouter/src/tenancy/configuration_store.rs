@@ -324,16 +324,19 @@ pub(super) async fn resource(
     let Some(row) = resource_row(db, reference, false).await? else {
         return Ok(None);
     };
-    let record = StoredResource {
-        reference: reference.clone(),
-        compiler_version: text(&row, "compiler_version")?,
-        payload: json(&row, "payload_json")?,
-        dependencies: json(&row, "dependency_json")?,
-        content_digest: text(&row, "content_digest")?.try_into()?,
-        created_at: text(&row, "created_at")?.try_into()?,
-    };
-    resource_fields(&record)?;
-    Ok(Some(record))
+    (|| -> Result<_> {
+        let record = StoredResource {
+            reference: reference.clone(),
+            compiler_version: text(&row, "compiler_version")?,
+            payload: json(&row, "payload_json")?,
+            dependencies: json(&row, "dependency_json")?,
+            content_digest: text(&row, "content_digest")?.try_into()?,
+            created_at: text(&row, "created_at")?.try_into()?,
+        };
+        resource_fields(&record)?;
+        Ok(Some(record))
+    })()
+    .context(super::store::directory::InvalidRecord)
 }
 
 fn metadata(compiler: &str, timestamp: &Timestamp) -> Result<()> {
@@ -524,23 +527,26 @@ pub(super) async fn configuration(
     let Some(row) = configuration_row(db, tenant, revision, false).await? else {
         return Ok(None);
     };
-    let result = StoredConfiguration {
-        revision: ConfigurationRevision {
-            tenant_id: tenant.clone(),
-            revision_id: revision.clone(),
-            schema_version: u32::try_from(row.try_get::<i32>("", "schema_version")?)?,
-            document: json(&row, "document_json")?,
-            compiler_version: text(&row, "compiler_version")?,
-            content_digest: text(&row, "content_digest")?.try_into()?,
-        },
-        compiled: json(&row, "compiled_json")?,
-        dependencies: json(&row, "dependencies_json")?,
-        creator: text(&row, "creator_principal_id")?.try_into()?,
-        authority_revision: authority(&row)?,
-        created_at: text(&row, "created_at")?.try_into()?,
-    };
-    configuration_fields(&result)?;
-    Ok(Some(result))
+    (|| -> Result<_> {
+        let result = StoredConfiguration {
+            revision: ConfigurationRevision {
+                tenant_id: tenant.clone(),
+                revision_id: revision.clone(),
+                schema_version: u32::try_from(row.try_get::<i32>("", "schema_version")?)?,
+                document: json(&row, "document_json")?,
+                compiler_version: text(&row, "compiler_version")?,
+                content_digest: text(&row, "content_digest")?.try_into()?,
+            },
+            compiled: json(&row, "compiled_json")?,
+            dependencies: json(&row, "dependencies_json")?,
+            creator: text(&row, "creator_principal_id")?.try_into()?,
+            authority_revision: authority(&row)?,
+            created_at: text(&row, "created_at")?.try_into()?,
+        };
+        configuration_fields(&result)?;
+        Ok(Some(result))
+    })()
+    .context(super::store::directory::InvalidRecord)
 }
 
 fn configuration_fields(record: &StoredConfiguration) -> Result<Vec<(&'static str, Value)>> {

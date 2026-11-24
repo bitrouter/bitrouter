@@ -1,4 +1,4 @@
-//! Isolated Eval rows are validated before startup mutation or restore publication.
+//! Explicit audit and selected reads validate isolated retained Eval rows.
 use super::*;
 use crate::tenancy::resources::Resources;
 use bitrouter_ai::{
@@ -9,7 +9,7 @@ use bitrouter_ai::{
         resources::{CredentialBinding, Definition, ResourcePut},
     },
 };
-use sea_orm::{ConnectionTrait, Statement};
+use sea_orm::{ConnectionTrait, Statement, TransactionTrait};
 use std::sync::Arc;
 use std::{os::unix::fs::PermissionsExt, path::Path};
 
@@ -19,8 +19,12 @@ async fn open_keyed(
     database: crate::db::OwnedDatabase,
     resources: Arc<Resources>,
 ) -> Result<Service> {
-    let (db, owner, claim) = database.claim()?;
-    let initial = super::super::super::store::load(&db, Utc::now()).await?;
+    let (db, owner, claim) = database
+        .claim()
+        .context("claiming retained Eval database")?;
+    let initial = super::super::super::store::initial_header(&db, Utc::now())
+        .await
+        .context("reading retained Eval startup header")?;
     Service::start_resources_with_continuations(
         db,
         Some(owner),
@@ -36,6 +40,7 @@ async fn open_keyed(
         None,
     )
     .await
+    .context("starting retained Eval Service")
 }
 
 async fn model_resource(
@@ -153,6 +158,8 @@ async fn seed_model_policy(fixture: &Fixture) -> Result<()> {
 
 struct Seeded {
     installation: InstallationId,
+    tenant: TenantId,
+    secret: String,
     resources: Arc<Resources>,
     gateway: EvalSubject,
 }
@@ -162,26 +169,55 @@ async fn seeded(path: &Path, key_env: Option<&str>) -> Result<Seeded> {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
     let database =
         crate::db::connect_owned_tenancy(&format!("sqlite://{}?mode=rwc", path.display())).await?;
-    database.migrate().await?;
+    database
+        .migrate()
+        .await
+        .context("migrating retained Eval seed database")?;
     let db = database.database().clone();
-    let mut fixture = Fixture::with_database(db, &mut |_| {}).await?;
-    fixture.service.shutdown().await?;
+    let mut fixture = Fixture::with_database(db, &mut |_| {})
+        .await
+        .context("initial retained Eval authority fixture")?;
+    fixture
+        .service
+        .shutdown()
+        .await
+        .context("stopping unkeyed retained Eval seed Service")?;
     let resources = Arc::new(Resources::fixture_key(&fixture.installation, key_env)?);
-    fixture.service = open_keyed(database, resources.clone()).await?;
-    seed_generic(&fixture).await?;
-    seed_model_policy(&fixture).await?;
-    seed_gateway(&fixture).await?;
+    fixture.service = open_keyed(database, resources.clone())
+        .await
+        .context("opening keyed retained Eval seed Service")?;
+    seed_generic(&fixture)
+        .await
+        .context("seeding generic tenant Eval subjects")?;
+    seed_model_policy(&fixture)
+        .await
+        .context("seeding model-policy tenant Eval subject")?;
+    seed_gateway(&fixture)
+        .await
+        .context("seeding independent gateway Eval subject")?;
+    let reader = fixture
+        .issue("retained-subject-reader")
+        .await
+        .context("issuing retained Eval reader")?;
     let seeded = Seeded {
         installation: fixture.installation.clone(),
+        tenant: fixture.tenant.clone(),
+        secret: reader.secret.context("retained read credential secret")?,
         resources,
         gateway: gateway_subject(&fixture)?,
     };
-    fixture.service.shutdown().await?;
+    fixture
+        .service
+        .shutdown()
+        .await
+        .context("stopping fully seeded retained Eval Service")?;
     let db = fixture.db.clone();
     // Both the Service claim and the final pool clone retain the acquisition.
     // Return only facts so stopped-file readers can acquire a fresh owner.
     drop(fixture);
-    finish_fixture_image(db).await?;
+    finish_fixture_image(db)
+        .await
+        .context("closing retained Eval seed image")?;
     Ok(seeded)
 }
 
@@ -315,7 +351,7 @@ fn options(home: &Path) -> crate::offline::large::Options {
     }
 }
 
-async fn corrupt(path: &Path, gateway: bool, expression: &str) -> Result<()> {
+async fn corrupt(path: &Path, gateway: bool, expression: &str) -> Result<String> {
     let database =
         crate::db::connect_owned_tenancy(&format!("sqlite://{}?mode=rw", path.display())).await?;
     let db = database.database().clone();
@@ -323,14 +359,16 @@ async fn corrupt(path: &Path, gateway: bool, expression: &str) -> Result<()> {
         .query_one(Statement::from_string(
             db.get_database_backend(),
             if gateway {
-                "SELECT eval_id FROM eval_subjects WHERE installation_id IS NULL ORDER BY eval_id DESC LIMIT 1"
+                "SELECT eval_id,subject_json FROM eval_subjects WHERE installation_id IS NULL ORDER BY eval_id DESC LIMIT 1"
             } else {
-                "SELECT eval_id FROM eval_subjects WHERE installation_id IS NOT NULL ORDER BY eval_id DESC LIMIT 1"
+                "SELECT eval_id,subject_json FROM eval_subjects WHERE installation_id IS NOT NULL ORDER BY eval_id DESC LIMIT 1"
             },
         ))
         .await?
         .context("last isolated subject")?;
     let eval_id: String = row.try_get("", "eval_id")?;
+    let logical_id =
+        serde_json::from_str::<EvalSubject>(&row.try_get::<String>("", "subject_json")?)?.eval_id;
     let result = db
         .execute(Statement::from_sql_and_values(
             db.get_database_backend(),
@@ -367,18 +405,39 @@ async fn corrupt(path: &Path, gateway: bool, expression: &str) -> Result<()> {
         }
     }
     drop(database);
-    finish_fixture_image(db).await
+    finish_fixture_image(db).await?;
+    Ok(logical_id)
+}
+
+async fn owned_subject(
+    service: &Service,
+    fixture: &Seeded,
+    id: &str,
+) -> Result<axum::response::Response> {
+    Ok(crate::tenancy::eval::http::router(service.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/control/v1/tenants/{}/evals/subjects/{id}",
+                    fixture.tenant
+                ))
+                .header("authorization", format!("Bearer {}", fixture.secret))
+                .header("bitrouter-installation-id", fixture.installation.as_str())
+                .body(Body::empty())?,
+        )
+        .await?)
 }
 
 #[tokio::test]
-async fn isolated_retained_subjects_fail_startup_without_writes_and_current_mixed_namespaces_restart()
+async fn isolated_retained_subjects_fail_read_only_audit_and_selected_reads_after_startup()
 -> Result<()> {
     tokio::time::timeout(Duration::from_secs(60), async {
         let home = tempfile::tempdir()?;
         let path = home.path().join("current.sqlite");
-        let fixture = seeded(&path, None).await?;
+        let fixture = seeded(&path, None).await.context("building shared valid retained Eval image before corruption loop")?;
         for (index, (gateway, expression)) in [
             (false, "subject_json=json_remove(subject_json,'$.spec_version')"),
+            (false, "subject_json=json_set(subject_json,'$.spec_version','eval/1.0.0-beta.0')"),
             (false, "subject_json=json_set(subject_json,'$.identity',json('{\"profile\":\"gateway_generic\"}'))"),
             (false, "subject_json=json_set(subject_json,'$.identity.tenant_id','other-tenant')"),
             (false, "subject_json=json_set(subject_json,'$.identity.installation_id','other-installation')"),
@@ -387,29 +446,66 @@ async fn isolated_retained_subjects_fail_startup_without_writes_and_current_mixe
             (false, "content_digest='wrong-content-index'"),
             (false, "creator_principal_id=NULL"),
             (true, "subject_json=json_remove(subject_json,'$.spec_version')"),
+            (true, "subject_json=json_set(subject_json,'$.spec_version','eval/1.0.0-beta.0')"),
             (true, "subject_json=json_set(subject_json,'$.identity',json('{\"profile\":\"tenant_generic\",\"installation_id\":\"forged-installation\",\"tenant_id\":\"forged-tenant\"}'))"),
             (true, "creator_principal_id='partial-owner'"),
             (true, "tenant_id='partial-tenant'"),
         ].iter().enumerate() {
             let source = home.path().join(format!("invalid-{index}.sqlite"));
             std::fs::copy(&path, &source)?;
-            corrupt(&source, *gateway, expression).await?;
+            let damaged = corrupt(&source, *gateway, expression).await.with_context(|| format!("injecting retained Eval corruption: {expression}"))?;
             let original = std::fs::read(&source)?;
             let database = crate::db::connect_owned_tenancy(&format!("sqlite://{}?mode=rw", source.display())).await?;
-            let db = database.database().clone();
-            let opened = open_keyed(database, fixture.resources.clone()).await;
-            if let Ok(service) = opened {
-                service.shutdown().await?;
-                anyhow::bail!("invalid retained Eval subject started: {expression}");
-            }
-            db.close().await?;
-            ensure!(std::fs::read(&source)? == original, "failed startup mutated original {expression}");
+            let mut db = database.database().clone();
+            let audit_writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let writes = audit_writes.clone();
+            db.set_metric_callback(move |info| {
+                if matches!(info.statement.sql.split_whitespace().next(),Some("INSERT" | "UPDATE" | "DELETE" | "REPLACE")) {
+                    writes.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
+                }
+            });
+            let tx = db.begin().await?;
+            let audited = crate::eval::store::retained::validate_retained_subjects_in(
+                &tx,&fixture.installation,64 * 1024 * 1024,&|| Ok(())
+            ).await;
+            tx.rollback().await?;
+            ensure!(audited.is_err(),"read-only audit accepted malformed Eval: {expression}");
+            ensure!(audit_writes.load(std::sync::atomic::Ordering::Relaxed) == 0,"integrity audit attempted to mutate malformed Eval");
+            let service = open_keyed(database, fixture.resources.clone()).await.with_context(|| format!("opening Service with retained Eval corruption: {expression}"))?;
+            let outcome: Result<()> = async {
+                ensure!(service.current().is_ok());
+                service.authenticate_live(&fixture.secret).await.map_err(failure)?;
+                if *gateway {
+                    let healthy: EvalSubject = json(owned_subject(&service,&fixture,"retained-000").await?).await?;
+                    ensure!(healthy.eval_id == "retained-000");
+                } else {
+                    read_gateway(db.clone(),&fixture.gateway).await?;
+                }
+                let selected = if *gateway {
+                    gateway_router(db.clone()).oneshot(Request::builder().uri(format!("/v1/evals/subjects/{damaged}")).body(Body::empty())?).await?
+                } else {
+                    owned_subject(&service,&fixture,&damaged).await?
+                };
+                ensure!(!selected.status().is_success(),"selected malformed Eval was accepted: {expression}");
+                ensure!(service.current().is_ok(),"selected malformed Eval fenced unrelated authority: {expression}");
+                service.authenticate_live(&fixture.secret).await.map_err(failure)?;
+                Ok(())
+            }.await;
+            let stopped = service.shutdown().await.with_context(|| format!("stopping Service after selected retained Eval read: {expression}"));
+            drop(service);
+            let closed = finish_fixture_image(db).await;
+            outcome.and(stopped).and(closed).with_context(|| format!("selected retained Eval: {expression}"))?;
+            ensure!(std::fs::read(&source)? == original, "audit or selected read mutated original {expression}");
         }
         let database = crate::db::connect_owned_tenancy(&format!("sqlite://{}?mode=rw", path.display())).await?;
         let db = database.database().clone();
-        let service = open_keyed(database, fixture.resources.clone()).await?;
-        read_gateway(db.clone(), &fixture.gateway).await?;
-        service.shutdown().await?;
+        let service = open_keyed(database, fixture.resources.clone()).await.context("opening intact mixed-namespace Eval image after corruption cases")?;
+        let tx = db.begin().await?;
+        let valid = crate::eval::store::retained::validate_retained_subjects_in(&tx,&fixture.installation,64 * 1024 * 1024,&|| Ok(())).await;
+        tx.rollback().await?;
+        valid.context("auditing intact mixed-namespace Eval image")?;
+        read_gateway(db.clone(), &fixture.gateway).await.context("reading intact gateway Eval after corruption cases")?;
+        service.shutdown().await.context("stopping intact mixed-namespace Eval Service after corruption cases")?;
         drop(service);
         db.close().await?;
         Ok::<_, anyhow::Error>(())

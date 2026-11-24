@@ -1,6 +1,9 @@
 //! Normalized authority storage; command results and authority commit together.
 
 pub(super) mod directory;
+#[cfg(test)]
+#[path = "store/tests/operation_point.rs"]
+mod operation_point_tests;
 mod records;
 pub(super) mod startup;
 #[cfg(test)]
@@ -10,13 +13,13 @@ use anyhow::{Context, Result, ensure};
 use bitrouter_ai::tenancy::{
     authority::CredentialIssued,
     configuration::ConfigurationRevision,
-    identity::{InstallationId, OperationId, PrincipalId},
-    operation::{Error, OperationResult},
+    identity::{Digest, InstallationId, OperationId, PrincipalId},
+    operation::{Error, OperationResult, OperationStatus},
     validation::Validate,
 };
 use chrono::{DateTime, Utc};
 use sea_orm::{
-    ConnectionTrait, DatabaseConnection, DatabaseTransaction, QueryResult, Value,
+    ConnectionTrait, DatabaseBackend, DatabaseConnection, DatabaseTransaction, QueryResult, Value,
     sea_query::{Alias, Asterisk, Expr, OnConflict, Query},
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -392,20 +395,92 @@ pub(super) async fn operation(
     principal: &PrincipalId,
     id: &OperationId,
 ) -> Result<Option<Operation>> {
-    let query = Query::select()
-        .column(Asterisk)
-        .from(Alias::new("tenancy_operations"))
+    // Bound stored JSON before the driver transfers a possibly damaged row.
+    let mut query = directory::query::select(
+        db,
+        directory::query::Table::Operation,
+        configuration_store::MAX_ENVELOPE_BYTES,
+    )?;
+    query
         .and_where(Expr::col(Alias::new("installation_id")).eq(installation.as_str()))
         .and_where(Expr::col(Alias::new("principal_id")).eq(principal.as_str()))
-        .and_where(Expr::col(Alias::new("operation_id")).eq(id.as_str()))
-        .to_owned();
-    let Some(row) = db
-        .query_one(db.get_database_backend().build(&query))
-        .await?
+        .and_where(Expr::col(Alias::new("operation_id")).eq(id.as_str()));
+    let Some(operation) = directory::query::one(db, query, |row| {
+        ensure!(
+            string(row, "installation_id")? == installation.as_str(),
+            "operation history installation mismatch"
+        );
+        operation_from(row, principal, id)
+    })
+    .await?
     else {
         return Ok(None);
     };
-    operation_from(&row, principal, id).map(Some)
+    let header = startup::read_header_in(db, 4096)
+        .await?
+        .context("operation authority identity missing")?
+        .header;
+    ensure!(
+        &header.installation == installation,
+        "operation history installation mismatch"
+    );
+    validate_operation_result(&operation, &header).context(directory::InvalidRecord)?;
+    Ok(Some(operation))
+}
+
+/// Point reads and the complete audit enforce the same immutable result binding.
+fn validate_operation_result(
+    operation: &Operation,
+    header: &super::model::AuthorityHeader,
+) -> Result<()> {
+    let result = &operation.result;
+    ensure!(
+        result.operation_id == operation.id
+            && result
+                .authority_revision
+                .is_none_or(|revision| revision <= header.revision),
+        "operation result identity or authority mismatch"
+    );
+    let _: Digest = operation.digest.clone().try_into()?;
+    match &operation.response {
+        StoredResponse::Operation(returned) => ensure!(
+            serde_json::to_value(returned)? == serde_json::to_value(result)?,
+            "operation response differs from result"
+        ),
+        StoredResponse::Issued(issued) => {
+            issued.validate()?;
+            ensure!(
+                issued.secret.is_none()
+                    && issued.operation_id == operation.id
+                    && result.status == OperationStatus::Applied
+                    && Some(issued.authority_revision) == result.authority_revision
+                    && Some(&issued.credential_revision) == result.resource_revision.as_ref()
+                    && result.resource_id.as_ref().map(|id| id.as_str())
+                        == Some(issued.credential_id.as_str()),
+                "issuance response differs from result"
+            );
+        }
+        StoredResponse::Configuration(configuration) => {
+            configuration.validate()?;
+            ensure!(
+                result.status == OperationStatus::Applied
+                    && result.resource_revision.as_ref() == Some(&configuration.revision_id),
+                "configuration response differs from result"
+            );
+        }
+        StoredResponse::Failure(failure) => {
+            failure.validate()?;
+            ensure!(
+                result.status == OperationStatus::Rejected
+                    && failure.operation_id.as_ref() == Some(&operation.id)
+                    && serde_json::to_value(
+                        result.error.as_ref().context("missing rejected result")?
+                    )? == serde_json::to_value(failure)?,
+                "failure response differs from result"
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Shared by ordinary operation reads and the stopped-target verifier, under
@@ -427,10 +502,37 @@ pub(super) fn operation_from(
         !matches!(&response, StoredResponse::Issued(issued) if issued.secret.is_some()),
         "unexpected persisted issuance secret"
     );
+    ensure!(
+        string(row, "principal_id")? == principal.as_str()
+            && string(row, "operation_id")? == id.as_str(),
+        "operation indexed identity mismatch"
+    );
+    let context: ReadContext = json_from(row, "read_context_json")?;
+    let class: AuthorityClass = enum_from(row, "authority_class")?;
+    let tenant: Option<String> = row.try_get("", "tenant_id")?;
+    match &context {
+        ReadContext::Installation => ensure!(
+            class == AuthorityClass::Installation && tenant.is_none(),
+            "operation read context differs from indexed owner"
+        ),
+        ReadContext::Tenant {
+            tenant: owner,
+            scopes,
+            ..
+        } => {
+            ensure!(
+                class == AuthorityClass::Tenant && tenant.as_deref() == Some(owner.as_str()),
+                "operation read context differs from indexed owner"
+            );
+            for scope in scopes {
+                scope.validate()?;
+            }
+        }
+    }
     Ok(Operation {
         principal: principal.clone(),
         id: id.clone(),
-        context: json_from(row, "read_context_json")?,
+        context,
         digest: string(row, "command_digest")?,
         result,
         response,
@@ -505,6 +607,11 @@ async fn ensure_empty_authority(db: &impl ConnectionTrait) -> Result<()> {
         "tenancy_admission_index",
         "tenancy_configurations",
         "tenancy_active_configurations",
+        "tenancy_dispatch_intents",
+        "tenancy_execution_receipts",
+        "tenancy_usage_evidence",
+        "tenancy_receipt_auxiliary",
+        "tenancy_oauth_slots",
     ] {
         // A scalar probe stays bounded even when a retained row is corrupt.
         let query = Query::select()
@@ -519,11 +626,69 @@ async fn ensure_empty_authority(db: &impl ConnectionTrait) -> Result<()> {
             "authority has no installation identity"
         );
     }
+    if db.get_database_backend() == DatabaseBackend::Sqlite {
+        for table in ["tenancy_receipt_archive", "tenancy_unknown_obligations"] {
+            let query = Query::select()
+                .expr(Expr::val(1_i32))
+                .from(Alias::new(table))
+                .limit(1)
+                .to_owned();
+            ensure!(
+                db.query_one(db.get_database_backend().build(&query))
+                    .await?
+                    .is_none(),
+                "authority has no installation identity"
+            );
+        }
+    }
+    // Only first installation examines legacy global records. Existing stores
+    // return from read_header_in before reaching this exceptional preflight.
+    for table in [
+        "eval_admission_events",
+        "eval_import_provenance",
+        "eval_results",
+        "eval_snapshots",
+        "eval_subjects",
+        "trajectory_episodes",
+        "trajectory_events",
+        "trajectory_outbox",
+        "trajectory_prefix_index",
+        "trajectory_requests",
+    ] {
+        let query = Query::select()
+            .expr(Expr::val(1_i32))
+            .from(Alias::new(table))
+            .and_where(
+                Expr::col(Alias::new("installation_id"))
+                    .is_not_null()
+                    .or(Expr::col(Alias::new("tenant_id")).is_not_null())
+                    .or(Expr::col(Alias::new("creator_principal_id")).is_not_null()),
+            )
+            .limit(1)
+            .to_owned();
+        ensure!(
+            db.query_one(db.get_database_backend().build(&query))
+                .await?
+                .is_none(),
+            "authority has no installation identity"
+        );
+    }
+    let inventory = crate::db::migration::capacity::load(db).await?;
+    ensure!(
+        inventory.live_bytes == 0
+            && inventory.history_bytes == 0
+            && inventory.history_rows == 0
+            && inventory.oauth_bytes == 0
+            && inventory.technical_bytes == 0
+            && inventory.unknown_count == 0
+            && !crate::db::migration::capacity::epoch_required(db).await?,
+        "authority has no installation identity"
+    );
     Ok(())
 }
 
-/// Read only the seed header before spawning the owning startup actor. Complete
-/// fixed-snapshot validation happens under that actor.
+/// Read the installation header before spawning the owning startup actor.
+/// Full retained-history validation belongs to explicit offline audit.
 /// The exclusive-owner preflight runs only when a new header will be inserted.
 pub(super) async fn initial_header_with(
     db: &DatabaseConnection,
@@ -535,7 +700,7 @@ pub(super) async fn initial_header_with(
     }
     ensure!(
         !super::continuation::has_epoch(db).await?
-            && !super::continuation::http::bootstrap::has_owned(db).await?,
+            && !crate::db::migration::capacity::epoch_required(db).await?,
         "authority has no installation identity"
     );
     ensure_empty_authority(db).await?;

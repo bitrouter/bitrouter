@@ -109,9 +109,12 @@ archive compression does not prove space was returned to the filesystem.
 Monitor real disk/WAL growth and maintain headroom: other filesystem users and
 SQLite write amplification can still cause ENOSPC after an admission probe.
 
-Startup validates all retained pages of the current dataset before serving. An
-insufficient validation budget blocks readiness. Keep a consistent stopped-writer
-backup of the database and its external credentials.
+Normal tenant startup checks the installation header, key epoch, schema and
+durable admission accounting, then recovers unfinished dispatch intents before
+serving. Request reads authenticate the selected authority and resources.
+Offline restore authenticates retained history. Supported format upgrades verify
+receipt accounting sources before their initial backfill. Keep a matching binary and consistent stopped-writer
+backup of the database and its external credentials for rollback.
 
 Submission bounds upload and admission, not the lifetime of an admitted stream.
 `ordered_attempt_limit` bounds explicit ordered submissions to 1–64 candidates

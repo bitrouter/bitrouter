@@ -149,28 +149,39 @@ pub(in crate::tenancy) async fn read_prepared(
         .map(|stored| stored.prepared))
 }
 
-/// One autocommit statement. It only inserts its exact optional child object;
-/// no receipt/usage/archive byte or private disposition is updated. Conflicts
-/// never overwrite another byte sequence, nor a completed original receipt.
+/// Insert a test payload and its capacity delta in the same transaction.
 #[cfg(test)]
 pub(in crate::tenancy) async fn insert(
-    db: &impl ConnectionTrait,
+    db: &(impl ConnectionTrait + sea_orm::TransactionTrait),
     terminal: &Terminal,
     prepared: &Prepared,
 ) -> Result<bool> {
     crate::db::migration::provider_technical::validate(db).await?;
-    if let Some(old) = read_prepared(db, terminal).await? {
-        ensure!(
-            old.version == prepared.version && old.json == prepared.json,
-            "conflicting optional provider facts"
-        );
-        return Ok(false);
+    let tx = db.begin().await?;
+    let result = async {
+        if let Some(old) = read_prepared(&tx, terminal).await? {
+            ensure!(
+                old.version == prepared.version && old.json == prepared.json,
+                "conflicting optional provider facts"
+            );
+            return Ok(false);
+        }
+        insert_new(&tx, terminal, prepared).await
     }
-    insert_new(db, terminal, prepared).await
+    .await;
+    match result {
+        Ok(inserted) => {
+            tx.commit().await?;
+            Ok(inserted)
+        }
+        Err(error) => {
+            tx.rollback().await?;
+            Err(error)
+        }
+    }
 }
 
-/// The same one INSERT after an owned caller has positively checked absence.
-/// It never overwrites conflicts; callers close/read back any uncertain result.
+/// The caller retains a transaction through insertion and capacity accounting.
 pub(in crate::tenancy) async fn insert_new(
     db: &impl ConnectionTrait,
     terminal: &Terminal,
@@ -212,6 +223,17 @@ pub(in crate::tenancy) async fn insert_new(
         result.rows_affected() == 1,
         "optional provider insert acknowledgement"
     );
+    let bytes = u64::try_from(prepared.json.len())?
+        .checked_add(crate::tenancy::receipts::capacity::ROW_OVERHEAD)
+        .context("provider technical accounting overflow")?;
+    crate::db::migration::capacity::adjust(
+        db,
+        crate::db::migration::capacity::Delta {
+            technical_bytes: i64::try_from(bytes)?,
+            ..Default::default()
+        },
+    )
+    .await?;
     Ok(true)
 }
 

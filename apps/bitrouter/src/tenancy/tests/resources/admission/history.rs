@@ -94,7 +94,7 @@ async fn admission_rotation_refuses_to_recreate_a_missing_witness() -> Result<()
 }
 
 #[tokio::test]
-async fn admission_startup_rejects_an_orphan_witness_in_an_empty_catalog() -> Result<()> {
+async fn orphan_witness_is_rejected_by_read_only_audit_and_scoped_consumption() -> Result<()> {
     let recording = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let mut db = crate::db::connect("sqlite::memory:").await?;
@@ -113,6 +113,8 @@ async fn admission_startup_rejects_an_orphan_witness_in_an_empty_catalog() -> Re
     });
     let mut fixture = Fixture::with_database(db, &mut |_| {}).await?;
     restart(&mut fixture).await?;
+    let healthy = fixture.issue("orphan-witness-healthy").await?;
+    fixture.service.shutdown().await?;
     ensure!(count(&fixture, "tenancy_installation").await? == 1);
     ensure!(count(&fixture, "tenancy_resource_revisions").await? == 0);
     let reference = ResourceRef {
@@ -134,10 +136,43 @@ async fn admission_startup_rejects_an_orphan_witness_in_an_empty_catalog() -> Re
         .await?;
     let orphan = only_witness(&fixture).await?;
     recording.store(true, std::sync::atomic::Ordering::Relaxed);
-    ensure!(restart(&mut fixture).await.is_err());
+    restart(&mut fixture).await?;
+    fixture
+        .service
+        .authenticate_live(healthy.secret.as_deref().context("healthy credential")?)
+        .await
+        .map_err(failure)?;
+    let tx = fixture.db.begin().await?;
+    let audited = fixture
+        .service
+        .resources
+        .audit_retained_in(&tx, 64 * 1024 * 1024, &|| Ok(()))
+        .await;
+    tx.rollback().await?;
+    ensure!(
+        audited.is_err(),
+        "audit accepted an orphan admission witness"
+    );
+    let selected = fixture
+        .service
+        .authority_read(AuthoritySubject::Profiles {
+            caller: fixture.operator.clone(),
+            references: vec![reference],
+        })
+        .await;
+    ensure!(
+        matches!(selected,Err(error) if error.0.code == ErrorCode::AuthorityUnavailable),
+        "selected orphan witness was accepted"
+    );
+    fixture
+        .service
+        .authenticate_live(healthy.secret.as_deref().context("healthy credential")?)
+        .await
+        .map_err(failure)?;
     ensure!(writes.load(std::sync::atomic::Ordering::Relaxed) == 0);
     ensure!(count(&fixture, "tenancy_resource_revisions").await? == 0);
     ensure!(only_witness(&fixture).await? == orphan);
+    fixture.service.shutdown().await?;
     Ok(())
 }
 

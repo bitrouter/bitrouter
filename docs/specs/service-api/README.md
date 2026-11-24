@@ -413,7 +413,9 @@ unexpired operation only while current authority covers its saved scope.
 
 Host budgets are defined by the [configuration contract](../configuration/README.md#process-capacity).
 The store preserves indexed operation IDs, cumulative counters and stop state.
-Startup validates the store before acquiring authority.
+Normal tenant startup verifies store identity, key epoch and durable admission
+accounting before publishing readiness. Full history validation belongs to
+explicit offline audit and supported format upgrades.
 
 The tenancy error body is a JSON object with `code`, `message`, `dispatch_state`,
 `operation_id` and `execution_id` (the last two may be null). HTTP mappings are:
@@ -1553,30 +1555,40 @@ validation under exclusive initialization custody. Never stamp/adopt a nonempty
 old or foreign layout. Tenant service remains file-owned SQLite; shared authority
 remains PostgreSQL. This does not add tenant/shared support to another backend.
 
-Bootstrap, join, restart, restore and offline/import entry points validate the
-current baseline and all retained affected source/envelopes, including inactive,
-revoked, hidden and terminal history. SQLite tenant startup authenticates the
-retained definitions and verifies their admission witnesses and managed heads.
-These checks are read-only and precede import, recovery and readiness. Missing or
-mismatched witnesses fail startup. A Policy-free active head cannot bypass
-these checks. Missing markers on nonempty stores, old/partial/foreign/future
-layouts, forged current stamps and unsupported retained content are rejected
-before listeners, claims, recovery, authority registration/heartbeat or mutations.
-Physical locks/custody may be acquired for validation; this is not execution
-authority. Shared refusal precedes Engine::join side effects. Failed opens never
-clear/rewrite old databases or user files, or create a successful empty substitute.
+Normal SQLite tenant startup verifies the current schema, installation header,
+key epoch and durable admission projection. It recovers unfinished dispatch
+intents before publishing readiness. Completed execution history, dormant
+identities and retained resource versions are authenticated through selected
+reads and explicit offline audits. Selected corrupt authority and resource
+records fail their operation and invalidate cached authority and retained payload
+access. Healthy requests can obtain fresh facts. Read-only Eval content errors
+reject the selected read. SQL failures and unconfirmed transaction cleanup retain
+the instance fence.
+
+Full offline restore validates the retained affected sources and envelopes,
+including inactive, revoked, hidden and terminal history, and compares source
+quantities with durable admission accounting. Supported predecessor formats
+receive a versioned upgrade and an initial accounting backfill under migration
+custody. Source mutations update the projection in their own transactions.
+Subsequent opens read that projection. Missing identity on a populated tenant
+store, unsupported layouts and incomplete current projections refuse readiness.
+A new installation requires empty tenant-owned stores. An interrupted MySQL DDL
+stage can resume only after its exact schema and empty unpublished projection
+have been verified. Shared authority validates its authenticated publication
+before joining the shared engine.
 
 An imported route or configuration must retain its exact current source,
 bindings and credentials. Policy-bearing closures retain the model Policy
 document and selected name. The selected route's ordinary, profiled or native
 dispatch semantics survive publication and reopening.
 
-Stop old ingress and finish resolvable work with the old deployment. Archive its
-binary/data outside the new dataset. New instances use explicit new locations,
-new installation identity and current APIs to provision resources; no implicit
-copy/import of old rows. New binaries do not recover, resend, refund, fabricate
-receipts for or claim completion of old paid work. Rollback runs the old binary
-with its own consistent database/configuration/key copy, never a new database.
+Stop old ingress and finish resolvable work before a format upgrade. Preserve
+the matching binary, consistent database, configuration and key copy for rollback.
+Supported upgrades preserve installation identity, execution IDs, receipts and
+unresolved obligations. Incompatible datasets require an explicit new location
+and installation with current resource provisioning. Provider recovery preserves
+uncertain outcomes and dispatches no replacement provider request. A rollback
+must account for writes accepted after upgrading.
 
 Current-format recovery is mandatory. Preserve no-send/observed/unknown dispatch
 meaning, original receipts/output/usage and immutable bindings. Missing provider

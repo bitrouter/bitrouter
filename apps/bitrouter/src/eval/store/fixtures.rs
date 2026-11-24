@@ -3,6 +3,18 @@
 use super::*;
 
 impl EvalStore {
+    pub(super) fn subject_fixture(&self) -> Result<EvalSubject> {
+        let mut subject = tests::subject()?;
+        if let Some((installation, tenant)) = self.scope.snapshot_namespace() {
+            subject.identity = bitrouter_ai::eval::EvalSubjectIdentity::TenantGeneric {
+                installation_id: installation.try_into()?,
+                tenant_id: tenant.try_into()?,
+                execution: None,
+            };
+        }
+        Ok(subject)
+    }
+
     pub(crate) async fn subject(&self, eval_id: &str) -> Result<Option<EvalSubject>> {
         self.read_subject(eval_id, None).await
     }

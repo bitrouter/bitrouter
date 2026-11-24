@@ -30,7 +30,7 @@ async fn database() -> Result<DatabaseConnection> {
 }
 
 async fn admitted(store: &EvalStore) -> Result<String> {
-    store.insert_subject(&subject()?).await?;
+    store.insert_subject(&store.subject_fixture()?).await?;
     let value = store.insert_result(&result(EvalVerdict::Pass)).await?;
     store
         .append_admission_event(
@@ -57,10 +57,13 @@ async fn three_namespaces_share_logical_content_but_never_sql_identity() -> Resu
     assert_eq!(admitted(&a).await?, logical);
     assert_eq!(admitted(&b).await?, logical);
     assert_eq!(admitted(&other_installation).await?, logical);
-    assert_eq!(second.subject("eval-1").await?, Some(subject()?));
+    assert_eq!(
+        second.subject("eval-1").await?,
+        Some(second.subject_fixture()?)
+    );
     assert_eq!(second.list_subjects().await?.len(), 1);
     assert!(matches!(
-        second.insert_subject(&subject()?).await?,
+        second.insert_subject(&second.subject_fixture()?).await?,
         SubjectInsertOutcome::Duplicate
     ));
     assert!(
@@ -173,7 +176,7 @@ async fn literal_names_are_exact_and_collections_order_logically() -> Result<()>
     let a = tenant(&db, "installation", "a", "first")?;
     let ids = ["é", "case ", "Case", "e\u{301}", "case"];
     for id in ids {
-        let mut item = subject()?;
+        let mut item = a.subject_fixture()?;
         item.eval_id = id.into();
         a.insert_subject(&item).await?;
     }
@@ -201,14 +204,14 @@ async fn crafted_legacy_primary_and_secondary_collisions_are_not_duplicates() ->
     let mut crafted = subject()?;
     crafted.eval_id = a.key(KeyDomain::EvalSubject, "eval-1")?;
     legacy.insert_subject(&crafted).await?;
-    assert!(a.insert_subject(&subject()?).await.is_err());
+    assert!(a.insert_subject(&a.subject_fixture()?).await.is_err());
     assert!(a.subject("eval-1").await?.is_none());
     assert_eq!(
         legacy.subject(&crafted.eval_id).await?,
         Some(crafted.clone())
     );
     let b = tenant(&db, "installation", "b", "first")?;
-    b.insert_subject(&subject()?).await?;
+    b.insert_subject(&b.subject_fixture()?).await?;
     let compatibility = b.owner("local")?;
     legacy
         .insert_subject_owned(&subject()?, &compatibility)
@@ -356,7 +359,7 @@ async fn missing_closure_and_forged_physical_projections_are_rejected() -> Resul
         entries: foreign.entries,
     };
     assert!(a.persist_snapshot(&claimed).await.is_err());
-    let item = subject()?;
+    let item = a.subject_fixture()?;
     a.insert_subject(&item).await?;
     let key = a.key(KeyDomain::EvalSubject, &item.eval_id)?;
     let mut forged = item;
@@ -382,11 +385,11 @@ async fn row_limit_rejects_overflow_without_truncation_or_cross_namespace_counti
     let db = database().await?;
     let a = tenant(&db, "installation", "a", "first")?;
     let b = tenant(&db, "installation", "b", "first")?;
-    b.insert_subject(&subject()?).await?;
+    b.insert_subject(&b.subject_fixture()?).await?;
     let metadata = a.scope.metadata(&a.provenance)?;
     let mut batch = Vec::new();
     for index in 0..=io::MAX_ROWS {
-        let mut value = subject()?;
+        let mut value = a.subject_fixture()?;
         value.eval_id = format!("row-{index:04}");
         batch.push(subject_entity::ActiveModel {
             installation_id: Set(metadata.installation.clone()),
@@ -436,8 +439,8 @@ async fn oversized_sql_cells_fail_before_decode_and_do_not_affect_other_tenants(
     let db = database().await?;
     let a = tenant(&db, "installation", "a", "first")?;
     let b = tenant(&db, "installation", "b", "first")?;
-    a.insert_subject(&subject()?).await?;
-    b.insert_subject(&subject()?).await?;
+    a.insert_subject(&a.subject_fixture()?).await?;
+    b.insert_subject(&b.subject_fixture()?).await?;
     // Construct the oversized value in SQLite, so the regression exercises the
     // SQL preflight rather than only a Rust deserialization limit.
     db.execute(sea_orm::Statement::from_sql_and_values(
@@ -457,7 +460,7 @@ async fn oversized_sql_cells_fail_before_decode_and_do_not_affect_other_tenants(
             .to_string()
             .contains("byte bound")
     );
-    assert_eq!(b.subject("eval-1").await?, Some(subject()?));
+    assert_eq!(b.subject("eval-1").await?, Some(b.subject_fixture()?));
     Ok(())
 }
 
@@ -470,17 +473,22 @@ async fn conflict_transaction(db: DatabaseConnection) -> Result<()> {
     let id = format!("fixture-{}", uuid::Uuid::new_v4());
     let a = tenant(&db, "installation", &id, "first")?;
     let second = tenant(&db, "installation", &id, "second")?;
-    a.insert_subject(&subject()?).await?;
+    a.insert_subject(&a.subject_fixture()?).await?;
     a.insert_result(&result(EvalVerdict::Pass)).await?;
     let tx = second.transaction(true).await?;
     let owner = second.owner("local")?;
     assert!(matches!(
         second
-            .insert_subject_in(&tx, &subject()?, &owner, &mut Budget::new(&second))
+            .insert_subject_in(
+                &tx,
+                &second.subject_fixture()?,
+                &owner,
+                &mut Budget::new(&second)
+            )
             .await?,
         SubjectInsertOutcome::Duplicate
     ));
-    let mut conflicting = subject()?;
+    let mut conflicting = second.subject_fixture()?;
     conflicting.subject_id = "changed".into();
     assert!(
         second
@@ -510,7 +518,7 @@ async fn conflict_transaction(db: DatabaseConnection) -> Result<()> {
             .await
             .is_err()
     );
-    let mut next = subject()?;
+    let mut next = second.subject_fixture()?;
     next.eval_id = "after-conflicts".into();
     second
         .insert_subject_in(&tx, &next, &owner, &mut Budget::new(&second))
@@ -561,7 +569,7 @@ async fn admission_queries_are_scoped(mut db: DatabaseConnection) -> Result<()> 
     let a = tenant(&db, "installation", &id, "first")?;
     let b = tenant(&db, "elsewhere", &id, "second")?;
     let logical = admitted(&b).await?;
-    a.insert_subject(&subject()?).await?;
+    a.insert_subject(&a.subject_fixture()?).await?;
     assert_eq!(
         a.insert_result(&result(EvalVerdict::Pass))
             .await?
@@ -652,7 +660,7 @@ async fn snapshot_load_reads_closure_once_and_bounds_manifest_plus_records() -> 
     let loaded = SnapshotFixture::load(&a, &snapshot.evidence_root).await?;
     assert_eq!(loaded.snapshot.evidence_root, snapshot.evidence_root);
     assert_eq!(loaded.records.len(), 1);
-    assert_eq!(loaded.records[0].1, subject()?);
+    assert_eq!(loaded.records[0].1, a.subject_fixture()?);
     let reads = queries
         .try_iter()
         .filter(|sql| sql.starts_with("select "))
@@ -770,7 +778,7 @@ async fn snapshot_closure_has_one_cumulative_byte_budget() -> Result<()> {
     let db = database().await?;
     let a = tenant(&db, "installation", "a", "first")?;
     for id in ["one", "two"] {
-        let mut item = subject()?;
+        let mut item = a.subject_fixture()?;
         item.eval_id = id.into();
         a.insert_subject(&item).await?;
         let mut verdict = result(EvalVerdict::Pass);
@@ -807,7 +815,7 @@ async fn concurrent_identical_creators_replay_one_immutable_winner() -> Result<(
     let db = database().await?;
     let first = tenant(&db, "installation", "a", "first")?;
     let second = tenant(&db, "installation", "a", "second")?;
-    let value = subject()?;
+    let value = first.subject_fixture()?;
     let (a, b) = tokio::join!(first.insert_subject(&value), second.insert_subject(&value));
     assert!(matches!(
         (a?, b?),

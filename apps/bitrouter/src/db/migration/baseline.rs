@@ -12,6 +12,24 @@ impl MigrationName for Migration {
 }
 
 pub(super) async fn open(connection: SchemaManagerConnection<'_>) -> Result<(), DbErr> {
+    // MySQL DDL commits implicitly. Stage only the exactly validated new table
+    // before starting the data/marker transaction. A crash leaves the old
+    // marker and a recognized empty table, so the same upgrade can retry.
+    if connection.get_database_backend() == DatabaseBackend::MySql {
+        let state = store_format::inspect(&connection)
+            .await
+            .map_err(|error| DbErr::Custom(error.to_string()))?;
+        if state == State::Legacy {
+            crate::db::current_schema::validate_legacy(&connection).await?;
+            let manager = match &connection {
+                SchemaManagerConnection::Connection(db) => SchemaManager::new(*db),
+                SchemaManagerConnection::Transaction(tx) => SchemaManager::new(*tx),
+            };
+            super::capacity::ensure_table(&manager)
+                .await
+                .map_err(|error| DbErr::Custom(error.to_string()))?;
+        }
+    }
     let tx = connection.begin().await?;
     let result = async {
         if tx.get_database_backend() == DatabaseBackend::Postgres {
@@ -25,6 +43,15 @@ pub(super) async fn open(connection: SchemaManagerConnection<'_>) -> Result<(), 
         let state = store_format::inspect(&tx)
             .await
             .map_err(|error| DbErr::Custom(error.to_string()))?;
+        if state == State::Legacy {
+            if tx.get_database_backend() != DatabaseBackend::Sqlite {
+                crate::db::current_schema::validate_legacy(&tx).await?;
+            }
+            super::capacity::upgrade(&tx)
+                .await
+                .map_err(|error| DbErr::Custom(format!("capacity upgrade: {error:#}")))?;
+            return validate(&tx).await;
+        }
         if tx.get_database_backend() == DatabaseBackend::Sqlite {
             if state == State::Empty {
                 crate::db::sqlite_schema::initialize_gateway_schema(&tx)
@@ -38,6 +65,13 @@ pub(super) async fn open(connection: SchemaManagerConnection<'_>) -> Result<(), 
         }
         let manager = SchemaManager::new(&tx);
         Migration.up(&manager).await?;
+        super::capacity::initialize(
+            &tx,
+            &crate::tenancy::receipts::capacity::Inventory::default(),
+            false,
+        )
+        .await
+        .map_err(|error| DbErr::Custom(error.to_string()))?;
         crate::db::current_schema::validate(&tx).await?;
         // Install and publish the only ledger row after the complete schema
         // validates. SQLite/PostgreSQL commit the schema and marker together.

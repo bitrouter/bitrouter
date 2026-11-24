@@ -694,6 +694,26 @@ impl Service {
         ErrorCode::StorageUnavailable.into()
     }
 
+    fn retained_read_failure(&self, error: anyhow::Error) -> Failure {
+        if error.is::<store::directory::InvalidRecord>() {
+            self.retained_access_failure(ErrorCode::AuthorityUnavailable)
+        } else {
+            self.unavailable()
+        }
+    }
+
+    fn retained_access_failure(&self, code: ErrorCode) -> Failure {
+        if code == ErrorCode::StorageUnavailable {
+            return self.unavailable();
+        }
+        if code == ErrorCode::AuthorityUnavailable
+            && self.authority.invalidate_retained_views().is_err()
+        {
+            return self.unavailable();
+        }
+        code.into()
+    }
+
     fn read_permit(&self) -> Result<SemaphorePermit<'_>, Failure> {
         // Do not create an unbounded queue of multi-megabyte retained reads on
         // the single SQLite pool. Ordinary read pressure is not storage failure.
@@ -925,7 +945,15 @@ impl Service {
         )
         .await
         .map_err(|_| self.unavailable())?
-        .map_err(|_| self.unavailable())?
+        .map_err(|error| {
+            if error.is::<store::directory::InvalidRecord>() {
+                Failure::from(ErrorCode::AuthorityUnavailable)
+            } else if error.is::<store::directory::CapacityExceeded>() {
+                Failure::from(ErrorCode::CapacityExceeded)
+            } else {
+                self.unavailable()
+            }
+        })?
         .ok_or_else(|| Failure::from(ErrorCode::NotFound))?;
         self.authority
             .read()

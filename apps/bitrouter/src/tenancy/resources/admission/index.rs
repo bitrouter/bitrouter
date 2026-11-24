@@ -5,12 +5,29 @@
 //! A witness is never replaced with a later (possibly more permissive) revision.
 
 use super::*;
+use crate::tenancy::store::directory::{CapacityExceeded, InvalidRecord};
 use sea_orm::{
     DatabaseBackend, QueryResult, Statement, Value,
     sea_query::{Alias, Cond, Expr, Func, OnConflict, Order, Query, SelectStatement},
 };
 
 const TABLE: &str = "tenancy_admission_index";
+
+fn valid(condition: bool, reason: &'static str) -> Result<()> {
+    if condition {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(reason).context(InvalidRecord))
+    }
+}
+
+fn resource_error(code: ErrorCode) -> anyhow::Error {
+    match code {
+        ErrorCode::StorageUnavailable => anyhow::anyhow!("admission resource storage unavailable"),
+        ErrorCode::CapacityExceeded => CapacityExceeded.into(),
+        _ => InvalidRecord.into(),
+    }
+}
 const COLUMNS: [&str; 5] = [
     "index_kind",
     "owner_kind",
@@ -124,11 +141,14 @@ fn select(backend: DatabaseBackend) -> SelectStatement {
 }
 
 fn decode(row: &QueryResult) -> Result<Entry> {
-    let [kind, owner_kind, owner_id, resource_kind, resource_id] =
-        COLUMNS.map(|name| row.try_get::<String>("", name));
-    let key = Key([kind?, owner_kind?, owner_id?, resource_kind?, resource_id?]);
-    let reference = serde_json::from_str(&row.try_get::<String>("", "reference_json")?)?;
-    Ok(Entry { key, reference })
+    let decoded = || -> Result<Entry> {
+        let [kind, owner_kind, owner_id, resource_kind, resource_id] =
+            COLUMNS.map(|name| row.try_get::<String>("", name));
+        let key = Key([kind?, owner_kind?, owner_id?, resource_kind?, resource_id?]);
+        let reference = serde_json::from_str(&row.try_get::<String>("", "reference_json")?)?;
+        Ok(Entry { key, reference })
+    };
+    decoded().context(InvalidRecord)
 }
 
 /// Batch exact primary-key probes; query and result size follow the caller's keys.
@@ -144,15 +164,15 @@ pub(super) async fn lookup(db: &impl ConnectionTrait, keys: &[Key]) -> Result<Ve
         );
         query.limit(u64::try_from(batch.len())? + 1);
         let rows = db.query_all(backend.build(&query)).await?;
-        ensure!(rows.len() <= batch.len(), "duplicate admission witness");
+        valid(rows.len() <= batch.len(), "duplicate admission witness")?;
         let mut seen = HashSet::new();
         for row in rows {
             let entry = decode(&row)?;
-            ensure!(batch.contains(&entry.key), "foreign admission witness");
-            ensure!(
+            valid(batch.contains(&entry.key), "foreign admission witness")?;
+            valid(
                 seen.insert(entry.key.clone()),
-                "duplicate admission witness"
-            );
+                "duplicate admission witness",
+            )?;
             result.push(entry);
         }
     }
@@ -167,13 +187,14 @@ async fn authenticate_entry(
     let artifact = resources
         .load(db, &entry.reference)
         .await
-        .map_err(|_| anyhow::anyhow!("admission witness unavailable"))?;
-    ensure!(
+        .map_err(resource_error)
+        .context("admission witness unavailable")?;
+    valid(
         entries(&artifact.reference, &artifact.definition)?
             .iter()
             .any(|expected| expected.key == entry.key),
-        "admission witness identity mismatch"
-    );
+        "admission witness identity mismatch",
+    )?;
     Ok(artifact)
 }
 
@@ -210,7 +231,7 @@ pub(super) fn page_query(backend: DatabaseBackend, after: Option<&Key>) -> State
     backend.build(&query)
 }
 
-/// Walk the complete witness index in the fixed startup transaction.
+/// Walk the complete witness index in an explicit fixed-snapshot audit.
 pub(in crate::tenancy::resources) async fn verify_index(
     resources: &Resources,
     db: &impl ConnectionTrait,
@@ -303,7 +324,8 @@ impl Resources {
         let mut required = HashSet::new();
         let mut require = |artifact: &Artifact| -> Result<()> {
             required.extend(
-                entries(&artifact.reference, &artifact.definition)?
+                entries(&artifact.reference, &artifact.definition)
+                    .context(InvalidRecord)?
                     .into_iter()
                     .map(|entry| entry.key),
             );
@@ -313,7 +335,7 @@ impl Resources {
         for entry in witnesses {
             let artifact = authenticate_entry(self, db, &entry).await?;
             require(&artifact)?;
-            state.insert(&artifact)?;
+            state.insert(&artifact).context(InvalidRecord)?;
             pending.remove(&artifact.reference);
             observed.insert(entry.key);
         }
@@ -323,10 +345,14 @@ impl Resources {
             match self.load(db, &reference).await {
                 Ok(artifact) => {
                     require(&artifact)?;
-                    state.insert(&artifact)?;
+                    state.insert(&artifact).context(InvalidRecord)?;
                 }
                 Err(ErrorCode::NotFound) => {}
-                Err(_) => anyhow::bail!("admission pinned resource unavailable"),
+                Err(code) => {
+                    return Err(
+                        resource_error(code).context("admission pinned resource unavailable")
+                    );
+                }
             }
         }
         let profiles: Vec<_> = state.profiles.keys().cloned().collect();
@@ -334,48 +360,51 @@ impl Resources {
         for reference in profiles {
             let record = lifecycle::exact(db, &self.installation, &reference)
                 .await?
-                .context("admission profile has no managed lifecycle")?;
-            ensure!(
+                .context("admission profile has no managed lifecycle")
+                .context(InvalidRecord)?;
+            valid(
                 record.authority_revision <= authority,
-                "admission lifecycle exceeds authority"
-            );
+                "admission lifecycle exceeds authority",
+            )?;
             state.apply_lifecycle(&record);
             if !heads.insert(reference.key()) {
                 continue;
             }
             let head = lifecycle::head(db, &self.installation, &reference.key())
                 .await?
-                .context("admission profile has no managed head")?;
-            ensure!(
+                .context("admission profile has no managed head")
+                .context(InvalidRecord)?;
+            valid(
                 head.authority_revision <= authority,
-                "admission head exceeds authority"
-            );
+                "admission head exceeds authority",
+            )?;
             let artifact = self
                 .load(db, &head.reference)
                 .await
-                .map_err(|_| anyhow::anyhow!("admission head unavailable"))?;
-            ensure!(
+                .map_err(resource_error)
+                .context("admission head unavailable")?;
+            valid(
                 artifact.definition.is_admission_profile(),
-                "admission profile head changes type"
-            );
+                "admission profile head changes type",
+            )?;
             require(&artifact)?;
-            state.insert(&artifact)?;
+            state.insert(&artifact).context(InvalidRecord)?;
             state.apply_lifecycle(&head);
         }
         // Pins and heads prove what must already exist. Absence is permissible
         // for new keys, but a retained artifact cannot recreate its witnesses.
         let additional: Vec<_> = required.difference(&observed).cloned().collect();
-        ensure!(
+        valid(
             additional.iter().all(|key| !unique.contains(key)),
-            "retained admission witness missing"
-        );
+            "retained admission witness missing",
+        )?;
         // A retained definition can reveal a group or witness anchor outside
         // the initial probes. Authenticate those additional exact keys too.
         let supplemental = lookup(db, &additional).await?;
-        ensure!(
+        valid(
             supplemental.len() == additional.len(),
-            "retained admission witness missing"
-        );
+            "retained admission witness missing",
+        )?;
         for entry in supplemental {
             authenticate_entry(self, db, &entry).await?;
         }
@@ -383,7 +412,7 @@ impl Resources {
     }
 }
 
-/// Complete startup checks existence as well as authenticity. An erased witness
+/// Complete audits check existence as well as authenticity. An erased witness
 /// must not turn a retained profiled route into a never-protected key.
 pub(in crate::tenancy::resources) async fn verify(
     resources: &Resources,
@@ -396,10 +425,10 @@ pub(in crate::tenancy::resources) async fn verify(
     }
     let keys: Vec<_> = expected.iter().map(|entry| entry.key.clone()).collect();
     let actual = lookup(db, &keys).await?;
-    ensure!(
+    valid(
         actual.len() == expected.len(),
-        "retained admission witness missing"
-    );
+        "retained admission witness missing",
+    )?;
     let groups: Vec<_> = match &artifact.definition {
         Definition::AdmissionProfile { profile } => profile
             .health_group_id
@@ -466,4 +495,49 @@ pub(in crate::tenancy::resources) async fn retain(
         write(db, &entry).await?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// UT for corrupt witness content retaining a different class from SQL failure.
+    #[tokio::test]
+    async fn witness_decode_corruption_is_scoped_but_backend_failure_is_preserved() -> Result<()> {
+        let db = crate::db::connect("sqlite::memory:").await?;
+        crate::db::run_migrations(&db).await?;
+        let reference = ResourceRef {
+            owner_kind: bitrouter_ai::tenancy::authority::OwnerKind::Tenant,
+            owner_id: "tenant".try_into()?,
+            resource_kind: ResourceKind::Policy,
+            resource_id: "policy".try_into()?,
+            revision_id: "r1".try_into()?,
+        };
+        let key = Key::resource(&reference.key())?;
+        write(
+            &db,
+            &Entry {
+                key: key.clone(),
+                reference,
+            },
+        )
+        .await?;
+        db.execute_unprepared("UPDATE tenancy_admission_index SET reference_json='{invalid'")
+            .await?;
+        let error = lookup(&db, std::slice::from_ref(&key))
+            .await
+            .err()
+            .context("corrupt witness admitted")?;
+        assert!(error.is::<InvalidRecord>());
+        db.execute_unprepared("DROP TABLE tenancy_admission_index")
+            .await?;
+        let error = lookup(&db, &[key])
+            .await
+            .err()
+            .context("missing SQL table admitted")?;
+        assert!(!error.is::<InvalidRecord>());
+        assert!(error.is::<sea_orm::DbErr>());
+        db.close().await?;
+        Ok(())
+    }
 }

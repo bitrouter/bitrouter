@@ -330,11 +330,11 @@ impl Service {
         )
         .await
         .map_err(|_| self.unavailable())?
-        .map_err(|_| self.unavailable())?
+        .map_err(|error| self.retained_read_failure(error))?
         .ok_or_else(|| Failure::from(ErrorCode::NotFound))?;
         self.resources
             .validate_compiled(&retained)
-            .map_err(|_| self.unavailable())?;
+            .map_err(|code| self.retained_access_failure(code))?;
         self.authority
             .read()
             .map_err(Failure::from)?

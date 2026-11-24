@@ -7,7 +7,7 @@ async fn oversized_owned_list_rolls_back_without_truncating_or_poisoning_reads()
         let store = fixture().await?;
         let tx = store.transaction(false).await?;
         for index in 0..10 {
-            let mut subject = tests::subject()?;
+            let mut subject = store.subject_fixture()?;
             subject.eval_id = format!("large-{index}");
             subject.cohort = Some("x".repeat(900 * 1024));
             assert!(serde_json::to_vec(&subject)?.len() < 1024 * 1024);
