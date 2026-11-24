@@ -687,6 +687,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "bitrouter-behavior-upstream"
+version = "1.0.0-beta.1"
+dependencies = [
+ "anyhow",
+ "serde_json",
+ "tokio",
+ "wiremock",
+]
+
+[[package]]
 name = "bitrouter-bro"
 version = "1.0.0-beta.1"
 dependencies = [

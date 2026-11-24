@@ -1,0 +1,101 @@
+name: Behavior
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: behavior-live-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+  CARGO_BUILD_JOBS: '2'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+
+jobs:
+  build:
+    name: build behavior binary
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.99.1
+      - name: Build the candidate gateway
+        env:
+          BITROUTER_BUILD_REVISION: ${{ github.sha }}
+        run: |
+          cargo build --locked -p bitrouter --bin bitrouter
+          mkdir -p behavior-bin
+          tar -czf behavior-bin/bitrouter.tar.gz -C target/debug bitrouter
+          printf '%s\n' "$GITHUB_SHA" > behavior-bin/tests.sha
+      - uses: actions/upload-artifact@v6
+        with:
+          name: behavior-binary-${{ github.run_id }}-${{ github.run_attempt }}
+          path: behavior-bin/
+          if-no-files-found: error
+          retention-days: 7
+
+  live:
+    name: behavior-live
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      BITROUTER_TEST_GATEWAY_BINARY: ${{ github.workspace }}/behavior-bin/bitrouter
+      BITROUTER_LIVE_OPENAI_MODEL: ${{ vars.BITROUTER_LIVE_OPENAI_MODEL }}
+      BITROUTER_LIVE_ANTHROPIC_MODEL: ${{ vars.BITROUTER_LIVE_ANTHROPIC_MODEL }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v7
+        with:
+          name: behavior-binary-${{ github.run_id }}-${{ github.run_attempt }}
+          path: behavior-bin
+      - name: Verify and unpack the candidate gateway
+        run: |
+          test "$(cat behavior-bin/tests.sha)" = "$GITHUB_SHA"
+          tar -xzf behavior-bin/bitrouter.tar.gz -C behavior-bin
+          chmod +x behavior-bin/bitrouter
+          behavior-bin/bitrouter --json build-info | jq -e --arg sha "$GITHUB_SHA" \
+            '.product == "bitrouter" and .source_revision == $sha'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+      - uses: oven-sh/setup-bun@v2
+      - name: Install behavior dependencies
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Require live behavior inputs
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          test -n "$OPENAI_API_KEY"
+          test -n "$ANTHROPIC_API_KEY"
+          test -n "$BITROUTER_LIVE_OPENAI_MODEL"
+          test -n "$BITROUTER_LIVE_ANTHROPIC_MODEL"
+      - name: Run live agent behavior
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          export BITROUTER_TEST_NODE="$(command -v node)"
+          bun run --bun test:behavior:live
+
+  release-plz:
+    name: release-plz
+    needs: live
+    uses: ./.github/workflows/release-plz.yml
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+    secrets:
+      APP_ID: ${{ secrets.APP_ID }}
+      APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}

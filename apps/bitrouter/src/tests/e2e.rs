@@ -511,58 +511,6 @@ async fn cloned_native_request_owns_one_delivery_and_charge() -> anyhow::Result<
 }
 
 #[tokio::test]
-async fn e2e_assembled_pipeline_routes_to_mock_provider() -> anyhow::Result<()> {
-    let upstream = mock_chat_completions_upstream().await;
-    let cfg = config_for(&upstream.uri());
-
-    // Assemble the FULL app — db + migrations + routing + auth + policy +
-    // settlement + the language_model pipeline.
-    let assembled = crate::assemble::build_app(&cfg)
-        .await
-        .expect("app assembles");
-    let pipeline = assembled
-        .app
-        .language_model()
-        .expect("language_model pipeline configured")
-        .clone();
-
-    // skip_auth is on → a local caller passes through AuthHook.
-    let req = PipelineRequest::new("test-model", CallerContext::local(), chat_prompt());
-    let resp = pipeline.execute(req).await.expect("request succeeds e2e");
-
-    // the mock upstream's content made it all the way back through conversion
-    let text: String = resp
-        .result
-        .generation()
-        .ok_or_else(|| anyhow::anyhow!("generation result missing"))?
-        .content
-        .iter()
-        .filter_map(|c| match c {
-            bitrouter_ai::types::Content::Text { text, .. } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(text, "hello from the mock upstream");
-
-    // metering ran — a metering row exists with the full identity context.
-    let row = requests::Entity::find()
-        .one(&assembled.db)
-        .await
-        .expect("metering query runs")
-        .expect("a metering row was written");
-    assert_eq!(
-        row.model_id, "test-model",
-        "metering row records the routed model"
-    );
-    // 11 prompt × 2 + 7 completion × 10 = 92 µ$
-    assert_eq!(
-        row.estimated_charge_micro_usd, 92,
-        "estimated charge derived from pricing × tokens"
-    );
-    Ok(())
-}
-
-#[tokio::test]
 async fn e2e_assembled_mcp_route_enforces_virtual_key_auth() {
     use crate::config::mcp::{McpServerConfig, McpTransport};
     use http::Request;

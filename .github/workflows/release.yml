@@ -17,6 +17,7 @@
 name: Release
 permissions:
   contents: read
+  checks: read
 
 # This task will run whenever you push a git tag that looks like a version
 # like "1.0.0", "v0.1.0-prerelease.1", "my-app/0.1.0", "releases/v1.0.0", etc.
@@ -62,6 +63,18 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+      - name: Verify live behavior passed for this commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          matches="$(gh api \
+            "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?per_page=100" \
+            --jq '[.check_runs[] | select(.name == "behavior-live" and .conclusion == "success")] | length')"
+          if [[ "$matches" -lt 1 ]]; then
+            echo "::error::No successful behavior-live check exists for $GITHUB_SHA"
+            exit 1
+          fi
+      - uses: oven-sh/setup-bun@v2
       - name: Install dist
         # we specify bash to get pipefail; it guards against the `curl` command
         # failing. otherwise `sh` won't catch that `curl` returned non-0
@@ -77,7 +90,7 @@ jobs:
           BITROUTER_BUILD_REVISION: ${{ github.sha }}
         run: |
           dist host --steps=create --tag "$RELEASE_TAG" --output-format=json > plan-dist-manifest.json
-          node helpers/dist-helper/packaging/release-plan.mjs plan-dist-manifest.json > distribution-plan.json
+          bun run release:plan -- plan-dist-manifest.json > distribution-plan.json
           cat plan-dist-manifest.json
           echo "manifest=$(jq -c "." plan-dist-manifest.json)" >> "$GITHUB_OUTPUT"
       - name: "Upload dist-manifest.json"
@@ -127,6 +140,7 @@ jobs:
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
             echo "$HOME/.cargo/bin" >> $GITHUB_PATH
           fi
+      - uses: oven-sh/setup-bun@v2
       - name: Install dist
         run: ${{ matrix.install_dist.run }}
       # Get the dist-manifest
@@ -146,7 +160,7 @@ jobs:
           dist build --tag "$RELEASE_TAG" --print=linkage --output-format=json ${{ matrix.dist_args }} > dist-manifest.json
           echo "dist ran successfully"
       - name: Verify native release executables and archive digests
-        run: node helpers/dist-helper/packaging/verify-archives.mjs dist-manifest.json
+        run: bun run release:verify-archives -- dist-manifest.json
       - id: cargo-dist
         name: Post-build
         # We force bash here just because github makes it really hard to get values up
@@ -198,6 +212,7 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+      - uses: oven-sh/setup-bun@v2
       - name: Install cached dist
         uses: actions/download-artifact@v7
         with:
@@ -217,8 +232,8 @@ jobs:
           dist build --tag "$RELEASE_TAG" --output-format=json "--artifacts=global" > dist-manifest.json
           echo "dist ran successfully"
 
-          node helpers/dist-helper/packaging/guard-installers.mjs dist-manifest.json target/distrib
-          node helpers/dist-helper/packaging/release-plan.mjs --finalize \
+          bun run release:guard-installers -- dist-manifest.json target/distrib
+          bun run release:plan -- --finalize \
             target/distrib/plan-dist-manifest.json target/distrib > target/distribution-manifest.json
           mv target/distribution-manifest.json target/distrib/
 
@@ -389,13 +404,11 @@ jobs:
           pattern: artifacts-*
           path: npm/
           merge-multiple: true
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '20.x'
-          registry-url: 'https://registry.npmjs.org'
-      - run: npm publish --access public ./npm/bitrouter-bro-npm-package.tar.gz
+      - uses: oven-sh/setup-bun@v2
+      - run: bun publish --access public ./npm/bitrouter-bro-npm-package.tar.gz
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_REGISTRY: https://registry.npmjs.org
+          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   announce:
     needs:

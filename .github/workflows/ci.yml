@@ -1,9 +1,5 @@
 name: CI
 'on':
-  push:
-    branches:
-    - v1
-    - main
   pull_request:
     branches:
     - '**'
@@ -63,6 +59,7 @@ jobs:
               apps/bitrouter/tests/product_process.rs|apps/bitrouter/tests/support/product_bro.rs|.github/scripts/ci-bro-sandbox.sh)
                 bro=true; gateway=true ;;
               apps/bro/*) bro=true ;;
+              helpers/behavior-upstream/*|tests/behavior/*) gateway=true ;;
               apps/bitrouter/*|templates/*) gateway=true ;;
               *) shared=true ;;
             esac
@@ -121,20 +118,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v6
-    - uses: actions/setup-node@v4
-      with:
-        node-version: '22'
+    - uses: oven-sh/setup-bun@v2
+    - name: Install repository JavaScript tooling
+      run: bun install --frozen-lockfile --ignore-scripts
+    - name: Install Claude Code's native binary
+      run: bun run install:claude-native
     - name: claude plugin validate (strict)
-      run: |
-        npm install -g @anthropic-ai/claude-code
-        claude plugin validate . --strict
+      run: bun x --bun claude plugin validate . --strict
     - name: codex loader exercise (presence-asserted)
       run: |
-        npm install -g @openai/codex
         export CODEX_HOME="$(mktemp -d)"
-        codex plugin marketplace add "$PWD"
-        codex plugin add bitrouter@bitrouter
-        codex plugin list --json | tee /tmp/codex-plugins.json
+        bun x --bun codex plugin marketplace add "$PWD"
+        bun x --bun codex plugin add bitrouter@bitrouter
+        bun x --bun codex plugin list --json | tee /tmp/codex-plugins.json
         jq -e '.installed[] | select(.name == "bitrouter")' /tmp/codex-plugins.json
   clippy:
     name: clippy (ubuntu-latest)
@@ -299,6 +295,11 @@ jobs:
       env:
         SUITE: ${{ matrix.suite }}
       run: bash .github/actions/test-archive/build.sh "$SUITE"
+    - name: Build the behavior upstream fixture
+      if: runner.os == 'Linux' && matrix.profile == 'full'
+      run: |
+        cargo build --locked -p bitrouter-behavior-upstream
+        cp target/debug/bitrouter-behavior-upstream ci-artifacts/
     - name: Record the artifact revision and checksums
       run: |
         cd ci-artifacts
@@ -309,6 +310,7 @@ jobs:
         elif [[ "$RUNNER_OS" == Linux ]]; then
           files=(*.tar.zst)
           if [[ -f native-ap-sdk-consumer ]]; then files+=(native-ap-sdk-consumer); fi
+          if [[ -f bitrouter-behavior-upstream ]]; then files+=(bitrouter-behavior-upstream); fi
           sha256sum -- "${files[@]}" > checksums.sha256
         else
           sha256sum -- *.tar.zst > checksums.sha256
@@ -504,6 +506,22 @@ jobs:
     - name: Run the all-feature gateway integration tests
       if: "!cancelled() && runner.os == 'Linux' && matrix.profile == 'full' && steps.archives.outcome == 'success'"
       run: bash .github/scripts/ci-test.sh service --test-threads 2 -E 'kind(test)'
+    - uses: actions/setup-node@v4
+      if: "!cancelled() && runner.os == 'Linux' && matrix.profile == 'full'"
+      with:
+        node-version: '22.19.0'
+    - uses: oven-sh/setup-bun@v2
+      if: "!cancelled() && runner.os == 'Linux' && matrix.profile == 'full'"
+    - name: Run deterministic client behavior tests
+      if: "!cancelled() && runner.os == 'Linux' && matrix.profile == 'full' && steps.archives.outcome == 'success'"
+      env:
+        BITROUTER_TEST_GATEWAY_BINARY: ${{ github.workspace }}/target/debug/bitrouter
+        BITROUTER_TEST_BEHAVIOR_UPSTREAM: ${{ github.workspace }}/ci-artifacts/bitrouter-behavior-upstream
+      run: |
+        chmod +x "$BITROUTER_TEST_BEHAVIOR_UPSTREAM"
+        bun install --frozen-lockfile --ignore-scripts
+        export BITROUTER_TEST_NODE="$(command -v node)"
+        bun run --bun test:behavior
     - name: Install the BRO process-test sandbox
       id: sandbox
       if: "!cancelled() && runner.os == 'Linux' && matrix.profile == 'full' && steps.archives.outcome == 'success'"

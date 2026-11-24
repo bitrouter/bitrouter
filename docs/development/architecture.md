@@ -517,6 +517,40 @@ cargo test --workspace --all-features
 
 CI additionally runs `doc` (rustdoc under `-D warnings`), `doctest`, `feature-isolation` (the SDK's default tree stays free of axum, the OTel stack never reaches the SDK at any feature combination, and the two OTLP transports stay isolated), `sdk-public-api` (see below), and `msrv` (pinned to Rust 1.93). AI agents should also read [`CLAUDE.md`](../../CLAUDE.md).
 
+### Client behavior tests
+
+The root Bun project owns the TypeScript tooling and test dependencies. Build
+the gateway and fixture, run `bun install --frozen-lockfile` once, then provide
+their paths:
+
+```sh
+cargo build -p bitrouter -p bitrouter-behavior-upstream
+BITROUTER_TEST_NODE="$(command -v node)" \
+BITROUTER_TEST_GATEWAY_BINARY="$PWD/target/debug/bitrouter" \
+BITROUTER_TEST_BEHAVIOR_UPSTREAM="$PWD/target/debug/bitrouter-behavior-upstream" \
+  bun run --bun test:behavior
+```
+
+The deterministic matrix drives Pi and the Vercel AI SDK through streaming
+Responses and Messages ingress, across both outbound protocols. It uses
+`helpers/behavior-upstream` for the stateful wiremock model endpoint. The suite
+does not build Cargo targets; CI supplies the exact artifacts from
+`build-gateway`.
+
+The `behavior-live` workflow on main builds the revision once and runs the same
+clients against configured OpenAI and Anthropic models. A successful
+`behavior-live` check for the commit is required before release-plz, tag
+Release, and tag Distribution acceptance can proceed. Live inputs are
+`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
+`BITROUTER_LIVE_OPENAI_MODEL`, and `BITROUTER_LIVE_ANTHROPIC_MODEL`. Run it
+locally with the same `BITROUTER_TEST_NODE` and gateway path variables via
+`bun run --bun test:behavior:live`.
+
+Known client compatibility gaps are recorded as Vitest expected failures rather
+than silently skipped. In particular, AI SDK's Responses schema rejects the
+gateway's `response.in_progress` event because the synthesized response object
+omits `created_at`; remove the `.fails` marker only when that event validates.
+
 ### HTTP/2 feature isolation
 
 The `application-features` matrix checks the lean `http2` and
