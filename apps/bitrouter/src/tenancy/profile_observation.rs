@@ -16,7 +16,7 @@ use bitrouter_ai::tenancy::{
 };
 use chrono::Utc;
 use serde::Serialize;
-use tokio::{sync::SemaphorePermit, time::Instant};
+use tokio::{sync::OwnedSemaphorePermit, time::Instant};
 
 use super::{
     Service,
@@ -31,7 +31,7 @@ pub(in crate::tenancy) struct Read<'a> {
     caller: Caller,
     state: Arc<Snapshot>,
     deadline: Instant,
-    _permit: SemaphorePermit<'a>,
+    permit: Arc<OwnedSemaphorePermit>,
 }
 
 fn deadline(at: Instant) -> Result<(), Failure> {
@@ -60,7 +60,7 @@ impl Service {
         if !matches!(caller, Caller::Installation(_)) {
             return Err(ErrorCode::Forbidden.into());
         }
-        let permit = self.read_permit()?;
+        let permit = self.owned_read_permit()?;
         let state = self.profile_observation_current()?;
         state.principal(caller, Utc::now()).map_err(Failure::from)?;
         if installation.is_some_and(|expected| *expected != state.installation) {
@@ -72,7 +72,7 @@ impl Service {
             caller: caller.clone(),
             state,
             deadline: at,
-            _permit: permit,
+            permit,
         })
     }
 }
@@ -103,11 +103,14 @@ impl Read<'_> {
         self.revision(request.expected_authority_revision)?;
         let identity = tokio::time::timeout_at(
             self.deadline,
-            self.service
-                .authority_read(super::actor::AuthoritySubject::Profiles {
+            self.service.authority_read_with_permit(
+                super::actor::AuthoritySubject::Profiles {
                     caller: self.caller.clone(),
                     references: request.profiles.clone(),
-                }),
+                },
+                self.permit.clone(),
+                self.deadline,
+            ),
         )
         .await
         .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))??;

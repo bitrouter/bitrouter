@@ -50,7 +50,7 @@ use futures::{
     future::{BoxFuture, Shared},
 };
 use sea_orm::DatabaseConnection;
-use tokio::sync::{Semaphore, SemaphorePermit, mpsc, oneshot};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, SemaphorePermit, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use self::{
@@ -770,6 +770,14 @@ impl Service {
             .map_err(|_| ErrorCode::CapacityExceeded.into())
     }
 
+    fn owned_read_permit(&self) -> Result<Arc<OwnedSemaphorePermit>, Failure> {
+        self.reads
+            .clone()
+            .try_acquire_owned()
+            .map(Arc::new)
+            .map_err(|_| ErrorCode::CapacityExceeded.into())
+    }
+
     #[cfg(test)]
     async fn admission_snapshot_for_test(&self) -> Result<Snapshot, Failure> {
         let mut snapshot = (*self.current()?).clone();
@@ -834,13 +842,24 @@ impl Service {
         &self,
         prepare: impl FnOnce() -> Result<actor::AuthoritySubject, Failure>,
     ) -> Result<authority::live::Authenticated, Failure> {
-        let permit = self
-            .reads
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| Failure::from(ErrorCode::CapacityExceeded))?;
+        let permit = self.owned_read_permit()?;
         let subject = prepare()?;
         let deadline = tokio::time::Instant::now() + MANAGEMENT_TIMEOUT;
+        self.authority_read_with_permit(subject, permit, deadline)
+            .await
+    }
+
+    // A retained read and its actor job share one reservation. Either owner
+    // keeps it charged, including after HTTP cancellation until SQL cleanup.
+    async fn authority_read_with_permit(
+        &self,
+        subject: actor::AuthoritySubject,
+        permit: Arc<OwnedSemaphorePermit>,
+        deadline: tokio::time::Instant,
+    ) -> Result<authority::live::Authenticated, Failure> {
+        if !Arc::ptr_eq(permit.semaphore(), &self.reads) {
+            return Err(ErrorCode::AuthorityUnavailable.into());
+        }
         let (reply, receive) = oneshot::channel();
         self.enqueue(
             Job::AuthorityRead(actor::AuthorityRead {
