@@ -1,7 +1,7 @@
 //! The same owned tenancy lifecycle runs on file SQLite and real PostgreSQL.
 use super::*;
 use crate::config::tenancy::TenancyConfig;
-use sea_orm::ConnectionTrait;
+use sea_orm::{ConnectionTrait, TransactionTrait};
 #[cfg(feature = "db-postgres")]
 use std::time::Duration;
 
@@ -136,6 +136,27 @@ async fn exercise(url: &str) -> Result<()> {
     };
     fixture.service.shutdown().await?;
     drop(fixture.service);
+    // Relocate through the same archive implementation, then require both the
+    // crash-recovery child and final owner to decode the original receipt.
+    let tx = fixture.db.begin().await?;
+    let saved = crate::tenancy::receipts::store::lookup_terminal(
+        &tx,
+        &installation,
+        &fixture.tenant,
+        &execution,
+    )
+    .await?
+    .context("receipt before archive")?;
+    let crate::tenancy::receipts::store::format::Terminal::Strict(candidate) = &saved else {
+        anyhow::bail!("strict fixture receipt");
+    };
+    let prepared =
+        crate::tenancy::receipts::store::archive::Prepared::new(candidate, &|_, _| Ok(()))?;
+    ensure!(
+        crate::tenancy::receipts::store::archive::archive_one(&tx, &prepared, &|_, _| Ok(()))
+            .await?
+    );
+    tx.commit().await?;
     fixture.db.close().await?;
     let child = tokio::process::Command::new(std::env::current_exe()?)
         .args([

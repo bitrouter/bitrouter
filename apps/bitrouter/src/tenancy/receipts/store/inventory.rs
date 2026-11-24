@@ -156,7 +156,7 @@ async fn scan_locations(
                         Expr::cust(if backend == DatabaseBackend::Sqlite {
                             "length(payload)"
                         } else {
-                            "octet_length(payload)"
+                            "CAST(octet_length(payload) AS BIGINT)"
                         }),
                         Alias::new("stored_bytes"),
                     )
