@@ -19,7 +19,7 @@ async fn fixture(url: &str) -> Result<Fixture> {
         crate::tenancy::store::load(&fixture.db, Utc::now()).await?,
         Arc::new(crate::tenancy::resources::Resources::with_key(
             fixture.installation.clone(),
-            [43; 32],
+            rand::random(),
         )?),
         Provisioning {
             import: None,

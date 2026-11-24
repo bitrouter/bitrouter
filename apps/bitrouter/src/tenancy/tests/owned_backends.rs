@@ -1,7 +1,9 @@
 //! The same owned tenancy lifecycle runs on file SQLite and real PostgreSQL.
 use super::*;
 use crate::config::tenancy::TenancyConfig;
-use sea_orm::{ConnectionTrait, TransactionTrait};
+#[cfg(feature = "db-postgres")]
+use sea_orm::ConnectionTrait;
+use sea_orm::TransactionTrait;
 #[cfg(feature = "db-postgres")]
 use std::time::Duration;
 
