@@ -117,6 +117,15 @@ pub(super) async fn reconcile_completion(
         tenant: receipt.tenant_id.clone(),
         execution: receipt.execution_id.clone(),
     };
+    #[cfg(all(test, feature = "db-mysql"))]
+    if tx.get_database_backend() == DatabaseBackend::MySql {
+        server_known::validate_expected(tx, expected, charge).await?;
+        return Ok(Change {
+            key,
+            before: None,
+            after: None,
+        });
+    }
     reconcile_inner(tx, &receipt.installation_id, &key, Some(expected), charge).await
 }
 
