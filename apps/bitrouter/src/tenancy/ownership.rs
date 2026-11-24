@@ -16,7 +16,11 @@ pub(crate) struct Lease {
 }
 
 struct Acquisition {
-    _lock: File,
+    _lock: Option<File>,
+    postgres: bool,
+    #[cfg(feature = "db-postgres")]
+    connected: std::sync::atomic::AtomicBool,
+    lost: tokio_util::sync::CancellationToken,
     path: PathBuf,
     exclusive: bool,
     id: String,
@@ -34,9 +38,48 @@ impl Claim {
     }
 }
 impl Lease {
+    pub(crate) fn postgres() -> Self {
+        Self {
+            path: PathBuf::new(),
+            acquisition: Arc::new(Acquisition {
+                _lock: None,
+                path: PathBuf::new(),
+                postgres: true,
+                #[cfg(feature = "db-postgres")]
+                connected: std::sync::atomic::AtomicBool::new(false),
+                lost: tokio_util::sync::CancellationToken::new(),
+                exclusive: true,
+                id: uuid::Uuid::new_v4().to_string(),
+                claimed: std::sync::atomic::AtomicBool::new(false),
+            }),
+        }
+    }
+    #[cfg(feature = "db-postgres")]
+    pub(crate) fn connect_postgres_once(&self) -> bool {
+        !self
+            .acquisition
+            .connected
+            .swap(true, std::sync::atomic::Ordering::AcqRel)
+    }
+    pub(crate) fn is_postgres(&self) -> bool {
+        self.acquisition.postgres
+    }
+    #[cfg(feature = "db-postgres")]
+    pub(crate) fn lost(&self) -> tokio_util::sync::CancellationToken {
+        self.acquisition.lost.clone()
+    }
+    pub(crate) fn volume(&self) -> Option<&std::path::Path> {
+        if self.is_postgres() {
+            None
+        } else {
+            self.path.parent()
+        }
+    }
     pub(crate) fn claim(&self) -> Result<Claim> {
         ensure!(
-            self.acquisition.exclusive && self.path == self.acquisition.path,
+            self.acquisition.exclusive
+                && self.path == self.acquisition.path
+                && !self.acquisition.lost.is_cancelled(),
             "recovery requires the actual exclusive acquisition"
         );
         self.acquisition
@@ -53,7 +96,44 @@ impl Lease {
         })
     }
     pub(crate) fn exclusive(&self) -> bool {
-        self.acquisition.exclusive && self.path == self.acquisition.path
+        self.acquisition.exclusive
+            && self.path == self.acquisition.path
+            && !self.acquisition.lost.is_cancelled()
+    }
+}
+
+#[cfg(feature = "db-postgres")]
+pub(super) async fn monitor_postgres(
+    db: &sea_orm::DatabaseConnection,
+    owner: &Lease,
+    stop: tokio_util::sync::CancellationToken,
+    proof: Arc<super::transaction::Proof>,
+) {
+    use sea_orm::sqlx::Connection;
+    let pool = db.get_postgres_connection_pool();
+    let lost = owner.lost();
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+    loop {
+        tokio::select! {
+            _ = stop.cancelled() => break,
+            _ = lost.cancelled() => { proof.quarantine(); break; },
+            _ = interval.tick() => {
+                // Busy transactions retain the session. Waiting for that pool
+                // slot is not evidence of lost ownership and is never timed.
+                let Some(mut connection) = pool.try_acquire() else { continue; };
+                let result = tokio::time::timeout(std::time::Duration::from_secs(2), connection.ping()).await;
+                if !matches!(result, Ok(Ok(()))) {
+                    lost.cancel();
+                    proof.quarantine();
+                    // Bound shutdown of the already fenced session. A timeout
+                    // drops its socket; it cannot restore authority or permit reconnect.
+                    if !matches!(tokio::time::timeout(std::time::Duration::from_secs(1), connection.close()).await, Ok(Ok(()))) {
+                        tracing::warn!("lost tenancy owner session close was unconfirmed");
+                    }
+                    break;
+                }
+            }
+        }
     }
 }
 
@@ -180,7 +260,11 @@ fn lock_path(path: &std::path::Path, create: bool, exclusive: bool) -> Result<Le
     }
     Ok(Lease {
         acquisition: Arc::new(Acquisition {
-            _lock: lock,
+            _lock: Some(lock),
+            postgres: false,
+            #[cfg(feature = "db-postgres")]
+            connected: std::sync::atomic::AtomicBool::new(false),
+            lost: tokio_util::sync::CancellationToken::new(),
             path: canonical.clone(),
             exclusive,
             id: uuid::Uuid::new_v4().to_string(),

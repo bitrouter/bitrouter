@@ -31,8 +31,8 @@ impl ConnectionTrait for Probe<'_> {
         statement: Statement,
     ) -> std::result::Result<Vec<QueryResult>, DbErr> {
         let sql = statement.to_string();
-        let metadata = sql.contains("AS stored_bytes");
-        let payload = sql.contains("AS payload");
+        let metadata = sql.contains(r#"AS "stored_bytes""#);
+        let payload = sql.contains(r#"AS "payload""#);
         if payload {
             self.payload_queries.fetch_add(1, Ordering::SeqCst);
         }

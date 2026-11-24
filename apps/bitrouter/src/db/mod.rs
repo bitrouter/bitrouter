@@ -18,6 +18,8 @@ mod exclusive_migrations;
 pub mod migration;
 #[cfg(test)]
 mod migration_atomicity;
+#[cfg(feature = "db-postgres")]
+mod postgres;
 mod sqlite;
 mod sqlite_schema;
 pub(crate) mod store_format;
@@ -50,6 +52,10 @@ pub(crate) struct OwnedDatabase {
     owner: crate::tenancy::ownership::Lease,
 }
 impl OwnedDatabase {
+    #[cfg(test)]
+    pub(crate) fn owner(&self) -> crate::tenancy::ownership::Lease {
+        self.owner.clone()
+    }
     pub(crate) fn database(&self) -> &DatabaseConnection {
         &self.db
     }
@@ -70,6 +76,10 @@ impl OwnedDatabase {
     ) -> anyhow::Result<()> {
         use anyhow::{Context, ensure};
         ensure!(self.owner.exclusive(), "exclusive migration owner required");
+        if self.db.get_database_backend() == DatabaseBackend::Postgres {
+            run_migrations(&self.db).await?;
+            return Ok(());
+        }
         if !pending_sqlite_migrations(&self.db).await? {
             return Ok(());
         }
@@ -113,7 +123,15 @@ async fn pending_sqlite_migrations(db: &DatabaseConnection) -> anyhow::Result<bo
     Ok(store_format::inspect(db).await? != store_format::State::Current)
 }
 pub(crate) async fn connect_owned_tenancy(url: &str) -> anyhow::Result<OwnedDatabase> {
-    let owner = crate::tenancy::ownership::acquire(url)?;
+    validate_backend_availability(url)?;
+    let owner = if matches!(
+        url::Url::parse(url).ok().as_ref().map(url::Url::scheme),
+        Some("postgres" | "postgresql")
+    ) {
+        crate::tenancy::ownership::Lease::postgres()
+    } else {
+        crate::tenancy::ownership::acquire(url)?
+    };
     anyhow::ensure!(owner.exclusive(), "exclusive file owner required");
     let db = connect_tenancy(url, &owner).await?;
     Ok(OwnedDatabase { db, owner })
@@ -143,11 +161,33 @@ async fn connect_inner(
             .map_err(|error| {
                 BitrouterError::internal(format!("connecting to SQLite database: {error:#}"))
             })?
+    } else if matches!(
+        url::Url::parse(&normalized)
+            .ok()
+            .as_ref()
+            .map(url::Url::scheme),
+        Some("postgres" | "postgresql")
+    ) {
+        #[cfg(feature = "db-postgres")]
+        {
+            (
+                postgres::connect(&normalized, opts, owner)
+                    .await
+                    .map_err(|error| {
+                        BitrouterError::internal(format!("opening PostgreSQL database: {error:#}"))
+                    })?,
+                false,
+            )
+        }
+        #[cfg(not(feature = "db-postgres"))]
+        return Err(BitrouterError::bad_request(
+            "PostgreSQL requires db-postgres",
+        ));
     } else {
         (
-            Database::connect(opts).await.map_err(|e| {
-                BitrouterError::internal(format!("connecting to database {url}: {e}"))
-            })?,
+            Database::connect(opts)
+                .await
+                .map_err(|e| BitrouterError::internal(format!("connecting to database: {e}")))?,
             false,
         )
     };

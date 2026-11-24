@@ -17,6 +17,28 @@ impl Sources {
     }
 }
 
+fn add_pending(
+    sources: &mut Sources,
+    candidate: Option<&Candidate>,
+    metadata: &oauth::Metadata,
+    key: &Key,
+) -> Result<()> {
+    let work = match &metadata.state {
+        oauth::State::RefreshStarted(work) | oauth::State::Quarantined(work) => work,
+        oauth::State::Ready => return Ok(()),
+    };
+    if work.tenant != key.tenant || work.execution != key.execution {
+        return Ok(());
+    }
+    if !witnessed(candidate, metadata, work)? {
+        sources.add(
+            PENDING,
+            DateTime::parse_from_rfc3339(work.started_at.as_str())?.with_timezone(&Utc),
+        );
+    }
+    Ok(())
+}
+
 // Same exact immutable binding as auxiliary_store::pending_receipted, evaluated
 // against the already charged canonical candidate rather than reloading it.
 fn witnessed(
@@ -97,9 +119,25 @@ pub(super) async fn read_expected(
     } else {
         charge(2, 1024)?;
         for table in ["tenancy_usage_evidence", "tenancy_receipt_auxiliary"] {
-            ensure!(db.query_one(sql(format!("SELECT 1 FROM {table} WHERE installation_id=? AND tenant_id=? AND execution_id=? LIMIT 1"), [installation.as_str().into(), key.tenant.as_str().into(), key.execution.as_str().into()])).await?.is_none(), "orphan unknown source evidence");
+            let backend = supported(db)?;
+            let query = Query::select()
+                .from(Alias::new(table))
+                .expr(Expr::val(1_i32))
+                .and_where(Expr::col(Alias::new("installation_id")).eq(installation.as_str()))
+                .and_where(Expr::col(Alias::new("tenant_id")).eq(key.tenant.as_str()))
+                .and_where(Expr::col(Alias::new("execution_id")).eq(key.execution.as_str()))
+                .limit(1)
+                .to_owned();
+            ensure!(
+                db.query_one(backend.build(&query)).await?.is_none(),
+                "orphan unknown source evidence"
+            );
         }
     }
+    let strict = match &candidate {
+        Some(format::Terminal::Strict(c)) => Some(c.as_ref()),
+        _ => None,
+    };
     let mut after: Option<String> = None;
     loop {
         let page = oauth::pending::for_execution(
@@ -115,22 +153,8 @@ pub(super) async fn read_expected(
             break;
         }
         for metadata in page {
-            let work = match &metadata.state {
-                oauth::State::RefreshStarted(work) | oauth::State::Quarantined(work) => work,
-                oauth::State::Ready => anyhow::bail!("Ready OAuth pending source"),
-            };
             charge(0, crate::tenancy::receipts::auxiliary::MAX_BYTES * 2)?;
-            let strict = match &candidate {
-                Some(format::Terminal::Strict(c)) => Some(c.as_ref()),
-                _ => None,
-            };
-            if !witnessed(strict, &metadata, work)? {
-                sources.add(
-                    PENDING,
-                    DateTime::parse_from_rfc3339(work.started_at.as_str())?.with_timezone(&Utc),
-                );
-            }
-            // Do not stop at the first source: later slots may be corrupt.
+            add_pending(&mut sources, strict, &metadata, key)?;
             after = Some(metadata.slot);
         }
     }
@@ -165,7 +189,7 @@ async fn keys(
     pending: bool,
     charge: &Charge<'_>,
 ) -> Result<Vec<Key>> {
-    sqlite(db)?;
+    let backend = supported(db)?;
     charge(PAGE, PAGE * 512)?;
     let (table, tenant, execution) = if pending {
         (
@@ -176,29 +200,42 @@ async fn keys(
     } else {
         ("tenancy_execution_receipts", "tenant_id", "execution_id")
     };
-    // DISTINCT and ordering operate on the raw covering-index columns; guarded
+    // Grouping and ordering operate on the raw covering-index columns; guarded
     // projections are decoded below and never silently omitted as invalid keys.
-    let mut query = format!(
-        "SELECT DISTINCT {tenant} AS tenant_id,{execution} AS execution_id FROM {table} WHERE installation_id=?"
-    );
-    let mut values: Vec<Value> = vec![installation.as_str().into()];
+    let mut query = Query::select();
+    let guarded = |name: &str| {
+        if backend == DatabaseBackend::Sqlite {
+            format!(
+                "CASE WHEN typeof({name})='text' AND length(CAST({name} AS BLOB)) BETWEEN 1 AND 128 THEN {name} ELSE NULL END"
+            )
+        } else {
+            format!("CASE WHEN octet_length({name}) BETWEEN 1 AND 128 THEN {name} ELSE NULL END")
+        }
+    };
+    query
+        .from(Alias::new(table))
+        .expr_as(Expr::cust(guarded(tenant)), Alias::new("tenant_id"))
+        .expr_as(Expr::cust(guarded(execution)), Alias::new("execution_id"))
+        .and_where(Expr::col(Alias::new("installation_id")).eq(installation.as_str()))
+        .order_by(Alias::new(tenant), Order::Asc)
+        .order_by(Alias::new(execution), Order::Asc)
+        .limit(PAGE as u64);
     if pending {
-        query.push_str(" AND pending_tenant_id IS NOT NULL AND pending_execution_id IS NOT NULL");
+        query
+            .group_by_columns([Alias::new(tenant), Alias::new(execution)])
+            .and_where(Expr::col(Alias::new("pending_tenant_id")).is_not_null())
+            .and_where(Expr::col(Alias::new("pending_execution_id")).is_not_null());
     }
     if let Some(after) = after {
-        query.push_str(&format!(" AND ({tenant},{execution})>(?,?)"));
-        values.extend([
-            after.tenant.as_str().into(),
-            after.execution.as_str().into(),
-        ]);
+        let tenant_key = Expr::col(Alias::new(tenant));
+        query.and_where(
+            tenant_key.clone().gt(after.tenant.as_str()).or(tenant_key
+                .eq(after.tenant.as_str())
+                .and(Expr::col(Alias::new(execution)).gt(after.execution.as_str()))),
+        );
     }
-    query.push_str(&format!(" ORDER BY {tenant},{execution} LIMIT ?"));
-    values.push(i64::try_from(PAGE)?.into());
-    // Guard before transfer; only a bounded inner key page reaches these CASEs.
-    let query = format!(
-        "SELECT CASE WHEN typeof(tenant_id)='text' AND length(CAST(tenant_id AS BLOB)) BETWEEN 1 AND 128 THEN tenant_id ELSE NULL END AS tenant_id,CASE WHEN typeof(execution_id)='text' AND length(CAST(execution_id AS BLOB)) BETWEEN 1 AND 128 THEN execution_id ELSE NULL END AS execution_id FROM ({query})"
-    );
-    let rows = db.query_all(sql(query, values)).await?;
+    let statement = backend.build(&query);
+    let rows = db.query_all(statement).await?;
     let mut result = Vec::new();
     result.try_reserve_exact(rows.len())?;
     let mut previous = after.cloned();

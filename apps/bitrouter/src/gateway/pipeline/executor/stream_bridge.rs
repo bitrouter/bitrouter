@@ -238,7 +238,8 @@ impl HttpExecutor {
                     target,
                     ctx,
                     Some(true),
-                )?;
+                )
+                .await?;
                 if let Some(guard) = routing_guard {
                     guard.sent()?;
                 }

@@ -83,7 +83,7 @@ struct Constraint {
 fn expected(backend: DatabaseBackend) -> Result<Vec<Table>> {
     let mut tables: Vec<Table> = serde_json::from_str(include_str!("current_schema/expected.json"))
         .context("invalid compiled current schema model")?;
-    if backend != DatabaseBackend::Sqlite {
+    if backend == DatabaseBackend::MySql {
         tables.retain(|table| !table.sqlite_only);
         for table in &mut tables {
             table.columns.retain(|column| !column.sqlite_only);
@@ -95,6 +95,12 @@ fn expected(backend: DatabaseBackend) -> Result<Vec<Table>> {
         }
     }
     Ok(tables)
+}
+
+#[cfg(all(test, feature = "db-postgres"))]
+pub(crate) fn legacy_postgres_statements() -> Result<Vec<String>> {
+    // The preceding server format excluded the SQLite ownership projections.
+    definition::statements(DatabaseBackend::Postgres, expected(DatabaseBackend::MySql)?)
 }
 
 /// Render fresh DDL from the same definition used by all catalog validators.
@@ -177,8 +183,28 @@ async fn validate_inner(db: &impl ConnectionTrait, legacy: bool) -> Result<()> {
         .iter()
         .map(|table| table.name.as_str())
         .collect::<BTreeSet<_>>();
-    let extra = names.iter().any(|name| !ordinary.contains(name.as_str()));
-    let (shared_tables, shared_sequences) = shared_composition(db, extra).await?;
+    let optional_names = [
+        "tenancy_provider_technical_facts",
+        "tenancy_provider_technical_schema",
+    ];
+    let optional_present = optional_names
+        .iter()
+        .filter(|name| names.contains(**name))
+        .count();
+    let optional_tables = if optional_present == 0 {
+        BTreeSet::new()
+    } else {
+        crate::db::migration::provider_technical::validate(db).await?;
+        optional_names
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>()
+    };
+    let extra = names
+        .iter()
+        .any(|name| !ordinary.contains(name.as_str()) && !optional_tables.contains(name.as_str()));
+    let (mut shared_tables, shared_sequences) = shared_composition(db, extra).await?;
+    shared_tables.extend(optional_tables);
     ensure!(
         names.len() == expected.len() + shared_tables.len()
             && shared_tables.iter().all(|name| names.contains(name)),
@@ -565,6 +591,18 @@ fn check_matches(backend: DatabaseBackend, expected: &str, observed: &str) -> bo
     // MySQL 8.4 can serialize quotes in CHECK_CLAUSE as backslash-quote.
     // Compare the escaped spelling of the trusted pattern without decoding
     // escapes in an arbitrary catalog expression.
+    if backend == DatabaseBackend::Postgres
+        && let Some((column, bounds)) = expected.split_once("between")
+        && column
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        && let Some((lower, upper)) = bounds.split_once("and")
+        && lower.parse::<i64>().is_ok()
+        && upper.parse::<i64>().is_ok()
+        && observed == format!("{column}>={lower}and{column}<={upper}")
+    {
+        return true;
+    }
     expected == observed
         // PostgreSQL deparses this integer IN constraint as a scalar-array
         // comparison. Recognize only the exact compiled domain and column;
@@ -621,7 +659,11 @@ fn normalized(value: &str) -> String {
             out.push(character.to_ascii_lowercase());
         }
     }
-    if out.starts_with("publication_state=anyarray[") && out.ends_with(']') {
+    if (out.starts_with("publication_state=anyarray[")
+        || out.starts_with("storage_kind=anyarray[")
+        || out.starts_with("escalated=anyarray["))
+        && out.ends_with(']')
+    {
         out = out.replacen("=anyarray[", "in", 1);
         out.pop();
     }

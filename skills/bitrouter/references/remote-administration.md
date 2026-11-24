@@ -35,10 +35,22 @@ It is not a personal usage scope. Inference `server.skip_auth` has no effect.
 `control:tenancy` is a separate installation-management grant. It does not imply
 `control:read` or `control:reload`; use a dedicated credential when only tenant
 management is needed. The optional `tenancy.enabled: true` service requires
-authenticated ingress, this explicit operator grant, local gateway state and a
-literal SQLite file URL. This profile supports one owning process on Unix;
-shared databases, memory databases, encoded paths and the host coding-task API
-are rejected. Enabling or disabling tenancy requires restart. Once provisioned,
+authenticated ingress, this explicit operator grant and local gateway state.
+Storage defaults to a literal SQLite file on Unix. With `db-postgres`, an
+explicit PostgreSQL URL supports one owning process using a database-scoped
+session advisory lock. Connect directly to PostgreSQL or through a session-affine
+endpoint, since transaction or statement pooling cannot retain a session lock.
+All tenancy transactions use that physical session;
+losing it fences dispatch and requires a process restart. SQLite memory
+databases and encoded paths are rejected. The host coding-task API is unavailable.
+Set `tenancy.expected_installation_id` to require an existing installation before
+schema changes or recovery. `tenancy.expected_wrapping_key_sha256` optionally
+pins the lowercase hex SHA256 of the exact wrapping-key environment string.
+A missing installation, identity mismatch or key mismatch refuses startup.
+The PostgreSQL storage baseline is `m20261124_000008_gateway_postgres`.
+The preceding `m20261118_000007_gateway_server` format is refused before writes;
+retain that database and its original binary, and initialize the current format
+in a separate empty database before moving data. Enabling or disabling tenancy requires restart. Once provisioned,
 the store cannot be reopened by ordinary local database commands with tenancy
 disabled; use protected HTTP administration. Read-only host reports remain
 available. Stop all old writers before first enabling tenancy, especially older
@@ -81,7 +93,7 @@ tenancy:
       tenant_queue: 64
 ```
 
-This requires the same authenticated control and exclusive SQLite profile as
+This requires the same authenticated control and exclusive ownership profile as
 other tenancy settings. Increasing a budget does not override a request's
 permissions or public protocol limits. Queues may be zero to disable waiting;
 other counts and bytes must be positive. Capacity changes require restart.

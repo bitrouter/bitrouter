@@ -1263,21 +1263,20 @@ impl HttpExecutor {
                 .headers()
                 .get(reqwest::header::AUTHORIZATION)
                 .cloned();
-            let mut routing_guard = None;
-            let mut arm = || {
-                if tenancy::legacy_routing(ctx) {
-                    routing_guard = Some(crate::tenancy::routing::admit(ctx, target)?);
-                }
-                tenancy::admit_send(
-                    tenant_binding.as_ref(),
-                    &mut tenant_attempt,
-                    &mut request,
-                    target,
-                    ctx,
-                    None,
-                )
+            let routing_guard = if tenancy::legacy_routing(ctx) {
+                Some(crate::tenancy::routing::admit(ctx, target)?)
+            } else {
+                None
             };
-            let _tenant_attempt = arm()?;
+            let _tenant_attempt = tenancy::admit_send(
+                tenant_binding.as_ref(),
+                &mut tenant_attempt,
+                &mut request,
+                target,
+                ctx,
+                None,
+            )
+            .await?;
             if let Some(guard) = routing_guard {
                 guard.sent()?;
             }
@@ -1672,7 +1671,8 @@ impl Executor for HttpExecutor {
                     target,
                     ctx,
                     Some(false),
-                )?;
+                )
+                .await?;
                 if let Some(guard) = routing_guard {
                     guard.sent()?;
                 }

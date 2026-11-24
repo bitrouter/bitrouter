@@ -26,7 +26,11 @@ fn selection(installation: Option<&InstallationId>, after: Option<&str>) -> Sele
     selected
 }
 
-fn keys(mut selected: SelectStatement) -> SelectStatement {
+fn keys(mut selected: SelectStatement, backend: DatabaseBackend) -> SelectStatement {
+    if backend != DatabaseBackend::Sqlite {
+        selected.column(Alias::new("slot_key"));
+        return selected;
+    }
     selected.expr_as(Expr::cust("CASE WHEN typeof(slot_key)='text' AND length(CAST(slot_key AS BLOB)) BETWEEN 1 AND 64 THEN slot_key ELSE NULL END"), Alias::new("slot_key"));
     selected
 }
@@ -38,11 +42,11 @@ async fn metadata_page(
     charge: &Charge<'_>,
 ) -> Result<Vec<Metadata>> {
     ensure!(
-        db.get_database_backend() == DatabaseBackend::Sqlite,
-        "indexed OAuth requires SQLite"
+        db.get_database_backend() != DatabaseBackend::MySql,
+        "indexed OAuth requires owned tenancy storage"
     );
     charge(PAGE as usize, PAGE as usize * (META_BYTES + 2048))?;
-    let selected = keys(selected);
+    let selected = keys(selected, db.get_database_backend());
     let keys = db
         .query_all(db.get_database_backend().build(&selected))
         .await?;

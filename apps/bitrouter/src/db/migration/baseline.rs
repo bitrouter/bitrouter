@@ -85,7 +85,7 @@ pub(super) async fn open(connection: SchemaManagerConnection<'_>) -> Result<(), 
                 _ => "INSERT INTO seaql_migrations(version,applied_at) VALUES (?,?)",
             },
             [
-                store_format::GATEWAY_SERVER.into(),
+                store_format::marker(tx.get_database_backend()).into(),
                 chrono::Utc::now().timestamp().into(),
             ],
         ))

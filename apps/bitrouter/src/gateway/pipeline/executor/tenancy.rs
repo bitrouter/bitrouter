@@ -335,7 +335,7 @@ pub(in crate::gateway::pipeline::executor) async fn authenticate_static_exact(
     ))
 }
 
-pub(super) fn admit_send(
+pub(super) async fn admit_send(
     binding: Option<&BoundAuthentication>,
     permit: &mut Option<crate::tenancy::receipts::journal::AttemptPermit>,
     request: &mut reqwest::Request,
@@ -393,6 +393,10 @@ pub(super) fn admit_send(
             let permit = permit
                 .as_mut()
                 .ok_or_else(|| execution.reject(ErrorCode::Forbidden))?;
+            execution
+                .verify_database_owner()
+                .await
+                .map_err(|code| execution.reject(code))?;
             let attempt_id = execution
                 .arm_attempt_with_oauth(target, permit, &binding.stamp, binding.oauth.as_ref())
                 .map_err(|code| execution.reject(code))?;

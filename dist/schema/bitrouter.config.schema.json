@@ -2485,6 +2485,22 @@
             "null"
           ]
         },
+        "expected_installation_id": {
+          "default": null,
+          "description": "Require an existing installation with this ID before startup writes.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expected_wrapping_key_sha256": {
+          "default": null,
+          "description": "SHA256 of the wrapping-key environment value, encoded as lowercase hex.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "ordered_attempt_limit": {
           "default": 8,
           "description": "Maximum candidates in an explicit ordered submission, from 1 through\n64. This is a per-execution work budget; strict dispatch is bounded at 8.",

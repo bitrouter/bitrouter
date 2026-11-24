@@ -846,19 +846,19 @@ async fn charged_body_rechecks_between_scalar_and_payload_reads() -> Result<()> 
             false,
         ),
         (
-            " AS inline_bytes",
+            r#" AS "inline_bytes""#,
             "UPDATE tenancy_usage_evidence SET evidence_json=evidence_json||' '",
             true,
             false,
         ),
         (
-            " AS inline_bytes",
+            r#" AS "inline_bytes""#,
             "UPDATE tenancy_usage_evidence SET receipt_digest=printf('%064d',0)",
             true,
             true,
         ),
         (
-            " AS inline_bytes",
+            r#" AS "inline_bytes""#,
             "UPDATE tenancy_usage_evidence SET byte_count=1.5",
             true,
             true,

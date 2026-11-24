@@ -5,6 +5,7 @@
 //! Current authority is checked again at every provider boundary; finalization
 //! retains ownership without granting permission to start more provider work.
 
+use sea_orm::ConnectionTrait;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -196,7 +197,12 @@ impl Service {
         check: impl FnOnce(&mut super::authority::live::ReadGuard<'_>) -> Result<T, ErrorCode>,
     ) -> Result<T, ErrorCode> {
         let mut guard = self.authority.read()?;
-        if !self.live.load(Ordering::Acquire) {
+        if self
+            .owner_lost
+            .as_ref()
+            .is_some_and(tokio_util::sync::CancellationToken::is_cancelled)
+            || !self.live.load(Ordering::Acquire)
+        {
             return Err(ErrorCode::AuthorityUnavailable);
         }
         if submission.deadline.expired() || submission.cancelled.is_cancelled() {
@@ -421,7 +427,9 @@ impl Service {
         drop(revision);
         // Bound volumes are refreshed under accounting before count pins/grants.
         // Preserve the existing refusal/test behavior for an unbound volume.
-        if self.receipt_volume.is_none() {
+        if self.receipt_volume.is_none()
+            && self.db.get_database_backend() == sea_orm::DatabaseBackend::Sqlite
+        {
             let free = super::receipts::capacity::free_space(self.receipt_volume.as_deref())
                 .map_err(|_| Failure::from(ErrorCode::StorageUnavailable))?;
             self.admission.receipt_probe(free);
@@ -814,6 +822,43 @@ impl TenantExecution {
             .map_err(super::receipts::journal_error)?;
         permit.bind_operational(self.bound_hop(target)?);
         Ok(permit)
+    }
+
+    /// Verify the original PostgreSQL owner before the final synchronous send gate.
+    pub(crate) async fn verify_database_owner(&self) -> Result<(), ErrorCode> {
+        if self.service.db.get_database_backend() != sea_orm::DatabaseBackend::Postgres {
+            return Ok(());
+        }
+        self.revalidate()?;
+        // Borrowed store-consumer fixtures predate the owning-process profile.
+        // The owned backend suite supplies a real lease and exercises this gate.
+        #[cfg(test)]
+        if self.service.owner_lost.is_none() {
+            return Ok(());
+        }
+        let statement =
+            sea_orm::Statement::from_string(sea_orm::DatabaseBackend::Postgres, "SELECT 1");
+        let query = self.service.db.query_one(statement);
+        let lost = self
+            .service
+            .owner_lost
+            .as_ref()
+            .ok_or(ErrorCode::AuthorityUnavailable)?;
+        let result = tokio::select! {
+            biased;
+            _ = lost.cancelled() => { self.service.cleanup.quarantine(); return Err(ErrorCode::StorageUnavailable); },
+            result = query => result,
+        };
+        match result {
+            Ok(Some(_)) => self.revalidate(),
+            Err(sea_orm::DbErr::ConnectionAcquire(sea_orm::ConnAcquireErr::Timeout)) => {
+                Err(ErrorCode::CapacityExceeded)
+            }
+            _ => {
+                self.service.cleanup.quarantine();
+                Err(ErrorCode::StorageUnavailable)
+            }
+        }
     }
 
     /// The last synchronous current-grant check and arming share one authority lock.

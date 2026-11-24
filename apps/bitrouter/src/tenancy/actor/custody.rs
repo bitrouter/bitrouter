@@ -1,5 +1,6 @@
 //! The owning actor supervises transactions; HTTP owns only its response waiter.
 
+use sea_orm::ConnectionTrait;
 use std::future::{Future, pending, poll_fn};
 use std::panic::AssertUnwindSafe;
 use std::task::Poll;
@@ -417,9 +418,13 @@ impl Worker {
                     .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
                 let inventory =
                     inventory.map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
-                let volume = self.owner.as_ref().and_then(|owner| owner.path.parent());
-                let free = crate::tenancy::receipts::capacity::free_space(volume)
-                    .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
+                let volume = self.owner.as_ref().and_then(|owner| owner.volume());
+                let free = if self.db.get_database_backend() == sea_orm::DatabaseBackend::Postgres {
+                    u64::MAX
+                } else {
+                    crate::tenancy::receipts::capacity::free_space(volume)
+                        .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?
+                };
                 self.admission
                     .initialize_receipts(inventory, free)
                     .map_err(|code| self.unavailable(code))?;

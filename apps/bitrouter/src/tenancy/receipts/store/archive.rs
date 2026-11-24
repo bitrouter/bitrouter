@@ -1,11 +1,14 @@
-//! SQLite payload relocation. The caller owns eligibility, transaction custody,
+//! Receipt payload relocation. The caller owns eligibility, transaction custody,
 //! disk reservations and publication; relocation never releases a live owner.
 use anyhow::{Context, Result, ensure};
 use bitrouter_ai::tenancy::{
     execution::Outcome,
     identity::{ExecutionId, InstallationId, TenantId},
 };
-use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseTransaction, Statement, Value};
+use sea_orm::{
+    ConnectionTrait, DatabaseBackend, DatabaseTransaction, Statement, Value,
+    sea_query::{Alias, Expr, Query, SelectStatement},
+};
 
 use super::Candidate;
 
@@ -16,6 +19,7 @@ mod tests;
 
 pub(in crate::tenancy) type Charge<'a> = dyn Fn(usize, usize) -> Result<()> + Sync + 'a;
 const TABLE: &str = "tenancy_receipt_archive";
+#[cfg(test)]
 const KEY: &str = "installation_id=? AND tenant_id=? AND execution_id=?";
 
 /// Progress through inline history, with at most one fully decoded candidate.
@@ -41,6 +45,7 @@ pub(in crate::tenancy) async fn next_candidate(
     select::next(tx, installation, after, charge).await
 }
 
+#[cfg(test)]
 fn values(installation: &InstallationId, tenant: &TenantId, id: &ExecutionId) -> [Value; 3] {
     [
         installation.as_str().into(),
@@ -51,11 +56,55 @@ fn values(installation: &InstallationId, tenant: &TenantId, id: &ExecutionId) ->
 fn sqlite(sql: impl Into<String>, values: impl IntoIterator<Item = Value>) -> Statement {
     Statement::from_sql_and_values(DatabaseBackend::Sqlite, sql, values)
 }
-fn integer(name: &str) -> String {
-    format!("CASE WHEN typeof({name})='integer' THEN {name} ELSE NULL END AS {name}")
+fn backend(db: &impl ConnectionTrait) -> Result<DatabaseBackend> {
+    let backend = db.get_database_backend();
+    ensure!(
+        matches!(backend, DatabaseBackend::Sqlite | DatabaseBackend::Postgres),
+        "receipt archive backend unavailable"
+    );
+    Ok(backend)
+}
+fn integer(backend: DatabaseBackend, name: &str) -> String {
+    if backend == DatabaseBackend::Sqlite {
+        format!("CASE WHEN typeof({name})='integer' THEN {name} ELSE NULL END")
+    } else {
+        format!("CAST({name} AS BIGINT)")
+    }
+}
+fn octets(backend: DatabaseBackend, name: &str) -> String {
+    if backend == DatabaseBackend::Sqlite {
+        format!("length(CAST({name} AS BLOB))")
+    } else {
+        format!("CAST(octet_length({name}) AS BIGINT)")
+    }
+}
+fn scoped(
+    table: &str,
+    installation: &InstallationId,
+    tenant: &TenantId,
+    id: &ExecutionId,
+) -> SelectStatement {
+    Query::select()
+        .from(Alias::new(table))
+        .and_where(Expr::col(Alias::new("installation_id")).eq(installation.as_str()))
+        .and_where(Expr::col(Alias::new("tenant_id")).eq(tenant.as_str()))
+        .and_where(Expr::col(Alias::new("execution_id")).eq(id.as_str()))
+        .to_owned()
+}
+async fn present(
+    db: &impl ConnectionTrait,
+    table: &str,
+    installation: &InstallationId,
+    tenant: &TenantId,
+    id: &ExecutionId,
+) -> Result<bool> {
+    let backend = backend(db)?;
+    let mut query = scoped(table, installation, tenant, id);
+    query.expr(Expr::val(1_i32)).limit(1);
+    Ok(db.query_one(backend.build(&query)).await?.is_some())
 }
 
-/// SQLite terminal staging only: true proves both exact-key rows are absent in
+/// Terminal staging only: true proves both exact-key rows are absent in
 /// this transaction. False requires the full canonical replay check; an archive
 /// alongside an existing receipt may be legitimate. No validity filter may
 /// turn a corrupt existing row into absence, and errors never mean missing.
@@ -65,24 +114,8 @@ pub(super) async fn missing_receipt(
     tenant: &TenantId,
     id: &ExecutionId,
 ) -> Result<bool> {
-    ensure!(
-        tx.get_database_backend() == DatabaseBackend::Sqlite,
-        "receipt presence probe requires SQLite"
-    );
-    let row = tx
-        .query_one(sqlite(
-            format!(
-                "SELECT EXISTS(SELECT 1 FROM {} WHERE {KEY}) AS receipt_present, EXISTS(SELECT 1 FROM {TABLE} WHERE {KEY}) AS archive_present",
-                super::TABLE
-            ),
-            values(installation, tenant, id)
-                .into_iter()
-                .chain(values(installation, tenant, id)),
-        ))
-        .await?
-        .context("receipt presence result missing")?;
-    let receipt: bool = row.try_get("", "receipt_present")?;
-    let archive: bool = row.try_get("", "archive_present")?;
+    let receipt = present(tx, super::TABLE, installation, tenant, id).await?;
+    let archive = present(tx, TABLE, installation, tenant, id).await?;
     ensure!(receipt || !archive, "orphan or duplicate receipt archive");
     Ok(!receipt)
 }
@@ -93,16 +126,11 @@ pub(super) async fn ensure_inline(
     tenant: &TenantId,
     id: &ExecutionId,
 ) -> Result<()> {
-    if db.get_database_backend() != DatabaseBackend::Sqlite {
+    if db.get_database_backend() == DatabaseBackend::MySql {
         return Ok(());
     }
     ensure!(
-        db.query_one(sqlite(
-            format!("SELECT 1 FROM {TABLE} WHERE {KEY} LIMIT 1"),
-            values(installation, tenant, id)
-        ))
-        .await?
-        .is_none(),
+        !present(db, TABLE, installation, tenant, id).await?,
         "orphan or duplicate receipt archive"
     );
     Ok(())
@@ -115,17 +143,29 @@ pub(super) async fn load(
     id: &ExecutionId,
     charge: &Charge<'_>,
 ) -> Result<(String, String)> {
-    ensure!(
-        db.get_database_backend() == DatabaseBackend::Sqlite,
-        "receipt archive requires SQLite"
-    );
+    let backend = backend(db)?;
     charge(2, 1024)?;
-    let columns = ["format_version", "codec", "receipt_bytes", "usage_bytes"]
-        .map(integer)
-        .join(",");
-    let rows = db.query_all(sqlite(format!(
-        "SELECT {columns}, CASE WHEN typeof(payload)='blob' AND length(payload) BETWEEN 1 AND {} THEN length(payload) ELSE NULL END AS stored_bytes FROM {TABLE} WHERE {KEY} LIMIT 2",
-        codec::MAX_PAYLOAD), values(installation, tenant, id))).await?;
+    let mut query = scoped(TABLE, installation, tenant, id);
+    for name in ["format_version", "codec", "receipt_bytes", "usage_bytes"] {
+        query.expr_as(Expr::cust(integer(backend, name)), Alias::new(name));
+    }
+    let kind = if backend == DatabaseBackend::Sqlite {
+        "typeof(payload)='blob' AND "
+    } else {
+        ""
+    };
+    query
+        .expr_as(
+            Expr::cust(format!(
+                "CASE WHEN {kind}{} BETWEEN 1 AND {} THEN {} ELSE NULL END",
+                octets(backend, "payload"),
+                codec::MAX_PAYLOAD,
+                octets(backend, "payload")
+            )),
+            Alias::new("stored_bytes"),
+        )
+        .limit(2);
+    let rows = db.query_all(backend.build(&query)).await?;
     ensure!(rows.len() == 1, "missing or duplicate receipt archive");
     let row = &rows[0];
     let version: i64 = row.try_get("", "format_version")?;
@@ -150,9 +190,17 @@ pub(super) async fn load(
     )?;
     // Guard again in the payload SELECT: growth or a type change after preflight
     // must become NULL before the database driver allocates a cell.
-    let rows = db.query_all(sqlite(format!(
-        "SELECT CASE WHEN typeof(payload)='blob' AND length(payload)={stored} AND format_version={version} AND codec={codec} AND receipt_bytes={receipt_bytes} AND usage_bytes={usage_bytes} THEN payload ELSE NULL END AS payload FROM {TABLE} WHERE {KEY} LIMIT 2"
-    ), values(installation, tenant, id))).await?;
+    let mut query = scoped(TABLE, installation, tenant, id);
+    query
+        .expr_as(
+            Expr::cust(format!(
+                "CASE WHEN {kind}{}={stored} AND format_version={version} AND codec={codec} AND receipt_bytes={receipt_bytes} AND usage_bytes={usage_bytes} THEN payload ELSE NULL END",
+                octets(backend, "payload")
+            )),
+            Alias::new("payload"),
+        )
+        .limit(2);
+    let rows = db.query_all(backend.build(&query)).await?;
     charge(0, 0)?;
     ensure!(rows.len() == 1, "receipt archive changed during load");
     codec::Encoded {
@@ -167,7 +215,7 @@ pub(super) async fn load(
 
 /// Check sidecar location without loading an inline body. Archived metadata
 /// remains authoritative for presence, schema, both digests and logical size.
-/// Returns the required SQLite sidecar's verified length.
+/// Returns the required sidecar's verified length.
 pub(in crate::tenancy::receipts) async fn usage_metadata(
     db: &impl ConnectionTrait,
     r: &bitrouter_ai::tenancy::execution::ExecutionReceipt,
@@ -176,17 +224,46 @@ pub(in crate::tenancy::receipts) async fn usage_metadata(
     archived: bool,
     charge: &Charge<'_>,
 ) -> Result<usize> {
-    ensure!(
-        db.get_database_backend() == DatabaseBackend::Sqlite,
-        "receipt archive requires SQLite"
-    );
+    let backend = backend(db)?;
     charge(2, 2048)?;
-    let columns = ["schema_version", "byte_count", "storage_kind"]
-        .map(integer)
-        .join(",");
-    let rows = db.query_all(sqlite(format!(
-        "SELECT {columns}, CASE WHEN typeof(evidence_json)='text' THEN length(CAST(evidence_json AS BLOB)) ELSE NULL END AS inline_bytes, CASE WHEN typeof(evidence_digest)='text' AND length(CAST(evidence_digest AS BLOB))=64 THEN evidence_digest ELSE NULL END AS evidence_digest, CASE WHEN typeof(receipt_digest)='text' AND length(CAST(receipt_digest AS BLOB))=64 THEN receipt_digest ELSE NULL END AS receipt_digest FROM tenancy_usage_evidence WHERE {KEY} LIMIT 2"
-    ), values(&r.installation_id, &r.tenant_id, &r.execution_id))).await?;
+    let mut query = scoped(
+        "tenancy_usage_evidence",
+        &r.installation_id,
+        &r.tenant_id,
+        &r.execution_id,
+    );
+    for name in ["schema_version", "byte_count", "storage_kind"] {
+        query.expr_as(Expr::cust(integer(backend, name)), Alias::new(name));
+    }
+    let text = if backend == DatabaseBackend::Sqlite {
+        "typeof(evidence_json)='text' AND "
+    } else {
+        ""
+    };
+    query.expr_as(
+        Expr::cust(format!(
+            "CASE WHEN {text}{} >= 0 THEN {} ELSE NULL END",
+            octets(backend, "evidence_json"),
+            octets(backend, "evidence_json")
+        )),
+        Alias::new("inline_bytes"),
+    );
+    for name in ["evidence_digest", "receipt_digest"] {
+        let kind = if backend == DatabaseBackend::Sqlite {
+            format!("typeof({name})='text' AND ")
+        } else {
+            String::new()
+        };
+        query.expr_as(
+            Expr::cust(format!(
+                "CASE WHEN {kind}{}=64 THEN {name} ELSE NULL END",
+                octets(backend, name)
+            )),
+            Alias::new(name),
+        );
+    }
+    query.limit(2);
+    let rows = db.query_all(backend.build(&query)).await?;
     charge(0, 0)?;
     ensure!(rows.len() <= 1, "usage evidence multiplicity");
     let row = rows.first().context("missing usage evidence")?;
@@ -311,10 +388,7 @@ pub(in crate::tenancy) async fn archive_one(
     prepared: &Prepared,
     charge: &Charge<'_>,
 ) -> Result<bool> {
-    ensure!(
-        tx.get_database_backend() == DatabaseBackend::Sqlite,
-        "receipt archive requires SQLite"
-    );
+    let backend = backend(tx)?;
     let saved = super::lookup_candidate_bounded(
         tx,
         &prepared.installation,
@@ -330,15 +404,18 @@ pub(in crate::tenancy) async fn archive_one(
     );
     known(&saved)?;
     let r = &saved.receipt;
+    let mut marker = scoped(
+        super::TABLE,
+        &r.installation_id,
+        &r.tenant_id,
+        &r.execution_id,
+    );
+    marker.expr_as(
+        Expr::cust(integer(backend, "storage_kind")),
+        Alias::new("storage_kind"),
+    );
     let row = tx
-        .query_one(sqlite(
-            format!(
-                "SELECT {} FROM {} WHERE {KEY}",
-                integer("storage_kind"),
-                super::TABLE
-            ),
-            values(&r.installation_id, &r.tenant_id, &r.execution_id),
-        ))
+        .query_one(backend.build(&marker))
         .await?
         .context("receipt archive marker missing")?;
     match row.try_get::<i64>("", "storage_kind")? {
@@ -369,30 +446,64 @@ pub(in crate::tenancy) async fn archive_one(
             .checked_add(4096)
             .context("receipt archive write allocation")?,
     )?;
-    let mut parameters = values(&r.installation_id, &r.tenant_id, &r.execution_id).to_vec();
-    parameters.extend([
-        encoded.version.into(),
-        encoded.codec.into(),
-        i64::try_from(encoded.receipt_bytes)?.into(),
-        i64::try_from(encoded.usage_bytes)?.into(),
-        encoded.payload.clone().into(),
-    ]);
-    ensure!(tx.execute(sqlite(format!("INSERT INTO {TABLE} (installation_id,tenant_id,execution_id,format_version,codec,receipt_bytes,usage_bytes,payload) VALUES (?,?,?,?,?,?,?,?)"), parameters)).await?.rows_affected() == 1,
-        "receipt archive insert count");
-    ensure!(tx.execute(sqlite(format!("UPDATE tenancy_usage_evidence SET evidence_json='',storage_kind=1 WHERE {KEY} AND storage_kind=0"),
-        values(&r.installation_id, &r.tenant_id, &r.execution_id))).await?.rows_affected() == 1,
-        "receipt archive usage update count");
+    let insert = Query::insert()
+        .into_table(Alias::new(TABLE))
+        .columns(
+            [
+                "installation_id",
+                "tenant_id",
+                "execution_id",
+                "format_version",
+                "codec",
+                "receipt_bytes",
+                "usage_bytes",
+                "payload",
+            ]
+            .map(Alias::new),
+        )
+        .values([
+            r.installation_id.as_str().into(),
+            r.tenant_id.as_str().into(),
+            r.execution_id.as_str().into(),
+            encoded.version.into(),
+            encoded.codec.into(),
+            i64::try_from(encoded.receipt_bytes)?.into(),
+            i64::try_from(encoded.usage_bytes)?.into(),
+            encoded.payload.clone().into(),
+        ])?
+        .to_owned();
     ensure!(
-        tx.execute(sqlite(
-            format!(
-                "UPDATE {} SET receipt_json='',storage_kind=1 WHERE {KEY} AND storage_kind=0",
-                super::TABLE
-            ),
-            values(&r.installation_id, &r.tenant_id, &r.execution_id)
-        ))
-        .await?
-        .rows_affected()
-            == 1,
+        tx.execute(backend.build(&insert)).await?.rows_affected() == 1,
+        "receipt archive insert count"
+    );
+    let mut usage = Query::update();
+    usage
+        .table(Alias::new("tenancy_usage_evidence"))
+        .values([
+            (Alias::new("evidence_json"), "".into()),
+            (Alias::new("storage_kind"), 1_i32.into()),
+        ])
+        .and_where(Expr::col(Alias::new("installation_id")).eq(r.installation_id.as_str()))
+        .and_where(Expr::col(Alias::new("tenant_id")).eq(r.tenant_id.as_str()))
+        .and_where(Expr::col(Alias::new("execution_id")).eq(r.execution_id.as_str()))
+        .and_where(Expr::col(Alias::new("storage_kind")).eq(0_i32));
+    ensure!(
+        tx.execute(backend.build(&usage)).await?.rows_affected() == 1,
+        "receipt archive usage update count"
+    );
+    let mut receipt = Query::update();
+    receipt
+        .table(Alias::new(super::TABLE))
+        .values([
+            (Alias::new("receipt_json"), "".into()),
+            (Alias::new("storage_kind"), 1_i32.into()),
+        ])
+        .and_where(Expr::col(Alias::new("installation_id")).eq(r.installation_id.as_str()))
+        .and_where(Expr::col(Alias::new("tenant_id")).eq(r.tenant_id.as_str()))
+        .and_where(Expr::col(Alias::new("execution_id")).eq(r.execution_id.as_str()))
+        .and_where(Expr::col(Alias::new("storage_kind")).eq(0_i32));
+    ensure!(
+        tx.execute(backend.build(&receipt)).await?.rows_affected() == 1,
         "receipt archive marker update count"
     );
     crate::db::migration::capacity::adjust(

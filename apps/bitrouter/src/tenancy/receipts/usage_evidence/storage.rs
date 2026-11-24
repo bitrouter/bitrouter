@@ -210,7 +210,7 @@ pub(in crate::tenancy::receipts) async fn validate_inline(
     expected: &str,
     charge: Option<&Charge<'_>>,
 ) -> Result<Evidence> {
-    if db.get_database_backend() == DatabaseBackend::Sqlite {
+    if db.get_database_backend() != DatabaseBackend::MySql {
         let uncharged = |_, _| Ok(());
         let measured = store::archive::usage_metadata(
             db,
@@ -246,14 +246,18 @@ async fn load(
     expected: &str,
     charge: Option<&Charge<'_>>,
 ) -> Result<Evidence> {
-    if db.get_database_backend() == DatabaseBackend::Sqlite {
+    if db.get_database_backend() != DatabaseBackend::MySql {
         if let Some(charge) = charge {
             charge(1, 256)?;
         }
         let query = Query::select()
             .from(Alias::new("tenancy_execution_receipts"))
             .expr_as(
-                Expr::cust(integer_cell(DatabaseBackend::Sqlite, "storage_kind")),
+                Expr::cust(if db.get_database_backend() == DatabaseBackend::Postgres {
+                    "CAST(storage_kind AS BIGINT)".to_owned()
+                } else {
+                    integer_cell(db.get_database_backend(), "storage_kind")
+                }),
                 Alias::new("storage_kind"),
             )
             .and_where(
@@ -263,7 +267,10 @@ async fn load(
             .and_where(Expr::col(Alias::new("execution_id")).eq(receipt.execution_id.as_str()))
             .limit(1)
             .to_owned();
-        if let Some(row) = db.query_one(DatabaseBackend::Sqlite.build(&query)).await? {
+        if let Some(row) = db
+            .query_one(db.get_database_backend().build(&query))
+            .await?
+        {
             match row.try_get::<i64>("", "storage_kind")? {
                 0 => {}
                 1 => {

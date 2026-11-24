@@ -487,3 +487,67 @@ fn execution_id(response: &reqwest::Response) -> Result<ExecutionId> {
         .to_str()?
         .try_into()?)
 }
+
+/// Reuse the serving harness with the connector's real database and lease.
+#[cfg(unix)]
+pub(in crate::tenancy::tests) async fn owned_backend_dispatch(
+    fixture: Fixture,
+    owner: crate::tenancy::ownership::Lease,
+) -> Result<(Fixture, ExecutionId)> {
+    let h = Harness::with_initial(
+        "chat_completions",
+        StatusCode::OK,
+        serde_json::to_string(&json_response(
+            "chat_completions",
+            full_usage("chat_completions"),
+        )?)?,
+        false,
+        None,
+        false,
+        Some((fixture, owner)),
+    )
+    .await?;
+    let client = Harness::client(false)?;
+    let response = h.send(&client).send().await?;
+    if response.status() != StatusCode::OK {
+        let status = response.status();
+        anyhow::bail!(
+            "owned backend inference failed: {status}, {}",
+            response.text().await?
+        );
+    }
+    let execution = execution_id(&response)?;
+    let body: Value = response.json().await?;
+    ensure!(body["choices"][0]["message"]["content"] == "receipt reply");
+    let receipt = h.receipt(&client, &execution).await?;
+    ensure!(receipt.execution_id == execution && receipt.attempts.len() == 1);
+    let replay = h.receipt(&client, &execution).await?;
+    ensure!(serde_json::to_vec(&receipt)? == serde_json::to_vec(&replay)?);
+    ensure!(h.calls.load(Ordering::SeqCst) == 1);
+    // The tenant token cannot read the same receipt through another tenant URL.
+    let denied = client
+        .get(format!(
+            "{}/control/v1/tenants/foreign/executions/{}",
+            h.base, execution
+        ))
+        .bearer_auth(h.credential.secret.as_deref().context("secret")?)
+        .header("bitrouter-installation-id", h.fixture.installation.as_str())
+        .send()
+        .await?;
+    ensure!(denied.status() == StatusCode::FORBIDDEN || denied.status() == StatusCode::NOT_FOUND);
+    let Harness {
+        fixture,
+        _gateway: gateway,
+        _provider: provider,
+        ..
+    } = h;
+    gateway.abort();
+    if let Err(error) = gateway.await {
+        ensure!(error.is_cancelled(), "gateway fixture join failed");
+    }
+    provider.abort();
+    if let Err(error) = provider.await {
+        ensure!(error.is_cancelled(), "provider fixture join failed");
+    }
+    Ok((fixture, execution))
+}

@@ -50,7 +50,23 @@ pub(super) async fn preflight(
         "tenancy_oauth_slots",
     ] {
         charge(1, 256)?;
-        ensure!(db.query_one(sql(format!("SELECT 1 FROM {table} WHERE typeof(installation_id)<>'text' OR installation_id<>? LIMIT 1"), [installation.as_str().into()])).await?.is_none(), "foreign unknown inventory installation");
+        let backend = supported(db)?;
+        let invalid = if backend == DatabaseBackend::Sqlite {
+            Expr::cust("typeof(installation_id)<>'text'")
+                .or(Expr::col(Alias::new("installation_id")).ne(installation.as_str()))
+        } else {
+            Expr::col(Alias::new("installation_id")).ne(installation.as_str())
+        };
+        let query = Query::select()
+            .from(Alias::new(table))
+            .expr(Expr::val(1_i32))
+            .and_where(invalid)
+            .limit(1)
+            .to_owned();
+        ensure!(
+            db.query_one(backend.build(&query)).await?.is_none(),
+            "foreign unknown inventory installation"
+        );
     }
     for table in [
         "tenancy_receipt_auxiliary",
@@ -58,7 +74,8 @@ pub(super) async fn preflight(
         "tenancy_receipt_archive",
     ] {
         charge(1, 256)?;
-        ensure!(db.query_one(sql(format!("SELECT 1 FROM {table} e LEFT JOIN tenancy_execution_receipts r ON e.installation_id=r.installation_id AND e.tenant_id=r.tenant_id AND e.execution_id=r.execution_id WHERE r.execution_id IS NULL LIMIT 1"), [])).await?.is_none(), "orphan unknown inventory evidence");
+        let backend = supported(db)?;
+        ensure!(db.query_one(Statement::from_string(backend, format!("SELECT 1 FROM {table} e LEFT JOIN tenancy_execution_receipts r ON e.installation_id=r.installation_id AND e.tenant_id=r.tenant_id AND e.execution_id=r.execution_id WHERE r.execution_id IS NULL LIMIT 1"))).await?.is_none(), "orphan unknown inventory evidence");
     }
     Ok(())
 }

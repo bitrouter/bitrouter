@@ -8,6 +8,16 @@ pub(crate) const GATEWAY_SQLITE: &str = "m20261124_000008_gateway_sqlite_capacit
 
 pub(crate) const LEGACY_GATEWAY_SERVER: &str = "m20261118_000007_gateway_server";
 pub(crate) const GATEWAY_SERVER: &str = "m20261124_000009_gateway_server_capacity";
+pub(crate) const LEGACY_GATEWAY_POSTGRES: &str = "m20261124_000008_gateway_postgres";
+pub(crate) const GATEWAY_POSTGRES: &str = "m20261124_000010_gateway_postgres_capacity";
+
+pub(crate) fn marker(backend: DatabaseBackend) -> &'static str {
+    match backend {
+        DatabaseBackend::Sqlite => GATEWAY_SQLITE,
+        DatabaseBackend::Postgres => GATEWAY_POSTGRES,
+        DatabaseBackend::MySql => GATEWAY_SERVER,
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum State {
@@ -18,11 +28,7 @@ pub(crate) enum State {
 
 /// Select the product schema before enabling WAL or acquiring write authority.
 pub(crate) async fn inspect(db: &impl ConnectionTrait) -> Result<State> {
-    let marker = if db.get_database_backend() == DatabaseBackend::Sqlite {
-        GATEWAY_SQLITE
-    } else {
-        GATEWAY_SERVER
-    };
+    let marker = marker(db.get_database_backend());
     let state = inspect_marker(db, marker).await?;
     if state == State::Current && db.get_database_backend() == DatabaseBackend::Sqlite {
         super::sqlite_schema::validate(db, true).await?;

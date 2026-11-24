@@ -3,10 +3,10 @@
 use super::*;
 use archive::Charge;
 use chrono::{DateTime, Utc};
-use sea_orm::{Statement, Value};
-mod io;
+use sea_orm::Statement;
 #[cfg(test)]
-mod server_known;
+use sea_orm::Value;
+mod io;
 pub(in crate::tenancy) mod sources;
 #[cfg(test)]
 pub(crate) mod tests;
@@ -61,15 +61,17 @@ impl Change {
         i64::from(self.after.is_some()) - i64::from(self.before.is_some())
     }
 }
+#[cfg(test)]
 fn sql(query: impl Into<String>, values: impl IntoIterator<Item = Value>) -> Statement {
     Statement::from_sql_and_values(DatabaseBackend::Sqlite, query, values)
 }
-fn sqlite(db: &impl ConnectionTrait) -> Result<()> {
+fn supported(db: &impl ConnectionTrait) -> Result<DatabaseBackend> {
+    let backend = db.get_database_backend();
     ensure!(
-        db.get_database_backend() == DatabaseBackend::Sqlite,
-        "unknown projection requires SQLite"
+        matches!(backend, DatabaseBackend::Sqlite | DatabaseBackend::Postgres),
+        "unknown projection backend unavailable"
     );
-    Ok(())
+    Ok(backend)
 }
 
 fn due(first: DateTime<Utc>) -> Result<DateTime<Utc>> {
@@ -91,15 +93,6 @@ pub(in crate::tenancy) async fn reconcile(
     key: &Key,
     charge: &Charge<'_>,
 ) -> Result<Change> {
-    #[cfg(test)]
-    if tx.get_database_backend() != DatabaseBackend::Sqlite {
-        server_known::validate(tx, installation, Some(key), charge).await?;
-        return Ok(Change {
-            key: key.clone(),
-            before: None,
-            after: None,
-        });
-    }
     reconcile_inner(tx, installation, key, None, charge).await
 }
 
@@ -123,7 +116,7 @@ async fn reconcile_inner(
     expected: Option<&Candidate>,
     charge: &Charge<'_>,
 ) -> Result<Change> {
-    sqlite(tx)?;
+    supported(tx)?;
     let before = lookup(tx, installation, key, charge).await?;
     let source = sources::read_expected(tx, installation, key, expected, charge).await?;
     if let Some(old) = &before {
@@ -177,7 +170,7 @@ pub(in crate::tenancy) async fn lookup(
     key: &Key,
     charge: &Charge<'_>,
 ) -> Result<Option<Record>> {
-    sqlite(db)?;
+    supported(db)?;
     io::lookup(db, installation, key, charge).await
 }
 
@@ -189,7 +182,7 @@ pub(in crate::tenancy) async fn page(
     after: Option<&Key>,
     charge: &Charge<'_>,
 ) -> Result<Vec<Record>> {
-    sqlite(db)?;
+    supported(db)?;
     io::page(db, installation, after, charge).await
 }
 
@@ -202,14 +195,18 @@ pub(in crate::tenancy) async fn tenant_count(
     tenant: &TenantId,
     charge: &Charge<'_>,
 ) -> Result<u64> {
-    #[cfg(test)]
-    if db.get_database_backend() != DatabaseBackend::Sqlite {
-        server_known::validate(db, installation, None, charge).await?;
-        return Ok(0);
-    }
-    sqlite(db)?;
+    let backend = supported(db)?;
     charge(1, 128)?;
-    let row = db.query_one(sql("SELECT COUNT(*) AS count FROM tenancy_unknown_obligations WHERE installation_id=? AND tenant_id=?", [installation.as_str().into(), tenant.as_str().into()])).await?.context("unknown tenant count")?;
+    let query = Query::select()
+        .from(Alias::new(TABLE))
+        .expr_as(Expr::cust("CAST(COUNT(*) AS BIGINT)"), Alias::new("count"))
+        .and_where(Expr::col(Alias::new("installation_id")).eq(installation.as_str()))
+        .and_where(Expr::col(Alias::new("tenant_id")).eq(tenant.as_str()))
+        .to_owned();
+    let row = db
+        .query_one(backend.build(&query))
+        .await?
+        .context("unknown tenant count")?;
     let count = u64::try_from(row.try_get::<i64>("", "count")?)?;
     charge(0, 0)?;
     Ok(count)
@@ -223,7 +220,7 @@ pub(in crate::tenancy) async fn due_page(
     now: DateTime<Utc>,
     charge: &Charge<'_>,
 ) -> Result<Vec<Record>> {
-    sqlite(db)?;
+    supported(db)?;
     io::due_page(db, installation, now, charge).await
 }
 
@@ -233,12 +230,7 @@ pub(in crate::tenancy) async fn next_due(
     installation: &InstallationId,
     charge: &Charge<'_>,
 ) -> Result<Option<DateTime<Utc>>> {
-    #[cfg(test)]
-    if db.get_database_backend() != DatabaseBackend::Sqlite {
-        server_known::validate(db, installation, None, charge).await?;
-        return Ok(None);
-    }
-    sqlite(db)?;
+    supported(db)?;
     io::next_due(db, installation, charge).await
 }
 
@@ -276,12 +268,7 @@ pub(in crate::tenancy) async fn validate(
     installation: &InstallationId,
     charge: &Charge<'_>,
 ) -> Result<Inventory> {
-    #[cfg(test)]
-    if tx.get_database_backend() != DatabaseBackend::Sqlite {
-        server_known::validate(tx, installation, None, charge).await?;
-        return Ok(Fold::new().finish());
-    }
-    sqlite(tx)?;
+    supported(tx)?;
     validation::run(tx, installation, charge).await
 }
 
@@ -297,7 +284,7 @@ pub(in crate::tenancy) async fn validate_with_budget(
     installation: &InstallationId,
     charge: &Charge<'_>,
 ) -> Result<Inventory> {
-    sqlite(db)?;
+    supported(db)?;
     charge(validation::WORKING_ROWS, validation::WORKING_BYTES)?;
     validation::run(db, installation, &|rows, bytes| {
         // Bounds changes in subordinate readers must update the documented

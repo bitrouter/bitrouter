@@ -2616,7 +2616,8 @@
       },
       {
         "name": "payload",
-        "kind": "blob",
+        "kind": "bytea",
+        "sqlite_kind": "blob",
         "nullable": false,
         "binary": false,
         "automatic": false,
