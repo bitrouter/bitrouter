@@ -416,11 +416,21 @@ impl Harness {
             )
             .send()
             .await?;
-        ensure!(
-            response.status() == StatusCode::OK,
-            "receipt read: {}",
-            response.status()
-        );
+        let status = response.status();
+        if status != StatusCode::OK {
+            let service = &self.fixture.service;
+            let current = service.current().map(|_| ()).map_err(|error| error.0.code);
+            let transaction = service.cleanup.disposition();
+            let receipts_ready = service.admission.receipts_ready();
+            let owner_lost = service
+                .owner_lost
+                .as_ref()
+                .is_some_and(tokio_util::sync::CancellationToken::is_cancelled);
+            let body = response.text().await;
+            anyhow::bail!(
+                "receipt read: {status}, body={body:?}, current={current:?}, transaction={transaction:?}, receipts_ready={receipts_ready}, owner_lost={owner_lost}"
+            );
+        }
         ensure!(
             response
                 .headers()

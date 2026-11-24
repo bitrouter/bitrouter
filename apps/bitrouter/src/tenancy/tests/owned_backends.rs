@@ -7,6 +7,9 @@ use sea_orm::TransactionTrait;
 #[cfg(feature = "db-postgres")]
 use std::time::Duration;
 
+#[cfg(feature = "db-postgres")]
+mod acquisition;
+
 async fn exercise(url: &str) -> Result<()> {
     let owned = crate::db::connect_owned_tenancy(url).await?;
     let expected = TenancyConfig {
@@ -264,6 +267,13 @@ async fn postgres_owned_tenancy_lifecycle() -> Result<()> {
     .await?;
     let result = exercise(&fixture.url).await;
     fixture.finish(result).await
+}
+
+#[cfg(feature = "db-postgres")]
+#[tokio::test]
+#[ignore = "requires BITROUTER_TEST_MIGRATION_DATABASE_URL and dedicated CREATEDB"]
+async fn postgres_idle_acquisition_cancellation_retains_owner_session() -> Result<()> {
+    acquisition::exercise().await
 }
 
 #[cfg(feature = "db-postgres")]

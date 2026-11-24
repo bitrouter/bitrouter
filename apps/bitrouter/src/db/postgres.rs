@@ -24,7 +24,13 @@ pub(super) async fn connect(
     }
     let mut pool_options = options.sqlx_pool_options::<Postgres>();
     if owner.is_some() {
-        pool_options = pool_options.max_lifetime(None).idle_timeout(None);
+        // Cancelling acquire during SQLx's idle ping drops that connection.
+        // Handing the idle owner session to its caller must not suspend;
+        // after_connect runs only for new sessions, which cannot replace it.
+        pool_options = pool_options
+            .max_lifetime(None)
+            .idle_timeout(None)
+            .test_before_acquire(false);
     }
     let pool = pool_options
         .after_connect(move |connection, _| {

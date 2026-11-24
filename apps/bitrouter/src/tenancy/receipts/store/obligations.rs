@@ -7,6 +7,8 @@ use sea_orm::Statement;
 #[cfg(test)]
 use sea_orm::Value;
 mod io;
+#[cfg(all(test, feature = "db-mysql"))]
+mod server_known;
 pub(in crate::tenancy) mod sources;
 #[cfg(test)]
 pub(crate) mod tests;
@@ -93,6 +95,15 @@ pub(in crate::tenancy) async fn reconcile(
     key: &Key,
     charge: &Charge<'_>,
 ) -> Result<Change> {
+    #[cfg(all(test, feature = "db-mysql"))]
+    if tx.get_database_backend() == DatabaseBackend::MySql {
+        server_known::validate(tx, installation, Some(key), charge).await?;
+        return Ok(Change {
+            key: key.clone(),
+            before: None,
+            after: None,
+        });
+    }
     reconcile_inner(tx, installation, key, None, charge).await
 }
 
@@ -195,6 +206,11 @@ pub(in crate::tenancy) async fn tenant_count(
     tenant: &TenantId,
     charge: &Charge<'_>,
 ) -> Result<u64> {
+    #[cfg(all(test, feature = "db-mysql"))]
+    if db.get_database_backend() == DatabaseBackend::MySql {
+        server_known::validate(db, installation, None, charge).await?;
+        return Ok(0);
+    }
     let backend = supported(db)?;
     charge(1, 128)?;
     let query = Query::select()
@@ -230,6 +246,11 @@ pub(in crate::tenancy) async fn next_due(
     installation: &InstallationId,
     charge: &Charge<'_>,
 ) -> Result<Option<DateTime<Utc>>> {
+    #[cfg(all(test, feature = "db-mysql"))]
+    if db.get_database_backend() == DatabaseBackend::MySql {
+        server_known::validate(db, installation, None, charge).await?;
+        return Ok(None);
+    }
     supported(db)?;
     io::next_due(db, installation, charge).await
 }
@@ -268,6 +289,11 @@ pub(in crate::tenancy) async fn validate(
     installation: &InstallationId,
     charge: &Charge<'_>,
 ) -> Result<Inventory> {
+    #[cfg(all(test, feature = "db-mysql"))]
+    if tx.get_database_backend() == DatabaseBackend::MySql {
+        server_known::validate(tx, installation, None, charge).await?;
+        return Ok(Fold::new().finish());
+    }
     supported(tx)?;
     validation::run(tx, installation, charge).await
 }

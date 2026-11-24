@@ -1,8 +1,8 @@
-//! Empty-source compatibility cannot hide even one retained server-side row.
+//! Full native audits and the MySQL test fallback cannot hide foreign sources.
 use super::*;
 use crate::tenancy::receipts::store::{archive::Charge, obligations};
 use sea_orm::{
-    ConnectionTrait, Value,
+    ConnectionTrait, DatabaseBackend, Value,
     sea_query::{Alias, Query},
 };
 
@@ -27,12 +27,27 @@ pub(super) async fn check(database: &mut database::Fixture) -> Result<()> {
             )
             .await?;
             populate(tx, table).await?;
-            rejected(
-                tx,
-                FREE,
-                &format!("server test source must be empty: {table}"),
-            )
-            .await
+            if tx.get_database_backend() == DatabaseBackend::MySql {
+                rejected(
+                    tx,
+                    FREE,
+                    &format!("server test source must be empty: {table}"),
+                )
+                .await
+            } else {
+                let installation = "installation".try_into()?;
+                let error = obligations::validate(tx, &installation, FREE)
+                    .await
+                    .err()
+                    .context("full native audit accepted a foreign opaque source")?;
+                ensure!(
+                    error.to_string() == "foreign unknown inventory installation",
+                    "wrong foreign-source audit refusal for {table}: {error:#}"
+                );
+                // Indexed native reads own only their requested installation;
+                // they must not replace the separate full coverage audit.
+                scoped_empty(tx).await
+            }
         }
         .await;
         database.rollback(slot).await?;
@@ -46,10 +61,15 @@ pub(super) async fn check(database: &mut database::Fixture) -> Result<()> {
 
 async fn empty(tx: &DatabaseTransaction) -> Result<()> {
     let installation = "installation".try_into()?;
-    let tenant = "tenant".try_into()?;
     ensure!(
         obligations::validate(tx, &installation, FREE).await? == obligations::Fold::new().finish()
     );
+    scoped_empty(tx).await
+}
+
+async fn scoped_empty(tx: &DatabaseTransaction) -> Result<()> {
+    let installation = "installation".try_into()?;
+    let tenant = "tenant".try_into()?;
     ensure!(
         obligations::next_due(tx, &installation, FREE)
             .await?
