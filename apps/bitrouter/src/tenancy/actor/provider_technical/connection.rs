@@ -22,7 +22,10 @@ pub(super) struct Connection {
 enum Driver {
     Sqlite(Mutex<SqliteConnection>),
     #[cfg(feature = "db-postgres")]
-    Postgres(Mutex<PoolConnection<Postgres>>),
+    Postgres {
+        db: Mutex<PoolConnection<Postgres>>,
+        statement_timeout: String,
+    },
 }
 impl Connection {
     pub(super) async fn open(
@@ -46,13 +49,21 @@ impl Connection {
                     deadline,
                     owner.get_postgres_connection_pool().acquire(),
                 );
-                let db = tokio::select! {
+                let mut db = tokio::select! {
                     biased;
                     _ = async { match cancel { Some(cancel) => cancel.cancelled().await, None => std::future::pending().await } } => anyhow::bail!("optional connection acquisition cancelled"),
                     result = acquire => result??,
                 };
+                let statement_timeout: String = tokio::time::timeout_at(
+                    deadline,
+                    sea_orm::sqlx::query_scalar("SHOW statement_timeout").fetch_one(&mut *db),
+                )
+                .await??;
                 return Ok(Self {
-                    db: Driver::Postgres(Mutex::new(db)),
+                    db: Driver::Postgres {
+                        db: Mutex::new(db),
+                        statement_timeout,
+                    },
                     _lease: lease,
                 });
             }
@@ -97,7 +108,7 @@ impl Connection {
                     })
             }
             #[cfg(feature = "db-postgres")]
-            Driver::Postgres(db) => {
+            Driver::Postgres { db, .. } => {
                 let milliseconds = deadline
                     .saturating_duration_since(tokio::time::Instant::now())
                     .as_millis()
@@ -117,13 +128,22 @@ impl Connection {
         let result = match db {
             Driver::Sqlite(db) => db.into_inner().close().await.is_ok(),
             #[cfg(feature = "db-postgres")]
-            Driver::Postgres(db) => {
+            Driver::Postgres {
+                db,
+                statement_timeout,
+            } => {
                 let mut db = db.into_inner();
                 // A dropped optional future may have left its manual install
                 // transaction open. PostgreSQL accepts ROLLBACK with no active
                 // transaction, so use one close path for reads and writes.
+                // Restore the borrowed owner's setting rather than assuming
+                // zero; returning this pool slot must not close its owner session.
                 let rollback = (&mut *db).execute("ROLLBACK").await;
-                let reset = (&mut *db).execute("SET statement_timeout=0").await;
+                let reset =
+                    sea_orm::sqlx::query("SELECT set_config('statement_timeout', $1, false)")
+                        .bind(statement_timeout)
+                        .execute(&mut *db)
+                        .await;
                 rollback.is_ok() && reset.is_ok() && db.ping().await.is_ok()
             }
         };
@@ -144,7 +164,7 @@ impl Connection {
                 state.driver_gate(&mut *db.lock().await, cancel).await
             }
             #[cfg(feature = "db-postgres")]
-            Driver::Postgres(_) => Ok(()),
+            Driver::Postgres { .. } => Ok(()),
         }
     }
 }
@@ -234,7 +254,7 @@ impl ConnectionTrait for Connection {
         match &self.db {
             Driver::Sqlite(_) => DatabaseBackend::Sqlite,
             #[cfg(feature = "db-postgres")]
-            Driver::Postgres(_) => DatabaseBackend::Postgres,
+            Driver::Postgres { .. } => DatabaseBackend::Postgres,
         }
     }
     async fn execute(&self, stmt: Statement) -> Result<ExecResult, DbErr> {
@@ -249,7 +269,7 @@ impl ConnectionTrait for Connection {
                     .map_err(|_| failure())
             }
             #[cfg(feature = "db-postgres")]
-            Driver::Postgres(db) => {
+            Driver::Postgres { db, .. } => {
                 let (sql, args) = postgres_arguments(stmt)?;
                 sea_orm::sqlx::query_with(&sql, args)
                     .persistent(false)
@@ -271,7 +291,7 @@ impl ConnectionTrait for Connection {
                 .map(ExecResult::from)
                 .map_err(|_| failure()),
             #[cfg(feature = "db-postgres")]
-            Driver::Postgres(db) => (&mut **db.lock().await)
+            Driver::Postgres { db, .. } => (&mut **db.lock().await)
                 .execute(sql)
                 .await
                 .map(ExecResult::from)
@@ -290,7 +310,7 @@ impl ConnectionTrait for Connection {
                     .map_err(|_| failure())
             }
             #[cfg(feature = "db-postgres")]
-            Driver::Postgres(db) => {
+            Driver::Postgres { db, .. } => {
                 let (sql, args) = postgres_arguments(stmt)?;
                 sea_orm::sqlx::query_with(&sql, args)
                     .persistent(false)
@@ -319,7 +339,7 @@ impl ConnectionTrait for Connection {
                 Ok(rows)
             }
             #[cfg(feature = "db-postgres")]
-            Driver::Postgres(db) => {
+            Driver::Postgres { db, .. } => {
                 let (sql, args) = postgres_arguments(stmt)?;
                 let mut db = db.lock().await;
                 let mut stream = sea_orm::sqlx::query_with(&sql, args)

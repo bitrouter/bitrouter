@@ -228,7 +228,7 @@ pub(super) async fn load(
         Ok(())
     })
     .await?;
-    if db.get_database_backend() == DatabaseBackend::Sqlite
+    if db.get_database_backend() != DatabaseBackend::MySql
         && crate::db::migration::provider_technical::available(db).await?
     {
         inventory.technical_bytes =

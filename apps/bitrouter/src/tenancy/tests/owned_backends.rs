@@ -100,6 +100,7 @@ async fn exercise(url: &str) -> Result<()> {
     ensure!(fixture.service.authenticate_live(&secret).await.is_err());
     let (fixture, execution) =
         super::execution::receipts::owned_backend_dispatch(fixture, owner).await?;
+    ensure!(super::startup::agreement(&fixture.db, &installation).await?[6] > 0);
     // Same configuration mutation ID with a different document must conflict.
     let mut input = fixture.configuration_input("cas-draft")?;
     let initial = input.clone();
@@ -138,6 +139,9 @@ async fn exercise(url: &str) -> Result<()> {
     };
     fixture.service.shutdown().await?;
     drop(fixture.service);
+    // Shutdown joins optional technical persistence before comparing a stable
+    // before/after archive vector as well as the canonical financial sources.
+    let before_archive = super::startup::agreement(&fixture.db, &installation).await?;
     // Relocate through the same archive implementation, then require both the
     // crash-recovery child and final owner to decode the original receipt.
     let tx = fixture.db.begin().await?;
@@ -159,6 +163,24 @@ async fn exercise(url: &str) -> Result<()> {
             .await?
     );
     tx.commit().await?;
+    let archived = super::startup::agreement(&fixture.db, &installation).await?;
+    ensure!(
+        archived[0] < before_archive[0]
+            && archived[1] > before_archive[1]
+            && archived[2] == before_archive[2] + 1
+            && archived[6] == before_archive[6],
+        "archive did not move exactly one retained receipt"
+    );
+    let tx = fixture.db.begin().await?;
+    ensure!(
+        !crate::tenancy::receipts::store::archive::archive_one(&tx, &prepared, &|_, _| Ok(()))
+            .await?
+    );
+    tx.commit().await?;
+    ensure!(
+        super::startup::agreement(&fixture.db, &installation).await? == archived,
+        "archive replay changed durable accounting"
+    );
     fixture.db.close().await?;
     let child = tokio::process::Command::new(std::env::current_exe()?)
         .args([
@@ -189,13 +211,17 @@ async fn exercise(url: &str) -> Result<()> {
     .await?
     .context("persisted dispatch receipt")?;
     ensure!(retained.facts().execution == &execution);
+    ensure!(
+        super::startup::agreement(owned.database(), &installation).await? == archived,
+        "fresh owner or lost commit ACK changed receipt accounting"
+    );
     let (db, owner, _claim) = owned.claim()?;
     let recovered = Service::start_prepared(
         db.clone(),
         Some(owner),
-        super::super::store::load(&db, Utc::now()).await?,
+        super::super::store::initial_header(&db, Utc::now()).await?,
         std::sync::Arc::new(super::super::resources::Resources::with_key(
-            installation,
+            installation.clone(),
             fixture.wrapping_key,
         )?),
     )
@@ -208,6 +234,10 @@ async fn exercise(url: &str) -> Result<()> {
         .await
         .map_err(failure)?;
     ensure!(result(replay)?.status == bitrouter_ai::tenancy::operation::OperationStatus::Applied);
+    ensure!(
+        super::startup::agreement(&db, &installation).await? == archived,
+        "acknowledgement-loss replay charged an existing receipt again"
+    );
     recovered.shutdown().await?;
     db.close().await?;
     Ok(())
@@ -312,7 +342,7 @@ async fn owned_backend_commit_loss_child() -> Result<()> {
     let owned = crate::db::connect_owned_tenancy(&url).await?;
     owned.migrate().await?;
     let (db, owner, _claim) = owned.claim()?;
-    let state = super::super::store::load(&db, Utc::now()).await?;
+    let state = super::super::store::initial_header(&db, Utc::now()).await?;
     let installation = state.installation.clone();
     let service = Service::start_prepared(
         db.clone(),
@@ -332,6 +362,7 @@ async fn owned_backend_commit_loss_child() -> Result<()> {
         subject: "committed-before-ack".into(),
         installation_id: installation.clone(),
     };
+    let before = super::startup::agreement(&db, &installation).await?;
     service.cleanup.lose_next_commit_ack_for_test();
     ensure!(
         service
@@ -346,6 +377,10 @@ async fn owned_backend_commit_loss_child() -> Result<()> {
         .await?
         .context("committed operation survived missing ACK")?;
     ensure!(stored.result.status == bitrouter_ai::tenancy::operation::OperationStatus::Applied);
+    ensure!(
+        super::startup::agreement(&db, &installation).await? == before,
+        "durable committed operation changed unrelated receipt quantities"
+    );
     ensure!(service.current().is_err());
     // Simulate process death after a durable commit with no client ACK. The
     // operating system releases ownership, as required for safe single-owner restart.

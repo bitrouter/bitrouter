@@ -218,11 +218,15 @@ async fn rows(
         }
         select.expr_as(Expr::cust("CASE WHEN (pending_tenant_id IS NULL OR (typeof(pending_tenant_id)='text' AND length(CAST(pending_tenant_id AS BLOB)) BETWEEN 1 AND 128)) AND (pending_execution_id IS NULL OR (typeof(pending_execution_id)='text' AND length(CAST(pending_execution_id AS BLOB)) BETWEEN 1 AND 128)) THEN 1 ELSE 0 END"), Alias::new("pending_valid"));
     } else if backend == DatabaseBackend::Postgres {
-        select.columns([
-            Alias::new("pending_tenant_id"),
-            Alias::new("pending_execution_id"),
-        ]);
-        select.expr_as(Expr::val(1_i64), Alias::new("pending_valid"));
+        for name in ["pending_tenant_id", "pending_execution_id"] {
+            select.expr_as(
+                Expr::cust(format!(
+                    "CASE WHEN octet_length({name}) BETWEEN 1 AND 128 THEN {name} ELSE NULL END"
+                )),
+                Alias::new(name),
+            );
+        }
+        select.expr_as(Expr::cust("CASE WHEN (pending_tenant_id IS NULL OR octet_length(pending_tenant_id) BETWEEN 1 AND 128) AND (pending_execution_id IS NULL OR octet_length(pending_execution_id) BETWEEN 1 AND 128) THEN CAST(1 AS BIGINT) ELSE CAST(0 AS BIGINT) END"), Alias::new("pending_valid"));
     }
     let rows = db.query_all(backend.build(&select)).await?;
     let decoded = || -> Result<Vec<Row>> {

@@ -217,8 +217,8 @@ async fn keys(
         .expr_as(Expr::cust(guarded(tenant)), Alias::new("tenant_id"))
         .expr_as(Expr::cust(guarded(execution)), Alias::new("execution_id"))
         .and_where(Expr::col(Alias::new("installation_id")).eq(installation.as_str()))
-        .order_by(Alias::new(tenant), Order::Asc)
-        .order_by(Alias::new(execution), Order::Asc)
+        .order_by((Alias::new(table), Alias::new(tenant)), Order::Asc)
+        .order_by((Alias::new(table), Alias::new(execution)), Order::Asc)
         .limit(PAGE as u64);
     if pending {
         query

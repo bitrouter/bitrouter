@@ -7,14 +7,17 @@ and generated schema define host settings. This guide evolves with the runtime.
 
 ## Deployment and ownership
 
-Tenancy is an explicit opt-in to a single Unix process holding an exclusive
-lease on a file-backed SQLite database. It requires authenticated inference, an
+Tenancy is an explicit opt-in to one owning process. File-backed SQLite on Unix
+uses an exclusive file lease. PostgreSQL requires `db-postgres` and holds a
+database-scoped session advisory lock on one physical connection; losing that
+session fences dispatch until restart. Transaction-pooling endpoints cannot
+retain this ownership. It requires authenticated inference, an
 enabled control listener and an explicit `control:tenancy` operator credential.
 [Shared gateway](../SHARED_GATEWAY_DISTRIBUTION.md) uses a separate PostgreSQL
 authority profile. Startup validates the configuration and obtains ownership before
 opening listeners; decoding public types does not enable these capabilities.
 The [configuration validator](../../apps/bitrouter/src/config/tenancy.rs) and
-[file owner](../../apps/bitrouter/src/tenancy/ownership.rs) enforce eligibility.
+[database owner](../../apps/bitrouter/src/tenancy/ownership.rs) enforce eligibility.
 This profile does not establish distributed tenant authority or hosted capacity.
 
 ## Model-only policy boundary
@@ -48,7 +51,8 @@ that the service committed an execution receipt.
 
 ## Recovery
 
-Recovery checks retained execution and authority before resuming service.
+Recovery checks the installation header, key epoch, durable admission quantities
+and unfinished dispatch intents before resuming service.
 Proven producer exclusion and cleanup allow a missing terminal outcome to be
 recorded as Unknown. Capacity and custody stay held through durable settlement
 and cleanup acknowledgement, including after a lost transaction response.
@@ -63,14 +67,11 @@ work, ingress, management, caches, authority views, routing and transport. The
 defines their fields, units and defaults. Operators can raise them subject to
 machine representation, checked allocation and budget relationships. They do
 not impose a directory-size ceiling or preallocate one entry per stored tenant.
-The exclusive SQLite connection and single authority writer remain unchanged;
+One owned database connection and one authority writer serialize mutations;
 ordinary, safety and completion queues rotate service so each can make progress.
 
-Startup validates the entire directory and retained authority through bounded
-keyset pages, including all retained operation IDs. Page size and working bytes
-bound temporary memory; no successful prefix substitutes for the complete scan.
-Current authority validation has no directory or lifetime operation count
-ceiling. Runtime reads load only the caller and exact
+Normal startup does not enumerate completed history, dormant identities or
+retained resource versions. Runtime reads validate the selected caller and exact
 dependency closure under read custody. The authority registry retains a small
 publication header and bounded leased views. Committed deltas update those views
 under a common publication gate; unrelated mutations do not invalidate a native caller solely
@@ -311,7 +312,7 @@ limits and offline bundle limits remain independent of host capacity.
 ## Receipt archive and physical storage
 
 The existing writer moves eligible terminal receipt and usage-evidence payloads
-into an archive table in the same SQLite database. It uses bounded compression
+into an archive table in the same owned database. It uses bounded compression
 and preserves the original bytes and integrity digests, retaining the indexed
 receipt identity and correlation metadata. Readers transparently decode one
 bounded payload through the same authorized receipt/page APIs. There is no
@@ -420,11 +421,14 @@ It retains a shared operation budget across records, absolute cell limits,
 measured-length guards against intervening growth and receipt/evidence integrity
 checks. Stored byte-count metadata is not trusted to authorize allocation.
 
-The current SQLite schema and baseline ledger initialize atomically only in
-an empty location. Startup validates the entire current dataset before ready,
-including non-head revisions and encrypted source/envelopes. Restore validates
-the database contents and requires the matching installation identity and wrapping
-key.
+The current SQLite and PostgreSQL schemas initialize atomically only in empty
+locations. Supported predecessor formats receive a versioned upgrade that audits
+receipt sources and backfills durable admission quantities once. Current startup
+reads that projection without scanning completed history; missing or inconsistent
+required state refuses readiness. Full offline restore validates retained content,
+including non-head revisions and encrypted envelopes, and compares receipt source
+quantities against the projection. It requires the matching installation identity
+and wrapping key.
 
 ## Routing and diagnostics
 

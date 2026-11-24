@@ -19,7 +19,7 @@ mod tests;
 struct Table {
     name: String,
     #[serde(default)]
-    sqlite_only: bool,
+    owned_only: bool,
     columns: Vec<Column>,
     primary: Vec<String>,
     unique: Vec<Vec<String>>,
@@ -27,6 +27,8 @@ struct Table {
     checks: Vec<String>,
     #[serde(default)]
     sqlite_checks: Vec<String>,
+    #[serde(default)]
+    owned_checks: Vec<String>,
     indexes: Vec<Index>,
 }
 #[derive(Clone, Debug, Deserialize)]
@@ -37,7 +39,7 @@ struct Column {
     mysql_kind: Option<String>,
     sqlite_kind: Option<String>,
     #[serde(default)]
-    sqlite_only: bool,
+    owned_only: bool,
     nullable: bool,
     binary: bool,
     automatic: bool,
@@ -59,7 +61,7 @@ struct Index {
     columns: Vec<String>,
     unique: bool,
     #[serde(default)]
-    sqlite_only: bool,
+    owned_only: bool,
     #[serde(default)]
     mysql_prefixes: BTreeMap<String, u32>,
 }
@@ -84,23 +86,30 @@ fn expected(backend: DatabaseBackend) -> Result<Vec<Table>> {
     let mut tables: Vec<Table> = serde_json::from_str(include_str!("current_schema/expected.json"))
         .context("invalid compiled current schema model")?;
     if backend == DatabaseBackend::MySql {
-        tables.retain(|table| !table.sqlite_only);
+        tables.retain(|table| !table.owned_only);
         for table in &mut tables {
-            table.columns.retain(|column| !column.sqlite_only);
-            table.indexes.retain(|index| !index.sqlite_only);
+            table.columns.retain(|column| !column.owned_only);
+            table.indexes.retain(|index| !index.owned_only);
         }
     } else {
         for table in &mut tables {
-            table.checks.append(&mut table.sqlite_checks);
+            table.checks.append(&mut table.owned_checks);
+            if backend == DatabaseBackend::Sqlite {
+                table.checks.append(&mut table.sqlite_checks);
+            }
         }
     }
     Ok(tables)
 }
 
 #[cfg(all(test, feature = "db-postgres"))]
-pub(crate) fn legacy_postgres_statements() -> Result<Vec<String>> {
-    // The preceding server format excluded the SQLite ownership projections.
-    definition::statements(DatabaseBackend::Postgres, expected(DatabaseBackend::MySql)?)
+pub(crate) fn generic_postgres_statements(with_capacity: bool) -> Result<Vec<String>> {
+    // The generic server profile excluded the native ownership projections.
+    let mut tables = expected(DatabaseBackend::MySql)?;
+    if !with_capacity {
+        tables.retain(|table| table.name != crate::db::migration::capacity::TABLE);
+    }
+    definition::statements(DatabaseBackend::Postgres, tables)
 }
 
 /// Render fresh DDL from the same definition used by all catalog validators.
@@ -108,7 +117,7 @@ pub(super) fn statements(backend: DatabaseBackend) -> Result<Vec<String>> {
     definition::statements(backend, expected(backend)?)
 }
 
-pub(super) fn legacy_statements(backend: DatabaseBackend) -> Result<Vec<String>> {
+pub(crate) fn legacy_statements(backend: DatabaseBackend) -> Result<Vec<String>> {
     let mut tables = expected(backend)?;
     tables.retain(|t| t.name != crate::db::migration::capacity::TABLE);
     definition::statements(backend, tables)

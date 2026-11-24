@@ -966,7 +966,7 @@ pub(crate) async fn capacity_backfill(db: &impl ConnectionTrait) -> Result<Inven
             "capacity source without installation"
         );
     }
-    if backend == DatabaseBackend::Sqlite {
+    if backend != DatabaseBackend::MySql {
         for table in ["tenancy_receipt_archive", "tenancy_unknown_obligations"] {
             let query = Query::select()
                 .from(Alias::new(table))

@@ -238,6 +238,46 @@ pub(crate) async fn available(db: &impl ConnectionTrait) -> Result<bool> {
     Ok(true)
 }
 
+/// Before creating an installation, reject any retained ownership-shaped rows.
+/// Passive name collisions do not register technical capability. The caller
+/// holds the exclusive owner and has checked the serving catalog; full audit
+/// and capacity backfill still require the exact optional schema and stamp.
+pub(crate) async fn ensure_no_owned_rows(db: &impl ConnectionTrait) -> Result<()> {
+    let backend = db.get_database_backend();
+    let catalog = match backend {
+        DatabaseBackend::Sqlite => {
+            "SELECT 'main' AS schema_name FROM pragma_table_xinfo(?, 'main') WHERE lower(name) IN ('installation_id','tenant_id','execution_id') LIMIT 1"
+        }
+        DatabaseBackend::Postgres => {
+            "SELECT n.nspname AS schema_name FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid=a.attrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema() AND c.relname=$1 AND a.attnum>0 AND NOT a.attisdropped AND lower(a.attname COLLATE \"C\") IN ('installation_id','tenant_id','execution_id') LIMIT 1"
+        }
+        DatabaseBackend::MySql => anyhow::bail!("optional technical backend unavailable"),
+    };
+    let Some(row) = db
+        .query_one(Statement::from_sql_and_values(
+            backend,
+            catalog,
+            [TABLE.into()],
+        ))
+        .await?
+    else {
+        return Ok(());
+    };
+    let schema: String = row.try_get("", "schema_name")?;
+    // Use the same namespace as the catalog probe, even if a temporary table
+    // occupies this name. No owner-value predicate may hide NULL/partial rows.
+    let query = Query::select()
+        .expr(Expr::val(1_i32))
+        .from((Alias::new(schema), Alias::new(TABLE)))
+        .limit(1)
+        .to_owned();
+    ensure!(
+        db.query_one(backend.build(&query)).await?.is_none(),
+        "authority has no installation identity"
+    );
+    Ok(())
+}
+
 /// Recognize only the exact registered optional layout and its committed
 /// installation stamp. An orphan/conflicting name is never adopted or repaired.
 pub(crate) async fn validate(db: &impl ConnectionTrait) -> Result<()> {
@@ -376,3 +416,7 @@ fn payload(backend: DatabaseBackend, name: &str) -> ColumnDef {
     }
     column.not_null().to_owned()
 }
+
+#[cfg(test)]
+#[path = "provider_technical/identity_tests.rs"]
+mod identity_tests;

@@ -68,6 +68,55 @@ fn owned_backends_retain_pending_projection_and_mysql_keeps_its_profile() -> Res
     ensure!(slots.indexes[0].columns == ["installation_id", "state", "slot_key"]);
     Ok(())
 }
+
+#[test]
+fn native_capacity_keeps_integer_domains_without_sqlite_dynamic_type_checks() -> Result<()> {
+    for backend in [DatabaseBackend::Postgres, DatabaseBackend::Sqlite] {
+        let tables = expected(backend)?;
+        let capacity = tables
+            .iter()
+            .find(|table| table.name == "tenancy_receipt_capacity")
+            .context("capacity table")?;
+        ensure!(
+            capacity.checks.len()
+                == if backend == DatabaseBackend::Sqlite {
+                    18
+                } else {
+                    9
+                }
+        );
+        ensure!(
+            capacity
+                .checks
+                .iter()
+                .any(|check| check.contains("unknown_count"))
+        );
+        ensure!(
+            capacity
+                .checks
+                .iter()
+                .any(|check| check.contains("continuation_epoch_required"))
+        );
+        for name in ["tenancy_execution_receipts", "tenancy_usage_evidence"] {
+            let receipt = tables
+                .iter()
+                .find(|table| table.name == name)
+                .context("receipt table")?;
+            ensure!(receipt.checks == ["(\"storage_kind\" IN (0, 1))"]);
+        }
+        let ddl = statements(backend)?.join("\n");
+        ensure!(ddl.contains("typeof(") == (backend == DatabaseBackend::Sqlite));
+        let legacy = legacy_statements(backend)?.join("\n");
+        ensure!(!legacy.contains("tenancy_receipt_capacity"));
+        ensure!(
+            legacy.contains("tenancy_receipt_archive")
+                && legacy.contains("tenancy_unknown_obligations")
+        );
+        ensure!(legacy.contains("pending_tenant_id") && legacy.contains("pending_execution_id"));
+        ensure!(!legacy.contains("typeof("));
+    }
+    Ok(())
+}
 #[test]
 fn altered_keys_and_checks_are_not_hidden_by_catalog_names() -> Result<()> {
     let table = expected(DatabaseBackend::Postgres)?
@@ -226,7 +275,7 @@ fn default_values_cannot_be_replaced_with_expressions() -> Result<()> {
         kind: "integer".into(),
         mysql_kind: None,
         sqlite_kind: None,
-        sqlite_only: false,
+        owned_only: false,
         nullable: false,
         binary: false,
         automatic: false,

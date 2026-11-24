@@ -27,11 +27,14 @@ fn selection(installation: Option<&InstallationId>, after: Option<&str>) -> Sele
 }
 
 fn keys(mut selected: SelectStatement, backend: DatabaseBackend) -> SelectStatement {
-    if backend != DatabaseBackend::Sqlite {
-        selected.column(Alias::new("slot_key"));
-        return selected;
-    }
-    selected.expr_as(Expr::cust("CASE WHEN typeof(slot_key)='text' AND length(CAST(slot_key AS BLOB)) BETWEEN 1 AND 64 THEN slot_key ELSE NULL END"), Alias::new("slot_key"));
+    selected.expr_as(
+        Expr::cust(if backend == DatabaseBackend::Sqlite {
+            "CASE WHEN typeof(slot_key)='text' AND length(CAST(slot_key AS BLOB)) BETWEEN 1 AND 64 THEN slot_key ELSE NULL END"
+        } else {
+            "CASE WHEN octet_length(slot_key) BETWEEN 1 AND 64 THEN slot_key ELSE NULL END"
+        }),
+        Alias::new("slot_key"),
+    );
     selected
 }
 
@@ -55,11 +58,15 @@ async fn metadata_page(
     let mut previous = after.map(str::to_owned);
     for key in keys {
         charge(0, 0)?;
-        let slot: String = key.try_get("", "slot_key")?;
-        ensure!(
-            previous.as_ref().is_none_or(|previous| previous < &slot),
-            "OAuth page order"
-        );
+        let slot = (|| -> Result<String> {
+            let slot: String = key.try_get("", "slot_key")?;
+            ensure!(
+                previous.as_ref().is_none_or(|previous| previous < &slot),
+                "OAuth page order"
+            );
+            Ok(slot)
+        })()
+        .context(crate::tenancy::store::directory::InvalidRecord)?;
         charge(1, (profile::PAYLOAD_BYTES + META_BYTES + 2048) * 4)?;
         let selected = Query::select()
             .from(Alias::new(TABLE))
@@ -69,7 +76,8 @@ async fn metadata_page(
         let row = rows(db, selected, 1)
             .await?
             .pop()
-            .context("OAuth page row disappeared")?;
+            .context("OAuth page row disappeared")
+            .context(crate::tenancy::store::directory::InvalidRecord)?;
         result.push(row.metadata);
         previous = Some(slot);
     }
@@ -90,16 +98,16 @@ pub(in crate::tenancy) async fn page(
     // key and reject a foreign installation, avoiding an installation/state
     // index scan plus a directory-sized sort for ORDER BY slot_key.
     let result = metadata_page(db, selection(None, after), after, charge).await?;
-    ensure!(
-        result.iter().all(|row| &row.installation == installation),
-        "foreign OAuth page row"
-    );
+    if !result.iter().all(|row| &row.installation == installation) {
+        return Err(anyhow::anyhow!("foreign OAuth page row")
+            .context(crate::tenancy::store::directory::InvalidRecord));
+    }
     Ok(result)
 }
 
 /// Exact execution range on the pending index. All pages must be visited even
-/// after finding an unresolved source. Startup separately validates every slot
-/// so corrupt null/Ready projections cannot hide a pending source.
+/// after finding an unresolved source. Explicit full audits separately validate
+/// every slot so corrupt null/Ready projections cannot hide a pending source.
 pub(in crate::tenancy) async fn for_execution(
     db: &impl ConnectionTrait,
     installation: &InstallationId,
@@ -113,20 +121,24 @@ pub(in crate::tenancy) async fn for_execution(
         .and_where(Expr::col(Alias::new("pending_tenant_id")).eq(tenant.as_str()))
         .and_where(Expr::col(Alias::new("pending_execution_id")).eq(execution.as_str()));
     let result = metadata_page(db, selected, after, charge).await?;
-    for row in &result {
-        ensure!(
-            &row.installation == installation,
-            "foreign OAuth pending installation"
-        );
-        let work = match &row.state {
-            State::RefreshStarted(work) | State::Quarantined(work) => work,
-            State::Ready => anyhow::bail!("Ready row in OAuth pending range"),
-        };
-        ensure!(
-            &work.tenant == tenant && &work.execution == execution,
-            "OAuth pending key mismatch"
-        );
-    }
+    (|| -> Result<()> {
+        for row in &result {
+            ensure!(
+                &row.installation == installation,
+                "foreign OAuth pending installation"
+            );
+            let work = match &row.state {
+                State::RefreshStarted(work) | State::Quarantined(work) => work,
+                State::Ready => anyhow::bail!("Ready row in OAuth pending range"),
+            };
+            ensure!(
+                &work.tenant == tenant && &work.execution == execution,
+                "OAuth pending key mismatch"
+            );
+        }
+        Ok(())
+    })()
+    .context(crate::tenancy::store::directory::InvalidRecord)?;
     Ok(result)
 }
 

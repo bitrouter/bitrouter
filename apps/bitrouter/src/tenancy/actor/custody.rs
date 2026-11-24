@@ -1,6 +1,5 @@
 //! The owning actor supervises transactions; HTTP owns only its response waiter.
 
-use sea_orm::ConnectionTrait;
 use std::future::{Future, pending, poll_fn};
 use std::panic::AssertUnwindSafe;
 use std::task::Poll;
@@ -406,12 +405,12 @@ impl Worker {
                     outcome = "started",
                     "tenant startup validation"
                 );
-                let inventory =
-                    if self.db.get_database_backend() == sea_orm::DatabaseBackend::Sqlite {
-                        crate::db::migration::capacity::load(&tx).await
-                    } else {
-                        crate::tenancy::receipts::store::inventory(&tx, &initial.installation).await
-                    };
+                let inventory = if self.db.get_database_backend() != sea_orm::DatabaseBackend::MySql
+                {
+                    crate::db::migration::capacity::load(&tx).await
+                } else {
+                    crate::tenancy::receipts::store::inventory(&tx, &initial.installation).await
+                };
                 control
                     .rollback(tx)
                     .await

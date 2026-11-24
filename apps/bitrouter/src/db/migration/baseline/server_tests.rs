@@ -352,29 +352,39 @@ async fn mysql_metering_restart(fixture: &OwnedServer) -> Result<()> {
 #[tokio::test]
 #[ignore = "requires dedicated PostgreSQL CREATEDB; no fallback"]
 async fn postgres_previous_server_format_is_refused_without_writes() -> Result<()> {
-    let fixture = OwnedServer::new(
-        DatabaseBackend::Postgres,
-        "BITROUTER_TEST_MIGRATION_DATABASE_URL",
-    )
-    .await?;
-    let result = async {
-        let db = &fixture.database;
-        for statement in crate::db::current_schema::legacy_postgres_statements()? { db.execute_unprepared(&statement).await?; }
-        db.execute(Statement::from_sql_and_values(DatabaseBackend::Postgres,
-            "INSERT INTO seaql_migrations(version,applied_at) VALUES($1,$2)",
-            [store_format::GATEWAY_SERVER.into(), 1_i64.into()])).await?;
-        db.execute_unprepared("INSERT INTO users(id,created_at) VALUES('preserved-user','2026-11-18T00:00:00Z')").await?;
-        let before = db.query_all(Statement::from_string(DatabaseBackend::Postgres, "SELECT table_name FROM information_schema.tables WHERE table_schema='public' ORDER BY table_name")).await?;
-        ensure!(super::super::Migrator::up(db, None).await.is_err());
-        ensure!(crate::db::connect_owned_tenancy(&fixture.url).await.is_err());
-        ensure!(crate::db::connect(&fixture.url).await.is_err());
-        let after = db.query_all(Statement::from_string(DatabaseBackend::Postgres, "SELECT table_name FROM information_schema.tables WHERE table_schema='public' ORDER BY table_name")).await?;
-        ensure!(before.len() == after.len());
-        for (before, after) in before.iter().zip(after) { ensure!(before.try_get::<String>("", "table_name")? == after.try_get::<String>("", "table_name")?); }
-        let row = db.query_one(Statement::from_string(DatabaseBackend::Postgres, "SELECT version FROM seaql_migrations")).await?.context("retained old ledger")?;
-        ensure!(row.try_get::<String>("", "version")? == store_format::GATEWAY_SERVER);
-        ensure!(db.query_one(Statement::from_string(DatabaseBackend::Postgres, "SELECT id FROM users WHERE id='preserved-user'")).await?.is_some());
-        Ok(())
-    }.await;
-    fixture.finish(result).await
+    for marker in [
+        store_format::LEGACY_GATEWAY_SERVER,
+        store_format::GATEWAY_SERVER,
+    ] {
+        let fixture = OwnedServer::new(
+            DatabaseBackend::Postgres,
+            "BITROUTER_TEST_MIGRATION_DATABASE_URL",
+        )
+        .await?;
+        let result = async {
+            let db = &fixture.database;
+            for statement in crate::db::current_schema::generic_postgres_statements(marker == store_format::GATEWAY_SERVER)? {
+                db.execute_unprepared(&statement).await?;
+            }
+            db.execute(Statement::from_sql_and_values(DatabaseBackend::Postgres,
+                "INSERT INTO seaql_migrations(version,applied_at) VALUES($1,$2)",
+                [marker.into(), 1_i64.into()])).await?;
+            db.execute_unprepared("INSERT INTO users(id,created_at) VALUES('preserved-user','2026-11-18T00:00:00Z')").await?;
+            let before = db.query_all(Statement::from_string(DatabaseBackend::Postgres, "SELECT table_name FROM information_schema.tables WHERE table_schema='public' ORDER BY table_name")).await?;
+            ensure!(super::super::Migrator::up(db, None).await.is_err());
+            ensure!(crate::db::connect_owned_tenancy(&fixture.url).await.is_err());
+            ensure!(crate::db::connect(&fixture.url).await.is_err());
+            let after = db.query_all(Statement::from_string(DatabaseBackend::Postgres, "SELECT table_name FROM information_schema.tables WHERE table_schema='public' ORDER BY table_name")).await?;
+            ensure!(before.len() == after.len());
+            for (before, after) in before.iter().zip(after) {
+                ensure!(before.try_get::<String>("", "table_name")? == after.try_get::<String>("", "table_name")?);
+            }
+            let row = db.query_one(Statement::from_string(DatabaseBackend::Postgres, "SELECT version FROM seaql_migrations")).await?.context("retained old ledger")?;
+            ensure!(row.try_get::<String>("", "version")? == marker);
+            ensure!(db.query_one(Statement::from_string(DatabaseBackend::Postgres, "SELECT id FROM users WHERE id='preserved-user'")).await?.is_some());
+            Ok(())
+        }.await;
+        fixture.finish(result).await?;
+    }
+    Ok(())
 }

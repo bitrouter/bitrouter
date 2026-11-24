@@ -147,6 +147,9 @@ pub(super) async fn validate(db: &impl ConnectionTrait) -> Result<(), DbErr> {
 #[cfg(all(test, any(feature = "db-postgres", feature = "db-mysql")))]
 mod server_tests;
 
+#[cfg(all(test, feature = "db-postgres"))]
+mod postgres_capacity_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;

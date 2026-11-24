@@ -19,6 +19,14 @@ pub(crate) fn marker(backend: DatabaseBackend) -> &'static str {
     }
 }
 
+pub(crate) fn legacy_marker(backend: DatabaseBackend) -> &'static str {
+    match backend {
+        DatabaseBackend::Sqlite => LEGACY_GATEWAY_SQLITE,
+        DatabaseBackend::Postgres => LEGACY_GATEWAY_POSTGRES,
+        DatabaseBackend::MySql => LEGACY_GATEWAY_SERVER,
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum State {
     Empty,
@@ -124,11 +132,7 @@ async fn inspect_marker(db: &impl ConnectionTrait, marker: &str) -> Result<State
         "incomplete or unsupported store format ledger"
     );
     let version: String = rows[0].try_get("", "version")?;
-    let legacy = if backend == DatabaseBackend::Sqlite {
-        LEGACY_GATEWAY_SQLITE
-    } else {
-        LEGACY_GATEWAY_SERVER
-    };
+    let legacy = legacy_marker(backend);
     if version != marker && version != legacy {
         if backend == DatabaseBackend::Sqlite {
             anyhow::bail!("unsupported database role or format; use a fresh gateway database");

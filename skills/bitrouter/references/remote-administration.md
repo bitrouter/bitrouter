@@ -47,8 +47,12 @@ Set `tenancy.expected_installation_id` to require an existing installation befor
 schema changes or recovery. `tenancy.expected_wrapping_key_sha256` optionally
 pins the lowercase hex SHA256 of the exact wrapping-key environment string.
 A missing installation, identity mismatch or key mismatch refuses startup.
-The PostgreSQL storage baseline is `m20261124_000008_gateway_postgres`.
-The preceding `m20261118_000007_gateway_server` format is refused before writes;
+The PostgreSQL storage baseline is `m20261124_000010_gateway_postgres_capacity`.
+The recognized `m20261124_000008_gateway_postgres` predecessor upgrades atomically
+under the owning session, verifying receipt sources and backfilling admission
+accounting once. Preserve a consistent backup before upgrading; an older binary
+cannot open the upgraded store. The generic `m20261118_000007_gateway_server`
+and `m20261124_000009_gateway_server_capacity` formats are refused before writes;
 retain that database and its original binary, and initialize the current format
 in a separate empty database before moving data. Enabling or disabling tenancy requires restart. Once provisioned,
 the store cannot be reopened by ordinary local database commands with tenancy

@@ -218,7 +218,7 @@ pub(crate) async fn initialize(
     Ok(())
 }
 
-pub(super) async fn ensure_table(manager: &sea_orm_migration::SchemaManager<'_>) -> Result<()> {
+pub(crate) async fn ensure_table(manager: &sea_orm_migration::SchemaManager<'_>) -> Result<()> {
     if manager.has_table(TABLE).await? {
         return Ok(());
     }
@@ -254,17 +254,8 @@ pub(super) async fn upgrade(db: &sea_orm::DatabaseTransaction) -> Result<()> {
         || db.query_one(Statement::from_string(backend, "SELECT 1 FROM tenancy_oauth_slots LIMIT 1")).await?.is_some();
     initialize(db, &inventory, epoch_required).await?;
     verify(db, &inventory).await?;
-    let (old, new) = if backend == DatabaseBackend::Sqlite {
-        (
-            super::super::store_format::LEGACY_GATEWAY_SQLITE,
-            super::super::store_format::GATEWAY_SQLITE,
-        )
-    } else {
-        (
-            super::super::store_format::LEGACY_GATEWAY_SERVER,
-            super::super::store_format::GATEWAY_SERVER,
-        )
-    };
+    let old = super::super::store_format::legacy_marker(backend);
+    let new = super::super::store_format::marker(backend);
     let update = Query::update()
         .table(Alias::new("seaql_migrations"))
         .value(Alias::new("version"), new)

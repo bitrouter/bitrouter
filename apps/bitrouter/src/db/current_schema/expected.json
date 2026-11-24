@@ -2114,7 +2114,7 @@
         "binary": false,
         "automatic": false,
         "default": "0",
-        "sqlite_only": true
+        "owned_only": true
       },
       {
         "name": "receipt_format",
@@ -2153,10 +2153,10 @@
           "execution_id"
         ],
         "unique": false,
-        "sqlite_only": true
+        "owned_only": true
       }
     ],
-    "sqlite_checks": [
+    "owned_checks": [
       "(\"storage_kind\" IN (0, 1))"
     ]
   },
@@ -2341,7 +2341,7 @@
         "binary": true,
         "automatic": false,
         "default": null,
-        "sqlite_only": true
+        "owned_only": true
       },
       {
         "name": "pending_execution_id",
@@ -2350,7 +2350,7 @@
         "binary": true,
         "automatic": false,
         "default": null,
-        "sqlite_only": true
+        "owned_only": true
       }
     ],
     "primary": [
@@ -2378,7 +2378,7 @@
           "slot_key"
         ],
         "unique": false,
-        "sqlite_only": true
+        "owned_only": true
       }
     ]
   },
@@ -2556,7 +2556,7 @@
   },
   {
     "name": "tenancy_receipt_archive",
-    "sqlite_only": true,
+    "owned_only": true,
     "columns": [
       {
         "name": "installation_id",
@@ -2950,7 +2950,7 @@
   },
   {
     "name": "tenancy_unknown_obligations",
-    "sqlite_only": true,
+    "owned_only": true,
     "columns": [
       {
         "name": "installation_id",
@@ -3128,7 +3128,7 @@
         "binary": false,
         "automatic": false,
         "default": "0",
-        "sqlite_only": true
+        "owned_only": true
       }
     ],
     "primary": [
@@ -3140,7 +3140,7 @@
     "foreign": [],
     "checks": [],
     "indexes": [],
-    "sqlite_checks": [
+    "owned_checks": [
       "(\"storage_kind\" IN (0, 1))"
     ]
   },

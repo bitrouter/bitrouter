@@ -120,10 +120,10 @@ pub(super) async fn next_due(
         .expr(Expr::cust(selected(backend)))
         .and_where(Expr::col(Alias::new("installation_id")).eq(installation.as_str()))
         .and_where(Expr::col(Alias::new("escalated")).eq(0_i32))
-        .order_by(Alias::new("due_seconds"), Order::Asc)
-        .order_by(Alias::new("due_nanos"), Order::Asc)
-        .order_by(Alias::new("tenant_id"), Order::Asc)
-        .order_by(Alias::new("execution_id"), Order::Asc)
+        .order_by((Alias::new(TABLE), Alias::new("due_seconds")), Order::Asc)
+        .order_by((Alias::new(TABLE), Alias::new("due_nanos")), Order::Asc)
+        .order_by((Alias::new(TABLE), Alias::new("tenant_id")), Order::Asc)
+        .order_by((Alias::new(TABLE), Alias::new("execution_id")), Order::Asc)
         .limit(1);
     let row = db.query_one(backend.build(&query)).await?;
     let due = row.map(decode).transpose()?.map(|row| row.due);
@@ -155,10 +155,10 @@ pub(super) async fn due_page(
                         .lte(i32::try_from(now.timestamp_subsec_nanos())?),
                 )),
         )
-        .order_by(Alias::new("due_seconds"), Order::Asc)
-        .order_by(Alias::new("due_nanos"), Order::Asc)
-        .order_by(Alias::new("tenant_id"), Order::Asc)
-        .order_by(Alias::new("execution_id"), Order::Asc)
+        .order_by((Alias::new(TABLE), Alias::new("due_seconds")), Order::Asc)
+        .order_by((Alias::new(TABLE), Alias::new("due_nanos")), Order::Asc)
+        .order_by((Alias::new(TABLE), Alias::new("tenant_id")), Order::Asc)
+        .order_by((Alias::new(TABLE), Alias::new("execution_id")), Order::Asc)
         .limit(PAGE as u64);
     let rows = db.query_all(backend.build(&query)).await?;
     let result = rows.into_iter().map(decode).collect::<Result<Vec<_>>>()?;
