@@ -52,9 +52,7 @@ pub(crate) async fn inspect_restore_in(
     let body = bytes
         .checked_sub(512 * 1024)
         .context("restore metadata working capacity")?;
-    resources
-        .inspect_all_retained_in(&reader, body, &|| workspace.check())
-        .await?;
+    super::continuation::audit_in(&reader, &state, &resources, body, &|| workspace.check()).await?;
     inspect_oauth_in(&reader, expected, &resources, body, workspace).await?;
     workspace.check()
 }

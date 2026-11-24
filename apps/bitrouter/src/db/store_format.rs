@@ -3,13 +3,16 @@
 use anyhow::{Context, Result, ensure};
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
-pub(crate) const GATEWAY_SQLITE: &str = "m20261118_000006_gateway_sqlite";
+pub(crate) const LEGACY_GATEWAY_SQLITE: &str = "m20261118_000006_gateway_sqlite";
+pub(crate) const GATEWAY_SQLITE: &str = "m20261124_000008_gateway_sqlite_capacity";
 
-pub(crate) const GATEWAY_SERVER: &str = "m20261118_000007_gateway_server";
+pub(crate) const LEGACY_GATEWAY_SERVER: &str = "m20261118_000007_gateway_server";
+pub(crate) const GATEWAY_SERVER: &str = "m20261124_000009_gateway_server_capacity";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum State {
     Empty,
+    Legacy,
     Current,
 }
 
@@ -24,20 +27,24 @@ pub(crate) async fn inspect(db: &impl ConnectionTrait) -> Result<State> {
     if state == State::Current && db.get_database_backend() == DatabaseBackend::Sqlite {
         super::sqlite_schema::validate(db, true).await?;
     }
+    if state == State::Legacy && db.get_database_backend() == DatabaseBackend::Sqlite {
+        super::sqlite_schema::validate_legacy(db, true).await?;
+    }
     Ok(state)
 }
 
 /// Recheck the archive's exact inventory marker inside the original read transaction.
 pub(crate) async fn inspect_archive(db: &impl ConnectionTrait, marker: &str) -> Result<()> {
     ensure!(
-        db.get_database_backend() == DatabaseBackend::Sqlite && marker == GATEWAY_SQLITE,
+        db.get_database_backend() == DatabaseBackend::Sqlite
+            && matches!(marker, GATEWAY_SQLITE | LEGACY_GATEWAY_SQLITE),
         "unsupported archive database role"
     );
-    ensure!(
-        inspect_marker(db, marker).await? == State::Current,
-        "archive is empty"
-    );
-    super::sqlite_schema::validate(db, false).await
+    match inspect_marker(db, marker).await? {
+        State::Current => super::sqlite_schema::validate(db, false).await,
+        State::Legacy => super::sqlite_schema::validate_legacy(db, false).await,
+        State::Empty => anyhow::bail!("archive is empty"),
+    }
 }
 
 async fn inspect_marker(db: &impl ConnectionTrait, marker: &str) -> Result<State> {
@@ -111,7 +118,12 @@ async fn inspect_marker(db: &impl ConnectionTrait, marker: &str) -> Result<State
         "incomplete or unsupported store format ledger"
     );
     let version: String = rows[0].try_get("", "version")?;
-    if version != marker {
+    let legacy = if backend == DatabaseBackend::Sqlite {
+        LEGACY_GATEWAY_SQLITE
+    } else {
+        LEGACY_GATEWAY_SERVER
+    };
+    if version != marker && version != legacy {
         if backend == DatabaseBackend::Sqlite {
             anyhow::bail!("unsupported database role or format; use a fresh gateway database");
         }
@@ -120,11 +132,8 @@ async fn inspect_marker(db: &impl ConnectionTrait, marker: &str) -> Result<State
         );
     }
     let _: i64 = rows[0].try_get("", "applied_at")?;
-    // Format selection is not content authentication. This cheap catalog pass
-    // requires supported compiler domains even with a forged schema marker.
-    // Policy-kind admission profiles retain their independent current compilers;
-    // the authenticated decoder binds each compiler to the decrypted definition.
-    // Resources authenticates every retained source before authority publication.
+    // Resource compiler/content authentication belongs to point reads and the
+    // explicit integrity audit. Format selection never predicates over history.
     for required in [
         "tenancy_installation",
         "tenancy_configurations",
@@ -154,28 +163,11 @@ async fn inspect_marker(db: &impl ConnectionTrait, marker: &str) -> Result<State
             "unsupported authority format"
         );
     }
-    let query = sea_orm::sea_query::Query::select()
-        .expr(sea_orm::sea_query::Expr::val(1))
-        .from(sea_orm::sea_query::Alias::new("tenancy_resource_revisions"))
-        .and_where(
-            sea_orm::sea_query::Expr::col(sea_orm::sea_query::Alias::new("resource_kind"))
-                .eq("policy"),
-        )
-        .and_where(
-            sea_orm::sea_query::Expr::col(sea_orm::sea_query::Alias::new("compiler_version"))
-                .is_not_in([
-                    "tenancy-model-policy-v1",
-                    "tenancy-admission-v1",
-                    "tenancy-admission-v2",
-                ]),
-        )
-        .limit(1)
-        .to_owned();
-    ensure!(
-        db.query_one(backend.build(&query)).await?.is_none(),
-        "unsupported Policy compiler"
-    );
-    Ok(State::Current)
+    Ok(if version == legacy {
+        State::Legacy
+    } else {
+        State::Current
+    })
 }
 
 #[cfg(test)]

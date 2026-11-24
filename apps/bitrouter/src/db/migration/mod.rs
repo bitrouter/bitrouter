@@ -3,6 +3,7 @@ use sea_orm::{ConnectionTrait, DatabaseBackend, DbErr};
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
 
 mod baseline;
+pub(crate) mod capacity;
 #[cfg(test)]
 mod catalog_tests;
 pub(crate) mod provider_technical;

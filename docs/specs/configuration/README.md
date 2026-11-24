@@ -162,6 +162,10 @@ With tenancy enabled, the local inference listener uses
 request/HTTP/2-stream budget of `ingress.requests` across connections. HTTP/1
 connections can use keep-alive. Each request remains subject to its wire limit.
 
+Tenant startup reads durable receipt policy quantities. Supported format upgrades
+backfill them once, and source transactions maintain subsequent changes.
+Explicit offline audit compares these quantities with the complete source history.
+
 Receipt unknown budgets govern new admission. Retained obligations above a
 lowered budget remain valid evidence and MUST NOT be deleted or treated as
 corruption merely to meet that budget. Storage probes and maintenance reserves

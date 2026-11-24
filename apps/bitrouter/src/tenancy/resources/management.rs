@@ -532,7 +532,7 @@ impl Service {
         )
         .await
         .map_err(|_| self.unavailable())?
-        .map_err(Failure::from)?;
+        .map_err(|code| self.retained_access_failure(code))?;
         self.authority
             .read()
             .map_err(Failure::from)?

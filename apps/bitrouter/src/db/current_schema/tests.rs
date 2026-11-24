@@ -125,6 +125,69 @@ fn mysql_check_catalog_matches_escaped_quotes_without_widening_literals() {
 }
 
 #[test]
+fn postgres_capacity_epoch_domain_accepts_exact_deparse_without_widening_membership() -> Result<()>
+{
+    let table = expected(DatabaseBackend::Postgres)?
+        .into_iter()
+        .find(|table| table.name == "tenancy_receipt_capacity")
+        .context("capacity table")?;
+    let constraints = |epoch: &str| {
+        let mut actual = BTreeMap::from([(
+            "capacity_pkey".into(),
+            Constraint {
+                kind: "p".into(),
+                columns: table.primary.clone(),
+                ..Default::default()
+            },
+        )]);
+        for (index, check) in table.checks.iter().enumerate() {
+            actual.insert(
+                format!("capacity_check_{index}"),
+                Constraint {
+                    kind: "c".into(),
+                    expression: if check.contains("continuation_epoch_required") {
+                        epoch.to_owned()
+                    } else {
+                        check.clone()
+                    },
+                    ..Default::default()
+                },
+            );
+        }
+        actual
+    };
+    for expression in [
+        "(continuation_epoch_required = ANY (ARRAY[0, 1]))",
+        r#"(("continuation_epoch_required") = ANY ((ARRAY[0::integer, 1::integer])))"#,
+    ] {
+        validate_constraints(DatabaseBackend::Postgres, &table, constraints(expression))?;
+        ensure!(!check_matches(
+            DatabaseBackend::MySql,
+            &normalized("continuation_epoch_required IN (0, 1)"),
+            &normalized(expression)
+        ));
+    }
+    for expression in [
+        "(continuation_epoch_required = ANY (ARRAY[0, 1, 2]))",
+        "(continuation_epoch_required = ANY (ARRAY[0]))",
+        "(continuation_epoch_required = ANY (ARRAY[1]))",
+        "(continuation_epoch_required = ANY (ARRAY[0, 1, NULL]))",
+        "(continuation_epoch_required = ANY (ARRAY['0', '1']))",
+        "(continuation_epoch_required <> ANY (ARRAY[0, 1]))",
+        "(continuation_epoch_required = ALL (ARRAY[0, 1]))",
+        "(unknown_count = ANY (ARRAY[0, 1]))",
+        "(continuation_epoch_required = ANY (ARRAY[0, 1]) OR true)",
+    ] {
+        ensure!(
+            validate_constraints(DatabaseBackend::Postgres, &table, constraints(expression))
+                .is_err(),
+            "accepted altered epoch constraint: {expression}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn default_values_cannot_be_replaced_with_expressions() -> Result<()> {
     let column = Column {
         name: "active".into(),

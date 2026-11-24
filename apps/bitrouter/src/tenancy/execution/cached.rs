@@ -101,12 +101,14 @@ impl Caches {
 #[derive(PartialEq, Eq)]
 enum ExecutionKey {
     Catalog {
+        integrity_epoch: u64,
         authority_revision: u64,
         tenant: Box<str>,
         revision: Box<str>,
         route: Box<str>,
     },
     Dispatch {
+        integrity_epoch: u64,
         authority_revision: u64,
         tenant: Box<str>,
         revision: Box<str>,
@@ -116,6 +118,7 @@ enum ExecutionKey {
     // replacement must go through the authenticated decoder again. Service
     // ownership fixes installation/store/wrapping-key/compiler context.
     Control {
+        integrity_epoch: u64,
         authority_revision: u64,
         binding: Box<str>,
     },
@@ -145,6 +148,7 @@ impl ExecutionKey {
 
 #[derive(PartialEq, Eq)]
 struct CredentialKey {
+    integrity_epoch: u64,
     authority_revision: u64,
     tenant: Box<str>,
     owner_kind: OwnerKind,
@@ -168,12 +172,16 @@ impl Service {
     fn with_control_cache<T>(
         &self,
         revision: AuthorityRevision,
+        integrity_epoch: u64,
         access: impl FnOnce(&Cache<ExecutionKey, RetainedExecutionRevision>) -> Result<T, CacheError>,
     ) -> Result<T, Failure> {
         // Shutdown closes caches under the corresponding authority write gate.
         // Neither this lookup/publication nor cache eviction performs I/O.
         let authority = self.authority.read().map_err(Failure::from)?;
         if !self.live.load(Ordering::Acquire) || self.caches.is_closed() {
+            return Err(ErrorCode::AuthorityUnavailable.into());
+        }
+        if self.authority.integrity_epoch() != integrity_epoch {
             return Err(ErrorCode::AuthorityUnavailable.into());
         }
         if authority.header().revision != revision {
@@ -189,12 +197,16 @@ impl Service {
         reference: &ResourceRef,
         inbound: GenerationProtocol,
     ) -> Result<CandidateManifest, Failure> {
+        let integrity_epoch = self.authority.integrity_epoch();
         let key = ExecutionKey::Control {
+            integrity_epoch,
             authority_revision: u64::from(authority_revision),
             binding: configuration_store::execution_cache_binding(stored)
-                .map_err(|_| self.unavailable())?,
+                .map_err(|_| self.retained_access_failure(ErrorCode::AuthorityUnavailable))?,
         };
-        if let Some(view) = self.with_control_cache(authority_revision, |cache| cache.get(&key))? {
+        if let Some(view) =
+            self.with_control_cache(authority_revision, integrity_epoch, |cache| cache.get(&key))?
+        {
             return view
                 .candidate_manifest(reference, inbound, authority_revision)
                 .map_err(Failure::from);
@@ -204,10 +216,7 @@ impl Service {
         let view = self
             .resources
             .open_execution(stored)
-            .map_err(|code| match code {
-                ErrorCode::InvalidRequest | ErrorCode::CapabilityMismatch => code.into(),
-                _ => self.unavailable(),
-            })?;
+            .map_err(|code| self.retained_access_failure(code))?;
         let heap = match view.retained_heap_bytes() {
             Ok(heap) => heap,
             // Weight traversal has its own bounded-work limit. Failure to cache
@@ -221,7 +230,7 @@ impl Service {
         };
         let key_heap = key.heap_bytes();
         let mut candidate = Some(view);
-        let cached = self.with_control_cache(authority_revision, |cache| {
+        let cached = self.with_control_cache(authority_revision, integrity_epoch, |cache| {
             cache.insert_if_fits(key, &mut candidate, heap, key_heap)
         })?;
         let view = match cached.as_deref().or(candidate.as_ref()) {
@@ -315,14 +324,15 @@ impl Service {
         )
         .await
         .map_err(|_| self.read_timeout(submission))?
-        .map_err(|_| self.unavailable())?
+        .map_err(|error| self.retained_read_failure(error))?
         .ok_or_else(|| Failure::from(ErrorCode::NotFound))?;
         let key = ExecutionKey::Dispatch {
+            integrity_epoch: self.authority.integrity_epoch(),
             authority_revision,
             tenant: submission.tenant.as_str().into(),
             revision: submission.binding.execution_revision.as_str().into(),
             binding: configuration_store::execution_cache_binding(&retained)
-                .map_err(|_| self.unavailable())?,
+                .map_err(|_| self.retained_access_failure(ErrorCode::AuthorityUnavailable))?,
         };
         if let Some(revision) = self
             .caches
@@ -336,12 +346,7 @@ impl Service {
         let revision = self
             .resources
             .open_execution(&retained)
-            .map_err(|code| match code {
-                // Authenticated history can be readable but unsupported for
-                // this execution. A rejected request must not fence storage.
-                ErrorCode::InvalidRequest | ErrorCode::CapabilityMismatch => code.into(),
-                _ => self.unavailable(),
-            })?;
+            .map_err(|code| self.retained_access_failure(code))?;
         self.check_cached_revision(submission, &revision)?;
         let heap = revision.retained_heap_bytes().map_err(Failure::from)?;
         let key_heap = key.heap_bytes();
@@ -406,6 +411,7 @@ impl Service {
         };
         let catalog = catalog.ok_or(ErrorCode::CapabilityMismatch)?;
         let key = ExecutionKey::Catalog {
+            integrity_epoch: self.authority.integrity_epoch(),
             authority_revision,
             tenant: submission.tenant.as_str().into(),
             revision: submission.binding.execution_revision.as_str().into(),
@@ -466,6 +472,7 @@ impl Service {
             })
             .map_err(Failure::from)?;
         let key = CredentialKey {
+            integrity_epoch: self.authority.integrity_epoch(),
             authority_revision,
             tenant: submission.tenant.as_str().into(),
             owner_kind: reference.owner_kind,
@@ -497,9 +504,9 @@ impl Service {
                     )
                     .await
                     .map_err(|_| self.read_timeout(submission))?
-                    .map_err(|_| self.unavailable())?;
+                    .map_err(|code| self.retained_access_failure(code))?;
                     let Credential::ApiKey { value } = value else {
-                        return Err(self.unavailable());
+                        return Err(ErrorCode::AuthorityUnavailable.into());
                     };
                     let credential = StaticCredential {
                         secret: value.into_boxed_str(),

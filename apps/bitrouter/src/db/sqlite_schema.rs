@@ -10,18 +10,23 @@ fn sql(s: impl Into<String>) -> Statement {
 }
 
 pub(super) async fn validate(db: &impl ConnectionTrait, serving: bool) -> Result<()> {
-    validate_selected(db, serving, None).await
+    validate_selected(db, serving, None, false).await
+}
+
+pub(super) async fn validate_legacy(db: &impl ConnectionTrait, serving: bool) -> Result<()> {
+    validate_selected(db, serving, None, true).await
 }
 
 /// Validate the exact current objects used by an independent receipt/authority reader.
 pub(super) async fn validate_tables(db: &impl ConnectionTrait, tables: &[&str]) -> Result<()> {
-    validate_selected(db, false, Some(tables)).await
+    validate_selected(db, false, Some(tables), false).await
 }
 
 async fn validate_selected(
     db: &impl ConnectionTrait,
     serving: bool,
     selected: Option<&[&str]>,
+    legacy: bool,
 ) -> Result<()> {
     ensure!(
         db.get_database_backend() == DatabaseBackend::Sqlite,
@@ -33,7 +38,11 @@ async fn validate_selected(
     // Preserve SQL token boundaries and quoted literals.
     let tokens = regex::Regex::new(r#""(?:[^"]|"")*"|'(?:[^']|'')*'|[a-zA-Z0-9_]+|[^\x09-\x0d ]"#)?;
     let mut expected = BTreeMap::new();
-    let statements = super::current_schema::statements(DatabaseBackend::Sqlite)?;
+    let statements = if legacy {
+        super::current_schema::legacy_statements(DatabaseBackend::Sqlite)?
+    } else {
+        super::current_schema::statements(DatabaseBackend::Sqlite)?
+    };
     for statement in &statements {
         let parts = tokens
             .find_iter(statement)
@@ -162,7 +171,7 @@ async fn validate_selected(
         }
     }
     ensure!(expected.is_empty(), "incomplete migration catalog");
-    super::current_schema::validate_sqlite_metadata(db, selected).await?;
+    super::current_schema::validate_sqlite_metadata(db, selected, legacy).await?;
     require_active_format(db).await
 }
 
@@ -197,6 +206,12 @@ pub(crate) async fn initialize_gateway_schema(db: &impl ConnectionTrait) -> Resu
     for statement in super::current_schema::statements(DatabaseBackend::Sqlite)? {
         db.execute_unprepared(&statement).await?;
     }
+    super::migration::capacity::initialize(
+        db,
+        &crate::tenancy::receipts::capacity::Inventory::default(),
+        false,
+    )
+    .await?;
     db.execute(Statement::from_sql_and_values(
         DatabaseBackend::Sqlite,
         "INSERT INTO main.seaql_migrations(version,applied_at) VALUES (?,?)",

@@ -143,7 +143,12 @@ impl Worker {
                             &budget,
                         )
                         .await
-                        .map_err(|e| self.http_error(e))?
+                        .map_err(|error| match error {
+                            store::Error::Integrity => self.directory_failure(
+                                crate::tenancy::store::directory::InvalidRecord.into(),
+                            ),
+                            other => self.http_error(other),
+                        })?
                     };
                     Ok((Reply::Resolved(result), false, None))
                 }

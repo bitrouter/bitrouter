@@ -57,22 +57,34 @@ impl TenantExecution {
             self.submission
                 .deadline
                 .min(tokio::time::Instant::now() + std::time::Duration::from_secs(5)),
-            oauth::storage::load(
-                &self.service.db,
-                self.installation_id(),
-                &metadata.reference,
-            ),
+            async {
+                let row = oauth::storage::load(
+                    &self.service.db,
+                    self.installation_id(),
+                    &metadata.reference,
+                )
+                .await
+                .map_err(|error| self.service.retained_read_failure(error).0.code)?
+                .ok_or_else(|| {
+                    self.service
+                        .retained_access_failure(ErrorCode::AuthorityUnavailable)
+                        .0
+                        .code
+                })?;
+                self.service
+                    .resources
+                    .authenticate_oauth_slot(&self.service.db, &row)
+                    .await
+                    .map_err(|error| self.service.retained_read_failure(error).0.code)?;
+                Ok::<_, ErrorCode>(row)
+            },
         )
         .await
-        .map_err(|_| ErrorCode::CapacityExceeded)?
-        .map_err(|_| ErrorCode::AuthorityUnavailable)?
-        .ok_or(ErrorCode::AuthorityUnavailable)?;
+        .map_err(|_| ErrorCode::CapacityExceeded)??;
         #[cfg(test)]
         self.service
             .receipt_credential_read_for_test(self.id())
             .await;
-        row.token(&self.oauth_crypto()?)
-            .map_err(|_| ErrorCode::AuthorityUnavailable)?;
         if self.oauth_profile(target)?.as_ref() != Some(&row.metadata) {
             return Err(ErrorCode::Forbidden);
         }

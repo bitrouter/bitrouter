@@ -28,6 +28,12 @@ use query::{Table, one, select};
 #[error("authority directory working capacity exceeded")]
 pub(in crate::tenancy) struct CapacityExceeded;
 
+/// Stored content failed decoding or its indexed authority links are missing.
+/// SQL execution and transaction cleanup errors retain their backend identity.
+#[derive(Debug, thiserror::Error)]
+#[error("stored authority record is invalid")]
+pub(in crate::tenancy) struct InvalidRecord;
+
 // Lifecycle reads have fixed SQL cell bounds, not Credential-sized payloads.
 // Reserve one sequential driver/decode window plus map growth and the actual
 // identifier bytes to be cloned. Existing payloads remain in caller custody;

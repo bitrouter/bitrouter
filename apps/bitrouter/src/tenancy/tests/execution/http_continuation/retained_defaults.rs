@@ -310,7 +310,8 @@ async fn sealed_reserved_defaults_remain_readable_but_cannot_execute_or_activate
 }
 
 #[tokio::test]
-async fn sealed_active_reserved_defaults_refuse_startup_without_rewriting_rows() -> Result<()> {
+async fn sealed_active_reserved_defaults_refuse_audit_and_execution_without_rewriting_rows()
+-> Result<()> {
     for field in ["previous_response_id", "conversation"] {
         let provider = Server::start().await?;
         let mut ready = ready(&provider).await?;
@@ -334,17 +335,40 @@ async fn sealed_active_reserved_defaults_refuse_startup_without_rewriting_rows()
         let changed = historic_payload(&ready, &row, field)?;
         replace(&ready, &changed).await?;
         let outcome: Result<()> = async {
-            match restart(&ready).await {
-                Ok(service) => {
-                    service.shutdown().await?;
-                    anyhow::bail!("active reserved defaults were restored");
-                }
-                Err(error) => ensure!(
-                    error
-                        .to_string()
-                        .contains("native continuation key initialization failed")
-                ),
-            }
+            let header = crate::tenancy::store::startup::read_header_in(&ready.fixture.db, 4096)
+                .await?
+                .context("authority header")?
+                .header;
+            ensure!(
+                crate::tenancy::continuation::audit_in(
+                    &ready.fixture.db,
+                    &header,
+                    &ready.fixture.service.resources,
+                    64 * 1024 * 1024,
+                    &|| Ok(())
+                )
+                .await
+                .is_err(),
+                "audit admitted active reserved defaults"
+            );
+            ready.fixture.service = restart(&ready).await?;
+            let secret = ready
+                .headers
+                .get("authorization")
+                .context("authorization")?
+                .to_str()?
+                .strip_prefix("Bearer ")
+                .context("bearer token")?
+                .to_owned();
+            ready
+                .fixture
+                .service
+                .dispatch_test_ready
+                .store(true, Ordering::Release);
+            ready.headers = headers(&ready.fixture, &secret, &ready.revision.revision_id)?;
+            let (status, _) = send(&ready, ready.headers.clone(), body(false, None)).await?;
+            ensure!(status == StatusCode::BAD_REQUEST);
+            read_and_reject_candidates_http(&ready).await?;
             let actual = configuration_store::configuration(
                 &ready.fixture.db,
                 &ready.fixture.tenant,
@@ -368,7 +392,8 @@ async fn sealed_active_reserved_defaults_refuse_startup_without_rewriting_rows()
                 active.try_get::<String>("", "revision_id")? == ready.revision.revision_id.as_str()
             );
             ensure!(provider.state.calls.load(Ordering::SeqCst) == 0);
-            // Known startup rejection released custody; restoration can retry.
+            // Neither auditing nor a rejected use may rewrite the retained revision.
+            ready.fixture.service.shutdown().await?;
             replace(&ready, &row.compiled).await?;
             ready.fixture.service = restart(&ready).await?;
             ready.fixture.service.shutdown().await?;

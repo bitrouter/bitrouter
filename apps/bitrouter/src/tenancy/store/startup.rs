@@ -76,7 +76,7 @@ fn decode_header(row: &QueryResult) -> Result<LoadedHeader> {
     })
 }
 
-/// Read only metadata; this alone is NOT a completed startup validation.
+/// Read the current publication metadata without traversing retained history.
 /// `bytes` bounds each encoded row, including the duplicate-singleton probe.
 pub(in crate::tenancy) async fn read_header_in(
     db: &impl ConnectionTrait,

@@ -13,6 +13,40 @@ use std::time::Duration;
 mod page;
 mod server;
 
+/// UT for SQL execution errors remaining distinct from stored OAuth corruption.
+#[tokio::test]
+async fn exact_slot_content_failure_is_typed_without_masking_backend_errors() -> Result<()> {
+    let db = crate::db::connect("sqlite::memory:").await?;
+    crate::db::run_migrations(&db).await?;
+    let fixture = case()?;
+    insert(&db, &fixture.initial).await?;
+    db.execute_unprepared("UPDATE tenancy_oauth_slots SET state='quarantined'")
+        .await?;
+    let error = load(
+        &db,
+        &fixture.initial.metadata.installation,
+        &fixture.initial.metadata.reference,
+    )
+    .await
+    .err()
+    .context("inconsistent OAuth projection admitted")?;
+    assert!(error.is::<crate::tenancy::store::directory::InvalidRecord>());
+    db.execute_unprepared("DROP TABLE tenancy_oauth_slots")
+        .await?;
+    let error = load(
+        &db,
+        &fixture.initial.metadata.installation,
+        &fixture.initial.metadata.reference,
+    )
+    .await
+    .err()
+    .context("missing OAuth table admitted")?;
+    assert!(!error.is::<crate::tenancy::store::directory::InvalidRecord>());
+    assert!(error.is::<sea_orm::DbErr>());
+    db.close().await?;
+    Ok(())
+}
+
 struct Case {
     crypto: Crypto,
     initial: Row,
@@ -166,6 +200,13 @@ async fn committed_generation_and_receipt(db: &DatabaseConnection, case: &Case) 
     // receipt bytes; rotation changes its payload without adding another slot.
     let slot_reserved = inventory(db, installation).await?;
     ensure!(slot_reserved == INVENTORY_BYTES && bytes.oauth_bytes == slot_reserved);
+    let durable = crate::db::migration::capacity::load(db).await?;
+    ensure!(
+        durable.oauth_bytes == bytes.oauth_bytes
+            && durable.live_bytes == bytes.live_bytes
+            && durable.unknown_count == bytes.unknown_count,
+        "OAuth transaction and durable capacity diverged"
+    );
     for slot in [&case.initial, &row] {
         ensure!(u64::try_from(slot.json.len() + slot.payload.len())? <= slot_reserved);
     }

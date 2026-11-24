@@ -94,65 +94,24 @@ pub(super) async fn initialize(
 ) -> Result<Option<PinnedCrypto>> {
     let crypto = resources.continuation_crypto();
     // Import expansion and its bounded metadata/index rows share the same
-    // physical ledger. With no import, only the small epoch row can be created.
+    // physical ledger. With no import, only the epoch and its required flag
+    // can be written in their two small metadata pages.
     let bytes = match import {
         Some(bytes) => bytes
             .len()
             .checked_mul(2)
             .and_then(|n| n.checked_add(4 * 1024 * 1024))
             .ok_or_else(|| anyhow::anyhow!("bootstrap write estimate overflow"))?,
-        None => 4096,
+        None => 8192,
     };
     control
         .reserve_write(bytes, true)
         .map_err(|code| anyhow::anyhow!("bootstrap storage capacity unavailable: {code:?}"))?;
     let transaction = control.begin_write(db).await?;
     let result = async {
-        super::trajectory_profile::validate_startup(&transaction, &initial.installation, control)
-            .await?;
-        http::bootstrap::validate(
-            &transaction,
-            &initial.installation,
-            crypto.as_ref(),
-            control,
-        )
-        .await?;
         verify_epoch(&transaction, &initial.installation, crypto.as_ref()).await?;
         resources.bootstrap(&transaction, import).await?;
-        let mut after = None;
-        loop {
-            let page =
-                super::configuration_store::active_revision_page(&transaction, after.as_ref())
-                    .await?;
-            if page.is_empty() {
-                break;
-            }
-            for pointer in page {
-                ensure!(
-                    pointer.authority_revision <= initial.revision,
-                    "active configuration exceeds published authority"
-                );
-                let stored = super::configuration_store::configuration(
-                    &transaction,
-                    &pointer.tenant,
-                    &pointer.revision,
-                )
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("active tenant configuration unavailable"))?;
-                resources.validate_executable(&stored).map_err(|_| {
-                    anyhow::anyhow!(
-                        "active tenant configuration authentication or qualification failed"
-                    )
-                })?;
-                super::configuration::validate_profile(&stored.revision.document).map_err(
-                    |_| {
-                        anyhow::anyhow!("active tenant configuration requires unavailable features")
-                    },
-                )?;
-                after = Some(pointer.tenant);
-            }
-        }
-        resources.validate_oauth(&transaction).await
+        Ok::<_, anyhow::Error>(())
     }
     .await;
     match result {
@@ -167,11 +126,62 @@ pub(super) async fn initialize(
     }
 }
 
-async fn verify_epoch(
+/// Complete read-only authentication under the caller's stable audit snapshot.
+/// Ordinary startup validates only the epoch and explicitly imported resources.
+pub(in crate::tenancy) async fn audit_in(
+    db: &impl ConnectionTrait,
+    header: &super::model::AuthorityHeader,
+    resources: &super::resources::Resources,
+    bytes: usize,
+    check: &(dyn Fn() -> Result<()> + Sync),
+) -> Result<()> {
+    check()?;
+    let crypto = resources.continuation_crypto();
+    ensure!(
+        check_epoch(db, &header.installation, crypto.as_ref()).await?
+            || !crate::db::migration::capacity::epoch_required(db).await?,
+        "native continuation epoch missing"
+    );
+    super::trajectory_profile::validate_audit(db, &header.installation, check).await?;
+    http::bootstrap::validate_audit(db, &header.installation, crypto.as_ref(), check).await?;
+    resources.audit_retained_in(db, bytes, check).await?;
+    let mut after = None;
+    loop {
+        check()?;
+        let page = super::configuration_store::active_revision_page(db, after.as_ref()).await?;
+        if page.is_empty() {
+            break;
+        }
+        for pointer in page {
+            check()?;
+            ensure!(
+                pointer.authority_revision <= header.revision,
+                "active configuration exceeds published authority"
+            );
+            let stored =
+                super::configuration_store::configuration(db, &pointer.tenant, &pointer.revision)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("active tenant configuration unavailable"))?;
+            resources.validate_executable(&stored).map_err(|_| {
+                anyhow::anyhow!(
+                    "active tenant configuration authentication or qualification failed"
+                )
+            })?;
+            super::configuration::validate_profile(&stored.revision.document).map_err(|_| {
+                anyhow::anyhow!("active tenant configuration requires unavailable features")
+            })?;
+            after = Some(pointer.tenant);
+        }
+    }
+    resources.audit_oauth_in(db, check).await?;
+    check()
+}
+
+async fn check_epoch(
     transaction: &impl ConnectionTrait,
     installation: &InstallationId,
     crypto: Option<&Crypto>,
-) -> Result<()> {
+) -> Result<bool> {
     let mut query = Query::select();
     query
         .from(Alias::new(EPOCH_TABLE))
@@ -200,7 +210,24 @@ async fn verify_epoch(
                 && crypto.is_some_and(|crypto| key.as_deref() == Some(crypto.id())),
             "native continuation key epoch unavailable"
         );
-    } else if let Some(crypto) = crypto {
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+async fn verify_epoch(
+    transaction: &impl ConnectionTrait,
+    installation: &InstallationId,
+    crypto: Option<&Crypto>,
+) -> Result<()> {
+    if check_epoch(transaction, installation, crypto).await? {
+        return crate::db::migration::capacity::mark_epoch_required(transaction).await;
+    }
+    ensure!(
+        !crate::db::migration::capacity::epoch_required(transaction).await?,
+        "native continuation epoch missing"
+    );
+    if let Some(crypto) = crypto {
         let mut insert = Query::insert();
         insert
             .into_table(Alias::new(EPOCH_TABLE))
@@ -216,6 +243,7 @@ async fn verify_epoch(
         transaction
             .execute(transaction.get_database_backend().build(&insert))
             .await?;
+        crate::db::migration::capacity::mark_epoch_required(transaction).await?;
     }
     Ok(())
 }

@@ -771,7 +771,7 @@ async fn warmed_entries_recheck_credential_and_binding_expiry_without_publicatio
             .authority
             .read()
             .map_err(|code| anyhow::anyhow!("authority read: {code:?}"))?
-            .publication();
+            .read_publication();
         // Move the fixture deadline across now in the actual live views and DB.
         // Neither the publication stamp nor the immutable cache namespace changes.
         let expired = Deadline::parse(
@@ -823,7 +823,7 @@ async fn warmed_entries_recheck_credential_and_binding_expiry_without_publicatio
                 .authority
                 .read()
                 .map_err(|code| anyhow::anyhow!("authority read: {code:?}"))?
-                .publication()
+                .read_publication()
                 == publication
         );
         let expected = if expire_binding {
@@ -857,11 +857,102 @@ async fn warmed_entries_recheck_credential_and_binding_expiry_without_publicatio
     Ok(())
 }
 
+async fn healthy_neighbor(
+    first: &mut Fixture,
+    route: &ResourceRef,
+    slot: &ResourceRef,
+    url: &str,
+) -> Result<(Fixture, ResourceRef)> {
+    first.service.shutdown().await?;
+    let tenant: TenantId = "cache-healthy-tenant".try_into()?;
+    let mut route = route.clone();
+    route.owner_id = tenant.as_str().try_into()?;
+    let mut slot = slot.clone();
+    slot.owner_id = tenant.as_str().try_into()?;
+    first.service.resources.provision_bytes(&first.db, &serde_json::to_vec(&json!({
+        "format":1,"installation_id":first.installation,"resources":[
+            {"reference":slot,"definition":{"kind":"credential","credential":{
+                "type":"api_key","data":{"value":"healthy-neighbor-secret"}}}},
+            {"reference":route,"definition":{"kind":"route","selector":"mock:model-a","policy":null,
+                "routing":{"providers":{"mock":{"api_base":url,"api_protocol":[{"*":"chat_completions"}],"models":[{"id":"model-a"}]}}},
+                "credentials":[{"provider":"mock","account":"default","credential":slot}]}}
+        ]
+    }))?).await?;
+    first.service = Service::start_prepared(
+        first.db.clone(),
+        None,
+        store::initial_header(&first.db, Utc::now()).await?,
+        first.service.resources.clone(),
+    )
+    .await?;
+    result(
+        first
+            .service
+            .execute(
+                first.operator.clone(),
+                Command::Tenant(
+                    tenant.clone(),
+                    TenantPut {
+                        operation_id: "cache-healthy-tenant-put".try_into()?,
+                        expected_revision: None,
+                        state: TenantState::Active,
+                        installation_id: first.installation.clone(),
+                    },
+                ),
+            )
+            .await
+            .map_err(failure)?,
+    )?;
+    let binding_result = result(
+        first
+            .service
+            .execute(
+                first.operator.clone(),
+                Command::Binding(
+                    tenant.clone(),
+                    first.binding.clone(),
+                    BindingPut {
+                        operation_id: "cache-healthy-binding-put".try_into()?,
+                        expected_revision: None,
+                        principal_id: first.principal.clone(),
+                        role: TenantRole::TenantAdmin,
+                        scope: GrantScope::Tenant {
+                            operator_pools: vec![],
+                        },
+                        expires_at: expiry()?,
+                        expected_management_owner: None,
+                        installation_id: first.installation.clone(),
+                    },
+                ),
+            )
+            .await
+            .map_err(failure)?,
+    )?;
+    Ok((
+        Fixture {
+            wrapping_key: first.wrapping_key,
+            service: first.service.clone(),
+            db: first.db.clone(),
+            operator: first.operator.clone(),
+            installation: first.installation.clone(),
+            tenant,
+            principal: first.principal.clone(),
+            binding: first.binding.clone(),
+            binding_result,
+        },
+        route,
+    ))
+}
+
 #[tokio::test]
 async fn warm_configuration_corruption_refuses_dispatch_without_another_provider_send() -> Result<()>
 {
     let mut provider = Provider::start().await?;
-    let (fixture, route, _) = provision(&provider.url).await?;
+    let (mut fixture, route, slot) = provision(&provider.url).await?;
+    let (neighbor, healthy_route) =
+        healthy_neighbor(&mut fixture, &route, &slot, &provider.url).await?;
+    let healthy_revision = draft(&neighbor, &healthy_route, "healthy-draft", 37).await?;
+    let healthy_credential = neighbor.issue("healthy-client").await?;
     let revision = draft(&fixture, &route, "cache-draft", 25).await?;
     let credential = fixture.issue("cache-user").await?;
     enable_dispatch(&fixture);
@@ -876,7 +967,7 @@ async fn warm_configuration_corruption_refuses_dispatch_without_another_provider
     corrupt_configuration(&fixture, &revision.revision_id).await?;
     let (status, rejection) = dispatch(&fixture.service, &binding).await?;
     ensure!(status == StatusCode::SERVICE_UNAVAILABLE);
-    ensure!(rejection["code"] == "storage_unavailable");
+    ensure!(rejection["code"] == "authority_unavailable");
     ensure!(rejection["dispatch_state"] == "not_started");
     ensure!(rejection["execution_id"].is_null());
     ensure!(
@@ -884,9 +975,26 @@ async fn warm_configuration_corruption_refuses_dispatch_without_another_provider
         "warm corrupt configuration reached the provider"
     );
     ensure!(
-        fixture.service.current().is_err(),
-        "dispatch integrity failure did not fence"
+        fixture.service.current().is_ok() && fixture.service.live.load(Ordering::Acquire),
+        "one corrupt configuration fenced unrelated traffic"
     );
+    let healthy_headers = headers(
+        &neighbor,
+        healthy_credential
+            .secret
+            .as_deref()
+            .context("healthy secret")?,
+        &healthy_revision.revision_id,
+    )?;
+    provider
+        .generation_with_secret(
+            &fixture.service,
+            &healthy_headers,
+            37,
+            "healthy-neighbor-secret",
+        )
+        .await?;
+    ensure!(provider.calls() == 2 && fixture.service.current().is_ok());
     fixture.service.shutdown().await?;
     Ok(())
 }
@@ -895,7 +1003,11 @@ async fn warm_configuration_corruption_refuses_dispatch_without_another_provider
 async fn warm_configuration_and_static_key_bytes_do_not_survive_service_restart() -> Result<()> {
     for corrupt_key in [false, true] {
         let mut provider = Provider::start().await?;
-        let (fixture, route, slot) = provision(&provider.url).await?;
+        let (mut fixture, route, slot) = provision(&provider.url).await?;
+        let (mut neighbor, healthy_route) =
+            healthy_neighbor(&mut fixture, &route, &slot, &provider.url).await?;
+        let healthy_revision = draft(&neighbor, &healthy_route, "healthy-draft", 37).await?;
+        let healthy_credential = neighbor.issue("healthy-client").await?;
         let revision = draft(&fixture, &route, "cache-draft", 25).await?;
         let credential = fixture.issue("cache-user").await?;
         let token = credential.secret.as_deref().context("secret")?;
@@ -924,7 +1036,7 @@ async fn warm_configuration_and_static_key_bytes_do_not_survive_service_restart(
         let expected_calls = if corrupt_key { 2 } else { 1 };
         ensure!(provider.calls() == expected_calls);
         fixture.service.shutdown().await?;
-        let snapshot = store::load(&fixture.db, Utc::now()).await?;
+        let snapshot = store::initial_header(&fixture.db, Utc::now()).await?;
         ensure!(snapshot.revision == before);
         // No activation pointer: reopen the fixture with the same installation,
         // wrapping key and authority revision, but a fresh Service-local cache.
@@ -932,19 +1044,42 @@ async fn warm_configuration_and_static_key_bytes_do_not_survive_service_restart(
             fixture.db.clone(),
             None,
             snapshot,
-            fixture.service.resources.clone(),
+            Arc::new(crate::tenancy::resources::Resources::with_key(
+                fixture.installation.clone(),
+                fixture.wrapping_key,
+            )?),
         )
-        .await;
-        // Bootstrap authenticates every retained configuration, including this
-        // inactive draft, and every retained credential before exposing service.
-        if let Ok(service) = reopened {
-            service.shutdown().await?;
-            anyhow::bail!("corrupt retained bytes passed bootstrap (credential: {corrupt_key})");
-        }
+        .await?;
+        fixture.service = reopened;
+        neighbor.service = fixture.service.clone();
+        enable_dispatch(&fixture);
+        let cold_binding = headers(&fixture, token, &revision.revision_id)?;
+        let (status, rejection) = dispatch(&fixture.service, &cold_binding).await?;
+        ensure!(status == StatusCode::SERVICE_UNAVAILABLE);
+        ensure!(!serde_json::to_string(&rejection)?.contains(SECRET));
         ensure!(
             provider.calls() == expected_calls,
             "cold corrupt bytes reached the provider"
         );
+        ensure!(fixture.service.current().is_ok() && fixture.service.live.load(Ordering::Acquire));
+        let healthy_headers = headers(
+            &neighbor,
+            healthy_credential
+                .secret
+                .as_deref()
+                .context("healthy secret")?,
+            &healthy_revision.revision_id,
+        )?;
+        provider
+            .generation_with_secret(
+                &fixture.service,
+                &healthy_headers,
+                37,
+                "healthy-neighbor-secret",
+            )
+            .await?;
+        ensure!(provider.calls() == expected_calls + 1 && fixture.service.current().is_ok());
+        fixture.service.shutdown().await?;
     }
     Ok(())
 }

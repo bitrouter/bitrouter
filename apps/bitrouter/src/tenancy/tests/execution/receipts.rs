@@ -37,6 +37,7 @@ mod fault_campaign;
 mod fragment_followup;
 mod ingress_overflow;
 mod ingress_socket;
+mod isolation;
 #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
 pub(in crate::tenancy::tests::execution) mod latency;
 mod lifecycle;

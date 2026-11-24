@@ -222,8 +222,8 @@ async fn empty_retained_marker_requires_exact_binding_without_a_key() -> Result<
 }
 
 #[tokio::test]
-async fn inactive_old_policy_envelope_after_a_page_boundary_refuses_bootstrap_and_restore()
--> Result<()> {
+async fn inactive_old_policy_envelope_after_a_page_boundary_refuses_audit_and_restore() -> Result<()>
+{
     let (db, resources) = fixture().await?;
     // Retained configurations require a real current tenant, including inactive rows.
     db.execute(Statement::from_sql_and_values(
@@ -270,7 +270,7 @@ async fn inactive_old_policy_envelope_after_a_page_boundary_refuses_bootstrap_an
             // The first page and its current overflow authenticate before adding corruption.
             resources.bootstrap(&db, None).await?;
             resources
-                .inspect_all_retained_in(&db, 64 * 1024 * 1024, &|| Ok(()))
+                .audit_retained_in(&db, 64 * 1024 * 1024, &|| Ok(()))
                 .await?;
             let binding = (
                 &resources.installation,
@@ -322,10 +322,20 @@ async fn inactive_old_policy_envelope_after_a_page_boundary_refuses_bootstrap_an
     let input = serde_json::to_vec(
         &json!({"format":1,"installation_id":resources.installation,"resources":[extra]}),
     )?;
-    ensure!(resources.bootstrap(&db, Some(&input)).await.is_err());
     ensure!(
         resources
-            .inspect_all_retained_in(&db, 64 * 1024 * 1024, &|| Ok(()))
+            .audit_retained_in(&db, 64 * 1024 * 1024, &|| Ok(()))
+            .await
+            .is_err()
+    );
+    // Ordinary bootstrap authenticates only this explicit import. A caller can
+    // still elect to audit the whole catalog before allowing any import commit.
+    let transaction = db.begin().await?;
+    resources.bootstrap(&transaction, Some(&input)).await?;
+    transaction.rollback().await?;
+    ensure!(
+        resources
+            .audit_retained_in(&db, 64 * 1024 * 1024, &|| Ok(()))
             .await
             .is_err()
     );

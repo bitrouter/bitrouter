@@ -391,13 +391,14 @@ async fn coherent_auxiliary_projection_corruption_cannot_discharge_pending_refre
             crate::tenancy::store::load(&harness.fixture.db, chrono::Utc::now()).await?,
             harness.resources.clone(),
         )).await?;
-        match restarted {
-            Err(_) => {},
-            Ok(service) => {
-                service.shutdown().await?;
-                anyhow::bail!("corrupted auxiliary evidence passed actual service startup");
-            }
-        }
+        let service = restarted?;
+        // Complete auditing and exact receipt lookup above still reject this
+        // corruption. Ordinary restart preserves quarantine and never reposts.
+        ensure!(harness.row().await?.same(&row));
+        ensure!(unknown_key(&harness, &id).await?);
+        ensure!(harness.provider.refreshes.load(Ordering::SeqCst) == 1
+            && harness.provider.models.load(Ordering::SeqCst) == 0);
+        service.shutdown().await?;
         Ok(())
     }.await;
     // Restore committed fixture corruption on either outcome before closing the

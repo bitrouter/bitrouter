@@ -25,6 +25,8 @@ mod eval;
 pub(in crate::tenancy) mod execution;
 mod http;
 mod resources;
+#[cfg(unix)]
+mod startup;
 
 #[tokio::test]
 async fn indexed_authentication_keeps_live_revoke_publication_after_read_cleanup() -> Result<()> {

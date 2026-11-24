@@ -338,6 +338,16 @@ pub(in crate::tenancy::receipts) async fn insert_fresh(
             == 1,
         "usage evidence insert count"
     );
+    crate::db::migration::capacity::adjust(
+        db,
+        crate::db::migration::capacity::Delta {
+            live_bytes: i64::try_from(evidence.json.len())?
+                .checked_add(i64::try_from(super::super::capacity::ROW_OVERHEAD)?)
+                .context("usage capacity overflow")?,
+            ..Default::default()
+        },
+    )
+    .await?;
     Ok(())
 }
 pub(in crate::tenancy::receipts) async fn insert(
@@ -555,6 +565,16 @@ pub(in crate::tenancy::receipts) async fn insert_v2(
                 == 1,
             "ordered evidence insert count"
         );
+        crate::db::migration::capacity::adjust(
+            db,
+            crate::db::migration::capacity::Delta {
+                live_bytes: i64::try_from(e.json.len())?
+                    .checked_add(i64::try_from(super::super::capacity::ROW_OVERHEAD)?)
+                    .context("usage capacity overflow")?,
+                ..Default::default()
+            },
+        )
+        .await?;
     }
     load_v2(db, receipt, &candidate.digest, &e.digest, None).await?;
     Ok(())

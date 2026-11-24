@@ -23,7 +23,7 @@ async fn fixture() -> Result<EvalStore> {
     let db = crate::db::connect("sqlite::memory:").await?;
     crate::db::run_migrations(&db).await?;
     let store = scoped(&db)?;
-    store.insert_subject(&tests::subject()?).await?;
+    store.insert_subject(&store.subject_fixture()?).await?;
     Ok(store)
 }
 
@@ -33,6 +33,100 @@ fn result(verdict: EvalVerdict, key: &str) -> EvaluationResult {
     result.evaluator.authority_id = "principal".into();
     result.idempotency_key = key.into();
     result
+}
+
+#[tokio::test]
+async fn selected_subject_checks_format_and_namespace_without_reclassifying_sql_errors()
+-> Result<()> {
+    use bitrouter_ai::eval::EvalSubjectIdentity;
+    let store = fixture().await?;
+    let original = store.subject_fixture()?;
+    for change in [
+        "profile",
+        "installation",
+        "tenant",
+        "missing-version",
+        "old-version",
+    ] {
+        let mut subject = original.clone();
+        match change {
+            "profile" => subject.identity = EvalSubjectIdentity::GatewayGeneric {},
+            "installation" => {
+                let EvalSubjectIdentity::TenantGeneric {
+                    installation_id, ..
+                } = &mut subject.identity
+                else {
+                    anyhow::bail!("owned subject fixture profile");
+                };
+                *installation_id = "other-installation".try_into()?;
+            }
+            "tenant" => {
+                let EvalSubjectIdentity::TenantGeneric { tenant_id, .. } = &mut subject.identity
+                else {
+                    anyhow::bail!("owned subject fixture profile");
+                };
+                *tenant_id = "other-tenant".try_into()?;
+            }
+            _ => {}
+        }
+        let mut json = serde_json::to_value(&subject)?;
+        if change == "missing-version" {
+            json.as_object_mut()
+                .context("subject object")?
+                .remove("spec_version");
+        } else if change == "old-version" {
+            json["spec_version"] = "eval/1.0.0-beta.0".into();
+        }
+        let tx = store.transaction(false).await?;
+        tx.execute(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
+            "UPDATE eval_subjects SET subject_json=?,content_digest=?,policy_digest=? WHERE eval_id=?",
+            [serde_json::to_string(&json)?.into(),canonical_digest(&subject)?.into(),
+                crate::storage::evaluation::identity_digest(&subject.identity)?.into(),
+                store.key(KeyDomain::EvalSubject,&original.eval_id)?.into()]
+        )).await?;
+        let row = subject_entity::Entity::find_by_id(
+            store.key(KeyDomain::EvalSubject, &original.eval_id)?,
+        )
+        .one(&tx)
+        .await?
+        .context("selected malformed subject fixture")?;
+        let malformed = store
+            .decode_subject(&row)
+            .err()
+            .context("decoder accepted malformed subject")?;
+        ensure!(
+            matches!(OwnedError::classify(malformed), OwnedError::Integrity(_)),
+            "decoder content failure lost its integrity classification"
+        );
+        let selected = store
+            .subject_owned_in(&tx, &original.eval_id, &|| Ok(()))
+            .await;
+        tx.rollback().await?;
+        ensure!(
+            matches!(selected, Err(OwnedError::Integrity(_))),
+            "malformed selected subject was accepted or misclassified: {change}"
+        );
+    }
+    let tx = store.transaction(false).await?;
+    tx.execute_unprepared("ALTER TABLE eval_subjects RENAME TO fixture_unreadable_eval_subjects")
+        .await?;
+    let selected = store
+        .subject_owned_in(&tx, &original.eval_id, &|| Ok(()))
+        .await;
+    tx.rollback().await?;
+    ensure!(
+        matches!(selected, Err(OwnedError::Storage(_))),
+        "raw SQL fault lost its storage classification"
+    );
+    let tx = store.transaction(false).await?;
+    ensure!(
+        store
+            .subject_owned_in(&tx, &original.eval_id, &|| Ok(()))
+            .await?
+            == original
+    );
+    tx.rollback().await?;
+    Ok(())
 }
 
 #[tokio::test]
@@ -147,7 +241,7 @@ async fn owned_freeze_has_one_cumulative_budget_across_subject_closure() -> Resu
     tokio::time::timeout(Duration::from_secs(20), async {
         let store = fixture().await?;
         for id in ["one", "two"] {
-            let mut subject = tests::subject()?;
+            let mut subject = store.subject_fixture()?;
             subject.eval_id = id.into();
             store.insert_subject(&subject).await?;
             let mut value = result(EvalVerdict::Pass, id);
@@ -184,7 +278,7 @@ async fn owned_collection_limit_is_exact_and_does_not_truncate() -> Result<()> {
         let store = fixture().await?;
         let mut models = Vec::new();
         for index in 0..1023 {
-            let mut subject = tests::subject()?;
+            let mut subject = store.subject_fixture()?;
             subject.eval_id = format!("bounded-{index}");
             let metadata = store.scope.metadata(&store.provenance)?;
             models.push(subject_entity::ActiveModel {
@@ -210,7 +304,7 @@ async fn owned_collection_limit_is_exact_and_does_not_truncate() -> Result<()> {
         let tx = store.transaction(false).await?;
         assert_eq!(store.subjects_owned_in(&tx, &|| Ok(())).await?.len(), 1024);
         tx.rollback().await?;
-        let mut overflow = tests::subject()?;
+        let mut overflow = store.subject_fixture()?;
         overflow.eval_id = "overflow".into();
         store.insert_subject(&overflow).await?;
         let tx = store.transaction(false).await?;

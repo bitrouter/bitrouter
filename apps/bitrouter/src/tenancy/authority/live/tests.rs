@@ -1,5 +1,6 @@
 use super::*;
 mod capacity;
+mod invalidation;
 mod oauth;
 mod reuse;
 use crate::config::tenancy::capacity::AuthorityViews;
@@ -58,7 +59,7 @@ fn quarantine_denies_an_existing_guard_without_a_publication_change() -> anyhow:
     let mut guard = authority.read().map_err(failure)?;
     guard.check(&lease, |_| Ok(())).map_err(failure)?;
     proof.quarantine();
-    assert_eq!(guard.publication(), 0);
+    assert_eq!(guard.read_publication(), 0);
     assert_eq!(guard.header().revision, initial.revision);
     assert!(matches!(
         guard.check(&lease, |_| Ok(())),
@@ -223,7 +224,7 @@ fn discarded_preparation_preserves_authority_and_stale_reads_cannot_register() -
         Err(ErrorCode::AuthorityUnavailable)
     ));
     drop(prepared);
-    assert_eq!(authority.read().map_err(failure)?.publication(), 0);
+    assert_eq!(authority.read().map_err(failure)?.read_publication(), 0);
     authority
         .prepare(initial.clone(), &[], None)
         .map_err(failure)?
@@ -356,7 +357,7 @@ fn closing_fence_uses_common_gate_without_advancing_publication() -> anyhow::Res
         .map_err(failure)?;
     let guard = authority.read().map_err(failure)?;
     assert!(closed.load(Ordering::Acquire));
-    assert_eq!(guard.publication(), 0);
+    assert_eq!(guard.read_publication(), 0);
     assert_eq!(guard.header().revision, initial.revision);
     Ok(())
 }

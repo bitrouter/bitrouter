@@ -3,11 +3,11 @@ use anyhow::{Result, ensure};
 
 /// Owned publication has no asynchronous worker. An undelivered row is not a
 /// recoverable queue: the complete terminal transaction was required atomically.
-/// This bounded projection runs under existing actor bootstrap before any write.
-pub(super) async fn validate_startup(
+/// History validation belongs to an explicit audit, never ordinary startup.
+pub(super) async fn validate_audit(
     db: &impl sea_orm::ConnectionTrait,
     installation: &bitrouter_ai::tenancy::identity::InstallationId,
-    control: &super::transaction::Control,
+    check: &(dyn Fn() -> Result<()> + Sync),
 ) -> Result<()> {
     use sea_orm::sea_query::{Alias, Condition, Expr, Query};
     let column = |name| Expr::col(Alias::new(name));
@@ -40,11 +40,11 @@ pub(super) async fn validate_startup(
         .cond_where(invalid)
         .limit(1)
         .to_owned();
-    control.check_read()?;
+    check()?;
     let invalid = db
         .query_one(db.get_database_backend().build(&query))
         .await?;
-    control.check_read()?;
+    check()?;
     ensure!(
         invalid.is_none(),
         "owned trajectory publication frontier is inconsistent"

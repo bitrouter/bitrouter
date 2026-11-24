@@ -1,8 +1,9 @@
-//! One bounded operation across trajectory and Eval, with H checkpoints.
+//! Shared operation accounting and checkpoints, with caller-selected limits.
 use bitrouter_ai::tenancy::operation::ErrorCode;
 use std::sync::Mutex;
 
 pub(crate) type Check<'a> = dyn Fn() -> Result<(), ErrorCode> + Sync + 'a;
+/// Physical write reservation/statement bound, independent of read accounting.
 pub(crate) const MAX_BYTES: usize = 32 * 1024 * 1024;
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
@@ -21,20 +22,20 @@ pub(crate) struct OperationBudget<'a> {
 }
 impl<'a> OperationBudget<'a> {
     pub(crate) fn new(check: &'a Check<'a>) -> Self {
-        Self::with_row_limit(check, 4096)
+        Self::with_row_limit(check, usize::MAX)
     }
-    /// A participant may narrow the common operation budget, never widen it.
+    /// Apply the caller's cumulative row limit, without an implicit byte limit.
     pub(crate) fn with_row_limit(check: &'a Check<'a>, rows: usize) -> Self {
-        Self::with_limits(check, rows, MAX_BYTES)
+        Self::with_limits(check, rows, usize::MAX)
     }
-    /// Narrow both cumulative limits for a participant such as owned learning.
+    /// Apply both caller-selected cumulative limits without clamping them.
     /// All its borrowed storage readers must share this one budget.
     pub(crate) fn with_limits(check: &'a Check<'a>, rows: usize, bytes: usize) -> Self {
         Self {
             check,
             used: Mutex::new((0, 0)),
-            rows: rows.min(4096),
-            bytes: bytes.min(MAX_BYTES),
+            rows,
+            bytes,
         }
     }
     pub(crate) fn check(&self) -> Result<(), Error> {
@@ -58,8 +59,7 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
     #[test]
-    fn participant_limits_charge_all_participants_without_raising_other_profiles()
-    -> anyhow::Result<()> {
+    fn explicit_limits_are_shared_and_preserved() -> anyhow::Result<()> {
         let check = || Ok(());
         let participant = OperationBudget::with_limits(&check, 4096, 8 * 1024 * 1024);
         participant.charge(1000, 3 * 1024 * 1024)?;
@@ -69,29 +69,31 @@ mod tests {
         let narrowed = OperationBudget::with_limits(&check, 1, 1);
         narrowed.charge(1, 1)?;
         assert!(matches!(narrowed.charge(0, 1), Err(Error::Capacity)));
-        let attempted = OperationBudget::with_limits(&check, usize::MAX, usize::MAX);
-        attempted.charge(4096, 32 * 1024 * 1024)?;
-        assert!(matches!(attempted.charge(1, 0), Err(Error::Capacity)));
-        assert!(matches!(attempted.charge(0, 1), Err(Error::Capacity)));
+        let larger = OperationBudget::with_limits(&check, 8192, 64 * 1024 * 1024);
+        larger.charge(4096, 32 * 1024 * 1024)?;
+        larger.charge(4096, 32 * 1024 * 1024)?;
+        assert!(matches!(larger.charge(1, 0), Err(Error::Capacity)));
+        assert!(matches!(larger.charge(0, 1), Err(Error::Capacity)));
+        let empty = OperationBudget::with_limits(&check, 0, 0);
+        empty.charge(0, 0)?;
+        assert!(matches!(empty.charge(1, 0), Err(Error::Capacity)));
+        assert!(matches!(empty.charge(0, 1), Err(Error::Capacity)));
         Ok(())
     }
     #[test]
-    fn participants_can_narrow_but_never_raise_the_shared_row_bound() -> anyhow::Result<()> {
+    fn explicit_row_limits_do_not_add_a_byte_limit_or_clamp_rows() -> anyhow::Result<()> {
         let check = || Ok(());
         let manual = OperationBudget::with_row_limit(&check, 1024);
-        manual.charge(1023, 0)?;
+        manual.charge(1023, 64 * 1024 * 1024)?;
         manual.charge(1, 0)?;
         assert!(matches!(manual.charge(1, 0), Err(Error::Capacity)));
-        let attempted_widening = OperationBudget::with_row_limit(&check, usize::MAX);
-        attempted_widening.charge(4096, 0)?;
-        assert!(matches!(
-            attempted_widening.charge(1, 0),
-            Err(Error::Capacity)
-        ));
+        let larger = OperationBudget::with_row_limit(&check, 8192);
+        larger.charge(8192, 0)?;
+        assert!(matches!(larger.charge(1, 0), Err(Error::Capacity)));
         Ok(())
     }
     #[test]
-    fn aggregate_bytes_rows_and_rejection_are_shared_and_do_not_wrap() -> anyhow::Result<()> {
+    fn default_accounting_exceeds_former_limits_and_preserves_cancellation() -> anyhow::Result<()> {
         let allowed = AtomicBool::new(true);
         let check = || {
             if allowed.load(Ordering::Acquire) {
@@ -103,18 +105,33 @@ mod tests {
         let budget = OperationBudget::new(&check);
         budget.charge(2048, 16 * 1024 * 1024)?;
         budget.charge(2048, 16 * 1024 * 1024)?;
-        assert!(matches!(budget.charge(1, 0), Err(Error::Capacity)));
-        assert!(matches!(budget.charge(0, 1), Err(Error::Capacity)));
-        assert!(matches!(
-            budget.charge(usize::MAX, usize::MAX),
-            Err(Error::Capacity)
-        ));
+        budget.charge(1, 1)?;
         budget.charge(0, 0)?;
         allowed.store(false, Ordering::Release);
         assert!(matches!(
             budget.check(),
             Err(Error::Rejected(ErrorCode::CapacityExceeded))
         ));
+        assert!(matches!(
+            budget.charge(0, 0),
+            Err(Error::Rejected(ErrorCode::CapacityExceeded))
+        ));
+        allowed.store(true, Ordering::Release);
+        budget.charge(1, 1)?;
+        Ok(())
+    }
+    #[test]
+    fn row_and_byte_overflow_do_not_partially_consume_the_shared_budget() -> anyhow::Result<()> {
+        let check = || Ok(());
+        for (rows, bytes) in [(usize::MAX, 1), (1, usize::MAX)] {
+            let budget = OperationBudget::new(&check);
+            budget.charge(rows, bytes)?;
+            assert!(matches!(budget.charge(1, 1), Err(Error::Capacity)));
+            budget.charge(usize::MAX - rows, usize::MAX - bytes)?;
+            assert!(matches!(budget.charge(1, 0), Err(Error::Capacity)));
+            assert!(matches!(budget.charge(0, 1), Err(Error::Capacity)));
+            budget.charge(0, 0)?;
+        }
         Ok(())
     }
 }

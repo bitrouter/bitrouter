@@ -191,7 +191,7 @@ impl Resources {
 
     /// Authenticate a retained configuration, including integrity-only reads.
     /// This reads no mutable catalog or global configuration. Invalid retained
-    /// bytes, missing keys and unsupported formats fence authority.
+    /// bytes, missing keys and unsupported formats refuse this resource access.
     pub(crate) fn validate_compiled(
         &self,
         stored: &super::configuration_store::StoredConfiguration,
@@ -201,7 +201,7 @@ impl Resources {
             .map_err(|_| ErrorCode::AuthorityUnavailable)
     }
 
-    /// Activation and startup must also qualify the authenticated routes for
+    /// Activation and execution must also qualify the authenticated routes for
     /// this binary. A missing capability is not retained-data corruption.
     pub(crate) fn validate_executable(
         &self,
@@ -320,7 +320,8 @@ impl Resources {
         if let Some(pool) = self.file_pool.as_deref() {
             self.require_unclaimed_pool(db, pool).await?;
         }
-        self.authenticate_retained(db).await?;
+        self.audit_retained_in(db, 64 * 1024 * 1024, &|| Ok(()))
+            .await?;
         if let Some(path) = import {
             let bytes = Self::read_import(Some(path))
                 .await?
@@ -338,14 +339,27 @@ impl Resources {
         if let Some(pool) = self.file_pool.as_deref() {
             self.require_unclaimed_pool(db, pool).await?;
         }
-        self.authenticate_retained(db).await?;
+        // The owning actor verified the installation/key epoch before entering
+        // this transaction participant. Imports authenticate their own exact
+        // dependency closure; unrelated retained history belongs to the audit.
         if let Some(bytes) = import {
             self.import_in(db, bytes).await?;
         }
         Ok(())
     }
 
+    #[cfg(test)]
     async fn authenticate_retained(&self, db: &impl ConnectionTrait) -> Result<()> {
+        self.audit_retained_in(db, 64 * 1024 * 1024, &|| Ok(()))
+            .await
+    }
+
+    pub(in crate::tenancy) async fn audit_retained_in(
+        &self,
+        db: &impl ConnectionTrait,
+        bytes: usize,
+        check: &(dyn Fn() -> Result<()> + Sync),
+    ) -> Result<()> {
         let retained = storage::has_resources(db)
             .await
             .map_err(|_| anyhow::anyhow!("tenancy catalog unavailable"))?;
@@ -353,11 +367,10 @@ impl Resources {
             self.key.is_some() || !retained,
             "retained tenancy catalog requires its wrapping key"
         );
-        // Verify all retained rows even when the import source has been removed.
-        // Verify BEFORE importing: a wrong key must not commit new rows and leave
-        // a mixed-key catalog behind when startup subsequently fails.
+        // The audit authenticates all retained rows even without an import.
         let mut after = None;
         loop {
+            check()?;
             let page = storage::reference_page(db, after.as_ref())
                 .await
                 .map_err(|_| anyhow::anyhow!("tenancy catalog unavailable"))?;
@@ -365,6 +378,9 @@ impl Resources {
                 break;
             }
             for reference in &page {
+                check()?;
+                self.inspect_retained_resource_in(db, reference, bytes)
+                    .await?;
                 let artifact = self.load(db, reference).await.map_err(|_| {
                     anyhow::anyhow!("retained tenancy resource authentication failed")
                 })?;
@@ -380,8 +396,7 @@ impl Resources {
             after = page.last().cloned();
         }
         admission::index::verify_index(self, db).await?;
-        self.inspect_all_configurations_in(db, 64 * 1024 * 1024, &|| Ok(()))
-            .await?;
+        self.inspect_all_configurations_in(db, bytes, check).await?;
         Ok(())
     }
 
@@ -725,7 +740,13 @@ impl Resources {
     ) -> std::result::Result<Artifact, ErrorCode> {
         let record = super::configuration_store::resource(db, reference)
             .await
-            .map_err(|_| ErrorCode::StorageUnavailable)?
+            .map_err(|error| {
+                if error.is::<super::store::directory::InvalidRecord>() {
+                    ErrorCode::AuthorityUnavailable
+                } else {
+                    ErrorCode::StorageUnavailable
+                }
+            })?
             .ok_or(ErrorCode::NotFound)?;
         storage::authenticate(self, record).map_err(|_| ErrorCode::AuthorityUnavailable)
     }

@@ -5,6 +5,7 @@ use std::panic::AssertUnwindSafe;
 use std::task::Poll;
 
 use futures::FutureExt;
+use sea_orm::ConnectionTrait;
 use tokio::sync::mpsc;
 
 use super::{Control, CredentialRead, ErrorCode, Failure, Instant, Job, Message, Worker};
@@ -342,27 +343,18 @@ impl Worker {
             let control = self.control();
             let work = async {
                 let initial = self.current()?;
-                // Validate the entire persisted directory under the existing
-                // startup owner, retaining bounded pages rather than all rows.
+                // Existing stores authenticate the publication header here. Each
+                // request validates the authority and resources it actually uses;
+                // complete retained-history validation belongs to offline audit.
                 let tx = control
-                    .begin_write_repeatable_read(&self.db)
+                    .begin_repeatable_read(&self.db)
                     .await
                     .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
                 let validated = async {
-                    let (loaded, totals) = crate::tenancy::store::startup::load_header_observed_in(
-                        &tx,
-                        crate::tenancy::store::startup::Budget {
-                            rows: 32,
-                            bytes: self
-                                .authority
-                                .load_budget()
-                                .checked_mul(3)
-                                .ok_or(ErrorCode::CapacityExceeded)?,
-                        },
-                    )
-                    .await
-                    .map_err(|error| self.directory_failure(error))?
-                    .ok_or(ErrorCode::AuthorityUnavailable)?;
+                    let loaded = crate::tenancy::store::startup::read_header_in(&tx, 4096)
+                        .await
+                        .map_err(|error| self.directory_failure(error))?
+                        .ok_or(ErrorCode::AuthorityUnavailable)?;
                     if loaded.header.installation != initial.installation
                         || loaded.header.revision != initial.revision
                     {
@@ -372,29 +364,7 @@ impl Worker {
                         loaded.header.revision.get(),
                         loaded.header.operation_ids,
                         loaded.header.safety_operation_ids,
-                        totals,
                     ));
-                    let check = || {
-                        control
-                            .check_read()
-                            .map_err(|_| anyhow::anyhow!("startup validation cancelled"))
-                    };
-                    self.resources
-                        .inspect_all_retained_in(
-                            &tx,
-                            self.authority.load_budget().saturating_mul(3),
-                            &check,
-                        )
-                        .await
-                        .map_err(|error| self.directory_failure(error))?;
-                    crate::eval::store::retained::validate_retained_subjects_in(
-                        &tx,
-                        &initial.installation,
-                        self.authority.load_budget().saturating_mul(3),
-                        &check,
-                    )
-                    .await
-                    .map_err(|error| self.directory_failure(error))?;
                     Ok::<_, Failure>(())
                 }
                 .await;
@@ -436,7 +406,11 @@ impl Worker {
                     "tenant startup validation"
                 );
                 let inventory =
-                    crate::tenancy::receipts::store::inventory(&tx, &initial.installation).await;
+                    if self.db.get_database_backend() == sea_orm::DatabaseBackend::Sqlite {
+                        crate::db::migration::capacity::load(&tx).await
+                    } else {
+                        crate::tenancy::receipts::store::inventory(&tx, &initial.installation).await
+                    };
                 control
                     .rollback(tx)
                     .await
@@ -496,20 +470,16 @@ impl Worker {
             });
             if result.is_ok() {
                 // All startup phases and their custody settlement succeeded.
-                // Counts describe the earlier validated authority snapshot only.
-                if let Some((authority_revision, operations, safety_operations, totals)) =
+                // Publication metadata describes the authenticated startup header.
+                if let Some((authority_revision, operations, safety_operations)) =
                     directory_snapshot
                 {
                     tracing::info!(
                         outcome = "complete",
-                        as_of = "validated_authority_snapshot",
+                        as_of = "startup_authority_header",
                         authority_revision,
                         operations,
                         safety_operations,
-                        tenants = totals.tenants,
-                        principals = totals.principals,
-                        bindings = totals.bindings,
-                        credentials = totals.credentials,
                         elapsed_ms = started.elapsed().as_millis() as u64,
                         "tenant startup validation completed"
                     );

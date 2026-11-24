@@ -92,13 +92,23 @@ fn name(token: Option<&Token>) -> bool {
 }
 
 /// Accept only a column comparison, BETWEEN range or IN membership with literals.
-/// This includes continuation constraints and the indexed obligation layout.
+/// Integer type guards admit only typeof(column) = 'integer', never arbitrary
+/// functions or expressions. This also covers the durable capacity projection.
 fn check(tokens: &[Token], at: &mut usize) -> Result<()> {
     ensure!(
         tokens.get(*at) == Some(&Token::Symbol(b'(')),
         "unsupported CHECK"
     );
     *at += 1;
+    if word(tokens.get(*at), "typeof") && tokens.get(*at + 1) == Some(&Token::Symbol(b'(')) {
+        integer_type(tokens, at)?;
+        ensure!(
+            tokens.get(*at) == Some(&Token::Symbol(b')')),
+            "unsupported CHECK expression"
+        );
+        *at += 1;
+        return Ok(());
+    }
     ensure!(name(tokens.get(*at)), "unsupported CHECK operand");
     *at += 1;
     if word(tokens.get(*at), "in") {
@@ -133,9 +143,9 @@ fn check(tokens: &[Token], at: &mut usize) -> Result<()> {
         match tokens.get(*at..*at + 2) {
             Some(
                 [Token::Symbol(b'<'), Token::Symbol(b'>')]
-                | [Token::Symbol(b'!'), Token::Symbol(b'=')],
+                | [Token::Symbol(b'!' | b'<' | b'>'), Token::Symbol(b'=')],
             ) => *at += 2,
-            _ if tokens.get(*at) == Some(&Token::Symbol(b'=')) => *at += 1,
+            _ if matches!(tokens.get(*at), Some(Token::Symbol(b'=' | b'<' | b'>'))) => *at += 1,
             _ => bail!("unsupported CHECK operator"),
         }
         literal(tokens, at)?;
@@ -145,6 +155,28 @@ fn check(tokens: &[Token], at: &mut usize) -> Result<()> {
         "unsupported CHECK expression"
     );
     *at += 1;
+    Ok(())
+}
+
+fn integer_type(tokens: &[Token], at: &mut usize) -> Result<()> {
+    let Some(
+        [
+            Token::Word(function),
+            Token::Symbol(b'('),
+            column,
+            Token::Symbol(b')'),
+            Token::Symbol(b'='),
+            Token::Text(kind),
+        ],
+    ) = tokens.get(*at..*at + 6)
+    else {
+        bail!("unsupported CHECK type guard");
+    };
+    ensure!(
+        function == "typeof" && name(Some(column)) && kind == "integer",
+        "unsupported CHECK type guard"
+    );
+    *at += 6;
     Ok(())
 }
 
@@ -289,6 +321,74 @@ mod tests {
         ] {
             ensure!(validate(b"table", Some(sql.as_bytes())).is_err());
         }
+        Ok(())
+    }
+
+    #[test]
+    fn capacity_comparisons_and_type_guards_never_admit_executable_operands() -> Result<()> {
+        for predicate in [
+            "(value >= 0)",
+            "(value <= 9223372036854775807)",
+            "(value > -1)",
+            "(value < +2)",
+            "(typeof(\"live_bytes\") = 'integer')",
+            "(TYPEOF(value)='integer')",
+        ] {
+            let sql = format!("CREATE TABLE t(value BIGINT, live_bytes BIGINT, CHECK {predicate})");
+            validate(b"table", Some(sql.as_bytes()))?;
+            let mut cursor = CheckCursor::new(&sql)?;
+            ensure!(cursor.next_predicate()? == Some(predicate));
+            ensure!(cursor.next_predicate()?.is_none());
+        }
+        for predicate in [
+            "(value >= abs(0))",
+            "(value >= (SELECT 0))",
+            "(value >= 0 OR value=9)",
+            "(coalesce(value,0) >= 0)",
+            "(typeof(abs(value)) = 'integer')",
+            "(typeof((SELECT value)) = 'integer')",
+            "(typeof(value+0) = 'integer')",
+            "(typeof(value,live_bytes) = 'integer')",
+            "(typeof(value) = substr('integer',1))",
+            "(typeof(value) = 'integer' OR value=9)",
+            "(typeof(value) = 'INTEGER')",
+        ] {
+            let sql = format!("CREATE TABLE t(value BIGINT, live_bytes BIGINT, CHECK {predicate})");
+            ensure!(
+                validate(b"table", Some(sql.as_bytes())).is_err(),
+                "accepted {predicate}"
+            );
+            ensure!(
+                CheckCursor::new(&sql).is_err(),
+                "accepted cursor for {predicate}"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn installed_gateway_schema_fits_the_offline_expression_profile() -> Result<()> {
+        use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
+        let db = crate::db::connect("sqlite::memory:").await?;
+        crate::db::run_migrations(&db).await?;
+        let rows = db
+            .query_all(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT type,sql FROM sqlite_schema WHERE type IN ('table','index')",
+            ))
+            .await?;
+        for row in rows {
+            let kind: String = row.try_get("", "type")?;
+            let sql: Option<String> = row.try_get("", "sql")?;
+            validate(kind.as_bytes(), sql.as_deref().map(str::as_bytes))?;
+            if kind == "table"
+                && let Some(sql) = sql
+            {
+                let mut cursor = CheckCursor::new(&sql)?;
+                while cursor.next_predicate()?.is_some() {}
+            }
+        }
+        db.close().await?;
         Ok(())
     }
 }

@@ -108,7 +108,13 @@ pub(in crate::tenancy) async fn check_in(
     use bitrouter_ai::tenancy::operation::ErrorCode;
     let record = exact(db, installation, reference)
         .await
-        .map_err(|_| ErrorCode::StorageUnavailable)?
+        .map_err(|error| {
+            if error.is::<crate::tenancy::store::directory::InvalidRecord>() {
+                ErrorCode::AuthorityUnavailable
+            } else {
+                ErrorCode::StorageUnavailable
+            }
+        })?
         .ok_or(ErrorCode::AuthorityUnavailable)?;
     if record.authority_revision > authority {
         return Err(ErrorCode::AuthorityUnavailable);
@@ -227,7 +233,9 @@ pub(in crate::tenancy) async fn exact(
     db.query_one(db.get_database_backend().build(&query))
         .await?
         .as_ref()
-        .map(|row| decode(row, installation))
+        .map(|row| {
+            decode(row, installation).context(crate::tenancy::store::directory::InvalidRecord)
+        })
         .transpose()
 }
 
@@ -244,9 +252,14 @@ pub(in crate::tenancy) async fn head(
     let rows = db
         .query_all(db.get_database_backend().build(&query))
         .await?;
-    ensure!(rows.len() <= 1, "duplicate resource lifecycle head");
+    if rows.len() > 1 {
+        return Err(anyhow::anyhow!("duplicate resource lifecycle head")
+            .context(crate::tenancy::store::directory::InvalidRecord));
+    }
     rows.first()
-        .map(|row| decode(row, installation))
+        .map(|row| {
+            decode(row, installation).context(crate::tenancy::store::directory::InvalidRecord)
+        })
         .transpose()
 }
 
@@ -567,7 +580,12 @@ mod tests {
             .await
             .err()
             .context("duplicate heads accepted")?;
-        ensure!(error.to_string() == "duplicate indexed authority identity");
+        ensure!(error.is::<crate::tenancy::store::directory::InvalidRecord>());
+        ensure!(
+            error
+                .chain()
+                .any(|cause| cause.to_string() == "duplicate indexed authority identity")
+        );
         ensure!(
             head(&db, &installation, &first.reference.key())
                 .await

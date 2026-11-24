@@ -190,7 +190,7 @@ fn later_view_expansion_rejects_before_any_payload_clone_and_leaves_gate_usable(
     assert_eq!(authority.staged_clones.load(Ordering::Relaxed), 0);
     {
         let mut guard = authority.read().map_err(failure)?;
-        assert_eq!(guard.publication(), 0);
+        assert_eq!(guard.read_publication(), 0);
         for lease in &leases {
             guard
                 .check(lease, |view| {
@@ -260,7 +260,7 @@ fn duplicate_intermediate_record_is_rejected_before_clone() -> anyhow::Result<()
         Err(ErrorCode::AuthorityUnavailable)
     ));
     assert_eq!(authority.staged_clones.load(Ordering::Relaxed), 0);
-    assert_eq!(authority.read().map_err(failure)?.publication(), 0);
+    assert_eq!(authority.read().map_err(failure)?.read_publication(), 0);
     drop(authority.prepare(initial, &[], None).map_err(failure)?);
     drop(leases);
     Ok(())

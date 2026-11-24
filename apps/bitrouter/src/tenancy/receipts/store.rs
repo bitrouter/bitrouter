@@ -15,6 +15,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub(in crate::tenancy) mod archive;
+#[cfg(test)]
+mod capacity_tests;
 pub(super) mod inventory;
 mod load;
 pub(crate) mod obligations;
@@ -570,6 +572,19 @@ async fn insert_new_row(tx: &DatabaseTransaction, candidate: &Candidate) -> Resu
         same_completion(&saved, candidate)?;
         return Ok(false);
     }
+    crate::db::migration::capacity::adjust(
+        tx,
+        crate::db::migration::capacity::Delta {
+            live_bytes: i64::try_from(
+                candidate
+                    .bytes()
+                    .checked_add(super::capacity::ROW_OVERHEAD)
+                    .context("receipt capacity overflow")?,
+            )?,
+            ..Default::default()
+        },
+    )
+    .await?;
     Ok(true)
 }
 
@@ -671,6 +686,18 @@ async fn insert_bytes(tx: &DatabaseTransaction, value: Row<'_>) -> Result<bool> 
         "immutable receipt conflict"
     );
     validate_facts(&saved, r, value.json.len() + value.private.len())?;
+    if changed {
+        crate::db::migration::capacity::adjust(
+            tx,
+            crate::db::migration::capacity::Delta {
+                live_bytes: i64::try_from(value.json.len() + value.private.len())?
+                    .checked_add(i64::try_from(super::capacity::ROW_OVERHEAD)?)
+                    .context("receipt capacity overflow")?,
+                ..Default::default()
+            },
+        )
+        .await?;
+    }
     Ok(changed)
 }
 fn validate_facts(row: &QueryResult, facts: &format::Facts<'_>, bytes: usize) -> Result<()> {
@@ -900,4 +927,64 @@ pub(in crate::tenancy) async fn inventory(
     installation: &InstallationId,
 ) -> Result<Inventory> {
     inventory::load(db, installation).await
+}
+
+/// Only the formal schema upgrade may derive policy quantities from all history.
+pub(crate) async fn capacity_backfill(db: &impl ConnectionTrait) -> Result<Inventory> {
+    let backend = db.get_database_backend();
+    let query = Query::select()
+        .from(Alias::new("tenancy_installation"))
+        .expr_as(
+            Expr::cust(format!(
+                "CASE WHEN {} BETWEEN 1 AND 128 THEN installation_id END",
+                octets(backend, "installation_id")
+            )),
+            Alias::new("installation_id"),
+        )
+        .limit(2)
+        .to_owned();
+    let rows = db.query_all(backend.build(&query)).await?;
+    ensure!(rows.len() <= 1, "duplicate capacity installation");
+    if let Some(row) = rows.first() {
+        let installation: InstallationId =
+            row.try_get::<String>("", "installation_id")?.try_into()?;
+        return inventory(db, &installation).await;
+    }
+    // Missing identity never turns retained financial state into zero use.
+    for table in [
+        TABLE,
+        "tenancy_usage_evidence",
+        "tenancy_receipt_auxiliary",
+        "tenancy_oauth_slots",
+    ] {
+        let query = Query::select()
+            .from(Alias::new(table))
+            .expr(Expr::val(1))
+            .limit(1)
+            .to_owned();
+        ensure!(
+            db.query_one(backend.build(&query)).await?.is_none(),
+            "capacity source without installation"
+        );
+    }
+    if backend == DatabaseBackend::Sqlite {
+        for table in ["tenancy_receipt_archive", "tenancy_unknown_obligations"] {
+            let query = Query::select()
+                .from(Alias::new(table))
+                .expr(Expr::val(1))
+                .limit(1)
+                .to_owned();
+            ensure!(
+                db.query_one(backend.build(&query)).await?.is_none(),
+                "capacity source without installation"
+            );
+        }
+        if crate::db::migration::provider_technical::available(db).await? {
+            ensure!(
+                super::provider_technical::storage::retained_bytes(db).await? == 0,
+                "technical capacity source without installation"
+            );
+        }
+    }
+    Ok(Inventory::default())
 }

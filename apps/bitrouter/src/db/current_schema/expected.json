@@ -3853,5 +3853,110 @@
     "foreign": [],
     "checks": [],
     "indexes": []
+  },
+  {
+    "name": "tenancy_receipt_capacity",
+    "columns": [
+      {
+        "name": "singleton",
+        "kind": "integer",
+        "nullable": false,
+        "binary": false,
+        "automatic": false,
+        "default": null
+      },
+      {
+        "name": "schema_version",
+        "kind": "integer",
+        "nullable": false,
+        "binary": false,
+        "automatic": false,
+        "default": null
+      },
+      {
+        "name": "live_bytes",
+        "kind": "bigint",
+        "nullable": false,
+        "binary": false,
+        "automatic": false,
+        "default": null
+      },
+      {
+        "name": "history_bytes",
+        "kind": "bigint",
+        "nullable": false,
+        "binary": false,
+        "automatic": false,
+        "default": null
+      },
+      {
+        "name": "history_rows",
+        "kind": "bigint",
+        "nullable": false,
+        "binary": false,
+        "automatic": false,
+        "default": null
+      },
+      {
+        "name": "oauth_bytes",
+        "kind": "bigint",
+        "nullable": false,
+        "binary": false,
+        "automatic": false,
+        "default": null
+      },
+      {
+        "name": "technical_bytes",
+        "kind": "bigint",
+        "nullable": false,
+        "binary": false,
+        "automatic": false,
+        "default": null
+      },
+      {
+        "name": "unknown_count",
+        "kind": "bigint",
+        "nullable": false,
+        "binary": false,
+        "automatic": false,
+        "default": null
+      },
+      {
+        "name": "continuation_epoch_required",
+        "kind": "integer",
+        "nullable": false,
+        "binary": false,
+        "automatic": false,
+        "default": null
+      }
+    ],
+    "primary": [
+      "singleton"
+    ],
+    "unique": [],
+    "foreign": [],
+    "checks": [
+      "(\"singleton\" = 1)",
+      "(\"schema_version\" = 1)",
+      "(\"live_bytes\" >= 0)",
+      "(\"history_bytes\" >= 0)",
+      "(\"history_rows\" >= 0)",
+      "(\"oauth_bytes\" >= 0)",
+      "(\"technical_bytes\" >= 0)",
+      "(\"unknown_count\" >= 0)",
+      "(\"continuation_epoch_required\" IN (0, 1))"
+    ],
+    "indexes": [],
+    "sqlite_checks": [
+      "(typeof(\"singleton\") = 'integer')",
+      "(typeof(\"schema_version\") = 'integer')",
+      "(typeof(\"live_bytes\") = 'integer')",
+      "(typeof(\"history_bytes\") = 'integer')",
+      "(typeof(\"history_rows\") = 'integer')",
+      "(typeof(\"oauth_bytes\") = 'integer')",
+      "(typeof(\"technical_bytes\") = 'integer')",
+      "(typeof(\"unknown_count\") = 'integer')",
+      "(typeof(\"continuation_epoch_required\") = 'integer')"
+    ]
   }
 ]

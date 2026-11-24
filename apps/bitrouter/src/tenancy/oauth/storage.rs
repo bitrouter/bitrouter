@@ -219,19 +219,22 @@ async fn rows(
         select.expr_as(Expr::cust("CASE WHEN (pending_tenant_id IS NULL OR (typeof(pending_tenant_id)='text' AND length(CAST(pending_tenant_id AS BLOB)) BETWEEN 1 AND 128)) AND (pending_execution_id IS NULL OR (typeof(pending_execution_id)='text' AND length(CAST(pending_execution_id AS BLOB)) BETWEEN 1 AND 128)) THEN 1 ELSE 0 END"), Alias::new("pending_valid"));
     }
     let rows = db.query_all(backend.build(&select)).await?;
-    ensure!(rows.len() <= maximum_rows, "OAuth batch row bound");
-    let mut bytes = 0usize;
-    rows.into_iter()
-        .map(|row| {
-            let value = decode(row, backend == DatabaseBackend::Sqlite)?;
-            bytes = bytes
-                .checked_add(value.json.len())
-                .and_then(|bytes| bytes.checked_add(value.payload.len()))
-                .context("OAuth batch byte overflow")?;
-            ensure!(bytes <= maximum_bytes, "OAuth batch byte bound");
-            Ok(value)
-        })
-        .collect()
+    let decoded = || -> Result<Vec<Row>> {
+        ensure!(rows.len() <= maximum_rows, "OAuth batch row bound");
+        let mut bytes = 0usize;
+        rows.into_iter()
+            .map(|row| {
+                let value = decode(row, backend == DatabaseBackend::Sqlite)?;
+                bytes = bytes
+                    .checked_add(value.json.len())
+                    .and_then(|bytes| bytes.checked_add(value.payload.len()))
+                    .context("OAuth batch byte overflow")?;
+                ensure!(bytes <= maximum_bytes, "OAuth batch byte bound");
+                Ok(value)
+            })
+            .collect()
+    };
+    decoded().context(crate::tenancy::store::directory::InvalidRecord)
 }
 fn decode(row: QueryResult, projected: bool) -> Result<Row> {
     let json: String = row.try_get("", "metadata_json")?;
@@ -290,11 +293,11 @@ pub(in crate::tenancy) async fn load(
     reference: &ResourceRef,
 ) -> Result<Option<Row>> {
     let row = lookup(db, installation, reference).await?;
-    if let Some(row) = &row {
-        ensure!(
-            row.metadata.reference == *reference,
-            "OAuth authority revision conflict"
-        );
+    if let Some(row) = &row
+        && row.metadata.reference != *reference
+    {
+        return Err(anyhow::anyhow!("OAuth authority revision conflict")
+            .context(crate::tenancy::store::directory::InvalidRecord));
     }
     Ok(row)
 }
@@ -315,7 +318,10 @@ pub(in crate::tenancy) async fn lookup(
         2,
     )
     .await?;
-    ensure!(rows.len() <= 1, "duplicate OAuth slot");
+    if rows.len() > 1 {
+        return Err(anyhow::anyhow!("duplicate OAuth slot")
+            .context(crate::tenancy::store::directory::InvalidRecord));
+    }
     Ok(rows.pop())
 }
 /// One bounded page for the exclusively owned installation, ordered by stable
@@ -356,6 +362,8 @@ pub(in crate::tenancy) async fn page(
     }
     Ok(result)
 }
+/// Insert in the caller's source transaction; the slot and fixed capacity
+/// reservation must commit or roll back together. Rotation retains this charge.
 pub(in crate::tenancy) async fn insert(db: &impl ConnectionTrait, row: &Row) -> Result<()> {
     let backend = db.get_database_backend();
     row.metadata.validate()?;
@@ -401,20 +409,36 @@ pub(in crate::tenancy) async fn insert(db: &impl ConnectionTrait, row: &Row) -> 
     if backend != DatabaseBackend::MySql {
         insert.on_conflict(OnConflict::new().do_nothing().to_owned());
     }
-    match db.execute(backend.build(&insert)).await {
-        Ok(_) => {}
+    let inserted = match db.execute(backend.build(&insert)).await {
+        Ok(result) => {
+            ensure!(result.rows_affected() <= 1, "OAuth slot insert count");
+            result.rows_affected() == 1
+        }
         Err(error)
             if backend == DatabaseBackend::MySql
                 && matches!(
                     error.sql_err(),
                     Some(sea_orm::SqlErr::UniqueConstraintViolation(_))
-                ) => {}
+                ) =>
+        {
+            false
+        }
         Err(error) => return Err(error.into()),
-    }
+    };
     let existing = load(db, &row.metadata.installation, &row.metadata.reference)
         .await?
         .context("OAuth insert winner missing")?;
     ensure!(existing.same(row), "OAuth insert conflict");
+    if inserted {
+        crate::db::migration::capacity::adjust(
+            db,
+            crate::db::migration::capacity::Delta {
+                oauth_bytes: i64::try_from(INVENTORY_BYTES)?,
+                ..Default::default()
+            },
+        )
+        .await?;
+    }
     Ok(())
 }
 pub(in crate::tenancy) async fn replace(

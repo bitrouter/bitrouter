@@ -111,6 +111,8 @@ impl sea_orm::ConnectionTrait for ReadConnection<'_> {
 /// Joining the worker is insufficient without its explicit transaction outcome.
 pub(super) struct Proof {
     #[cfg(test)]
+    lose_commit_ack: AtomicBool,
+    #[cfg(test)]
     rotation_overlap:
         std::sync::Mutex<Option<Arc<super::actor::provider_technical::tests::RotationOverlap>>>,
     state: watch::Sender<Evidence>,
@@ -130,6 +132,8 @@ pub(super) struct Proof {
 impl Proof {
     pub fn new(live: Arc<AtomicBool>) -> Arc<Self> {
         Arc::new(Self {
+            #[cfg(test)]
+            lose_commit_ack: AtomicBool::new(false),
             #[cfg(test)]
             rotation_overlap: std::sync::Mutex::new(None),
             live,
@@ -165,6 +169,11 @@ impl Proof {
                 state.disposition = disposition;
             }
         });
+    }
+
+    #[cfg(all(test, unix))]
+    pub(in crate::tenancy) fn lose_next_commit_ack_for_test(&self) {
+        self.lose_commit_ack.store(true, Ordering::Release);
     }
 
     pub fn disposition(&self) -> Disposition {
@@ -577,6 +586,14 @@ impl Control {
             .map(|o| o.span(crate::telemetry::receipt_latency::Phase::SqlCommit))
             .unwrap_or_default();
         let result = transaction.commit().await;
+        #[cfg(test)]
+        let result = if result.is_ok() && self.proof.lose_commit_ack.swap(false, Ordering::AcqRel) {
+            Err(DbErr::Custom(
+                "commit acknowledgement lost by test transport".into(),
+            ))
+        } else {
+            result
+        };
         if result.is_err() {
             self.storage_failed();
         }

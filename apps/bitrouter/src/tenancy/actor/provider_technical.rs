@@ -7,6 +7,7 @@ use crate::tenancy::{
     receipts::{owner::Owner, provider_technical::storage, store::format::Terminal},
 };
 use futures::FutureExt;
+use sea_orm::{ConnectionTrait, Statement};
 use std::{future::pending, sync::Arc};
 use tokio::{task::JoinHandle, time::Instant};
 use tokio_util::sync::CancellationToken;
@@ -231,6 +232,11 @@ async fn write(
     let work = async {
         db.interrupt_when(Some(cancel.clone()), deadline).await?;
         crate::db::migration::provider_technical::install(&db).await?;
+        // The optional payload and its durable capacity charge commit together.
+        // Cancellation retains this exact driver until close rolls back any
+        // unfinished transaction, before the existing readback can run.
+        db.execute(Statement::from_string(db.get_database_backend(), "BEGIN"))
+            .await?;
         #[cfg(test)]
         test.at(tests::Point::BeforeInsert, &cancel).await;
         if let Some(old) = storage::read_prepared(&db, &terminal).await? {
@@ -244,6 +250,8 @@ async fn write(
         db.driver_gate(&test, &cancel).await?;
         insert_polled = true;
         let inserted = storage::insert_new(&db, &terminal, &prepared).await?;
+        db.execute(Statement::from_string(db.get_database_backend(), "COMMIT"))
+            .await?;
         #[cfg(test)]
         test.at(tests::Point::AfterInsert, &cancel).await;
         Ok::<bool, anyhow::Error>(inserted)

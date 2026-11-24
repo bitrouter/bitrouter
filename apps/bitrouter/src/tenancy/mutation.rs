@@ -110,7 +110,13 @@ pub(super) async fn prepare(
             configuration::authorize(state, caller, tenant, Permission::PolicyActivate, &[], now)?;
             let value = configuration_store::configuration(db, tenant, &input.revision_id)
                 .await
-                .map_err(|_| ErrorCode::StorageUnavailable)?
+                .map_err(|error| {
+                    if error.is::<super::store::directory::InvalidRecord>() {
+                        ErrorCode::AuthorityUnavailable
+                    } else {
+                        ErrorCode::StorageUnavailable
+                    }
+                })?
                 .ok_or(ErrorCode::NotFound)?;
             configuration::authorize(
                 state,

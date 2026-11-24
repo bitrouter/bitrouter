@@ -20,7 +20,7 @@ async fn manual_principal_spelling_cannot_mint_builtin_authority() -> Result<()>
         provenance,
         storage_budget: None,
     };
-    store.insert_subject(&super::tests::subject()?).await?;
+    store.insert_subject(&store.subject_fixture()?).await?;
     let mut result = super::tests::result(EvalVerdict::Inconclusive);
     result.evaluator.kind = EvaluatorKind::Generic;
     result.evaluator.authority_id = TRAJECTORY_EVALUATOR_AUTHORITY_ID.into();

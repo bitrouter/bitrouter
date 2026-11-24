@@ -72,7 +72,7 @@ async fn seed(fixture: &mut Fixture, store: &EvalStore) -> Result<String> {
     let input = evaluation(store, EvalVerdict::Pass, "pass")?;
     let slot = fixture.start(&store.db).await?;
     let subject = store
-        .put_owned_in(fixture.tx(slot)?, &tests::subject()?, &|| Ok(()))
+        .put_owned_in(fixture.tx(slot)?, &store.subject_fixture()?, &|| Ok(()))
         .await?;
     ensure!(subject.outcome == SubjectInsertOutcome::Inserted);
     let admitted = store
@@ -130,7 +130,7 @@ async fn committed(fixture: &mut Fixture) -> Result<()> {
             && replay.status == AdmissionStatus::Admitted
     );
     let duplicate = reviewer
-        .put_owned_in(fixture.tx(slot)?, &tests::subject()?, &|| Ok(()))
+        .put_owned_in(fixture.tx(slot)?, &reviewer.subject_fixture()?, &|| Ok(()))
         .await?;
     ensure!(duplicate.outcome == SubjectInsertOutcome::Duplicate);
     // Inspect before rollback: cleanup must not hide an unintended replay write.
@@ -283,7 +283,7 @@ async fn committed(fixture: &mut Fixture) -> Result<()> {
         Err(OwnedError::Rejected(ErrorCode::NotFound))
     ));
     foreign
-        .put_owned_in(fixture.tx(slot)?, &tests::subject()?, &|| Ok(()))
+        .put_owned_in(fixture.tx(slot)?, &foreign.subject_fixture()?, &|| Ok(()))
         .await?;
     fixture.commit(slot).await?;
     ensure!(
@@ -319,7 +319,7 @@ async fn db_server_both_owned_eval_external_rr_winner_is_rejected_without_replay
 async fn external_writer(fixture: &mut Fixture) -> Result<()> {
     let left = initial(fixture).await?;
     let slot = fixture.start(&left.db).await?;
-    left.put_owned_in(fixture.tx(slot)?, &tests::subject()?, &|| Ok(()))
+    left.put_owned_in(fixture.tx(slot)?, &left.subject_fixture()?, &|| Ok(()))
         .await?;
     fixture.commit(slot).await?;
     let right = reconnect(fixture, &left).await?;
