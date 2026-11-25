@@ -85,7 +85,7 @@ pub(super) async fn open(connection: SchemaManagerConnection<'_>) -> Result<(), 
                 _ => "INSERT INTO seaql_migrations(version,applied_at) VALUES (?,?)",
             },
             [
-                store_format::GATEWAY_SERVER.into(),
+                store_format::marker(tx.get_database_backend()).into(),
                 chrono::Utc::now().timestamp().into(),
             ],
         ))
@@ -146,6 +146,9 @@ pub(super) async fn validate(db: &impl ConnectionTrait) -> Result<(), DbErr> {
 
 #[cfg(all(test, any(feature = "db-postgres", feature = "db-mysql")))]
 mod server_tests;
+
+#[cfg(all(test, feature = "db-postgres"))]
+mod postgres_capacity_tests;
 
 #[cfg(test)]
 mod tests {

@@ -626,7 +626,7 @@ async fn ensure_empty_authority(db: &impl ConnectionTrait) -> Result<()> {
             "authority has no installation identity"
         );
     }
-    if db.get_database_backend() == DatabaseBackend::Sqlite {
+    if db.get_database_backend() != DatabaseBackend::MySql {
         for table in ["tenancy_receipt_archive", "tenancy_unknown_obligations"] {
             let query = Query::select()
                 .expr(Expr::val(1_i32))
@@ -640,6 +640,7 @@ async fn ensure_empty_authority(db: &impl ConnectionTrait) -> Result<()> {
                 "authority has no installation identity"
             );
         }
+        crate::db::migration::provider_technical::ensure_no_owned_rows(db).await?;
     }
     // Only first installation examines legacy global records. Existing stores
     // return from read_header_in before reaching this exceptional preflight.

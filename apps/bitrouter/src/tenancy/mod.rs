@@ -50,7 +50,7 @@ use futures::{
     future::{BoxFuture, Shared},
 };
 use sea_orm::DatabaseConnection;
-use tokio::sync::{Semaphore, SemaphorePermit, mpsc, oneshot};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, SemaphorePermit, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use self::{
@@ -101,6 +101,7 @@ pub(crate) struct Service {
     technical_io: Arc<actor::provider_technical::tests::State>,
     startup: Option<Arc<origin::StartupOwner>>,
     db: DatabaseConnection,
+    owner_lost: Option<CancellationToken>,
     authority: Arc<authority::live::Authority>,
     live: Arc<AtomicBool>,
     instance: InstanceId,
@@ -281,6 +282,7 @@ impl Service {
         let (claim, receipt_observer) = origin;
         config.validate_lifetime()?;
         config.capacity.validate()?;
+        config.verify_binding(&db).await?;
         let initial = store::initial_header_with(&db, Utc::now(), || {
             if let Some(owner) = &owner {
                 return storage::exclusive_write(owner, 16 * 1024);
@@ -424,7 +426,7 @@ impl Service {
         let (completions, completion_receiver) = mpsc::channel(capacity.execution.instance_active);
         let receipt_volume = owner
             .as_ref()
-            .and_then(|owner| owner.path.parent().map(std::path::Path::to_path_buf));
+            .and_then(|owner| owner.volume().map(std::path::Path::to_path_buf));
         let admission = admission::Admission::configured(capacity);
         admission
             .bind_receipt_volume(receipt_volume.clone())
@@ -447,6 +449,20 @@ impl Service {
         let obligation_due = Arc::new(std::sync::Mutex::new(None));
         #[cfg(test)]
         let technical_io = Arc::new(actor::provider_technical::tests::State::default());
+        let owner_lost = owner
+            .as_ref()
+            .filter(|owner| owner.is_postgres())
+            .map(|owner| {
+                #[cfg(feature = "db-postgres")]
+                {
+                    owner.lost()
+                }
+                #[cfg(not(feature = "db-postgres"))]
+                {
+                    let _ = owner;
+                    CancellationToken::new()
+                }
+            });
         let worker = Worker {
             #[cfg(test)]
             technical_io: technical_io.clone(),
@@ -466,6 +482,21 @@ impl Service {
             accepting: accepting.clone(),
         };
         let stop = CancellationToken::new();
+        let monitor_stop = CancellationToken::new();
+        #[cfg(feature = "db-postgres")]
+        let monitor = worker
+            .owner
+            .as_ref()
+            .filter(|owner| owner.is_postgres())
+            .map(|owner| {
+                let owner = owner.clone();
+                let stop = monitor_stop.clone();
+                let db = db.clone();
+                let cleanup = cleanup.clone();
+                tokio::spawn(async move {
+                    ownership::monitor_postgres(&db, &owner, stop, cleanup).await
+                })
+            });
         let (initialized, initialization) = oneshot::channel();
         let worker = tokio::spawn(worker.run(
             receiver,
@@ -475,7 +506,18 @@ impl Service {
             import,
             initialized,
         ));
-        let completion = async move { worker.await.map_err(Arc::new) }
+        let supervisor = tokio::spawn(async move {
+            let result = worker.await.map_err(Arc::new);
+            monitor_stop.cancel();
+            #[cfg(feature = "db-postgres")]
+            if let Some(monitor) = monitor
+                && let Err(error) = monitor.await
+            {
+                return Err(Arc::new(error));
+            }
+            result
+        });
+        let completion = async move { supervisor.await.map_err(Arc::new)? }
             .boxed()
             .shared();
         let service = Self {
@@ -485,6 +527,7 @@ impl Service {
             obligation_due,
             startup,
             db,
+            owner_lost,
             authority,
             live,
             instance,
@@ -680,7 +723,12 @@ impl Service {
     }
 
     fn current(&self) -> Result<Arc<Snapshot>, Failure> {
-        if !self.live.load(Ordering::Acquire) {
+        if self
+            .owner_lost
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+            || !self.live.load(Ordering::Acquire)
+        {
             return Err(ErrorCode::AuthorityUnavailable.into());
         }
         self.authority
@@ -719,6 +767,14 @@ impl Service {
         // the single SQLite pool. Ordinary read pressure is not storage failure.
         self.reads
             .try_acquire()
+            .map_err(|_| ErrorCode::CapacityExceeded.into())
+    }
+
+    fn owned_read_permit(&self) -> Result<Arc<OwnedSemaphorePermit>, Failure> {
+        self.reads
+            .clone()
+            .try_acquire_owned()
+            .map(Arc::new)
             .map_err(|_| ErrorCode::CapacityExceeded.into())
     }
 
@@ -786,13 +842,24 @@ impl Service {
         &self,
         prepare: impl FnOnce() -> Result<actor::AuthoritySubject, Failure>,
     ) -> Result<authority::live::Authenticated, Failure> {
-        let permit = self
-            .reads
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| Failure::from(ErrorCode::CapacityExceeded))?;
+        let permit = self.owned_read_permit()?;
         let subject = prepare()?;
         let deadline = tokio::time::Instant::now() + MANAGEMENT_TIMEOUT;
+        self.authority_read_with_permit(subject, permit, deadline)
+            .await
+    }
+
+    // A retained read and its actor job share one reservation. Either owner
+    // keeps it charged, including after HTTP cancellation until SQL cleanup.
+    async fn authority_read_with_permit(
+        &self,
+        subject: actor::AuthoritySubject,
+        permit: Arc<OwnedSemaphorePermit>,
+        deadline: tokio::time::Instant,
+    ) -> Result<authority::live::Authenticated, Failure> {
+        if !Arc::ptr_eq(permit.semaphore(), &self.reads) {
+            return Err(ErrorCode::AuthorityUnavailable.into());
+        }
         let (reply, receive) = oneshot::channel();
         self.enqueue(
             Job::AuthorityRead(actor::AuthorityRead {

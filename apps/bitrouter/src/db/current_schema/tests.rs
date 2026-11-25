@@ -31,13 +31,33 @@ fn reviewed_model_has_complete_receipt_and_dispatch_shapes() -> Result<()> {
 }
 
 #[test]
-fn server_model_excludes_sqlite_only_pending_obligation_projection() -> Result<()> {
-    let tables = expected(DatabaseBackend::Postgres)?;
+fn owned_backends_retain_pending_projection_and_mysql_keeps_its_profile() -> Result<()> {
+    let postgres = expected(DatabaseBackend::Postgres)?;
+    let slots = postgres
+        .iter()
+        .find(|table| table.name == "tenancy_oauth_slots")
+        .context("OAuth slot table")?;
+    ensure!(
+        slots
+            .columns
+            .iter()
+            .any(|column| column.name == "pending_tenant_id")
+    );
+    ensure!(
+        slots
+            .columns
+            .iter()
+            .any(|column| column.name == "pending_execution_id")
+    );
+    for name in ["tenancy_receipt_archive", "tenancy_unknown_obligations"] {
+        ensure!(postgres.iter().any(|table| table.name == name));
+    }
+    let tables = expected(DatabaseBackend::MySql)?;
     let slots = tables
         .iter()
         .find(|table| table.name == "tenancy_oauth_slots")
         .context("OAuth slot table")?;
-    // Pending-work projection columns and their index are SQLite-only.
+    // MySQL retains its existing unowned storage profile.
     ensure!(slots.columns.len() == 11);
     ensure!(slots.columns.iter().all(|column| !matches!(
         column.name.as_str(),
@@ -46,6 +66,55 @@ fn server_model_excludes_sqlite_only_pending_obligation_projection() -> Result<(
     ensure!(slots.indexes.len() == 1);
     ensure!(slots.indexes[0].name == "idx_tenancy_oauth_pending");
     ensure!(slots.indexes[0].columns == ["installation_id", "state", "slot_key"]);
+    Ok(())
+}
+
+#[test]
+fn native_capacity_keeps_integer_domains_without_sqlite_dynamic_type_checks() -> Result<()> {
+    for backend in [DatabaseBackend::Postgres, DatabaseBackend::Sqlite] {
+        let tables = expected(backend)?;
+        let capacity = tables
+            .iter()
+            .find(|table| table.name == "tenancy_receipt_capacity")
+            .context("capacity table")?;
+        ensure!(
+            capacity.checks.len()
+                == if backend == DatabaseBackend::Sqlite {
+                    18
+                } else {
+                    9
+                }
+        );
+        ensure!(
+            capacity
+                .checks
+                .iter()
+                .any(|check| check.contains("unknown_count"))
+        );
+        ensure!(
+            capacity
+                .checks
+                .iter()
+                .any(|check| check.contains("continuation_epoch_required"))
+        );
+        for name in ["tenancy_execution_receipts", "tenancy_usage_evidence"] {
+            let receipt = tables
+                .iter()
+                .find(|table| table.name == name)
+                .context("receipt table")?;
+            ensure!(receipt.checks == ["(\"storage_kind\" IN (0, 1))"]);
+        }
+        let ddl = statements(backend)?.join("\n");
+        ensure!(ddl.contains("typeof(") == (backend == DatabaseBackend::Sqlite));
+        let legacy = legacy_statements(backend)?.join("\n");
+        ensure!(!legacy.contains("tenancy_receipt_capacity"));
+        ensure!(
+            legacy.contains("tenancy_receipt_archive")
+                && legacy.contains("tenancy_unknown_obligations")
+        );
+        ensure!(legacy.contains("pending_tenant_id") && legacy.contains("pending_execution_id"));
+        ensure!(!legacy.contains("typeof("));
+    }
     Ok(())
 }
 #[test]
@@ -89,6 +158,18 @@ fn casts_and_backend_check_rendering_preserve_literal_case_and_membership() {
     );
     assert_ne!(normalized("'local::text'"), normalized("'local'"));
     assert_ne!(normalized("'_utf8mb4local'"), normalized("'local'"));
+    assert_eq!(
+        normalized("storage_kind = ANY (ARRAY[0, 1])"),
+        normalized("storage_kind IN (0, 1)")
+    );
+    assert_ne!(
+        normalized("storage_kind = ANY (ARRAY[0, 2])"),
+        normalized("storage_kind IN (0, 1)")
+    );
+    assert_ne!(
+        normalized("other_column = ANY (ARRAY[0, 1])"),
+        normalized("storage_kind IN (0, 1)")
+    );
 }
 
 #[test]
@@ -194,7 +275,7 @@ fn default_values_cannot_be_replaced_with_expressions() -> Result<()> {
         kind: "integer".into(),
         mysql_kind: None,
         sqlite_kind: None,
-        sqlite_only: false,
+        owned_only: false,
         nullable: false,
         binary: false,
         automatic: false,
@@ -325,4 +406,40 @@ fn mysql_index_prefixes_are_exact_and_do_not_apply_to_postgres() -> Result<()> {
     }
     validate_indexes(DatabaseBackend::Postgres, &table, postgres)?;
     Ok(())
+}
+
+#[test]
+fn postgres_obligation_checks_preserve_exact_bounds_and_membership() {
+    for (expected, observed) in [
+        (
+            "source_mask BETWEEN 1 AND 7",
+            "source_mask >= 1 AND source_mask <= 7",
+        ),
+        (
+            "first_nanos BETWEEN 0 AND 999999999",
+            "first_nanos >= 0 AND first_nanos <= 999999999",
+        ),
+        ("escalated IN (0,1)", "escalated = ANY (ARRAY[0,1])"),
+    ] {
+        assert!(check_matches(
+            DatabaseBackend::Postgres,
+            &normalized(expected),
+            &normalized(observed)
+        ));
+        assert!(!check_matches(
+            DatabaseBackend::Postgres,
+            &normalized(expected),
+            &normalized(&observed.replace('1', "2").replace('9', "8"))
+        ));
+        assert!(!check_matches(
+            DatabaseBackend::Postgres,
+            &normalized(expected),
+            &normalized(
+                &observed
+                    .replace("source_mask", "other_column")
+                    .replace("first_nanos", "other_column")
+                    .replace("escalated", "other_column")
+            )
+        ));
+    }
 }

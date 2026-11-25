@@ -108,7 +108,8 @@ impl HttpExecutor {
             target,
             ctx,
             Some(input.stream()),
-        )?;
+        )
+        .await?;
         let response = admission.send(&client, request, ctx, &mut scrubber).await?;
         let status = response.status();
         let retry_after = parse_retry_after(response.headers().get(reqwest::header::RETRY_AFTER));

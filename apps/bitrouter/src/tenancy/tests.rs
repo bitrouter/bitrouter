@@ -24,6 +24,8 @@ mod directory;
 mod eval;
 pub(in crate::tenancy) mod execution;
 mod http;
+#[cfg(unix)]
+mod owned_backends;
 mod resources;
 #[cfg(unix)]
 mod startup;
@@ -496,6 +498,14 @@ impl Fixture {
     ) -> Result<Self> {
         crate::db::run_migrations(&db).await?;
         let service = Service::open(db.clone(), None).await?;
+        Self::with_service(db, service, started).await
+    }
+
+    async fn with_service(
+        db: sea_orm::DatabaseConnection,
+        service: Service,
+        started: &mut (impl FnMut(&Service) + ?Sized),
+    ) -> Result<Self> {
         started(&service);
         let installation = service.current().map_err(failure)?.installation.clone();
         let operator =

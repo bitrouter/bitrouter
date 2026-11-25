@@ -23,7 +23,7 @@ mod ingress;
 mod lifecycle_http;
 mod model_policy;
 mod oauth_cases;
-mod receipts;
+pub(super) mod receipts;
 mod rejections;
 #[path = "../routing/pipeline_tests.rs"]
 mod routing_regressions;

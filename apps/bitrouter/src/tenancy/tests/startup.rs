@@ -8,7 +8,9 @@ mod corruption;
 mod history;
 mod invalidation;
 mod observation;
+mod owned;
 mod recovery;
+mod scheduler;
 
 use observation::Queries;
 
@@ -27,14 +29,28 @@ async fn fixture(path: &Path) -> Result<(Fixture, crate::db::OwnedDatabase)> {
 /// Same connector, claim, header loader and actor as owned startup. Only the
 /// deployment key is injected, avoiding process-wide environment mutation.
 async fn open(path: &Path, queries: &Arc<Queries>, key: [u8; 32]) -> Result<Service> {
-    let mut database =
-        crate::db::connect_owned_tenancy(&format!("sqlite://{}?mode=rw", path.display())).await?;
+    open_url(
+        &format!("sqlite://{}?mode=rw", path.display()),
+        queries,
+        key,
+    )
+    .await
+}
+
+async fn open_url(url: &str, queries: &Arc<Queries>, key: [u8; 32]) -> Result<Service> {
+    let mut database = crate::db::connect_owned_tenancy(url).await?;
     let observed = queries.clone();
     database
         .database_mut_for_test()
         .set_metric_callback(move |info| observed.record(info));
     queries.start()?;
-    let migration = database.migrate().await;
+    let migration: Result<()> = async {
+        // The connector has already selected this owned pool. Observe its exact
+        // read-only format inspector too, before the real migration/ready path.
+        crate::db::store_format::inspect(database.database()).await?;
+        database.migrate().await
+    }
+    .await;
     if let Err(error) = migration {
         queries.stop();
         let db = database.database().clone();
@@ -99,4 +115,33 @@ async fn stop_fixture(fixture: Fixture, database: crate::db::OwnedDatabase) -> R
     drop((fixture, database));
     db.close().await?;
     Ok(())
+}
+
+/// Compare the projection and canonical sources in one stable read snapshot.
+/// No Service method may be called while this owns PostgreSQL's sole session.
+pub(super) async fn agreement(
+    db: &sea_orm::DatabaseConnection,
+    installation: &InstallationId,
+) -> Result<[u64; 8]> {
+    let tx = db
+        .begin_with_config(Some(sea_orm::IsolationLevel::RepeatableRead), None)
+        .await?;
+    let checked: Result<_> = async {
+        let source = receipts::inventory(&tx, installation).await?;
+        crate::db::migration::capacity::verify(&tx, &source).await?;
+        let durable = crate::db::migration::capacity::load(&tx).await?;
+        Ok([
+            durable.live_bytes,
+            durable.history_bytes,
+            durable.history_rows,
+            durable.oauth_bytes,
+            durable.technical_bytes,
+            durable.unknown_count,
+            source.rows,
+            source.bytes,
+        ])
+    }
+    .await;
+    tx.rollback().await?;
+    checked
 }

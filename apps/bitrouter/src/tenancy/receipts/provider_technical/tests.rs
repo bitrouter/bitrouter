@@ -7,7 +7,7 @@ use bitrouter_ai::tenancy::{
     operation::DispatchState,
 };
 
-fn terminal() -> Result<Terminal> {
+pub(in crate::tenancy) fn terminal() -> Result<Terminal> {
     Ok(Terminal::Strict(Arc::new(Candidate::new(
         ExecutionReceipt {
             dispatch: bitrouter_ai::tenancy::execution::Dispatch::Strict,

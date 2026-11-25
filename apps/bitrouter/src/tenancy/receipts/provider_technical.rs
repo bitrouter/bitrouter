@@ -17,7 +17,7 @@ pub(in crate::tenancy) mod http;
 pub(crate) mod scope;
 pub(in crate::tenancy) mod storage;
 #[cfg(test)]
-mod tests;
+pub(in crate::tenancy) mod tests;
 
 #[derive(Default)]
 struct State {

@@ -9,10 +9,24 @@ use bitrouter_ai::tenancy::{
     operation::DispatchState,
 };
 use sea_orm::{
-    ConnectionTrait,
+    ConnectionTrait, DatabaseBackend,
     sea_query::{Alias, Expr, Query},
 };
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+async fn validate_one_reservation(
+    tx: &DatabaseTransaction,
+    installation: &bitrouter_ai::tenancy::identity::InstallationId,
+    charge: &store::archive::Charge<'_>,
+) -> Result<obligations::Inventory> {
+    if tx.get_database_backend() == DatabaseBackend::MySql {
+        // MySQL's deliberately restricted test adapter already reserves one
+        // envelope; native PostgreSQL uses the full audit's budgeted entry point.
+        obligations::validate(tx, installation, charge).await
+    } else {
+        obligations::validate_with_budget(tx, installation, charge).await
+    }
+}
 
 pub(super) async fn check(database: &mut database::Fixture) -> Result<()> {
     let db = database.connect().await?;
@@ -65,7 +79,7 @@ pub(super) async fn check(database: &mut database::Fixture) -> Result<()> {
     let service = Service::start_prepared(
         db.clone(),
         None,
-        crate::tenancy::store::load(&db, Utc::now()).await?,
+        crate::tenancy::store::initial_header(&db, Utc::now()).await?,
         Arc::new(crate::tenancy::resources::Resources::with_key(
             installation.clone(),
             fixture.wrapping_key,
@@ -162,7 +176,7 @@ pub(super) async fn check(database: &mut database::Fixture) -> Result<()> {
             budget.charge(rows, bytes).map_err(Into::into)
         };
         ensure!(
-            obligations::validate(tx, &installation, &charge).await?
+            validate_one_reservation(tx, &installation, &charge).await?
                 == obligations::Fold::new().finish()
         );
         ensure!(
@@ -181,14 +195,14 @@ pub(super) async fn check(database: &mut database::Fixture) -> Result<()> {
         // Pre-existing caller use remains charged; exactly one working set fits.
         let exact = OperationBudget::with_limits(&check, rows + 1, bytes + 1);
         exact.charge(1, 1)?;
-        obligations::validate(tx, &installation, &|r, b| {
+        validate_one_reservation(tx, &installation, &|r, b| {
             exact.charge(r, b).map_err(Into::into)
         })
         .await?;
         ensure!(matches!(exact.charge(1, 0), Err(BudgetError::Capacity)));
         let insufficient = OperationBudget::with_limits(&check, rows, bytes - 1);
         let before = queries.load(Ordering::Relaxed);
-        let error = obligations::validate(tx, &installation, &|r, b| {
+        let error = validate_one_reservation(tx, &installation, &|r, b| {
             insufficient.charge(r, b).map_err(Into::into)
         })
         .await
@@ -206,7 +220,7 @@ pub(super) async fn check(database: &mut database::Fixture) -> Result<()> {
         pages.store(0, Ordering::Relaxed);
         cancel_mid_scan.store(true, Ordering::Release);
         let cancelled_budget = OperationBudget::with_limits(&check, rows, bytes);
-        let error = obligations::validate(tx, &installation, &|r, b| {
+        let error = validate_one_reservation(tx, &installation, &|r, b| {
             cancelled_budget.charge(r, b).map_err(Into::into)
         })
         .await
@@ -252,10 +266,16 @@ pub(super) async fn check(database: &mut database::Fixture) -> Result<()> {
             tenant: tenant.clone(),
             execution: execution.clone(),
         };
-        for result in [
-            obligations::validate(tx, &installation, &|_, _| Ok(())).await.map(|_| ()),
-            obligations::reconcile(tx, &installation, &retained, &|_, _| Ok(())).await.map(|_| ()),
-        ] {
+        let mut proofs = vec![obligations::validate(tx, &installation, &|_, _| Ok(())).await.map(|_| ())];
+        let point = obligations::reconcile(tx, &installation, &retained, &|_, _| Ok(())).await;
+        if tx.get_database_backend() == DatabaseBackend::MySql {
+            proofs.push(point.map(|_| ()));
+        } else {
+            let unchanged = point?;
+            ensure!(unchanged.key == retained && unchanged.before.is_none() && unchanged.after.is_none(),
+                "native point reconciliation was affected by another malformed key");
+        }
+        for result in proofs {
             let error = result.err().context("cross-page empty receipt key was skipped")?;
             ensure!(
                 matches!(error.downcast_ref::<sea_orm::DbErr>(),
@@ -264,8 +284,9 @@ pub(super) async fn check(database: &mut database::Fixture) -> Result<()> {
                 "wrong malformed-key refusal: {error:#}"
             );
         }
-        ensure!(pages.load(Ordering::Relaxed) == 2,
-            "each proof must encounter the raw empty key on its first page");
+        let expected_pages = if tx.get_database_backend() == DatabaseBackend::MySql { 2 } else { 1 };
+        ensure!(pages.load(Ordering::Relaxed) == expected_pages,
+            "complete audits must encounter the raw empty key on their first page");
         Ok::<_, anyhow::Error>(())
     }.await;
     database.rollback(slot).await?;
@@ -291,7 +312,34 @@ pub(super) async fn check(database: &mut database::Fixture) -> Result<()> {
             .await
             .err()
             .context("canonical unknown accepted")?;
-        ensure!(error.to_string() == "unresolved receipt cannot be archived");
+        if tx.get_database_backend() == DatabaseBackend::MySql {
+            ensure!(error.to_string() == "unresolved receipt cannot be archived");
+        } else {
+            ensure!(
+                error.to_string() == "unknown source coverage mismatch",
+                "wrong missing-coverage refusal: {error:#}"
+            );
+            let unknown_key = obligations::Key {
+                tenant: tenant.clone(),
+                execution: unknown.receipt.execution_id.clone(),
+            };
+            let change =
+                obligations::reconcile(tx, &installation, &unknown_key, &|_, _| Ok(())).await?;
+            ensure!(
+                change.before.is_none() && change.after.is_some(),
+                "canonical unknown did not acquire derived coverage"
+            );
+            let inventory = obligations::validate(tx, &installation, &|_, _| Ok(())).await?;
+            ensure!(inventory.unknown_count == 1);
+            ensure!(
+                obligations::tenant_count(tx, &installation, &tenant, &|_, _| Ok(())).await? == 1
+            );
+            ensure!(
+                obligations::next_due(tx, &installation, &|_, _| Ok(()))
+                    .await?
+                    .is_some()
+            );
+        }
         let query = Query::update()
             .table(Alias::new("tenancy_execution_receipts"))
             .value(Alias::new("unknown_outcome"), false)

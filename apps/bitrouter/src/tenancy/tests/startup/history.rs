@@ -46,6 +46,11 @@ async fn resources(fixture: &Fixture, rows: usize) -> Result<()> {
 
 pub(super) async fn seed(fixture: &mut Fixture, rows: usize) -> Result<()> {
     keyed(fixture).await?;
+    seed_prepared(fixture, rows).await
+}
+
+/// Seed through the caller's already-keyed Service and original owned session.
+pub(super) async fn seed_prepared(fixture: &mut Fixture, rows: usize) -> Result<()> {
     // Real management operations produce durable replay records as well as
     // directory facts; keep the currently used tenant/binding unchanged.
     for index in 0..rows {

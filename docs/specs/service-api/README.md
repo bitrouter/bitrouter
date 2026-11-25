@@ -187,8 +187,9 @@ mutations carry `installation_id` in their typed body. A mismatching identity
 is rejected rather than retargeted. The server checks Origin/Host where Origin is
 present. Capability discovery does not itself enable dispatch or prove that an
 optional backend or feature is available. Tenancy is opt-in; the currently
-qualified local dispatch profile requires a Unix owning-process SQLite service
-and remains subject to live authority, storage and admission fences. Other
+qualified local dispatch profile requires one owning process with file-backed
+SQLite on Unix or PostgreSQL built with `db-postgres`. It remains subject to live
+authority, storage and admission fences. Other
 backends or platforms MUST NOT be inferred from the DTOs alone.
 
 ### Operations
@@ -496,8 +497,8 @@ the same model-only routing contract. Exact selected names identify one policy.
 Resource provisioning creates immutable upstream credential, route and policy
 revisions. These are service messages within this specification, not a separate
 feature specification. It defines no login, commercial account, pricing or
-settlement contract. The qualified deployment remains opt-in, exclusively owned
-Unix SQLite in a single process; these guarantees do not establish distributed
+settlement contract. The qualified deployment remains opt-in, with one process
+exclusively owning SQLite or PostgreSQL; these guarantees do not establish distributed
 ownership or safety. Assembly and operational boundaries are in the
 [tenant service guide](../../development/tenant-service.md).
 
@@ -1542,7 +1543,7 @@ Policy source versions. Archive incompatible datasets with their matching
 binary and configuration before provisioning a new installation.
 
 Store validation checks the expected runtime schema and its ownership metadata.
-The current SQLite tenant baseline requires a format-6 authority header, which
+The current tenant baseline requires a format-6 authority header, which
 binds the installation independently of the schema ledger. Shared state requires
 the shared schema and authenticated head and publication. Validation also
 authenticates retained content.
@@ -1552,10 +1553,13 @@ and PostgreSQL stores, only in genuinely empty locations. For generic runtime
 backends with nontransactional DDL, including MySQL, incomplete initialization
 remains nonready; publish the current ledger marker only after complete schema
 validation under exclusive initialization custody. Never stamp/adopt a nonempty
-old or foreign layout. Tenant service remains file-owned SQLite; shared authority
-remains PostgreSQL. This does not add tenant/shared support to another backend.
+old or foreign layout. Tenant service supports file-owned SQLite and, with
+`db-postgres`, session-owned PostgreSQL. PostgreSQL uses one physical connection
+and a database-scoped session advisory lock; connection loss fences the service
+until restart. Shared authority remains a separate PostgreSQL profile. This does
+not enable multiple tenant-service owners or distributed tenant admission.
 
-Normal SQLite tenant startup verifies the current schema, installation header,
+Normal tenant startup verifies the current schema, installation header,
 key epoch and durable admission projection. It recovers unfinished dispatch
 intents before publishing readiness. Completed execution history, dormant
 identities and retained resource versions are authenticated through selected

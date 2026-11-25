@@ -9,10 +9,20 @@ run_database() {
     mysql) url='mysql://fixture:fixture-password@127.0.0.1:3306/bitrouter_test' ;;
     *) echo "Unknown database backend: $backend" >&2; return 1 ;;
   esac
-  BITROUTER_TEST_MIGRATION_DATABASE_URL="$url" \
-    db_test "kind(lib) & test(/^db::migration::baseline::server_tests::${backend}_/)"
+  export BITROUTER_TEST_MIGRATION_DATABASE_URL="$url"
   export BITROUTER_TEST_DATABASE_URL="$url"
-  db_test "kind(lib) & test(/::db_server_(both|${backend})_[^:]+$/)"
+  db_test "kind(lib) & (test(/^db::migration::baseline::server_tests::${backend}_/) | test(/::db_server_(both|${backend})_[^:]+$/))"
+  if [[ "$backend" == postgres ]]; then
+    db_test 'kind(lib) & (
+      test(/^db::migration::baseline::postgres_capacity_tests::/) |
+      test(/^db::migration::provider_technical::identity_tests::postgres_/) |
+      test(/^tenancy::receipts::store::capacity_tests::postgres_/) |
+      test(/^tenancy::tests::owned_backends::postgres_/) |
+      test(/^tenancy::tests::startup::owned::postgres_/) |
+      test(/^tenancy::actor::provider_technical::tests::postgres_/) |
+      test(/^tenancy::tests::resources::profile_observation::read_admission::postgres_/)
+    )'
+  fi
 }
 
 db_test() {

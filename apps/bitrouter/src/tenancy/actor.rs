@@ -120,7 +120,7 @@ pub(super) enum AuthoritySubject {
 pub(super) struct AuthorityRead {
     pub subject: AuthoritySubject,
     pub deadline: Instant,
-    pub permit: OwnedSemaphorePermit,
+    pub permit: Arc<OwnedSemaphorePermit>,
     pub reply: oneshot::Sender<Result<super::authority::live::Authenticated, Failure>>,
 }
 

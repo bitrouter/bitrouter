@@ -76,6 +76,7 @@ impl Slot {
         self.cancel = CancellationToken::new();
         let cancel = self.cancel.clone();
         let admission = worker.admission.clone();
+        let database = worker.db.clone();
         let cleanup = owner.cleanup_deadline();
         #[cfg(test)]
         let test = worker.technical_io.clone();
@@ -84,7 +85,7 @@ impl Slot {
             let id = terminal.facts().execution.clone();
             // Keep the same acquisition alive even through an unwinding future.
             let result = std::panic::AssertUnwindSafe(write(
-                lease,
+                (lease, database),
                 admission,
                 terminal,
                 facts,
@@ -151,7 +152,7 @@ async fn close(db: connection::Connection) -> bool {
 }
 
 async fn write(
-    lease: Lease,
+    connection: (Lease, sea_orm::DatabaseConnection),
     admission: Arc<Admission>,
     terminal: Arc<Terminal>,
     facts: crate::tenancy::receipts::provider_technical::Pending,
@@ -159,6 +160,7 @@ async fn write(
     cleanup: Instant,
     #[cfg(test)] test: Arc<tests::State>,
 ) -> Report {
+    let (lease, database) = connection;
     // Scope wait, connection and INSERT all share ONE existing optional bound.
     let deadline = cleanup.min(Instant::now() + crate::tenancy::MANAGEMENT_TIMEOUT);
     let Some(facts) = facts.finish(&terminal, deadline, &cancel).await else {
@@ -219,13 +221,18 @@ async fn write(
     let readonly = false;
     #[cfg(test)]
     let readonly = test.readonly_install();
-    let db = match connection::Connection::open(lease.clone(), readonly).await {
+    let db = match connection::Connection::open(
+        lease.clone(),
+        &database,
+        readonly,
+        deadline,
+        Some(&cancel),
+    )
+    .await
+    {
         Ok(db) => db,
         Err(_) => {
-            return Report {
-                closed: false,
-                disable: true,
-            };
+            return charge.settled(false, true);
         }
     };
     let mut insert_polled = false;
@@ -286,15 +293,13 @@ async fn write(
     }
     // One readback, AFTER writer closure. This never retries insertion or
     // inference, grants a receipt ACK, or involves the financial Proof.
-    let read = match connection::Connection::open(lease.clone(), true).await {
-        Ok(read) => read,
-        Err(_) => {
-            return Report {
-                closed: false,
-                disable: true,
-            };
-        }
-    };
+    let read =
+        match connection::Connection::open(lease.clone(), &database, true, cleanup, None).await {
+            Ok(read) => read,
+            Err(_) => {
+                return charge.settled(true, true);
+            }
+        };
     let observed = tokio::time::timeout_at(cleanup, async {
         read.interrupt_when(None, cleanup).await?;
         storage::read_prepared(&read, &terminal).await

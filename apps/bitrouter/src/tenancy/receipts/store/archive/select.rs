@@ -2,10 +2,39 @@
 use super::super::format::Terminal;
 use super::*;
 use crate::tenancy::receipts::store::obligations::{self, Key};
+use sea_orm::sea_query::Order;
 
 const PAGE_ROWS: usize = 32;
 
-fn keys(installation: &InstallationId, after: Option<&Key>) -> Statement {
+fn keys(backend: DatabaseBackend, installation: &InstallationId, after: Option<&Key>) -> Statement {
+    if backend == DatabaseBackend::Postgres {
+        let column = |name| (Alias::new("r"), Alias::new(name));
+        let mut query = Query::select();
+        query
+            .from_as(Alias::new("tenancy_execution_receipts"), Alias::new("r"))
+            .expr_as(
+                Expr::cust("CASE WHEN octet_length(r.tenant_id) BETWEEN 1 AND 128 THEN r.tenant_id ELSE NULL END"),
+                Alias::new("tenant_id"),
+            )
+            .expr_as(
+                Expr::cust("CASE WHEN octet_length(r.execution_id) BETWEEN 1 AND 128 THEN r.execution_id ELSE NULL END"),
+                Alias::new("execution_id"),
+            )
+            .and_where(Expr::col(column("installation_id")).eq(installation.as_str()))
+            .and_where(Expr::col(column("storage_kind")).eq(0_i32))
+            .order_by(column("tenant_id"), Order::Asc)
+            .order_by(column("execution_id"), Order::Asc)
+            .limit(PAGE_ROWS as u64);
+        if let Some(after) = after {
+            let tenant = Expr::col(column("tenant_id"));
+            query.and_where(
+                tenant.clone().gt(after.tenant.as_str()).or(tenant
+                    .eq(after.tenant.as_str())
+                    .and(Expr::col(column("execution_id")).gt(after.execution.as_str()))),
+            );
+        }
+        return backend.build(&query);
+    }
     let mut query = String::from(
         "SELECT CASE WHEN typeof(r.tenant_id)='text' AND length(CAST(r.tenant_id AS BLOB)) BETWEEN 1 AND 128 THEN r.tenant_id ELSE NULL END AS tenant_id, CASE WHEN typeof(r.execution_id)='text' AND length(CAST(r.execution_id AS BLOB)) BETWEEN 1 AND 128 THEN r.execution_id ELSE NULL END AS execution_id FROM tenancy_execution_receipts AS r INDEXED BY idx_tenancy_receipts_storage WHERE r.installation_id=? AND r.storage_kind=0",
     );
@@ -29,14 +58,11 @@ pub(super) async fn next(
     after: Option<&Key>,
     charge: &Charge<'_>,
 ) -> Result<Selection> {
-    ensure!(
-        tx.get_database_backend() == DatabaseBackend::Sqlite,
-        "receipt archive requires SQLite"
-    );
+    let backend = backend(tx)?;
     // Includes SQL key cells, decoded identities, vector/cursor metadata. Each
     // canonical candidate is charged by its existing reader before allocation.
     charge(PAGE_ROWS, PAGE_ROWS * 1024)?;
-    let page = tx.query_all(keys(installation, after)).await?;
+    let page = tx.query_all(keys(backend, installation, after)).await?;
     let count = page.len();
     ensure!(count <= PAGE_ROWS, "archive key page overflow");
     let mut cursor = after.cloned();
@@ -133,9 +159,12 @@ mod tests {
         let installation = "installation".try_into()?;
         let cursor = key("after")?;
         for (query, index) in [
-            (keys(&installation, None), "idx_tenancy_receipts_storage"),
             (
-                keys(&installation, Some(&cursor)),
+                keys(DatabaseBackend::Sqlite, &installation, None),
+                "idx_tenancy_receipts_storage",
+            ),
+            (
+                keys(DatabaseBackend::Sqlite, &installation, Some(&cursor)),
                 "idx_tenancy_receipts_storage",
             ),
         ] {

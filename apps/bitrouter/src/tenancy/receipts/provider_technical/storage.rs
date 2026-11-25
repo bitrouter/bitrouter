@@ -245,10 +245,17 @@ pub(in crate::tenancy) async fn retained_bytes(db: &impl ConnectionTrait) -> Res
     let measured = octets(backend, "technical_json");
     let mut query = Query::select();
     query.from(Alias::new(TABLE)).expr_as(
-        Expr::cust(format!(
-            "coalesce(sum({measured}+{}),0)",
-            super::super::capacity::ROW_OVERHEAD
-        )),
+        Expr::cust(if backend == DatabaseBackend::Postgres {
+            format!(
+                "CAST(coalesce(sum({measured}+{}),0) AS BIGINT)",
+                super::super::capacity::ROW_OVERHEAD
+            )
+        } else {
+            format!(
+                "coalesce(sum({measured}+{}),0)",
+                super::super::capacity::ROW_OVERHEAD
+            )
+        }),
         Alias::new("bytes"),
     );
     let row = db

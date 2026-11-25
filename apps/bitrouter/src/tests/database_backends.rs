@@ -128,12 +128,7 @@ async fn exercise(database_url: &str) -> Result<()> {
         let previous_ledger = existing_ledger(&connection).await?;
         db::run_migrations(&connection).await?;
         let ledger = Migrator::get_migration_models(&connection).await?;
-        let expected = match connection.get_database_backend() {
-            DatabaseBackend::Sqlite => "m20261124_000008_gateway_sqlite_capacity",
-            DatabaseBackend::Postgres | DatabaseBackend::MySql => {
-                "m20261124_000009_gateway_server_capacity"
-            }
-        };
+        let expected = crate::db::store_format::marker(connection.get_database_backend());
         ensure!(
             ledger.len() == 1 && ledger[0].version == expected,
             "unexpected gateway format ledger"

@@ -394,7 +394,7 @@ async fn bounded_row(
                 DatabaseBackend::Sqlite => {
                     "CASE WHEN typeof(storage_kind)='integer' THEN storage_kind ELSE NULL END"
                 }
-                DatabaseBackend::Postgres => "CAST(0 AS BIGINT)",
+                DatabaseBackend::Postgres => "CAST(storage_kind AS BIGINT)",
                 DatabaseBackend::MySql => "CAST(0 AS SIGNED)",
             }),
             Alias::new("storage_kind"),
@@ -783,7 +783,6 @@ impl TerminalWrite<'_> {
         charge: &archive::Charge<'_>,
     ) -> Result<obligations::Change> {
         if self.inserted
-            && self.tx.get_database_backend() == DatabaseBackend::Sqlite
             && let ExpectedTerminal::Strict(candidate) = self.expected
         {
             return obligations::reconcile_completion(self.tx, candidate, charge).await;
@@ -827,12 +826,12 @@ pub(in crate::tenancy) async fn stage_dispatch_terminal<'a>(
     }
 }
 
-/// Only a fresh SQLite terminal defers readback to its final source proof.
+/// A fresh archive-capable terminal defers readback to its final source proof.
 pub(in crate::tenancy) async fn stage_terminal<'a>(
     tx: &'a DatabaseTransaction,
     candidate: &'a Candidate,
 ) -> Result<TerminalWrite<'a>> {
-    let inserted = if tx.get_database_backend() == DatabaseBackend::Sqlite {
+    let inserted = if tx.get_database_backend() != DatabaseBackend::MySql {
         let receipt = &candidate.receipt;
         let missing = archive::missing_receipt(
             tx,
@@ -967,7 +966,7 @@ pub(crate) async fn capacity_backfill(db: &impl ConnectionTrait) -> Result<Inven
             "capacity source without installation"
         );
     }
-    if backend == DatabaseBackend::Sqlite {
+    if backend != DatabaseBackend::MySql {
         for table in ["tenancy_receipt_archive", "tenancy_unknown_obligations"] {
             let query = Query::select()
                 .from(Alias::new(table))

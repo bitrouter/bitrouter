@@ -405,21 +405,25 @@ impl Worker {
                     outcome = "started",
                     "tenant startup validation"
                 );
-                let inventory =
-                    if self.db.get_database_backend() == sea_orm::DatabaseBackend::Sqlite {
-                        crate::db::migration::capacity::load(&tx).await
-                    } else {
-                        crate::tenancy::receipts::store::inventory(&tx, &initial.installation).await
-                    };
+                let inventory = if self.db.get_database_backend() != sea_orm::DatabaseBackend::MySql
+                {
+                    crate::db::migration::capacity::load(&tx).await
+                } else {
+                    crate::tenancy::receipts::store::inventory(&tx, &initial.installation).await
+                };
                 control
                     .rollback(tx)
                     .await
                     .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
                 let inventory =
                     inventory.map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
-                let volume = self.owner.as_ref().and_then(|owner| owner.path.parent());
-                let free = crate::tenancy::receipts::capacity::free_space(volume)
-                    .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
+                let volume = self.owner.as_ref().and_then(|owner| owner.volume());
+                let free = if self.db.get_database_backend() == sea_orm::DatabaseBackend::Postgres {
+                    u64::MAX
+                } else {
+                    crate::tenancy::receipts::capacity::free_space(volume)
+                        .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?
+                };
                 self.admission
                     .initialize_receipts(inventory, free)
                     .map_err(|code| self.unavailable(code))?;

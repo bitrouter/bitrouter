@@ -1,6 +1,6 @@
-//! Private optional-schema/store consumer on one directly owned SQLite worker.
+//! Private optional-schema/store consumer on one directly owned database worker.
 //! Like the existing audit connection, queries remain SeaORM Statements. This
-//! adapter has no public input, pool/replacement connection or authority handle.
+//! adapter has no public input, replacement connection or authority handle.
 use crate::tenancy::ownership::Lease;
 use futures::{TryStreamExt, lock::Mutex};
 use sea_orm::sqlx::{
@@ -8,16 +8,68 @@ use sea_orm::sqlx::{
     sqlite::{SqliteArguments, SqliteConnectOptions},
 };
 use sea_orm::{
-    ConnectionTrait, DatabaseBackend, DbErr, ExecResult, QueryResult, Statement, sea_query::Value,
+    ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr, ExecResult, QueryResult,
+    Statement, sea_query::Value,
 };
 
+#[cfg(feature = "db-postgres")]
+use sea_orm::sqlx::{Postgres, pool::PoolConnection, postgres::PgArguments};
+
 pub(super) struct Connection {
-    db: Mutex<SqliteConnection>,
+    db: Driver,
     _lease: Lease,
 }
+enum Driver {
+    Sqlite(Mutex<SqliteConnection>),
+    #[cfg(feature = "db-postgres")]
+    Postgres {
+        db: Mutex<PoolConnection<Postgres>>,
+        statement_timeout: String,
+    },
+}
 impl Connection {
-    pub(super) async fn open(lease: Lease, readonly: bool) -> anyhow::Result<Self> {
+    pub(super) async fn open(
+        lease: Lease,
+        owner: &DatabaseConnection,
+        readonly: bool,
+        deadline: tokio::time::Instant,
+        cancel: Option<&tokio_util::sync::CancellationToken>,
+    ) -> anyhow::Result<Self> {
         anyhow::ensure!(lease.exclusive(), "optional connection owner mismatch");
+        #[cfg(not(feature = "db-postgres"))]
+        let _ = (owner, deadline, cancel);
+        if lease.is_postgres() {
+            #[cfg(feature = "db-postgres")]
+            {
+                anyhow::ensure!(
+                    owner.get_database_backend() == DatabaseBackend::Postgres,
+                    "optional PostgreSQL owner mismatch"
+                );
+                let acquire = tokio::time::timeout_at(
+                    deadline,
+                    owner.get_postgres_connection_pool().acquire(),
+                );
+                let mut db = tokio::select! {
+                    biased;
+                    _ = async { match cancel { Some(cancel) => cancel.cancelled().await, None => std::future::pending().await } } => anyhow::bail!("optional connection acquisition cancelled"),
+                    result = acquire => result??,
+                };
+                let statement_timeout: String = tokio::time::timeout_at(
+                    deadline,
+                    sea_orm::sqlx::query_scalar("SHOW statement_timeout").fetch_one(&mut *db),
+                )
+                .await??;
+                return Ok(Self {
+                    db: Driver::Postgres {
+                        db: Mutex::new(db),
+                        statement_timeout,
+                    },
+                    _lease: lease,
+                });
+            }
+            #[cfg(not(feature = "db-postgres"))]
+            anyhow::bail!("optional PostgreSQL backend unavailable");
+        }
         let options = SqliteConnectOptions::new()
             .filename(&lease.path)
             .create_if_missing(false)
@@ -28,7 +80,7 @@ impl Connection {
         // awaits its actual result, then observes stop/deadline before any DDL.
         let db = SqliteConnection::connect_with(&options).await?;
         Ok(Self {
-            db: Mutex::new(db),
+            db: Driver::Sqlite(Mutex::new(db)),
             _lease: lease,
         })
     }
@@ -37,18 +89,35 @@ impl Connection {
         cancel: Option<tokio_util::sync::CancellationToken>,
         deadline: tokio::time::Instant,
     ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            cancel.as_ref().is_none_or(|token| !token.is_cancelled()),
+            "optional database operation cancelled"
+        );
         // Same safe SQLx progress primitive used by the existing owned audit
         // reader. Busy waits are disabled; ready main work/stop interrupts this
         // optional VM without signalling a financial Proof or changing SQL.
-        self.db
-            .lock()
-            .await
-            .lock_handle()
-            .await?
-            .set_progress_handler(128, move || {
-                tokio::time::Instant::now() < deadline
-                    && cancel.as_ref().is_none_or(|token| !token.is_cancelled())
-            });
+        match &self.db {
+            Driver::Sqlite(db) => {
+                db.lock()
+                    .await
+                    .lock_handle()
+                    .await?
+                    .set_progress_handler(128, move || {
+                        tokio::time::Instant::now() < deadline
+                            && cancel.as_ref().is_none_or(|token| !token.is_cancelled())
+                    })
+            }
+            #[cfg(feature = "db-postgres")]
+            Driver::Postgres { db, .. } => {
+                let milliseconds = deadline
+                    .saturating_duration_since(tokio::time::Instant::now())
+                    .as_millis()
+                    .clamp(1, i64::MAX as u128);
+                (&mut **db.lock().await)
+                    .execute(format!("SET statement_timeout={milliseconds}").as_str())
+                    .await?;
+            }
+        }
         Ok(())
     }
     pub(super) async fn close(self) -> bool {
@@ -56,7 +125,28 @@ impl Connection {
         // queued commands and drops the SQLite handle before acknowledging.
         // Pool::close/hard-close are deliberately not closure evidence here.
         let Self { db, _lease: lease } = self;
-        let result = db.into_inner().close().await.is_ok();
+        let result = match db {
+            Driver::Sqlite(db) => db.into_inner().close().await.is_ok(),
+            #[cfg(feature = "db-postgres")]
+            Driver::Postgres {
+                db,
+                statement_timeout,
+            } => {
+                let mut db = db.into_inner();
+                // A dropped optional future may have left its manual install
+                // transaction open. PostgreSQL accepts ROLLBACK with no active
+                // transaction, so use one close path for reads and writes.
+                // Restore the borrowed owner's setting rather than assuming
+                // zero; returning this pool slot must not close its owner session.
+                let rollback = (&mut *db).execute("ROLLBACK").await;
+                let reset =
+                    sea_orm::sqlx::query("SELECT set_config('statement_timeout', $1, false)")
+                        .bind(statement_timeout)
+                        .execute(&mut *db)
+                        .await;
+                rollback.is_ok() && reset.is_ok() && db.ping().await.is_ok()
+            }
+        };
         drop(lease);
         result
     }
@@ -66,17 +156,26 @@ impl Connection {
         state: &std::sync::Arc<super::tests::State>,
         cancel: &tokio_util::sync::CancellationToken,
     ) -> anyhow::Result<()> {
-        state
-            .rotation_commit_gate(&mut *self.db.lock().await, cancel)
-            .await?;
-        state.driver_gate(&mut *self.db.lock().await, cancel).await
+        match &self.db {
+            Driver::Sqlite(db) => {
+                state
+                    .rotation_commit_gate(&mut *db.lock().await, cancel)
+                    .await?;
+                state.driver_gate(&mut *db.lock().await, cancel).await
+            }
+            #[cfg(feature = "db-postgres")]
+            Driver::Postgres { .. } => Ok(()),
+        }
     }
 }
 fn failure() -> DbErr {
-    DbErr::Custom("optional technical SQLite operation unavailable".into())
+    DbErr::Custom("optional technical database operation unavailable".into())
 }
-fn arguments(stmt: Statement) -> Result<(String, SqliteArguments<'static>), DbErr> {
-    if stmt.db_backend != DatabaseBackend::Sqlite || stmt.sql.len() > 4096 {
+fn checked_values(
+    stmt: Statement,
+    backend: DatabaseBackend,
+) -> Result<(String, Vec<Value>), DbErr> {
+    if stmt.db_backend != backend || stmt.sql.len() > 4096 {
         return Err(failure());
     }
     let values = stmt.values.map_or_else(Vec::new, |v| v.0);
@@ -84,8 +183,7 @@ fn arguments(stmt: Statement) -> Result<(String, SqliteArguments<'static>), DbEr
         return Err(failure());
     }
     let mut total = stmt.sql.len();
-    let mut args = SqliteArguments::default();
-    for value in values {
+    for value in &values {
         match value {
             Value::String(text) => {
                 total = total
@@ -94,8 +192,25 @@ fn arguments(stmt: Statement) -> Result<(String, SqliteArguments<'static>), DbEr
                 if total > bitrouter_ai::tenancy::provider_technical_facts::MAX_BYTES + 4096 {
                     return Err(failure());
                 }
-                args.add(text.map(|s| *s))
             }
+            Value::Int(_) | Value::BigInt(_) | Value::Bool(_) => {}
+            Value::BigUnsigned(value) => {
+                value
+                    .map(i64::try_from)
+                    .transpose()
+                    .map_err(|_| failure())?;
+            }
+            _ => return Err(failure()),
+        }
+    }
+    Ok((stmt.sql, values))
+}
+fn sqlite_arguments(stmt: Statement) -> Result<(String, SqliteArguments<'static>), DbErr> {
+    let (sql, values) = checked_values(stmt, DatabaseBackend::Sqlite)?;
+    let mut args = SqliteArguments::default();
+    for value in values {
+        match value {
+            Value::String(text) => args.add(text.map(|s| *s)),
             Value::Int(value) => args.add(value),
             Value::BigInt(value) => args.add(value),
             Value::Bool(value) => args.add(value),
@@ -109,54 +224,136 @@ fn arguments(stmt: Statement) -> Result<(String, SqliteArguments<'static>), DbEr
         }
         .map_err(|_| failure())?;
     }
-    Ok((stmt.sql, args))
+    Ok((sql, args))
+}
+#[cfg(feature = "db-postgres")]
+fn postgres_arguments(stmt: Statement) -> Result<(String, PgArguments), DbErr> {
+    let (sql, values) = checked_values(stmt, DatabaseBackend::Postgres)?;
+    let mut args = PgArguments::default();
+    for value in values {
+        match value {
+            Value::String(text) => args.add(text.map(|s| *s)),
+            Value::Int(value) => args.add(value),
+            Value::BigInt(value) => args.add(value),
+            Value::Bool(value) => args.add(value),
+            Value::BigUnsigned(value) => args.add(
+                value
+                    .map(i64::try_from)
+                    .transpose()
+                    .map_err(|_| failure())?,
+            ),
+            _ => return Err(failure()),
+        }
+        .map_err(|_| failure())?;
+    }
+    Ok((sql, args))
 }
 #[async_trait::async_trait]
 impl ConnectionTrait for Connection {
     fn get_database_backend(&self) -> DatabaseBackend {
-        DatabaseBackend::Sqlite
+        match &self.db {
+            Driver::Sqlite(_) => DatabaseBackend::Sqlite,
+            #[cfg(feature = "db-postgres")]
+            Driver::Postgres { .. } => DatabaseBackend::Postgres,
+        }
     }
     async fn execute(&self, stmt: Statement) -> Result<ExecResult, DbErr> {
-        let (sql, args) = arguments(stmt)?;
-        sea_orm::sqlx::query_with(&sql, args)
-            .persistent(false)
-            .execute(&mut *self.db.lock().await)
-            .await
-            .map(ExecResult::from)
-            .map_err(|_| failure())
+        match &self.db {
+            Driver::Sqlite(db) => {
+                let (sql, args) = sqlite_arguments(stmt)?;
+                sea_orm::sqlx::query_with(&sql, args)
+                    .persistent(false)
+                    .execute(&mut *db.lock().await)
+                    .await
+                    .map(ExecResult::from)
+                    .map_err(|_| failure())
+            }
+            #[cfg(feature = "db-postgres")]
+            Driver::Postgres { db, .. } => {
+                let (sql, args) = postgres_arguments(stmt)?;
+                sea_orm::sqlx::query_with(&sql, args)
+                    .persistent(false)
+                    .execute(&mut **db.lock().await)
+                    .await
+                    .map(ExecResult::from)
+                    .map_err(|_| failure())
+            }
+        }
     }
     async fn execute_unprepared(&self, sql: &str) -> Result<ExecResult, DbErr> {
         if sql.len() > 4096 {
             return Err(failure());
         }
-        (&mut *self.db.lock().await)
-            .execute(sql)
-            .await
-            .map(ExecResult::from)
-            .map_err(|_| failure())
+        match &self.db {
+            Driver::Sqlite(db) => (&mut *db.lock().await)
+                .execute(sql)
+                .await
+                .map(ExecResult::from)
+                .map_err(|_| failure()),
+            #[cfg(feature = "db-postgres")]
+            Driver::Postgres { db, .. } => (&mut **db.lock().await)
+                .execute(sql)
+                .await
+                .map(ExecResult::from)
+                .map_err(|_| failure()),
+        }
     }
     async fn query_one(&self, stmt: Statement) -> Result<Option<QueryResult>, DbErr> {
-        let (sql, args) = arguments(stmt)?;
-        sea_orm::sqlx::query_with(&sql, args)
-            .persistent(false)
-            .fetch_optional(&mut *self.db.lock().await)
-            .await
-            .map(|row| row.map(QueryResult::from))
-            .map_err(|_| failure())
+        match &self.db {
+            Driver::Sqlite(db) => {
+                let (sql, args) = sqlite_arguments(stmt)?;
+                sea_orm::sqlx::query_with(&sql, args)
+                    .persistent(false)
+                    .fetch_optional(&mut *db.lock().await)
+                    .await
+                    .map(|row| row.map(QueryResult::from))
+                    .map_err(|_| failure())
+            }
+            #[cfg(feature = "db-postgres")]
+            Driver::Postgres { db, .. } => {
+                let (sql, args) = postgres_arguments(stmt)?;
+                sea_orm::sqlx::query_with(&sql, args)
+                    .persistent(false)
+                    .fetch_optional(&mut **db.lock().await)
+                    .await
+                    .map(|row| row.map(QueryResult::from))
+                    .map_err(|_| failure())
+            }
+        }
     }
     async fn query_all(&self, stmt: Statement) -> Result<Vec<QueryResult>, DbErr> {
-        let (sql, args) = arguments(stmt)?;
-        let mut db = self.db.lock().await;
-        let mut stream = sea_orm::sqlx::query_with(&sql, args)
-            .persistent(false)
-            .fetch(&mut *db);
-        let mut rows = Vec::new();
-        while let Some(row) = stream.try_next().await.map_err(|_| failure())? {
-            if rows.len() == 3 {
-                return Err(failure());
+        match &self.db {
+            Driver::Sqlite(db) => {
+                let (sql, args) = sqlite_arguments(stmt)?;
+                let mut db = db.lock().await;
+                let mut stream = sea_orm::sqlx::query_with(&sql, args)
+                    .persistent(false)
+                    .fetch(&mut *db);
+                let mut rows = Vec::new();
+                while let Some(row) = stream.try_next().await.map_err(|_| failure())? {
+                    if rows.len() == 16 {
+                        return Err(failure());
+                    }
+                    rows.push(QueryResult::from(row));
+                }
+                Ok(rows)
             }
-            rows.push(QueryResult::from(row));
+            #[cfg(feature = "db-postgres")]
+            Driver::Postgres { db, .. } => {
+                let (sql, args) = postgres_arguments(stmt)?;
+                let mut db = db.lock().await;
+                let mut stream = sea_orm::sqlx::query_with(&sql, args)
+                    .persistent(false)
+                    .fetch(&mut **db);
+                let mut rows = Vec::new();
+                while let Some(row) = stream.try_next().await.map_err(|_| failure())? {
+                    if rows.len() == 16 {
+                        return Err(failure());
+                    }
+                    rows.push(QueryResult::from(row));
+                }
+                Ok(rows)
+            }
         }
-        Ok(rows)
     }
 }

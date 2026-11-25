@@ -539,3 +539,83 @@ async fn next_receipt_ack_error_release_and_caller_cancel_both_join() -> anyhow:
     }
     Ok(())
 }
+
+#[cfg(all(unix, feature = "db-postgres"))]
+#[tokio::test]
+#[ignore = "requires dedicated PostgreSQL CREATEDB; no fallback"]
+async fn postgres_optional_acquisition_failure_refunds_and_drains() -> anyhow::Result<()> {
+    use crate::tenancy::receipts::provider_technical::{Capture, tests::terminal};
+    use sea_orm::{ConnectionTrait, DatabaseBackend, Statement, TransactionTrait};
+    let fixture = crate::db::migration::server_fixture::OwnedServer::new(
+        DatabaseBackend::Postgres,
+        "BITROUTER_TEST_MIGRATION_DATABASE_URL",
+    )
+    .await?;
+    let result = async {
+        let owned = crate::db::connect_owned_tenancy(&fixture.url).await?;
+        owned.migrate().await?;
+        let db = owned.database().clone();
+        let admission = Admission::configured(&Default::default());
+        for cancelled in [false, true] {
+            let blocker = db.begin().await?;
+            let capture = Arc::new(Capture::default());
+            let operation = capture.begin(std::time::Instant::now(), false);
+            operation.armed(&"attempt".try_into()?);
+            operation.finish(false);
+            operation.selected();
+            capture.freeze();
+            let pending = capture
+                .pending()
+                .ok_or_else(|| anyhow::anyhow!("pending optional fixture"))?;
+            let cancel = CancellationToken::new();
+            let cancel_task = if cancelled {
+                let cancel = cancel.clone();
+                Some(tokio::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    cancel.cancel();
+                }))
+            } else {
+                None
+            };
+            let report = tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                super::write(
+                    (owned.owner(), db.clone()),
+                    admission.clone(),
+                    Arc::new(terminal()?),
+                    pending,
+                    cancel,
+                    Instant::now() + std::time::Duration::from_millis(60),
+                    Arc::new(State::default()),
+                ),
+            )
+            .await?;
+            if let Some(task) = cancel_task {
+                task.await?;
+            }
+            anyhow::ensure!(report.closed && report.disable);
+            anyhow::ensure!(
+                admission
+                    .optional_accounting_for_test()
+                    .map_err(|error| anyhow::anyhow!("accounting: {error:?}"))?
+                    == (0, 0, false)
+            );
+            let mut slot = super::Slot {
+                task: Some(tokio::spawn(async move { report })),
+                ..Default::default()
+            };
+            tokio::time::timeout(std::time::Duration::from_secs(1), slot.finish()).await?;
+            blocker.rollback().await?;
+            db.query_one(Statement::from_string(
+                DatabaseBackend::Postgres,
+                "SELECT 1",
+            ))
+            .await?;
+        }
+        drop(owned);
+        db.close().await?;
+        Ok(())
+    }
+    .await;
+    fixture.finish(result).await
+}

@@ -15,7 +15,7 @@ use bitrouter_ai::tenancy::{
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-fn identity(fixture: &Fixture, route: ResourceRef, id: &str) -> Result<Identity> {
+pub(super) fn identity(fixture: &Fixture, route: ResourceRef, id: &str) -> Result<Identity> {
     Ok(Identity {
         installation: fixture.installation.clone(),
         tenant: fixture.tenant.clone(),
@@ -36,7 +36,7 @@ fn identity(fixture: &Fixture, route: ResourceRef, id: &str) -> Result<Identity>
     })
 }
 
-async fn recovered(
+pub(super) async fn recovered(
     service: &Service,
     tenant: &TenantId,
     id: &ExecutionId,

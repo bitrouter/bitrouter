@@ -1,6 +1,6 @@
 use super::*;
 
-async fn healthy_credential(fixture: &Fixture) -> Result<CredentialIssued> {
+pub(super) async fn healthy_credential(fixture: &Fixture) -> Result<CredentialIssued> {
     let tenant: TenantId = "healthy-tenant".try_into()?;
     let principal: PrincipalId = "healthy-principal".try_into()?;
     let binding: BindingId = "healthy-binding".try_into()?;

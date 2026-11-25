@@ -693,7 +693,9 @@ async fn assemble_app(
     #[cfg(not(feature = "multi-instance"))]
     let shared_db: Option<DatabaseConnection> = None;
     let tenancy_database = if config.tenancy.enabled {
-        Some(crate::db::connect_owned_tenancy(&config.database.url).await?)
+        let owned = crate::db::connect_owned_tenancy(&config.database.url).await?;
+        config.tenancy.verify_binding(owned.database()).await?;
+        Some(owned)
     } else {
         None
     };

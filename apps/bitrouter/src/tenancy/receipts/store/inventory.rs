@@ -6,8 +6,8 @@ use sea_orm::Statement;
 const PAGE_ROWS: u64 = 64;
 
 async fn preflight(db: &impl ConnectionTrait, installation: &InstallationId) -> Result<()> {
-    // On SQLite this verifies the complete archive profile as well as the two
-    // original tables; server databases retain the exact inline usage schema.
+    // SQLite and PostgreSQL verify the complete archive profile as well as the
+    // original sidecar tables.
     crate::db::migration::validate_usage_evidence(db).await?;
     let backend = db.get_database_backend();
     for table in [TABLE, "tenancy_usage_evidence", "tenancy_receipt_auxiliary"] {
@@ -35,7 +35,7 @@ async fn preflight(db: &impl ConnectionTrait, installation: &InstallationId) -> 
             "orphan receipt evidence"
         );
     }
-    if backend == DatabaseBackend::Sqlite {
+    if backend != DatabaseBackend::MySql {
         ensure!(db.query_one(Statement::from_string(backend,
             "SELECT 1 FROM tenancy_receipt_archive a LEFT JOIN tenancy_execution_receipts r ON a.installation_id=r.installation_id AND a.tenant_id=r.tenant_id AND a.execution_id=r.execution_id WHERE r.execution_id IS NULL LIMIT 1"
         )).await?.is_none(), "orphan receipt archive");
@@ -74,8 +74,15 @@ fn key_page(
         .order_by(column("tenant_id"), Order::Asc)
         .order_by(column("execution_id"), Order::Asc)
         .limit(PAGE_ROWS);
-    if backend == DatabaseBackend::Sqlite {
-        query.column(Alias::new("storage_kind"));
+    if backend != DatabaseBackend::MySql {
+        query.expr_as(
+            Expr::cust(if backend == DatabaseBackend::Sqlite {
+                "storage_kind"
+            } else {
+                "CAST(storage_kind AS BIGINT)"
+            }),
+            Alias::new("storage_kind"),
+        );
     }
     for name in ["tenant_id", "execution_id"] {
         let kind = if backend == DatabaseBackend::Sqlite {
@@ -139,13 +146,27 @@ async fn scan_locations(
             let candidate = lookup_terminal(db, installation, &tenant, &id)
                 .await?
                 .context("receipt inventory row disappeared")?;
-            let archived = if backend == DatabaseBackend::Sqlite
+            let archived = if backend != DatabaseBackend::MySql
                 && row.try_get::<i64>("", "storage_kind")? == 1
             {
-                let stored = db.query_one(Statement::from_sql_and_values(backend,
-                    "SELECT length(payload) AS stored_bytes FROM tenancy_receipt_archive WHERE installation_id=? AND tenant_id=? AND execution_id=?",
-                    [installation.as_str().into(), tenant.as_str().into(), id.as_str().into()]
-                )).await?.context("receipt archive disappeared")?;
+                let mut query = Query::select();
+                query
+                    .from(Alias::new("tenancy_receipt_archive"))
+                    .expr_as(
+                        Expr::cust(if backend == DatabaseBackend::Sqlite {
+                            "length(payload)"
+                        } else {
+                            "CAST(octet_length(payload) AS BIGINT)"
+                        }),
+                        Alias::new("stored_bytes"),
+                    )
+                    .and_where(Expr::col(Alias::new("installation_id")).eq(installation.as_str()))
+                    .and_where(Expr::col(Alias::new("tenant_id")).eq(tenant.as_str()))
+                    .and_where(Expr::col(Alias::new("execution_id")).eq(id.as_str()));
+                let stored = db
+                    .query_one(backend.build(&query))
+                    .await?
+                    .context("receipt archive disappeared")?;
                 Some(u64::try_from(stored.try_get::<i64>("", "stored_bytes")?)?)
             } else {
                 None
@@ -207,7 +228,7 @@ pub(super) async fn load(
         Ok(())
     })
     .await?;
-    if db.get_database_backend() == DatabaseBackend::Sqlite
+    if db.get_database_backend() != DatabaseBackend::MySql
         && crate::db::migration::provider_technical::available(db).await?
     {
         inventory.technical_bytes =

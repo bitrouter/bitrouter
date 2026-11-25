@@ -81,8 +81,11 @@ also checks deployment, bounds and references.
 Omitting `tenancy` or supplying an empty mapping preserves the disabled default.
 Tenancy requires explicit enablement, authenticated inference, an enabled control
 listener and an explicit `control:tenancy` operator credential. The supported
-profile is one Unix process exclusively owning a file-backed SQLite database
-with `gateway_state.mode: local`.
+profile is one process with `gateway_state.mode: local`, exclusively owning
+either a file-backed SQLite database on Unix or, with `db-postgres`, a PostgreSQL
+database through one session-affine connection. PostgreSQL ownership uses a
+database-scoped session advisory lock; losing that session fences dispatch until
+restart. Transaction-pooling endpoints cannot retain this ownership.
 These settings do not enable distributed tenant authority or distributed quotas.
 
 The entire `tenancy` object is startup-only. A reload with changed effective
@@ -323,7 +326,8 @@ data/configuration/key copy, never a downgraded new store.
   optional values retain their absence semantics; reject null required values,
   unknown tenancy keys and invalid timeout bounds, including schema-valid zero.
 - Enabled tenancy rejects anonymous ingress, absent operator authority, shared
-  mode, in-memory/non-SQLite databases and non-Unix ownership.
+  mode, in-memory SQLite, unsupported database backends and non-Unix SQLite
+  ownership. PostgreSQL requires `db-postgres` and a session-affine endpoint.
   Changed effective tenancy settings reject reload before publishing a candidate.
 - Omitted capacity groups and partial nested mappings preserve the defaults of
   omitted fields. Reject null, negative and fractional numeric budgets, overflow,

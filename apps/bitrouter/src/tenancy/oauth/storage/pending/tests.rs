@@ -137,7 +137,9 @@ async fn indexed_pending_pages_cover_all_slots_and_replacement_clears_only_its_k
     selected
         .and_where(Expr::col(Alias::new("pending_tenant_id")).eq(tenant.as_str()))
         .and_where(Expr::col(Alias::new("pending_execution_id")).eq(execution.as_str()));
-    let mut statement = db.get_database_backend().build(&keys(selected));
+    let mut statement = db
+        .get_database_backend()
+        .build(&keys(selected, db.get_database_backend()));
     statement.sql = format!("EXPLAIN QUERY PLAN {}", statement.sql);
     let plan = db.query_all(statement).await?;
     let text = plan
@@ -148,7 +150,7 @@ async fn indexed_pending_pages_cover_all_slots_and_replacement_clears_only_its_k
     ensure!(text.contains("idx_tenancy_oauth_execution") && !text.contains("USE TEMP B-TREE"));
     let mut statement = db
         .get_database_backend()
-        .build(&keys(selection(None, Some("0"))));
+        .build(&keys(selection(None, Some("0")), db.get_database_backend()));
     statement.sql = format!("EXPLAIN QUERY PLAN {}", statement.sql);
     let plan = db.query_all(statement).await?;
     let text = plan

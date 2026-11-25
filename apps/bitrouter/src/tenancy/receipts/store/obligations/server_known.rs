@@ -1,4 +1,4 @@
-//! Test-only server subset: complete canonical known receipts, no OAuth/auxiliary.
+//! Test-only MySQL subset: complete canonical known receipts, no OAuth/auxiliary.
 //! No persisted projection, maintenance, repair or production backend is enabled.
 use super::*;
 
@@ -19,10 +19,40 @@ pub(super) async fn validate(
     required: Option<&Key>,
     charge: &Charge<'_>,
 ) -> Result<()> {
+    validate_inner(db, installation, required, None, charge).await
+}
+
+pub(super) async fn validate_expected(
+    db: &impl ConnectionTrait,
+    expected: &Candidate,
+    charge: &Charge<'_>,
+) -> Result<()> {
+    let receipt = &expected.receipt;
+    let key = Key {
+        tenant: receipt.tenant_id.clone(),
+        execution: receipt.execution_id.clone(),
+    };
+    validate_inner(
+        db,
+        &receipt.installation_id,
+        Some(&key),
+        Some(expected),
+        charge,
+    )
+    .await
+}
+
+async fn validate_inner(
+    db: &impl ConnectionTrait,
+    installation: &InstallationId,
+    required: Option<&Key>,
+    expected: Option<&Candidate>,
+    charge: &Charge<'_>,
+) -> Result<()> {
     let backend = db.get_database_backend();
     ensure!(
-        matches!(backend, DatabaseBackend::Postgres | DatabaseBackend::MySql),
-        "known-source compatibility requires a server test database"
+        backend == DatabaseBackend::MySql,
+        "known-source compatibility requires a MySQL test database"
     );
     // This debit consumes the caller's actual remaining cumulative budget ONCE.
     // Keep it until return; do not reset/increase the caller or bill every row.
@@ -147,6 +177,11 @@ pub(super) async fn validate(
                 "server auxiliary receipt unsupported"
             );
             archive::known(&candidate)?;
+            if required == Some(&key)
+                && let Some(expected) = expected
+            {
+                super::super::same_completion(&candidate, expected)?;
+            }
             found |= required == Some(&key);
             after = Some(key);
             // The candidate is dropped before the next canonical lookup. The
@@ -156,4 +191,99 @@ pub(super) async fn validate(
     }
     ensure!(found, "known server terminal receipt missing");
     bounded(0, 0)
+}
+
+#[tokio::test]
+#[ignore = "requires dedicated MySQL CREATE DATABASE; no fallback"]
+async fn db_server_mysql_fresh_terminal_compatibility_audits_expected_and_refuses_unknown()
+-> Result<()> {
+    use sea_orm::TransactionTrait;
+    let fixture = crate::db::migration::server_fixture::OwnedServer::new(
+        DatabaseBackend::MySql,
+        "BITROUTER_TEST_MIGRATION_DATABASE_URL",
+    )
+    .await?;
+    let checked = async {
+        let db = &fixture.database;
+        crate::db::run_migrations(db).await?;
+        let known = super::super::tests::candidate("installation", "tenant", "known", "creator")?;
+        let free: &Charge<'_> = &|_, _| Ok(());
+        let tx = db.begin().await?;
+        let staged = super::super::stage_terminal(&tx, &known).await?;
+        ensure!(staged.inserted());
+        let change = staged.reconcile(free).await?;
+        ensure!(change.before.is_none() && change.after.is_none());
+        tx.commit().await?;
+        let before = crate::db::migration::capacity::load(db).await?;
+        ensure!(before.live_bytes > 0 && before.unknown_count == 0);
+
+        let tx = db.begin().await?;
+        let replay = super::super::stage_terminal(&tx, &known).await?;
+        ensure!(!replay.inserted());
+        let change = replay.reconcile(free).await?;
+        ensure!(change.before.is_none() && change.after.is_none());
+        // Expected-candidate validation must compare the immutable candidate,
+        // not just observe that some known receipt exists under this key.
+        let other =
+            super::super::tests::candidate("installation", "tenant", "known", "other-creator")?;
+        let mismatched = super::reconcile_completion(&tx, &other, free).await;
+        let denied = super::reconcile_completion(&tx, &known, &|_, _| {
+            anyhow::bail!("working reservation denied")
+        })
+        .await;
+        tx.rollback().await?;
+        ensure!(
+            mismatched.is_err(),
+            "accepted a different expected candidate"
+        );
+        ensure!(
+            denied
+                .err()
+                .context("ignored working reservation failure")?
+                .to_string()
+                == "working reservation denied"
+        );
+
+        let mut receipt = known.receipt.clone();
+        receipt.execution_id = "unknown".try_into()?;
+        receipt.state = ReceiptState::Unknown;
+        receipt.outcome = bitrouter_ai::tenancy::execution::Outcome::Unknown;
+        let unknown = Candidate::new(
+            receipt,
+            super::super::Disposition {
+                dispatch: bitrouter_ai::tenancy::operation::DispatchState::Unknown,
+                statuses: Vec::new(),
+                auxiliary_digest: None,
+            },
+        )?;
+        let tx = db.begin().await?;
+        let staged = super::super::stage_terminal(&tx, &unknown).await?;
+        ensure!(staged.inserted());
+        let refused = staged.reconcile(free).await;
+        tx.rollback().await?;
+        ensure!(
+            refused
+                .err()
+                .context("silently ignored an unknown terminal")?
+                .to_string()
+                == "unresolved receipt cannot be archived"
+        );
+        ensure!(
+            super::super::lookup_candidate(
+                db,
+                &unknown.receipt.installation_id,
+                &unknown.receipt.tenant_id,
+                &unknown.receipt.execution_id
+            )
+            .await?
+            .is_none()
+        );
+        let after = crate::db::migration::capacity::load(db).await?;
+        ensure!(after.live_bytes == before.live_bytes && after.unknown_count == 0);
+        let audited = super::super::inventory(db, &known.receipt.installation_id).await?;
+        crate::db::migration::capacity::verify(db, &audited).await?;
+        Ok(())
+    }
+    .await;
+    fixture.finish(checked).await
 }

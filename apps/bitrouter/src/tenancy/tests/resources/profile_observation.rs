@@ -22,6 +22,7 @@ use std::time::Duration;
 use tokio::time::Instant;
 use tower::ServiceExt;
 
+mod read_admission;
 mod runtime;
 mod transport;
 const TOKEN: &str = "profile-observation-test-operator-token-at-least-32-bytes";

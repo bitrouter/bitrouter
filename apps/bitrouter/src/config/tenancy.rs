@@ -81,6 +81,10 @@ fn valid_env_name(name: &str) -> bool {
 pub struct TenancyConfig {
     /// Opt in to the tenant control service. Existing local startup stays unchanged.
     pub enabled: bool,
+    /// Require an existing installation with this ID before startup writes.
+    pub expected_installation_id: Option<String>,
+    /// SHA256 of the wrapping-key environment value, encoded as lowercase hex.
+    pub expected_wrapping_key_sha256: Option<String>,
     /// File-owned shared routes from the ordinary process configuration.
     pub catalog: Option<catalog::CatalogConfig>,
     /// Startup-only runtime budgets, independent of the stored directory size.
@@ -126,6 +130,8 @@ impl Default for TenancyConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            expected_installation_id: None,
+            expected_wrapping_key_sha256: None,
             catalog: None,
             capacity: capacity::CapacityConfig::default(),
             ordered_attempt_limit: 8,
@@ -146,7 +152,7 @@ impl TenancyConfig {
     ///
     /// # Errors
     /// Rejects anonymous ingress, missing operator authority, shared mode,
-    /// non-file SQLite configurations and unsupported local ownership platforms.
+    /// unsupported storage configurations and local ownership platforms.
     pub fn validate(&self, config: &super::Config) -> Result<()> {
         self.capacity.validate()?;
         self.validate_lifetime()?;
@@ -218,10 +224,15 @@ impl TenancyConfig {
                 "invalid tenancy wrapping key environment name"
             );
         }
+        ensure!(
+            self.enabled
+                || (self.expected_installation_id.is_none()
+                    && self.expected_wrapping_key_sha256.is_none()),
+            "tenancy identity binding requires tenancy.enabled"
+        );
         if !self.enabled {
             return Ok(());
         }
-        ensure!(cfg!(unix), "local tenancy currently requires a Unix host");
         ensure!(
             !config.server.skip_auth,
             "tenancy requires server.skip_auth=false"
@@ -249,7 +260,75 @@ impl TenancyConfig {
                 )?;
             }
         }
-        crate::tenancy::ownership::path(&config.database.url)?;
+        crate::db::validate_backend_availability(&config.database.url)?;
+        match url::Url::parse(&config.database.url)
+            .ok()
+            .as_ref()
+            .map(url::Url::scheme)
+        {
+            Some("postgres" | "postgresql") => {}
+            _ => {
+                ensure!(cfg!(unix), "SQLite tenancy requires a Unix host");
+                crate::tenancy::ownership::path(&config.database.url)?;
+            }
+        }
+        if let Some(id) = &self.expected_installation_id {
+            let _: bitrouter_ai::tenancy::identity::InstallationId = id.clone().try_into()?;
+        }
+        if let Some(hash) = &self.expected_wrapping_key_sha256 {
+            ensure!(
+                self.wrapping_key_env.is_some()
+                    && hash.len() == 64
+                    && hash
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+                "invalid expected wrapping key digest"
+            );
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn verify_binding(&self, db: &sea_orm::DatabaseConnection) -> Result<()> {
+        use anyhow::Context;
+        use sea_orm::{
+            ConnectionTrait,
+            sea_query::{Alias, Expr, Query},
+        };
+        use sea_orm_migration::SchemaManager;
+        if let Some(expected) = &self.expected_wrapping_key_sha256 {
+            use sha2::Digest;
+            let name = self
+                .wrapping_key_env
+                .as_deref()
+                .context("wrapping key environment missing")?;
+            let key = std::env::var(name)
+                .map_err(|_| anyhow::anyhow!("wrapping key environment unavailable"))?;
+            ensure!(
+                hex::encode(sha2::Sha256::digest(key.as_bytes())) == *expected,
+                "tenancy wrapping key identity mismatch"
+            );
+        }
+        if let Some(expected) = &self.expected_installation_id {
+            ensure!(
+                SchemaManager::new(db)
+                    .has_table("tenancy_installation")
+                    .await?,
+                "expected tenancy installation is missing"
+            );
+            let query = Query::select()
+                .column(Alias::new("installation_id"))
+                .from(Alias::new("tenancy_installation"))
+                .and_where(Expr::col(Alias::new("singleton")).eq(1_i32))
+                .limit(2)
+                .to_owned();
+            let rows = db
+                .query_all(db.get_database_backend().build(&query))
+                .await?;
+            ensure!(
+                rows.len() == 1 && rows[0].try_get::<String>("", "installation_id")? == *expected,
+                "tenancy installation identity mismatch"
+            );
+        }
         Ok(())
     }
 

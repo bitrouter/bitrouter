@@ -217,6 +217,16 @@ async fn rows(
             )), Alias::new(name));
         }
         select.expr_as(Expr::cust("CASE WHEN (pending_tenant_id IS NULL OR (typeof(pending_tenant_id)='text' AND length(CAST(pending_tenant_id AS BLOB)) BETWEEN 1 AND 128)) AND (pending_execution_id IS NULL OR (typeof(pending_execution_id)='text' AND length(CAST(pending_execution_id AS BLOB)) BETWEEN 1 AND 128)) THEN 1 ELSE 0 END"), Alias::new("pending_valid"));
+    } else if backend == DatabaseBackend::Postgres {
+        for name in ["pending_tenant_id", "pending_execution_id"] {
+            select.expr_as(
+                Expr::cust(format!(
+                    "CASE WHEN octet_length({name}) BETWEEN 1 AND 128 THEN {name} ELSE NULL END"
+                )),
+                Alias::new(name),
+            );
+        }
+        select.expr_as(Expr::cust("CASE WHEN (pending_tenant_id IS NULL OR octet_length(pending_tenant_id) BETWEEN 1 AND 128) AND (pending_execution_id IS NULL OR octet_length(pending_execution_id) BETWEEN 1 AND 128) THEN CAST(1 AS BIGINT) ELSE CAST(0 AS BIGINT) END"), Alias::new("pending_valid"));
     }
     let rows = db.query_all(backend.build(&select)).await?;
     let decoded = || -> Result<Vec<Row>> {
@@ -224,7 +234,7 @@ async fn rows(
         let mut bytes = 0usize;
         rows.into_iter()
             .map(|row| {
-                let value = decode(row, backend == DatabaseBackend::Sqlite)?;
+                let value = decode(row, backend != DatabaseBackend::MySql)?;
                 bytes = bytes
                     .checked_add(value.json.len())
                     .and_then(|bytes| bytes.checked_add(value.payload.len()))
@@ -394,7 +404,7 @@ pub(in crate::tenancy) async fn insert(db: &impl ConnectionTrait, row: &Row) -> 
         row.payload.clone().into(),
         row.digest.clone().into(),
     ];
-    if backend == DatabaseBackend::Sqlite {
+    if backend != DatabaseBackend::MySql {
         columns.extend(["pending_tenant_id", "pending_execution_id"]);
         let (tenant, execution) = pending_identity(&row.metadata);
         values.extend([
@@ -469,7 +479,7 @@ pub(in crate::tenancy) async fn replace(
         .and_where(Expr::col(Alias::new("slot_key")).eq(&old.metadata.slot))
         .and_where(Expr::col(Alias::new("installation_id")).eq(old.metadata.installation.as_str()))
         .and_where(Expr::col(Alias::new("content_digest")).eq(&old.digest));
-    if db.get_database_backend() == DatabaseBackend::Sqlite {
+    if db.get_database_backend() != DatabaseBackend::MySql {
         let (tenant, execution) = pending_identity(&new.metadata);
         update.values([
             (

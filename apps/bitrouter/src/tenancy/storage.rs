@@ -42,6 +42,9 @@ fn exclusive_write_with(
 ) -> anyhow::Result<()> {
     use anyhow::{Context, ensure};
     ensure!(owner.exclusive(), "exclusive database owner required");
+    if owner.is_postgres() {
+        return Ok(());
+    }
     let volume = owner
         .path
         .parent()
@@ -178,6 +181,19 @@ pub(crate) fn storage_health_error(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
         let driver = cause.downcast_ref::<Error>();
         if matches!(driver, Some(Error::Io(_))) {
+            return true;
+        }
+        #[cfg(feature = "db-postgres")]
+        if driver
+            .and_then(Error::as_database_error)
+            .and_then(|error| error.try_downcast_ref::<sea_orm::sqlx::postgres::PgDatabaseError>())
+            .or_else(|| cause.downcast_ref::<sea_orm::sqlx::postgres::PgDatabaseError>())
+            .is_some_and(|error| {
+                error.code().starts_with("08")
+                    || error.code().starts_with("53")
+                    || matches!(error.code(), "57P01" | "57P02" | "57P03" | "58030")
+            })
+        {
             return true;
         }
         driver
