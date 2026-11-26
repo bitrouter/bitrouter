@@ -45467,26 +45467,26 @@
         "weight": 1
       },
       {
-        "api_base": "https://api.uberllm.dev/v1",
+        "api_base": "https://api.martllm.com/v1",
         "auth": {
-          "env": "UBERLLM_API_KEY",
+          "env": "MARTLLM_API_KEY",
           "kind": "bearer"
         },
         "weight": 1,
         "billing": "usage",
         "community": true,
-        "display_name": "UberLLM",
-        "doc_url": "https://uberllm.dev/docs/quickstart",
+        "display_name": "MartLLM",
+        "doc_url": "https://martllm.com/docs/quickstart",
         "kind": "aggregator",
         "metadata": {
           "headquarters": "US",
-          "name": "UberLLM",
-          "privacy_policy_url": "https://uberllm.dev/privacy",
-          "slug": "uberllm",
-          "terms_of_service_url": "https://uberllm.dev/terms"
+          "name": "MartLLM",
+          "privacy_policy_url": "https://martllm.com/privacy",
+          "slug": "martllm",
+          "terms_of_service_url": "https://martllm.com/terms"
         },
         "models": [],
-        "name": "uberllm",
+        "name": "martllm",
         "status": "active",
         "submitted_at": "2026-11-10T00:00:00Z"
       },
