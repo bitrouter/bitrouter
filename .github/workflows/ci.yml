@@ -355,7 +355,7 @@ jobs:
         include:
         - os: ubuntu-24.04
         - os: macos-latest
-          filter: test(/^macos_shell_copy::/)
+          filter: test(/^macos_shell_copy::/) | test(/^tools::shell::macos::tests::/)
             | test(=tools::tests::dropped_shell_future_stops_unix_descendants) | test(=tools::tests::shell_grant_does_not_follow_a_running_commands_replaced_root)
             | (binary(=native_boundaries) & (test(=approved_shell_can_work_only_in_its_grant_without_bro_credentials) | test(=timed_out_operator_check_retains_unknown_effect_and_fences_resume)))
             | (binary(=acp_serve) & test(=manager_eof_reaps_adapter_descendant_during_unanswered_prompt))
