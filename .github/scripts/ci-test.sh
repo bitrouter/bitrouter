@@ -28,33 +28,20 @@ suite="${1:?suite required}"
 shift
 workspace="${GITHUB_WORKSPACE:?workspace required}"
 restore=ci-tests
-profile=ci
 suffix=
 if [[ "$RUNNER_OS" == Windows ]]; then suffix=.exe; fi
 
 # Match CARGO_TARGET_DIR in test-archive/build.sh. Test binaries embed this
 # absolute path through Cargo's CARGO_BIN_EXE_* variables at compile time.
-suite_target() {
-  case "$1" in
-    service|bro) printf '%s\n' target ;;
-    service-minimal|service-default|service-shared|service-grpc) printf 'target/%s\n' "$1" ;;
-    *) echo "Unknown CI suite: $1" >&2; return 1 ;;
-  esac
-}
-
-target="$(suite_target "$suite")"
 case "$suite" in
-  service-minimal|service-default|service-shared) profile="ci-$suite" ;;
+  service|bro) target=target ;;
+  *) echo "Unknown CI suite: $suite" >&2; exit 1 ;;
 esac
 previous=
 if [[ -f "$restore/suite" ]]; then
   previous="$(cat "$restore/suite")"
 fi
 if [[ "$previous" != "$suite" || ! -f "$target/nextest/binaries-metadata.json" ]]; then
-  if [[ -n "$previous" ]]; then
-    previous_target="$(suite_target "$previous")"
-    rm -rf -- "$previous_target"
-  fi
   rm -rf -- "$restore/target"
   mkdir -p "$restore"
   cargo-nextest nextest list --list-type binaries-only \
@@ -76,7 +63,6 @@ case "$suite" in
     "$BITROUTER_TEST_BRO" build-info | jq -e --arg sha "$GITHUB_SHA" '
       .product == "bitrouter-bro" and .source_revision == $sha'
     ;;
-  service-grpc) ;; # This suite builds and runs library tests only.
   *)
     export BITROUTER_TEST_GATEWAY_BINARY="$workspace/$target/debug/bitrouter$suffix"
     "$BITROUTER_TEST_GATEWAY_BINARY" build-info | jq -e --arg sha "$GITHUB_SHA" '
@@ -84,14 +70,14 @@ case "$suite" in
     ;;
 esac
 
-report="target/nextest/$profile/junit.xml"
+report="target/nextest/ci/junit.xml"
 rm -f -- "$report"
 status=0
 cargo-nextest nextest run \
   --cargo-metadata "$workspace/$target/nextest/cargo-metadata.json" \
   --binaries-metadata "$workspace/$target/nextest/binaries-metadata.json" \
   --workspace-remap "$workspace" --target-dir-remap "$workspace/$target" \
-  --profile "$profile" --retries 0 --no-fail-fast --no-tests fail "$@" || status=$?
+  --profile ci --retries 0 --no-fail-fast --no-tests fail "$@" || status=$?
 if [[ -f "$report" ]]; then
   mkdir -p ci-test-results
   report_directory="$(mktemp -d "ci-test-results/$suite.XXXXXX")"

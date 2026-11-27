@@ -519,6 +519,14 @@ cargo test --workspace --all-features
 
 CI additionally runs `doc` (rustdoc under `-D warnings`), `doctest`, `feature-isolation` (the SDK's default tree stays free of axum, the OTel stack never reaches the SDK at any feature combination, and the two OTLP transports stay isolated), `sdk-public-api` (see below), and `msrv` (pinned to Rust 1.93). AI agents should also read [`CLAUDE.md`](../../CLAUDE.md).
 
+Pull requests run the full Rust suites on Ubuntu and selected native cases
+on Windows and macOS. The Ubuntu gateway suite starts when its full archive
+and the Linux BRO companion are available. Each native runner builds its own
+test executables and runs them in the same job. The PR feature matrix links
+reduced gateway binaries and checks their dependency closures. Distribution
+acceptance exercises feature-specific runtime behavior on scheduled, manual,
+and release-tag runs.
+
 ### Client behavior tests
 
 The root Bun project owns the TypeScript tooling and test dependencies. Build
