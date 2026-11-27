@@ -5686,28 +5686,27 @@ impl ObserveHook for Arc<ConversionEvents> {
 
 fn json_observation_request(streamed: bool) -> Result<PipelineRequest> {
     let mut req = request();
-    req.input
+    let prompt = req
+        .input
         .generation_prompt_mut()
-        .ok_or_else(|| BitrouterError::internal("expected generation fixture"))?
-        .tools = vec![Tool::Function {
+        .ok_or_else(|| BitrouterError::internal("expected generation fixture"))?;
+    prompt.tools = vec![Tool::Function {
         name: "f".into(),
         description: None,
         parameters: serde_json::json!({"type":"object"}),
         strict: Some(true),
         provider_metadata: Default::default(),
     }];
-    req.input
-        .generation_prompt_mut()
-        .ok_or_else(|| {
-            crate::gateway::error::BitrouterError::internal("expected generation fixture")
-        })?
-        .stream = streamed;
-    req.input
-        .generation_prompt_mut()
-        .ok_or_else(|| {
-            crate::gateway::error::BitrouterError::internal("expected generation fixture")
-        })?
-        .messages = vec![Message {
+    // Messages output schemas enforce validation, so a non-strict output
+    // request still excludes that target and exercises refusal before dispatch.
+    prompt.response_format = Some(ResponseFormat::JsonSchema {
+        name: Some("fixture".into()),
+        description: None,
+        strict: Some(false),
+        schema: serde_json::json!({"type":"object"}),
+    });
+    prompt.stream = streamed;
+    prompt.messages = vec![Message {
         role: Role::Tool,
         content: vec![Content::ToolResult {
             call_id: "c".into(),
