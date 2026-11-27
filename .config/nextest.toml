@@ -9,15 +9,6 @@ slow-timeout = { period = "60s", terminate-after = 5 }
 [profile.ci.junit]
 path = "junit.xml"
 
-[profile.ci-service-minimal.junit]
-path = "junit.xml"
-
-[profile.ci-service-default.junit]
-path = "junit.xml"
-
-[profile.ci-service-shared.junit]
-path = "junit.xml"
-
 [profile.ci-service]
 archive.include = [
     { path = "debug/bitrouter", relative-to = "target", on-missing = "ignore" },

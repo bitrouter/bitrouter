@@ -1582,27 +1582,13 @@ fn messages_inbound_legacy_alias_does_not_disturb_output_config_siblings()
 fn messages_outbound_renders_admitted_output_config_format()
 -> crate::gateway::model::error::Result<()> {
     let adapter = adapter_for(ApiProtocol::Messages)?;
-    let mut prompt = sample_prompt_with_schema();
-    let report = request_projection_report(ApiProtocol::Messages, &prompt)?;
-    assert_eq!(report.issues.len(), 2);
-    if let Some(ResponseFormat::JsonSchema {
-        name,
-        description,
-        strict,
-        ..
-    }) = &mut prompt.response_format
-    {
-        *name = None;
-        *description = None;
-        *strict = None;
-    }
-    let rendered = adapter.render_request(&prompt)?;
+    let rendered = adapter.render_request(&sample_prompt_with_schema())?;
     assert_eq!(rendered["output_config"]["format"]["type"], "json_schema");
     assert_eq!(
         rendered["output_config"]["format"]["schema"]["properties"]["location"]["type"],
         "string"
     );
-    // A schema-only request has no metadata to omit on the native wire.
+    // Messages carries enforcement implicitly and has no separate name field.
     assert!(rendered["output_config"]["format"].get("name").is_none());
     assert!(rendered["output_config"]["format"].get("strict").is_none());
     Ok(())
@@ -4496,6 +4482,17 @@ fn responses_stream_completed_carries_output_array() -> crate::gateway::model::e
             _ => None,
         })
         .expect("response.completed present");
+    let created_at = completed["response"]["created_at"]
+        .as_u64()
+        .expect("Responses must carry an integer Unix timestamp");
+    assert!(created_at > 0);
+    for frame in &frames[..2] {
+        let SseFrame::Event { data, .. } = frame else {
+            panic!("Responses preamble must use SSE event frames");
+        };
+        let event: serde_json::Value = serde_json::from_str(data).expect("valid Responses SSE");
+        assert_eq!(event["response"]["created_at"], created_at);
+    }
     let output = completed["response"]["output"]
         .as_array()
         .expect("output is an array");
@@ -7362,32 +7359,61 @@ fn function_tool_strict_omitted_when_absent() -> crate::gateway::model::error::R
     Ok(())
 }
 
-/// Explicit strict flags are refused on wires that omit them; the native
-/// declaration without that flag still round-trips.
+/// Messages can use its default for non-strict tools. Explicit enforcement
+/// remains required when requested by the canonical tool.
 #[test]
-fn function_tool_strict_refused_on_anthropic_and_gemini() -> crate::gateway::model::error::Result<()>
-{
+fn function_tool_strict_projection_to_messages() -> crate::gateway::model::error::Result<()> {
+    use crate::gateway::conversion_report::{
+        ConversionDisposition, ConversionEffect, ConversionLocation, ConversionReason,
+    };
+
+    let protocol = ApiProtocol::Messages;
+    let adapter = adapter_for(protocol.clone())?;
+    let tool = |strict| Tool::Function {
+        name: "get_weather".to_string(),
+        description: Some("desc".to_string()),
+        parameters: serde_json::json!({"type":"object"}),
+        strict,
+        provider_metadata: Default::default(),
+    };
+    let strict_prompt = prompt_with_tools(vec![tool(Some(true))]);
+    let rendered = adapter.render_request(&strict_prompt)?;
+    assert_eq!(rendered["tools"][0]["strict"], true);
+
+    let mut non_strict_tool = tool(Some(false));
+    if let Tool::Function {
+        provider_metadata, ..
+    } = &mut non_strict_tool
     {
-        let protocol = ApiProtocol::Messages;
-        let mut prompt = prompt_with_tools(vec![Tool::Function {
-            name: "get_weather".to_string(),
-            description: Some("desc".to_string()),
-            parameters: serde_json::json!({"type":"object"}),
-            strict: Some(true),
-            provider_metadata: Default::default(),
-        }]);
-        let report = request_projection_report(protocol.clone(), &prompt)?;
-        assert_eq!(
-            report.issues[0].reason,
-            crate::gateway::conversion_report::ConversionReason::FunctionStrictUnrepresentable
+        set_provider_metadata(
+            provider_metadata,
+            "anthropic",
+            "toolExtra",
+            serde_json::json!({"strict": true}),
         );
-        if let Tool::Function { strict, .. } = &mut prompt.tools[0] {
-            *strict = None;
-        }
-        let adapter = adapter_for(protocol)?;
-        let rendered = adapter.render_request(&prompt)?;
-        assert_eq!(adapter.parse_request(rendered)?.tools, prompt.tools);
     }
+    let non_strict_prompt = prompt_with_tools(vec![non_strict_tool]);
+    let report =
+        crate::gateway::model::conversion::request_admission(&non_strict_prompt, &protocol);
+    assert!(report.issues.is_empty());
+    assert_eq!(report.admitted.len(), 1);
+    assert_eq!(
+        report.admitted[0].location,
+        ConversionLocation::ToolDefinition { tool: 0 }
+    );
+    assert_eq!(
+        report.admitted[0].reason,
+        ConversionReason::FunctionStrictDisabledByDefault
+    );
+    assert_eq!(
+        report.admitted[0].effect,
+        ConversionEffect::EquivalentRepresentation
+    );
+    assert_eq!(report.admitted[0].disposition, ConversionDisposition::Allow);
+
+    let rendered = adapter.render_request(&non_strict_prompt)?;
+    assert!(rendered["tools"][0].get("strict").is_none());
+    assert_eq!(adapter.parse_request(rendered)?.tools, vec![tool(None)]);
     Ok(())
 }
 // --- provider-defined tools: same-protocol round-trips ---

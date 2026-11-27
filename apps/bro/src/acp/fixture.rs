@@ -18,17 +18,17 @@ fn main() -> Result<()> {
     if args.get(1).is_some_and(|a| a == "--descendant") {
         let dir = std::path::Path::new(args.get(2).context("descendant workspace")?);
         let lifetime = std::net::TcpListener::bind("127.0.0.1:0")?;
-        std::fs::write(
-            dir.join("descendant-ready"),
-            lifetime.local_addr()?.to_string(),
-        )?;
+        let ready = dir.join("descendant-ready.tmp");
+        std::fs::write(&ready, lifetime.local_addr()?.to_string())?;
+        std::fs::rename(ready, dir.join("descendant-ready"))?;
         for _ in 0..500 {
             if dir.join("release").exists() {
-                std::fs::write(dir.join("orphan-effect"), "orphaned")?;
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
+        // A natural exit at the fixture deadline is also evidence that BRO did not stop us.
+        std::fs::write(dir.join("orphan-effect"), "orphaned")?;
         return Ok(());
     }
     if args.iter().any(|a| a == "--serve-compat") {

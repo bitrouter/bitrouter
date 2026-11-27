@@ -8,6 +8,7 @@ name: Distribution acceptance
     - v*
 permissions:
   contents: read
+  checks: read
 concurrency:
   group: distribution-acceptance-${{ github.ref }}
   cancel-in-progress: false
@@ -18,8 +19,29 @@ env:
   CARGO_PROFILE_DEV_DEBUG: '0'
   CARGO_PROFILE_TEST_DEBUG: '0'
 jobs:
+  behavior-evidence:
+    name: behavior-evidence
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require live behavior for tag releases
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          matches="$(gh api \
+            "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?per_page=100" \
+            --jq '[.check_runs[] | select(.name == "behavior-live" and .conclusion == "success")] | length')"
+          if [[ "$matches" -lt 1 ]]; then
+            echo "::error::No successful behavior-live check exists for $GITHUB_SHA"
+            exit 1
+          fi
+      - name: Scheduled/manual acceptance is not a publication gate
+        if: github.event_name != 'push'
+        run: echo "No tag release is being published for this run."
+
   application-features:
     name: application-features (${{ matrix.features }})
+    needs: behavior-evidence
     runs-on: ubuntu-latest
     env:
       BITROUTER_TEST_EXAMPLES_DIR: ${{ github.workspace }}/target/debug/examples
@@ -146,11 +168,21 @@ jobs:
         PROFILE_FEATURES: ${{ matrix.features }}
       run: |
         cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --lib "tests::onboarding::"
-    - name: verify unavailable telemetry before startup side effects
+    - name: verify behavior with optional gateway features disabled
       if: matrix.features == ''
       env:
-        PROFILE_FEATURES: ${{ matrix.features }}
-      run: cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --lib "tests::telemetry_disabled::" --jobs 2 -- --test-threads=2
+        FILTER: >-
+          test(/^tests::telemetry_disabled::/) |
+          test(=assemble::otel_config_tests::disabled_first_party_block_does_not_hide_generic_export) |
+          test(=assemble::trajectory_assembly_tests::no_core_cleans_untracked_observation_without_eval_writes) |
+          test(=cli::shared_tests::bootstrap_rejects_unavailable_feature_before_reading_any_inputs) |
+          test(=config::shared_process::tests::unavailable_mode_fails_before_environment_lookup) |
+          test(=tenancy::tests::configuration::gateway_rejects_activation_and_audit_without_eval_publication) |
+          test(=tests::configuration_state::unavailable_export_reload_preserves_live_configuration) |
+          (binary(=mcp_config) & test(=minimum_gateway_refuses_to_save_unavailable_mcp_servers))
+      run: |
+        cargo nextest run --locked -p bitrouter --no-default-features --lib --test mcp_config \
+          --build-jobs 2 --test-threads 2 --no-tests fail -E "$FILTER"
     - name: verify host shutdown draining
       if: matrix.features == '' || matrix.features == 'eval-publication'
       env:
@@ -177,6 +209,7 @@ jobs:
       run: cargo test -p bitrouter --no-default-features --features mcp --lib "tests::harness_mcp_check::" --jobs 2 -- --test-threads=2
   artifact-profiles:
     name: artifact profiles (${{ matrix.os }})
+    needs: behavior-evidence
     strategy:
       fail-fast: false
       matrix:
@@ -225,6 +258,7 @@ jobs:
         cargo nextest run --locked -p bitrouter --no-default-features --test product_process \
           --retries 0 --run-ignored only --no-tests fail -E 'test(=gateway_routes_the_approved_bro_tool_continuation)'
   packaged-gateway:
+    needs: behavior-evidence
     uses: ./.github/workflows/gateway-artifacts.yml
     with:
       plan: '{"releases":[{"app_name":"bitrouter"}]}'
@@ -232,6 +266,7 @@ jobs:
     if: github.event_name != 'push'
   registry-live-lifecycle:
     name: live registry sync and host consumption
+    needs: behavior-evidence
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -261,6 +296,7 @@ jobs:
         if-no-files-found: warn
   cargo-install:
     name: standalone Cargo install (${{ matrix.package }})
+    needs: behavior-evidence
     runs-on: ubuntu-latest
     timeout-minutes: 100
     strategy:
@@ -307,6 +343,7 @@ jobs:
         jq -e --arg sha "$GITHUB_SHA" --arg version "$version" '.source_revision == $sha and .version == $version' identity.json
   public-library-boundaries:
     name: public-library-boundaries
+    needs: behavior-evidence
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v6

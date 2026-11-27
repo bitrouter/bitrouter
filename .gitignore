@@ -42,3 +42,8 @@ skills/bitrouter-e2e-test/
 
 # Generated README charts (published to the orphan `charts` branch by CI)
 /dist/charts/
+
+# Bun / Vitest development
+node_modules/
+.vitest/
+coverage/

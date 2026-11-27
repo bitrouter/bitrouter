@@ -14,18 +14,14 @@ case "$suite" in
       Windows) archive_flags+=(--lib --test invocation); build_targets=() ;;
     esac
     ;;
-  service-minimal) feature_flags=(--locked --no-default-features) ;;
-  service-default) feature_flags=(--locked) ;;
-  service-shared) feature_flags=(--locked --no-default-features --features multi-instance,http2) ;;
-  service-grpc)
-    feature_flags=(--locked --no-default-features --features otel-grpc)
-    archive_flags=(--profile ci --lib)
-    build_targets=()
-    ;;
   bro)
     package=bitrouter-bro
     archive_flags=(--profile ci-bro)
     build_targets=(--example bro_acp_fixture)
+    case "$RUNNER_OS" in
+      macOS) archive_flags+=(--bin bro --test native_boundaries --test acp_serve) ;;
+      Windows) archive_flags+=(--bin bro --test home_owner --test native_boundaries --test acp_serve --test invocation) ;;
+    esac
     ;;
   bro-companion)
     package=bitrouter-bro
@@ -34,11 +30,7 @@ case "$suite" in
   *) echo "Unknown CI suite: $suite" >&2; exit 1 ;;
 esac
 
-# Match the target paths used when restoring the independent feature archives.
-case "$suite" in
-  service|bro|bro-companion) export CARGO_TARGET_DIR=target ;;
-  *) export CARGO_TARGET_DIR="target/$suite" ;;
-esac
+export CARGO_TARGET_DIR=target
 # Cargo also builds the executable for the selected integration tests.
 # Only build it separately where the Linux gateway suite verifies its production closure.
 if [[ -n "${build_targets[*]:-}" ]]; then

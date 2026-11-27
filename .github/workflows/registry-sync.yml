@@ -72,8 +72,9 @@ jobs:
           echo "REGISTRY_PROPOSAL_SHA=$proposal_sha" >> "$GITHUB_ENV"
           echo "REGISTRY_PREVIOUS=$previous" >> "$GITHUB_ENV"
 
+      - uses: oven-sh/setup-bun@v2
       - name: Test proposal lifecycle without network or credentials
-        run: node .github/scripts/registry-propose.test.cjs
+        run: bun run registry:test-proposal
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
 

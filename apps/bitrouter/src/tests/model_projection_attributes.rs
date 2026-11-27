@@ -2,7 +2,9 @@
 
 use super::conversion::{adapters, prompt, refusal};
 
-use crate::gateway::conversion_report::{ConversionEffect, ConversionLocation};
+use crate::gateway::conversion_report::{ConversionEffect, ConversionLocation, ConversionReason};
+use crate::gateway::model::protocol::chat_completions::ChatCompletionsAdapter;
+use crate::gateway::model::protocol::messages::MessagesAdapter;
 use crate::gateway::model::protocol::responses::ResponsesAdapter;
 use crate::gateway::model::protocol::{InboundAdapter, OutboundAdapter};
 use bitrouter_ai::types::{
@@ -24,25 +26,27 @@ fn function(parameters: Value, strict: Option<bool>) -> Tool {
 }
 
 #[test]
-fn explicit_function_strict_flags_need_a_faithful_target_slot() -> TestResult {
+fn function_strict_preserves_required_enforcement_and_target_defaults() -> TestResult {
     for strict in [true, false] {
         let mut source = prompt()?;
         source.tools = vec![function(json!({"type":"object"}), Some(strict))];
         for (protocol, adapter) in adapters() {
-            if matches!(protocol, ApiProtocol::Messages) {
-                let report = refusal(adapter.as_ref(), &source)?;
-                assert_eq!(
-                    report.issues[0].location,
-                    ConversionLocation::ToolDefinition { tool: 0 }
-                );
-            } else {
-                let body = adapter.render_request(&source)?;
-                let flag = if protocol == ApiProtocol::Responses {
-                    &body["tools"][0]["strict"]
-                } else {
-                    &body["tools"][0]["function"]["strict"]
-                };
-                assert_eq!(flag, strict);
+            match protocol {
+                ApiProtocol::Messages => {
+                    let body = adapter.render_request(&source)?;
+                    assert_eq!(
+                        body["tools"][0].get("strict"),
+                        strict.then(|| json!(true)).as_ref()
+                    );
+                }
+                ApiProtocol::Responses => {
+                    let body = adapter.render_request(&source)?;
+                    assert_eq!(body["tools"][0]["strict"], strict);
+                }
+                _ => {
+                    let body = adapter.render_request(&source)?;
+                    assert_eq!(body["tools"][0]["function"]["strict"], strict);
+                }
             }
         }
     }
@@ -50,41 +54,157 @@ fn explicit_function_strict_flags_need_a_faithful_target_slot() -> TestResult {
 }
 
 #[test]
-fn structured_output_metadata_cannot_disappear_on_other_wires() -> TestResult {
-    for (name, description, strict) in [
-        (Some("name-secret".into()), None, None),
-        (None, Some("description-secret".into()), None),
-        (None, None, Some(true)),
-        (None, None, Some(false)),
+fn strict_structured_output_maps_to_messages_and_back() -> TestResult {
+    let schema = json!({"type":"object","properties":{"answer":{"type":"string"}},
+        "required":["answer"],"additionalProperties":false});
+    let description = "Report the final answer.";
+    let input = json!({"model":"fixture","input":"hi","text":{"format":{
+        "type":"json_schema","name":"report","description":description,"strict":true,"schema":schema
+    }}});
+    let mut source = ResponsesAdapter.parse_request(input.clone())?;
+    let body = MessagesAdapter.render_request(&source)?;
+    let mut expected = schema.clone();
+    expected["description"] = json!(description);
+    assert_eq!(
+        body["output_config"]["format"],
+        json!({"type":"json_schema","schema":expected})
+    );
+
+    let prompt = MessagesAdapter.parse_request(body)?;
+    let responses = ResponsesAdapter.render_request(&prompt)?;
+    let chat = ChatCompletionsAdapter.render_request(&prompt)?;
+    for format in [
+        &responses["text"]["format"],
+        &chat["response_format"]["json_schema"],
     ] {
-        let mut source = prompt()?;
-        source.response_format = Some(ResponseFormat::JsonSchema {
-            name,
-            description,
-            strict,
-            schema: json!({"type":"object","properties":{"x":{"type":"string"}}}),
-        });
-        for (protocol, adapter) in adapters() {
-            if matches!(protocol, ApiProtocol::Messages) {
-                let report = refusal(adapter.as_ref(), &source)?;
-                assert_eq!(
-                    report.issues[0].location,
-                    ConversionLocation::ResponseFormat
-                );
-            } else {
-                adapter.render_request(&source)?;
-            }
-        }
+        assert_eq!(format["strict"], true);
+        assert_eq!(format["schema"], expected);
     }
-    let mut source = prompt()?;
-    source.response_format = Some(ResponseFormat::JsonSchema {
-        name: None,
-        description: None,
-        strict: None,
-        schema: json!({"type":"object"}),
+
+    if let Some(ResponseFormat::JsonSchema { schema, .. }) = &mut source.response_format {
+        schema["description"] = json!("Conflicting guidance.");
+    }
+    let report = refusal(&MessagesAdapter, &source)?;
+    assert_eq!(
+        report.issues[0].reason,
+        ConversionReason::ResponseFormatMetadataUnrepresentable
+    );
+
+    for strict in [Value::Null, json!(false)] {
+        let mut input = input.clone();
+        input["text"]["format"]["strict"] = strict;
+        let report = refusal(&MessagesAdapter, &ResponsesAdapter.parse_request(input)?)?;
+        assert_eq!(
+            report.issues[0].reason,
+            ConversionReason::ResponseFormatStrictUnrepresentable
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn messages_function_strict_flags_survive_openai_projection() -> TestResult {
+    let input = json!({"model":"fixture","max_tokens":64,
+        "messages":[{"role":"user","content":"hi"}],
+        "tools":[
+            {"type":"custom","name":"enforced","strict":true,"input_schema":{"type":"object"}},
+            {"name":"relaxed","strict":false,"input_schema":{"type":"object"}},
+            {"name":"default","input_schema":{"type":"object"}}
+        ]
     });
-    for (_, adapter) in adapters() {
-        adapter.render_request(&source)?;
+    let source = MessagesAdapter.parse_request(input.clone())?;
+    let native = MessagesAdapter.render_request(&source)?;
+    assert_eq!(native["tools"][0]["type"], "custom");
+    assert_eq!(
+        native["tools"][0]["input_schema"],
+        input["tools"][0]["input_schema"]
+    );
+    assert_eq!(native["tools"][0]["strict"], true);
+    assert_eq!(native["tools"][1]["strict"], false);
+    assert!(native["tools"][2].get("strict").is_none());
+
+    let responses = ResponsesAdapter.render_request(&source)?;
+    let chat = ChatCompletionsAdapter.render_request(&source)?;
+    for (index, strict) in [true, false, false].into_iter().enumerate() {
+        assert_eq!(responses["tools"][index]["strict"], strict);
+    }
+    assert_eq!(chat["tools"][0]["function"]["strict"], true);
+    assert_eq!(chat["tools"][1]["function"]["strict"], false);
+    assert!(chat["tools"][2]["function"].get("strict").is_none());
+    Ok(())
+}
+
+#[test]
+fn foreign_tool_allowlists_keep_only_selected_functions_and_mode() -> TestResult {
+    let responses_body = json!({"model":"fixture","input":"hi",
+        "tools":[
+            {"type":"function","name":"first","parameters":{"type":"object"}},
+            {"type":"function","name":"second","parameters":{"type":"object"}}
+        ],
+        "tool_choice":{"type":"allowed_tools","mode":"required",
+            "tools":[{"type":"function","name":"second"}]}
+    });
+    let prompt = ResponsesAdapter.parse_request(responses_body.clone())?;
+    let messages = MessagesAdapter.render_request(&prompt)?;
+    assert_eq!(
+        messages["tools"]
+            .as_array()
+            .ok_or("missing Messages tools")?
+            .len(),
+        1
+    );
+    assert_eq!(messages["tools"][0]["name"], "second");
+    assert_eq!(messages["tool_choice"], json!({"type":"any"}));
+    let chat = ChatCompletionsAdapter.render_request(&prompt)?;
+    assert_eq!(
+        chat["tools"].as_array().ok_or("missing Chat tools")?.len(),
+        1
+    );
+    assert_eq!(chat["tools"][0]["function"]["name"], "second");
+    assert_eq!(chat["tool_choice"], "required");
+    let native = ResponsesAdapter.render_request(&prompt)?;
+    assert_eq!(native["tool_choice"], responses_body["tool_choice"]);
+
+    let chat = json!({"model":"fixture","messages":[{"role":"user","content":"hi"}],
+        "tools":[
+            {"type":"function","function":{"name":"first","parameters":{"type":"object"}}},
+            {"type":"function","function":{"name":"second","parameters":{"type":"object"}}}
+        ],
+        "tool_choice":{"type":"allowed_tools","allowed_tools":{"mode":"auto",
+            "tools":[{"type":"function","function":{"name":"second"}}]}}
+    });
+    let prompt = ChatCompletionsAdapter.parse_request(chat)?;
+    let responses = ResponsesAdapter.render_request(&prompt)?;
+    assert_eq!(
+        responses["tools"]
+            .as_array()
+            .ok_or("missing Responses tools")?
+            .len(),
+        1
+    );
+    assert_eq!(responses["tools"][0]["name"], "second");
+    assert_eq!(responses["tools"][0]["strict"], false);
+    assert_eq!(responses["tool_choice"], "auto");
+    Ok(())
+}
+
+#[test]
+fn foreign_unrepresentable_tool_choices_are_refused() -> TestResult {
+    for selector in [
+        json!({"type":"allowed_tools","mode":"required","tools":[{"type":"function","name":"missing"}]}),
+        json!({"type":"allowed_tools","mode":"required","tools":[{"type":"web_search"}]}),
+        json!({"type":"allowed_tools","mode":"required","tools":[]}),
+    ] {
+        let source = ResponsesAdapter.parse_request(json!({
+            "model":"fixture","input":"hi","tool_choice":selector,
+            "tools":[{"type":"function","name":"f","parameters":{"type":"object"}}]
+        }))?;
+        let report = refusal(&MessagesAdapter, &source)?;
+        assert_eq!(report.issues[0].location, ConversionLocation::ToolChoice);
+        assert_eq!(
+            report.issues[0].reason,
+            ConversionReason::ToolChoiceUnrepresentable
+        );
     }
     Ok(())
 }

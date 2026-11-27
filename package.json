@@ -1,0 +1,24 @@
+{
+  "name": "bitrouter-workspace",
+  "private": true,
+  "packageManager": "bun@1.4.5",
+  "scripts": {
+    "registry:test-proposal": "bun .github/scripts/registry-propose.test.cjs",
+    "release:plan": "bun helpers/dist-helper/packaging/release-plan.mjs",
+    "release:verify-archives": "bun helpers/dist-helper/packaging/verify-archives.mjs",
+    "release:guard-installers": "bun helpers/dist-helper/packaging/guard-installers.mjs",
+    "test:behavior": "vitest run --config tests/behavior/vitest.config.ts",
+    "test:behavior:live": "vitest run --config tests/behavior/vitest.live.config.ts",
+    "install:claude-native": "bun node_modules/@anthropic-ai/claude-code/install.cjs"
+  },
+  "devDependencies": {
+    "@ai-sdk/anthropic": "4.0.107",
+    "@ai-sdk/openai": "4.0.122",
+    "@anthropic-ai/claude-code": "2.1.331",
+    "@earendil-works/pi-coding-agent": "1.6.0",
+    "@openai/codex": "0.172.0",
+    "ai": "7.0.181",
+    "vite": "8.0.0",
+    "vitest": "5.1.1"
+  }
+}

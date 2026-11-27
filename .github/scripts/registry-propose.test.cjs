@@ -47,7 +47,7 @@ fs.writeFileSync(state, "{}");
 fs.writeFileSync(calls, "");
 fs.writeFileSync(
   path.join(bin, "gh"),
-  '#!/usr/bin/env node\nconst fs=require("fs");const a=process.argv.slice(2);if(a[0]==="pr"&&a[1]==="list"){console.log(fs.readFileSync(process.env.TEST_PR_STATE,"utf8"));}else{fs.appendFileSync(process.env.TEST_GH_CALLS,a.join(" ")+"\\n");}\n',
+  '#!/usr/bin/env bun\nconst fs=require("fs");const a=process.argv.slice(2);if(a[0]==="pr"&&a[1]==="list"){console.log(fs.readFileSync(process.env.TEST_PR_STATE,"utf8"));}else{fs.appendFileSync(process.env.TEST_GH_CALLS,a.join(" ")+"\\n");}\n',
   { mode: 0o755 },
 );
 const env = {

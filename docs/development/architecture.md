@@ -128,15 +128,26 @@ approval parts/reasons and omitted tool-result media/file IDs. Existing native-f
 tool declarations remain eligible; unknown cross-family translation and non-object
 argument loss are refused. Native continuity tokens cannot cross a wire that omits them. Native token
 presence/representation and local denial pairing are not complete authority proofs.
-Projection now also refuses explicit strict flags, schema names/descriptions and file
-names that the selected codec would omit, plus tool-result error/denial status loss.
+Between Chat Completions, Responses, and Messages, a function allowlist
+projects to just the selected tool definitions with its original choice mode.
+Native selectors stay on their own wire. A foreign function allowlist without a
+faithful projection excludes that target before dispatch.
+Messages renders strict function tools with `strict: true`. It can omit an
+explicit opt-out because non-strict tool use is the default. OpenAI projections
+preserve Messages tool strictness, including an explicit opt-out when the
+Responses default could otherwise attempt enforcement.
+Messages JSON-schema output implies strict enforcement. OpenAI projections
+render that guarantee explicitly, and Messages can represent an OpenAI strict
+output format using the schema and its description annotation. An OpenAI
+non-strict output mode or a conflicting schema description excludes Messages.
+Unrepresentable file names and tool-result error/denial status remain refusals.
 Google Chat admits a conservative target-scoped schema/option subset without rewriting constraints. Explicit cache resources and unverified strict/schema metadata are refused. A suppressed paired denial cannot lose its supplied reason.
 Malformed argument strings cannot become empty objects on Messages. Chat and
 Messages preserve text-only tool-result arrays, and Chat preserves multiple text parts.
 Unclassified Chat ordering/reasoning concatenation and selected three-wire ingress
 attribute/boundary losses are refused. Value-preserving JSON encoding into
 string-only tool slots remains eligible; error/denial status is checked separately.
-`ConversionReport.admitted` retains classified JSON encoding separately from refusal issues.
+`ConversionReport.admitted` retains equivalent conversions separately from refusal issues.
 Selected-target preparation can return
 the report through `ModelClient::render_request_with_report`; executor preflight returns
 that assessment. The gateway rechecks refusals and invokes `on_conversion_admitted` for
@@ -516,6 +527,42 @@ cargo test --workspace --all-features
 ```
 
 CI additionally runs `doc` (rustdoc under `-D warnings`), `doctest`, `feature-isolation` (the SDK's default tree stays free of axum, the OTel stack never reaches the SDK at any feature combination, and the two OTLP transports stay isolated), `sdk-public-api` (see below), and `msrv` (pinned to Rust 1.93). AI agents should also read [`CLAUDE.md`](../../CLAUDE.md).
+
+Pull requests run the full Rust suites on Ubuntu and selected native cases
+on Windows and macOS. The Ubuntu gateway suite starts when its full archive
+and the Linux BRO companion are available. Each native runner builds its own
+test executables and runs them in the same job. The PR feature matrix links
+reduced gateway binaries and checks their dependency closures. Distribution
+acceptance exercises feature-specific runtime behavior on scheduled, manual,
+and release-tag runs.
+
+### Client behavior tests
+
+The root Bun project owns the TypeScript tooling and test dependencies. Build
+the gateway and fixture, run `bun install --frozen-lockfile` once, then provide
+their paths:
+
+```sh
+cargo build -p bitrouter -p bitrouter-behavior-upstream
+BITROUTER_TEST_NODE="$(command -v node)" \
+BITROUTER_TEST_GATEWAY_BINARY="$PWD/target/debug/bitrouter" \
+BITROUTER_TEST_BEHAVIOR_UPSTREAM="$PWD/target/debug/bitrouter-behavior-upstream" \
+  bun run --bun test:behavior
+```
+
+The deterministic matrix drives Pi and the Vercel AI SDK through streaming
+Responses and Messages ingress, across both outbound protocols. All eight cases
+complete a tool loop. The suite uses `helpers/behavior-upstream` for the
+stateful wiremock model endpoint. CI supplies the prebuilt gateway and fixture
+from `build-gateway`.
+
+The `behavior-live` workflow on main builds the revision once and runs Pi and
+Vercel AI SDK against DeepSeek's official Responses and Messages APIs using
+`deepseek-flash`. A successful `behavior-live` check for the commit is required
+before release-plz, tag Release, and tag Distribution acceptance can proceed.
+The workflow reads the `DEEPSEEK_BEHAVIOR_API_KEY` repository secret. To run
+locally, set the same environment variable along with `BITROUTER_TEST_NODE`
+and `BITROUTER_TEST_GATEWAY_BINARY`, then run `bun run --bun test:behavior:live`.
 
 ### HTTP/2 feature isolation
 

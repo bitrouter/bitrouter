@@ -340,8 +340,8 @@ pub struct MessagesTransport;
 
 /// Parse one Anthropic `tools` entry into a canonical [`Tool`]. A versioned
 /// `type` marks a provider-defined server tool (namespaced `anthropic.<type>`,
-/// config keys preserved verbatim as `args`); a typeless entry is a client
-/// function tool (`{name, description?, input_schema}`). An entry with neither a
+/// config keys preserved verbatim as `args`); typeless and `custom` entries
+/// are client function tools (`{name, description?, input_schema}`). An entry with neither a
 /// `type` nor a `name` is dropped — there is nothing to forward.
 fn parse_messages_tool(mut t: MessagesTool) -> Option<Tool> {
     // `cache_control` on a tool is a prompt-caching breakpoint, not a config
@@ -357,8 +357,9 @@ fn parse_messages_tool(mut t: MessagesTool) -> Option<Tool> {
             cc,
         );
     }
-    if let Some(kind) = t.kind {
-        // Server tool: `{type:"web_search_20250305", name:"web_search", …config}`.
+    let explicitly_custom = t.kind.as_deref() == Some("custom");
+    if let Some(kind) = t.kind.filter(|kind| kind != "custom") {
+        // A versioned provider tool: `{type:"web_search_20250305", name:"web_search", …config}`.
         return Some(Tool::ProviderDefined {
             id: format!("{PROVIDER_ID_ANTHROPIC}.{kind}"),
             name: t.name.unwrap_or_else(|| kind.clone()),
@@ -372,23 +373,34 @@ fn parse_messages_tool(mut t: MessagesTool) -> Option<Tool> {
     // namespace so a same-protocol round-trip is lossless; dropping them
     // silently disables the upstream feature they enable.
     let name = t.name?;
+    if explicitly_custom {
+        t.extra.insert("type".into(), "custom".into());
+    }
     set_tool_extra(&mut provider_metadata, t.extra);
     Some(Tool::Function {
         name,
         description: t.description,
         parameters: t.input_schema,
-        // Anthropic client tools carry no `strict` slot.
+        // The native strict option is retained in provider metadata.
         strict: None,
         provider_metadata,
     })
+}
+
+/// Read the original Messages function-tool enforcement flag.
+pub(super) fn native_function_tool_strict(meta: &ProviderMetadata) -> Option<bool> {
+    provider_namespace(meta, PROVIDER_ID_ANTHROPIC)?
+        .get(ANTHROPIC_TOOL_EXTRA)?
+        .get("strict")?
+        .as_bool()
 }
 
 /// Render one canonical [`Tool`] into an Anthropic `tools` entry.
 ///
 /// A [`Tool::Function`] becomes `{name, description?, input_schema}` plus any
 /// residual wire fields carried under [`ANTHROPIC_TOOL_EXTRA`] (`defer_loading`,
-/// `input_examples`, …). The current Messages serializer has no `strict` slot, so
-/// [`Tool::Function::strict`] must be absent under shared request admission.
+/// `input_examples`, …). Canonical strict enforcement uses the native flag.
+/// Explicit opt-out uses the Messages default for non-strict tool use.
 /// A [`Tool::ProviderDefined`] uses [`provider_defined_native`] after admission
 /// has selected its native family; foreign translation is refused before this
 /// serializer. Native schema/model validation remains a separate requirement.
@@ -399,7 +411,7 @@ fn render_messages_tool(tool: &Tool) -> serde_json::Value {
             name,
             description,
             parameters,
-            strict: _,
+            strict,
             provider_metadata,
         } => {
             let mut obj = serde_json::json!({
@@ -410,6 +422,15 @@ fn render_messages_tool(tool: &Tool) -> serde_json::Value {
             // Restore the unmodelled wire fields (`defer_loading`, …) this
             // adapter lifted on parse, then the `cache_control` breakpoint.
             apply_tool_extra(&mut obj, provider_metadata);
+            if let Some(strict) = strict
+                && let Some(tool) = obj.as_object_mut()
+            {
+                if *strict {
+                    tool.insert("strict".to_owned(), true.into());
+                } else {
+                    tool.remove("strict");
+                }
+            }
             apply_cache_control(&mut obj, provider_metadata);
             obj
         }
@@ -1109,7 +1130,7 @@ impl InboundAdapter for MessagesAdapter {
         // `code_execution_20250522`, `computer_20250124`, `bash_20250124`,
         // `text_editor_20250124`, …) marks a server tool — namespaced
         // `anthropic.<type>`, with its config keys preserved verbatim as `args`.
-        // A typeless entry is a client tool (`{name, description?, input_schema}`).
+        // Typeless and `custom` entries are client function tools.
         // <https://docs.claude.com/en/docs/agents-and-tools/tool-use/overview>
         let tools = req
             .tools
@@ -1270,6 +1291,10 @@ impl OutboundAdapter for MessagesAdapter {
 
     fn render_request(&self, prompt: &Prompt) -> Result<serde_json::Value> {
         crate::gateway::model::protocol::require_request_admission(prompt, &ApiProtocol::Messages)?;
+        let selection = crate::gateway::model::conversion::function_tool_selection(
+            prompt,
+            &ApiProtocol::Messages,
+        );
         if prompt.params.store == Some(true) {
             return Err(ModelError::invalid_request(
                 "store: true cannot be honored by a Messages upstream",
@@ -1311,6 +1336,11 @@ impl OutboundAdapter for MessagesAdapter {
                 prompt
                     .tools
                     .iter()
+                    .filter(|tool| {
+                        selection
+                            .as_ref()
+                            .is_none_or(|selection| selection.includes(tool))
+                    })
                     .map(render_messages_tool)
                     .collect::<Vec<_>>()
                     .into(),
@@ -1359,8 +1389,12 @@ impl OutboundAdapter for MessagesAdapter {
         // protocol-neutral top-level `parallel_tool_calls` (the shape every other
         // protocol uses) back into `disable_parallel_tool_use` here.
         let parallel_tool_calls = prompt.params.parallel_tool_calls;
-        if prompt.tool_choice.is_some() || parallel_tool_calls.is_some() {
-            let mut tc = match &prompt.tool_choice {
+        let tool_choice = selection
+            .as_ref()
+            .map(|selection| &selection.choice)
+            .or(prompt.tool_choice.as_ref());
+        if tool_choice.is_some() || parallel_tool_calls.is_some() {
+            let mut tc = match tool_choice {
                 Some(tc) => render_messages_tool_choice(tc),
                 // `disable_parallel_tool_use` only exists on a tool_choice object;
                 // default to `auto` (Anthropic's own default) to carry it.
@@ -1586,7 +1620,19 @@ fn json_schema_from(format: &serde_json::Value) -> Option<ResponseFormat> {
 /// Render a canonical [`ResponseFormat`] into Anthropic's
 /// `{ type: "json_schema", schema }` body that sits under `output_config.format`.
 fn render_messages_response_format(rf: &ResponseFormat) -> serde_json::Value {
-    let ResponseFormat::JsonSchema { schema, .. } = rf;
+    let ResponseFormat::JsonSchema {
+        schema,
+        description,
+        ..
+    } = rf;
+    let mut schema = schema.clone();
+    if let Some(description) = description
+        && let Some(schema) = schema.as_object_mut()
+    {
+        schema
+            .entry("description")
+            .or_insert_with(|| description.clone().into());
+    }
     serde_json::json!({ "type": "json_schema", "schema": schema })
 }
 

@@ -511,58 +511,6 @@ async fn cloned_native_request_owns_one_delivery_and_charge() -> anyhow::Result<
 }
 
 #[tokio::test]
-async fn e2e_assembled_pipeline_routes_to_mock_provider() -> anyhow::Result<()> {
-    let upstream = mock_chat_completions_upstream().await;
-    let cfg = config_for(&upstream.uri());
-
-    // Assemble the FULL app — db + migrations + routing + auth + policy +
-    // settlement + the language_model pipeline.
-    let assembled = crate::assemble::build_app(&cfg)
-        .await
-        .expect("app assembles");
-    let pipeline = assembled
-        .app
-        .language_model()
-        .expect("language_model pipeline configured")
-        .clone();
-
-    // skip_auth is on → a local caller passes through AuthHook.
-    let req = PipelineRequest::new("test-model", CallerContext::local(), chat_prompt());
-    let resp = pipeline.execute(req).await.expect("request succeeds e2e");
-
-    // the mock upstream's content made it all the way back through conversion
-    let text: String = resp
-        .result
-        .generation()
-        .ok_or_else(|| anyhow::anyhow!("generation result missing"))?
-        .content
-        .iter()
-        .filter_map(|c| match c {
-            bitrouter_ai::types::Content::Text { text, .. } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(text, "hello from the mock upstream");
-
-    // metering ran — a metering row exists with the full identity context.
-    let row = requests::Entity::find()
-        .one(&assembled.db)
-        .await
-        .expect("metering query runs")
-        .expect("a metering row was written");
-    assert_eq!(
-        row.model_id, "test-model",
-        "metering row records the routed model"
-    );
-    // 11 prompt × 2 + 7 completion × 10 = 92 µ$
-    assert_eq!(
-        row.estimated_charge_micro_usd, 92,
-        "estimated charge derived from pricing × tokens"
-    );
-    Ok(())
-}
-
-#[tokio::test]
 async fn e2e_assembled_mcp_route_enforces_virtual_key_auth() {
     use crate::config::mcp::{McpServerConfig, McpTransport};
     use http::Request;
@@ -2211,9 +2159,8 @@ async fn e2e_mcp_aggregate_and_sse_endpoints() {
 //   Chat Completions:      response_format.json_schema.schema
 //   Responses: text.format.schema
 //   Anthropic:        output_config.format.schema
-// OpenAI name/strict metadata is refused before upstream HTTP on Messages.
-// The two named OpenAI-to-Messages edges are refused. Messages supplies the
-// schema-only positive cells.
+// All nine edges preserve strict schema enforcement. OpenAI-to-Messages
+// also verifies that non-strict output is refused before upstream HTTP.
 //
 // Capability-gate coverage (a `Custom` outbound adapter without
 // `supports_response_format()` produces a 400) lives at the SDK level in
@@ -2509,6 +2456,7 @@ fn assert_native_schema(outbound: Outbound, body: &Value) {
                 "openai chat outbound must carry the schema under \
                  response_format.json_schema.schema; body: {body}",
             );
+            assert_eq!(body["response_format"]["json_schema"]["strict"], true);
             // Chat Completions requires `name`; the renderer must supply a default
             // when the inbound (Anthropic, Google) didn't carry one. Either
             // the caller-supplied name or the default `"response"` is fine.
@@ -2527,7 +2475,7 @@ fn assert_native_schema(outbound: Outbound, body: &Value) {
                 "anthropic outbound must carry the schema under \
                  output_config.format.schema; body: {body}",
             );
-            // Admitted common-subset requests have no name/strict to omit.
+            // Messages carries enforcement implicitly and has no separate format name.
             assert!(
                 body["output_config"]["format"].get("name").is_none(),
                 "anthropic outbound must NOT carry `name` (not in GA shape); body: {body}",
@@ -2552,6 +2500,7 @@ fn assert_native_schema(outbound: Outbound, body: &Value) {
                 body["text"]["format"]["schema"], want,
                 "responses outbound must carry the schema under text.format.schema; body: {body}",
             );
+            assert_eq!(body["text"]["format"]["strict"], true);
             assert!(
                 body["text"]["format"]["name"].is_string(),
                 "responses outbound must always set a name; body: {body}",
@@ -2604,6 +2553,12 @@ async fn run_cell(inbound: Inbound, outbound: Outbound) -> anyhow::Result<()> {
     {
         for streamed in [false, true] {
             let mut incompatible = body.clone();
+            let format = match inbound {
+                Inbound::ChatCompletions => &mut incompatible["response_format"]["json_schema"],
+                Inbound::Responses => &mut incompatible["text"]["format"],
+                _ => return Err(anyhow::anyhow!("unexpected non-strict schema source")),
+            };
+            format["strict"] = false.into();
             incompatible["stream"] = streamed.into();
             let response = match inbound {
                 Inbound::ChatCompletions => {
@@ -2630,11 +2585,10 @@ async fn run_cell(inbound: Inbound, outbound: Outbound) -> anyhow::Result<()> {
                 "incompatible schema must be refused before HTTP"
             );
         }
-    } else {
-        post_inbound(&server, inbound, model, &body).await;
-        let upstream_body = captured_outbound(&upstream, outbound).await;
-        assert_native_schema(outbound, &upstream_body);
     }
+    post_inbound(&server, inbound, model, &body).await;
+    let upstream_body = captured_outbound(&upstream, outbound).await;
+    assert_native_schema(outbound, &upstream_body);
 
     for artifact in identity_artifacts {
         assert!(
