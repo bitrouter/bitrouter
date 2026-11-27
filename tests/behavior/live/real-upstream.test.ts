@@ -29,12 +29,7 @@ const CASES: Array<{
 
 for (const client of ["pi", "ai-sdk"] as const) {
   for (const entry of CASES) {
-    // AI SDK's strict Responses schema rejects the gateway's synthesized
-    // `response.in_progress` frame because it omits `created_at`. Keep the live
-    // case visible without letting that client gap veto real upstream releases.
-    const behaviorTest =
-      client === "ai-sdk" && entry.provider === "openai" ? test.fails : test;
-    behaviorTest(`${client}: live ${entry.provider} ${entry.protocol} writes the result`, async () => {
+    test(`${client}: live ${entry.provider} ${entry.protocol} writes the result`, async () => {
       const apiKey = process.env[entry.keyEnv];
       const model = process.env[entry.modelEnv];
       if (!apiKey || !model) {

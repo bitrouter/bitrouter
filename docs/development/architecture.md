@@ -532,10 +532,12 @@ BITROUTER_TEST_BEHAVIOR_UPSTREAM="$PWD/target/debug/bitrouter-behavior-upstream"
 ```
 
 The deterministic matrix drives Pi and the Vercel AI SDK through streaming
-Responses and Messages ingress, across both outbound protocols. It uses
-`helpers/behavior-upstream` for the stateful wiremock model endpoint. The suite
-does not build Cargo targets; CI supplies the exact artifacts from
-`build-gateway`.
+Responses and Messages ingress, across both outbound protocols. Seven cases
+complete a tool loop. The AI SDK Responses-to-Messages case verifies that the
+gateway rejects the SDK's explicit tool `strict: false` before upstream
+dispatch, as Messages projection currently requires the flag to be absent.
+The suite uses `helpers/behavior-upstream` for the stateful wiremock model
+endpoint. CI supplies the prebuilt gateway and fixture from `build-gateway`.
 
 The `behavior-live` workflow on main builds the revision once and runs the same
 clients against configured OpenAI and Anthropic models. A successful
@@ -545,11 +547,6 @@ Release, and tag Distribution acceptance can proceed. Live inputs are
 `BITROUTER_LIVE_OPENAI_MODEL`, and `BITROUTER_LIVE_ANTHROPIC_MODEL`. Run it
 locally with the same `BITROUTER_TEST_NODE` and gateway path variables via
 `bun run --bun test:behavior:live`.
-
-Known client compatibility gaps are recorded as Vitest expected failures rather
-than silently skipped. In particular, AI SDK's Responses schema rejects the
-gateway's `response.in_progress` event because the synthesized response object
-omits `created_at`; remove the `.fails` marker only when that event validates.
 
 ### HTTP/2 feature isolation
 

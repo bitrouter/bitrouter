@@ -438,7 +438,9 @@ export class BehaviorRun {
       },
       prompt: "Read the fixture and then finish.",
     });
-    await result.consumeStream();
+    for await (const part of result.fullStream) {
+      if (part.type === "error") throw part.error;
+    }
     return {
       text: await result.text,
       finishReason: await result.finishReason,
@@ -508,7 +510,7 @@ export class LiveBehaviorRun {
     const port = await freePort();
     const endpoint = `http://127.0.0.1:${port}`;
     const baseUrl =
-      provider === "openai" ? "https://api.openai.com/v1" : "https://api.anthropic.com";
+      provider === "openai" ? "https://api.openai.com/v1" : "https://api.anthropic.com/v1";
     const configPath = join(root, "bitrouter.yaml");
     await writeFile(
       configPath,
@@ -639,7 +641,10 @@ export class LiveBehaviorRun {
         }
       }
     });
-    await waitChild(child, 240_000);
+    const exitCode = await waitChild(child, 240_000);
+    if (exitCode !== 0) {
+      throw new Error(`Pi live run exited with code ${exitCode}: ${stderr}`);
+    }
     const settled = [...events]
       .reverse()
       .find((event) => event.type === "agent_settled");
@@ -698,7 +703,9 @@ export class LiveBehaviorRun {
       },
       prompt: `Call write_result exactly once with content ${LIVE_RESULT}, then finish.`,
     });
-    await result.consumeStream();
+    for await (const part of result.fullStream) {
+      if (part.type === "error") throw part.error;
+    }
     return {
       text: await result.text,
       finishReason: await result.finishReason,
@@ -754,4 +761,3 @@ async function stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
     ]);
   }
 }
-

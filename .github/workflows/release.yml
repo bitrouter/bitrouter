@@ -405,7 +405,7 @@ jobs:
           path: npm/
           merge-multiple: true
       - uses: oven-sh/setup-bun@v2
-      - run: bun publish --access public ./npm/bitrouter-bro-npm-package.tar.gz
+      - run: bun publish --access public --tag latest ./npm/bitrouter-bro-npm-package.tar.gz
         env:
           NPM_CONFIG_REGISTRY: https://registry.npmjs.org
           NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -4496,6 +4496,17 @@ fn responses_stream_completed_carries_output_array() -> crate::gateway::model::e
             _ => None,
         })
         .expect("response.completed present");
+    let created_at = completed["response"]["created_at"]
+        .as_u64()
+        .expect("Responses must carry an integer Unix timestamp");
+    assert!(created_at > 0);
+    for frame in &frames[..2] {
+        let SseFrame::Event { data, .. } = frame else {
+            panic!("Responses preamble must use SSE event frames");
+        };
+        let event: serde_json::Value = serde_json::from_str(data).expect("valid Responses SSE");
+        assert_eq!(event["response"]["created_at"], created_at);
+    }
     let output = completed["response"]["output"]
         .as_array()
         .expect("output is an array");

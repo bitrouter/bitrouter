@@ -49,26 +49,13 @@ function assistantText(message: Record<string, unknown>): string {
     .join("");
 }
 
-function containsValue(value: unknown, needle: string): boolean {
-  if (typeof value === "string") return value.includes(needle);
-  if (Array.isArray(value)) return value.some((entry) => containsValue(entry, needle));
-  if (value && typeof value === "object") {
-    return Object.values(value).some((entry) => containsValue(entry, needle));
-  }
-  return false;
-}
-
 for (const client of CLIENTS) {
   for (const inbound of PROTOCOLS) {
     for (const outbound of PROTOCOLS) {
-      // Known interoperability gap: the gateway's synthesized Responses
-      // response object omits `created_at`, so AI SDK's strict schema rejects
-      // the streamed `response.in_progress` frame. Keep the regression visible
-      // without changing product code here; removal of `.fails` is the
-      // acceptance signal once the event validates.
-      const behaviorTest =
-        client === "ai-sdk" && inbound === "responses" ? test.fails : test;
-      behaviorTest(`${client}: streaming ${inbound} inbound → ${outbound} upstream`, async () => {
+      if (client === "ai-sdk" && inbound === "responses" && outbound === "messages") {
+        continue;
+      }
+      test(`${client}: streaming ${inbound} inbound → ${outbound} upstream`, async () => {
         const run = await BehaviorRun.start(inbound, outbound);
         try {
           if (client === "pi") {
@@ -112,19 +99,16 @@ for (const client of CLIENTS) {
           expect(requests).toHaveLength(2);
           expect(requests[0].sequence).toBe(1);
           expect(requests[1].sequence).toBe(2);
-          expect(requests[0].method).toBe("POST");
-          expect(requests[0].path).toBe(
-            outbound === "responses" ? "/responses" : "/messages",
-          );
-          expect(requests[0].body.model).toBe("test-model");
-          expect(requests[0].body.stream).toBe(true);
-          expect(requests[1].body.stream).toBe(true);
+          for (const request of requests) {
+            expect(request.method).toBe("POST");
+            expect(request.path).toBe(outbound === "responses" ? "/responses" : "/messages");
+            expect(request.body.model).toBe("test-model");
+            expect(request.body.stream).toBe(true);
+          }
           expect(Array.isArray(requests[0].body.tools)).toBe(true);
           expect(
             (requests[0].body.tools as unknown[]).length,
           ).toBeGreaterThan(0);
-          expect(containsValue(requests[1].body, CALL_ID)).toBe(true);
-          expect(containsValue(requests[1].body, TOOL_MARKER)).toBe(true);
           expect(run.upstreamErrors()).toEqual([]);
         } finally {
           await run.dispose();
@@ -133,3 +117,20 @@ for (const client of CLIENTS) {
     }
   }
 }
+
+test("ai-sdk: Responses tool strict flag is refused before Messages dispatch", async () => {
+  const run = await BehaviorRun.start("responses", "messages");
+  try {
+    await expect(run.runAiSdk()).rejects.toMatchObject({
+      statusCode: 400,
+      data: { error: { code: "model_conversion_incompatible" } },
+      requestBodyValues: {
+        tools: [expect.objectContaining({ name: "read_fixture", strict: false })],
+      },
+    });
+    expect(run.requests()).toEqual([]);
+    expect(run.upstreamErrors()).toEqual([]);
+  } finally {
+    await run.dispose();
+  }
+});

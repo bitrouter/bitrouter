@@ -1,8 +1,8 @@
 //! Scripted model upstream for the cross-client product behavior suite.
 //!
 //! The process is intentionally small and stateful: the first streamed model
-//! turn asks the client to read a fixture, the second turn accepts only the
-//! matching tool result and asks for a tool result, and one final turn answers.
+//! turn asks the client to read a fixture. The second request must return the
+//! matching tool result before the fixture streams the final answer.
 //! Every request is written to stdout so the TypeScript harness can assert the
 //! complete outbound wire shape.
 
@@ -19,6 +19,7 @@ const CALL_ID: &str = "call_behavior_1";
 const ITEM_ID: &str = "item_behavior_1";
 const TOOL_MARKER: &str = "BITROUTER_BEHAVIOR_TOOL_OK";
 const FINAL_TEXT: &str = "BITROUTER_BEHAVIOR_OK";
+const RESPONSES_CREATED_AT: u64 = 1_700_000_000;
 
 #[derive(Clone, Copy)]
 enum Protocol {
@@ -81,7 +82,7 @@ impl Responder {
             ));
         }
 
-        let has_tool_result = contains_string(&body, CALL_ID);
+        let has_tool_result = has_matching_tool_result(self.state.protocol, &body);
         match (sequence, has_tool_result) {
             (1, false) => {
                 let Some(tool) = first_tool_name(&body) else {
@@ -97,17 +98,14 @@ impl Responder {
                     Protocol::Messages => messages_tool_stream(&tool, &arguments),
                 })
             }
-            (2, true) => {
-                if !contains_string(&body, TOOL_MARKER) {
-                    return invalid("second request did not carry the tool marker");
-                }
-                stream(match self.state.protocol {
-                    Protocol::Responses => responses_final_stream(),
-                    Protocol::Messages => messages_final_stream(),
-                })
-            }
+            (2, true) => stream(match self.state.protocol {
+                Protocol::Responses => responses_final_stream(),
+                Protocol::Messages => messages_final_stream(),
+            }),
             (1, true) => invalid("first request unexpectedly carried a tool result"),
-            (2, false) => invalid("second request did not carry the tool result"),
+            (2, false) => {
+                invalid("second request did not carry the matching tool result and marker")
+            }
             _ => invalid(format!(
                 "unexpected extra model request {sequence} for {}",
                 self.state.protocol.as_str()
@@ -147,6 +145,7 @@ fn responses_tool_stream(tool: &str, arguments: &str) -> String {
     let response = json!({
         "id": "resp_behavior_1",
         "object": "response",
+        "created_at": RESPONSES_CREATED_AT,
         "status": "in_progress",
         "model": "test-model",
         "output": [],
@@ -170,6 +169,7 @@ fn responses_tool_stream(tool: &str, arguments: &str) -> String {
     let terminal = json!({
         "id": "resp_behavior_1",
         "object": "response",
+        "created_at": RESPONSES_CREATED_AT,
         "status": "completed",
         "model": "test-model",
         "output": [completed_item],
@@ -253,6 +253,7 @@ fn responses_final_stream() -> String {
     let terminal = json!({
         "id": "resp_behavior_2",
         "object": "response",
+        "created_at": RESPONSES_CREATED_AT,
         "status": "completed",
         "model": "test-model",
         "output": [item],
@@ -270,6 +271,7 @@ fn responses_final_stream() -> String {
                 "response": {
                     "id": "resp_behavior_2",
                     "object": "response",
+                    "created_at": RESPONSES_CREATED_AT,
                     "status": "in_progress",
                     "model": "test-model",
                     "output": [],
@@ -494,13 +496,44 @@ fn first_tool_name(body: &Value) -> Option<String> {
         })
 }
 
-fn contains_string(value: &Value, needle: &str) -> bool {
-    match value {
-        Value::String(value) => value.contains(needle),
-        Value::Array(values) => values.iter().any(|value| contains_string(value, needle)),
-        Value::Object(values) => values.values().any(|value| contains_string(value, needle)),
-        Value::Null | Value::Bool(_) | Value::Number(_) => false,
+fn has_matching_tool_result(protocol: Protocol, body: &Value) -> bool {
+    match protocol {
+        Protocol::Responses => body["input"].as_array().is_some_and(|items| {
+            items.iter().any(|item| {
+                item["type"] == "function_call_output"
+                    && item["call_id"] == CALL_ID
+                    && output_has_marker(&item["output"], "input_text")
+            })
+        }),
+        Protocol::Messages => body["messages"].as_array().is_some_and(|messages| {
+            messages.iter().any(|message| {
+                message["role"] == "user"
+                    && message["content"].as_array().is_some_and(|blocks| {
+                        blocks.iter().any(|block| {
+                            block["type"] == "tool_result"
+                                && block["tool_use_id"] == CALL_ID
+                                && block["is_error"] != true
+                                && output_has_marker(&block["content"], "text")
+                        })
+                    })
+            })
+        }),
     }
+}
+
+fn output_has_marker(output: &Value, text_block_type: &str) -> bool {
+    let has_marker = |text: &str| {
+        text.trim() == TOOL_MARKER
+            || serde_json::from_str::<Value>(text).is_ok_and(|value| value["marker"] == TOOL_MARKER)
+    };
+    if let Some(text) = output.as_str() {
+        return has_marker(text);
+    }
+    output.as_array().is_some_and(|blocks| {
+        blocks.iter().any(|block| {
+            block["type"] == text_block_type && block["text"].as_str().is_some_and(has_marker)
+        })
+    })
 }
 
 fn argument(args: &mut impl Iterator<Item = String>, name: &str) -> Result<String> {
@@ -542,4 +575,43 @@ async fn main() -> Result<()> {
         .await
         .context("waiting for shutdown signal")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// UT for Responses tool result matching.
+    #[test]
+    fn ut_responses_requires_marker_on_matching_output_item() {
+        let mut body = json!({
+            "input": [
+                {"type": "function_call", "call_id": CALL_ID},
+                {"type": "message", "role": "user", "content": TOOL_MARKER},
+                {"type": "function_call_output", "call_id": "call_other", "output": TOOL_MARKER},
+            ],
+        });
+
+        assert!(!has_matching_tool_result(Protocol::Responses, &body));
+        body["input"][2]["call_id"] = json!(CALL_ID);
+        assert!(has_matching_tool_result(Protocol::Responses, &body));
+    }
+
+    /// UT for Messages tool result matching.
+    #[test]
+    fn ut_messages_requires_marker_on_matching_user_tool_result() {
+        let mut body = json!({
+            "messages": [
+                {"role": "assistant", "content": [{"type": "tool_use", "id": CALL_ID}]},
+                {"role": "user", "content": [
+                    {"type": "text", "text": TOOL_MARKER},
+                    {"type": "tool_result", "tool_use_id": "call_other", "content": TOOL_MARKER},
+                ]},
+            ],
+        });
+
+        assert!(!has_matching_tool_result(Protocol::Messages, &body));
+        body["messages"][1]["content"][1]["tool_use_id"] = json!(CALL_ID);
+        assert!(has_matching_tool_result(Protocol::Messages, &body));
+    }
 }

@@ -2358,6 +2358,7 @@ impl InboundAdapter for ResponsesAdapter {
         Box::new(ResponsesStreamEncoder {
             response_id: encode_gateway_continuation_id(request_id),
             model: model.to_string(),
+            created_at: created_at_unix_seconds(),
             seq: 0,
             created: false,
             next_output_index: 0,
@@ -4307,6 +4308,7 @@ impl StreamDecoder for ResponsesStreamDecoder {
 struct ResponsesStreamEncoder {
     response_id: Result<String>,
     model: String,
+    created_at: u64,
     seq: u64,
     created: bool,
     /// Next free `output_index` to hand to a newly-opened item.
@@ -4446,6 +4448,7 @@ impl ResponsesStreamEncoder {
             let response = serde_json::json!({
                 "id": response_id,
                 "object": "response",
+                "created_at": self.created_at,
                 "model": self.model,
                 "status": "in_progress",
                 "output": [],
@@ -4826,6 +4829,7 @@ impl ResponsesStreamEncoder {
         let mut response = serde_json::json!({
             "id": response_id,
             "object": "response",
+            "created_at": self.created_at,
             "model": self.model,
             "status": status,
             "output": std::mem::take(&mut self.output_items).into_values().collect::<Vec<_>>(),
@@ -5115,6 +5119,7 @@ impl StreamEncoder for ResponsesStreamEncoder {
         let response = serde_json::json!({
             "id": response_id,
             "object": "response",
+            "created_at": self.created_at,
             "model": self.model,
             "status": "failed",
             "error": { "code": "upstream_error", "message": message },
@@ -5133,6 +5138,7 @@ impl StreamEncoder for ResponsesStreamEncoder {
         let response = serde_json::json!({
             "id": response_id,
             "object": "response",
+            "created_at": self.created_at,
             "model": self.model,
             "status": "failed",
             "error": { "code": error.code, "message": error.message },
