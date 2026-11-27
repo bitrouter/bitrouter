@@ -810,6 +810,10 @@ impl OutboundAdapter for ChatCompletionsAdapter {
             prompt,
             &ApiProtocol::ChatCompletions,
         )?;
+        let selection = crate::gateway::model::conversion::function_tool_selection(
+            prompt,
+            &ApiProtocol::ChatCompletions,
+        );
         let mut messages = Vec::new();
         if let Some(system) = &prompt.system {
             messages.push(serde_json::json!({ "role": "system", "content": system }));
@@ -824,7 +828,16 @@ impl OutboundAdapter for ChatCompletionsAdapter {
         // Drop tools with no Chat Completions wire form (provider-defined /
         // server tools); only emit `tools` if at least one function tool remains,
         // so a request that carried only server tools doesn't send `tools: []`.
-        let tools: Vec<_> = prompt.tools.iter().filter_map(render_chat_tool).collect();
+        let tools: Vec<_> = prompt
+            .tools
+            .iter()
+            .filter(|tool| {
+                selection
+                    .as_ref()
+                    .is_none_or(|selection| selection.includes(tool))
+            })
+            .filter_map(|tool| render_chat_tool(tool, prompt.params.extra_protocol.as_ref()))
+            .collect();
         if !tools.is_empty() {
             req.insert("tools".into(), tools.into());
         }
@@ -850,7 +863,10 @@ impl OutboundAdapter for ChatCompletionsAdapter {
         // `response_format` left in extras (typed slot wins, matching how
         // other params are handled).
         if let Some(rf) = &prompt.response_format {
-            req.insert("response_format".into(), render_chat_response_format(rf));
+            req.insert(
+                "response_format".into(),
+                render_chat_response_format(rf, prompt.params.extra_protocol.as_ref()),
+            );
         }
         // Output modalities -> OpenAI `modalities`.
         if !prompt.params.response_modalities.is_empty()
@@ -861,7 +877,11 @@ impl OutboundAdapter for ChatCompletionsAdapter {
         // Render the canonical tool_choice into Chat Completions' native shape.
         // Inserted before the extras splat so it wins over any leftover
         // `tool_choice` (matching how response_format is handled).
-        if let Some(tc) = &prompt.tool_choice {
+        if let Some(tc) = selection
+            .as_ref()
+            .map(|selection| &selection.choice)
+            .or(prompt.tool_choice.as_ref())
+        {
             req.insert("tool_choice".into(), render_chat_tool_choice(tc));
         }
         // Render the typed sampling slots into their Chat Completions wire names.
@@ -1159,14 +1179,14 @@ impl OutboundAdapter for ChatCompletionsAdapter {
 /// function tools — valid. This is wire-structural, not capability gating: a
 /// tool the target wire cannot express is omitted, never a function tool the
 /// model might support.
-fn render_chat_tool(tool: &Tool) -> Option<serde_json::Value> {
+fn render_chat_tool(tool: &Tool, source: Option<&ApiProtocol>) -> Option<serde_json::Value> {
     match tool {
         Tool::Function {
             name,
             description,
             parameters,
             strict,
-            ..
+            provider_metadata,
         } => {
             let mut function = serde_json::Map::new();
             function.insert("name".into(), name.clone().into());
@@ -1179,8 +1199,15 @@ fn render_chat_tool(tool: &Tool) -> Option<serde_json::Value> {
                     .map_or(serde_json::Value::Null, serde_json::Value::String),
             );
             function.insert("parameters".into(), parameters.clone());
+            let strict = strict.or_else(|| {
+                if source == Some(&ApiProtocol::Messages) {
+                    super::messages::native_function_tool_strict(provider_metadata)
+                } else {
+                    None
+                }
+            });
             if let Some(strict) = strict {
-                function.insert("strict".into(), (*strict).into());
+                function.insert("strict".into(), strict.into());
             }
             Some(serde_json::json!({ "type": "function", "function": function }))
         }
@@ -1194,7 +1221,10 @@ fn render_chat_tool(tool: &Tool) -> Option<serde_json::Value> {
 /// one. `description` is emitted only when the canonical slot carries it (the
 /// OpenAI family is the only wire that transmits a schema description).
 /// <https://platform.openai.com/docs/guides/structured-outputs>
-fn render_chat_response_format(rf: &ResponseFormat) -> serde_json::Value {
+fn render_chat_response_format(
+    rf: &ResponseFormat,
+    source: Option<&ApiProtocol>,
+) -> serde_json::Value {
     let ResponseFormat::JsonSchema {
         name,
         description,
@@ -1211,8 +1241,11 @@ fn render_chat_response_format(rf: &ResponseFormat) -> serde_json::Value {
     if let Some(description) = description {
         js.insert("description".into(), description.clone().into());
     }
-    if let Some(strict) = strict {
-        js.insert("strict".into(), (*strict).into());
+    // A Messages JSON output schema already implies strict enforcement.
+    if let Some(strict) =
+        strict.or_else(|| (source == Some(&ApiProtocol::Messages)).then_some(true))
+    {
+        js.insert("strict".into(), strict.into());
     }
     js.insert("schema".into(), schema.clone());
     serde_json::json!({ "type": "json_schema", "json_schema": serde_json::Value::Object(js) })

@@ -1,12 +1,14 @@
 //! Gateway conversion admission and projection rules.
 
+use std::collections::HashSet;
+
 use crate::gateway::conversion_report::{
     ConversionDisposition, ConversionEffect, ConversionIssue, ConversionLocation, ConversionReason,
     ConversionReport, ConversionStage,
 };
 use crate::gateway::model::error::{ModelError, Result};
 use bitrouter_ai::types::{
-    ApiProtocol, Content, Prompt, ResponseFormat, Role, Tool, ToolResultContentPart,
+    ApiProtocol, Content, Prompt, ResponseFormat, Role, Tool, ToolChoice, ToolResultContentPart,
     ToolResultOutput, provider_namespace,
 };
 
@@ -117,6 +119,115 @@ impl ReportAdmission for ConversionReport {
     }
 }
 
+/// This selector has wire-specific syntax on the two OpenAI APIs. Keep it
+/// unchanged on its original wire and project it only between the
+/// three standard generation wires.
+fn foreign_tool_choice<'a>(
+    prompt: &'a Prompt,
+    target: &ApiProtocol,
+) -> Option<(&'a ApiProtocol, &'a serde_json::Value)> {
+    let source = prompt.params.extra_protocol.as_ref()?;
+    if source == target
+        || !matches!(
+            source,
+            ApiProtocol::ChatCompletions | ApiProtocol::Responses
+        )
+        || !matches!(
+            target,
+            ApiProtocol::ChatCompletions | ApiProtocol::Responses | ApiProtocol::Messages
+        )
+    {
+        return None;
+    }
+    let selector = prompt.params.extra.get("tool_choice")?;
+    (!selector.is_null()).then_some((source, selector))
+}
+
+pub(crate) struct FunctionToolSelection<'a> {
+    names: HashSet<&'a str>,
+    pub(crate) choice: ToolChoice,
+}
+
+impl FunctionToolSelection<'_> {
+    pub(crate) fn includes(&self, tool: &Tool) -> bool {
+        matches!(tool, Tool::Function { name, .. } if self.names.contains(name.as_str()))
+    }
+}
+
+/// Represent a foreign function allowlist using the definitions it permits.
+/// The original declaration order is preserved by filtering at render time.
+pub(crate) fn function_tool_selection<'a>(
+    prompt: &'a Prompt,
+    target: &ApiProtocol,
+) -> Option<FunctionToolSelection<'a>> {
+    let (source, selector) = foreign_tool_choice(prompt, target)?;
+    let chat = *source == ApiProtocol::ChatCompletions;
+    if selector["type"] != "allowed_tools"
+        || selector.as_object()?.len() != if chat { 2 } else { 3 }
+    {
+        return None;
+    }
+    let selection = if chat {
+        let selection = &selector["allowed_tools"];
+        if selection.as_object()?.len() != 2 {
+            return None;
+        }
+        selection
+    } else {
+        selector
+    };
+    let choice = match selection["mode"].as_str()? {
+        "auto" => ToolChoice::Auto,
+        "required" => ToolChoice::Required,
+        _ => return None,
+    };
+    if prompt
+        .tool_choice
+        .as_ref()
+        .is_some_and(|typed| typed != &choice)
+    {
+        return None;
+    }
+    let names = selection["tools"]
+        .as_array()?
+        .iter()
+        .map(|entry| {
+            if entry["type"] != "function" || entry.as_object()?.len() != 2 {
+                return None;
+            }
+            if chat {
+                let function = &entry["function"];
+                if function.as_object()?.len() != 1 {
+                    return None;
+                }
+                function["name"].as_str()
+            } else {
+                entry["name"].as_str()
+            }
+        })
+        .collect::<Option<HashSet<_>>>()?;
+    if names.is_empty()
+        || names.iter().any(|name| {
+            name.is_empty()
+                || prompt
+                    .tools
+                    .iter()
+                    .filter(|tool| match tool {
+                        Tool::Function { name: declared, .. } => declared.as_str() == *name,
+                        Tool::ProviderDefined { .. } => false,
+                    })
+                    .count()
+                    != 1
+                || prompt.tools.iter().any(|tool| {
+                    matches!(tool, Tool::ProviderDefined { name: declared, .. } if declared.as_str() == *name)
+                })
+        })
+    {
+        return None;
+    }
+    Some(FunctionToolSelection { names, choice })
+}
+
 /// Check initial request projection losses without modifying source data or
 /// resolving credentials. Passing these rules is not a replay-authority proof
 /// or a certification of remaining codec or schema/model behavior.
@@ -139,28 +250,41 @@ pub fn request_admission(prompt: &Prompt, protocol: &ApiProtocol) -> ConversionR
             ConversionEffect::TaskSemantics,
         );
     }
+    let selected_tools = function_tool_selection(prompt, protocol);
+    if selected_tools.is_some() {
+        report.push_equivalent(
+            protocol,
+            ConversionLocation::ToolChoice,
+            ConversionReason::FunctionToolSelection,
+        );
+    } else if foreign_tool_choice(prompt, protocol).is_some() {
+        report.push_projection(
+            protocol,
+            ConversionLocation::ToolChoice,
+            ConversionReason::ToolChoiceUnrepresentable,
+            ConversionEffect::TaskSemantics,
+        );
+    }
     for (tool, definition) in prompt.tools.iter().enumerate() {
-        if let Tool::Function {
-            strict: Some(strict),
-            ..
-        } = definition
-            && matches!(protocol, ApiProtocol::Messages)
+        if selected_tools
+            .as_ref()
+            .is_some_and(|selection| !selection.includes(definition))
         {
-            let location = ConversionLocation::ToolDefinition { tool };
-            if *strict {
-                report.push_projection(
-                    protocol,
-                    location,
-                    ConversionReason::FunctionStrictUnrepresentable,
-                    ConversionEffect::TaskSemantics,
-                );
-            } else {
-                report.push_equivalent(
-                    protocol,
-                    location,
-                    ConversionReason::FunctionStrictDisabledByDefault,
-                );
+            continue;
+        }
+        if matches!(
+            definition,
+            Tool::Function {
+                strict: Some(false),
+                ..
             }
+        ) && matches!(protocol, ApiProtocol::Messages)
+        {
+            report.push_equivalent(
+                protocol,
+                ConversionLocation::ToolDefinition { tool },
+                ConversionReason::FunctionStrictDisabledByDefault,
+            );
         }
         let Tool::ProviderDefined { id, args, .. } = definition else {
             continue;
@@ -207,18 +331,36 @@ pub fn request_admission(prompt: &Prompt, protocol: &ApiProtocol) -> ConversionR
             name,
             description,
             strict,
-            ..
+            schema,
         }) = &prompt.response_format
     {
-        if name.is_some() || description.is_some() {
+        let description_fits = description.as_ref().is_none_or(|description| {
+            schema.as_object().is_some_and(|schema| {
+                schema
+                    .get("description")
+                    .is_none_or(|existing| existing.as_str() == Some(description))
+            })
+        });
+        if !description_fits {
             report.push_projection(
                 protocol,
                 ConversionLocation::ResponseFormat,
                 ConversionReason::ResponseFormatMetadataUnrepresentable,
-                ConversionEffect::Unknown,
+                ConversionEffect::TaskSemantics,
+            );
+        } else if name.is_some() || description.is_some() {
+            report.push_equivalent(
+                protocol,
+                ConversionLocation::ResponseFormat,
+                ConversionReason::ResponseFormatMetadataProjection,
             );
         }
-        if strict.is_some() {
+        let source = prompt.params.extra_protocol.as_ref();
+        let non_strict_by_default = matches!(
+            source,
+            Some(ApiProtocol::ChatCompletions | ApiProtocol::Responses)
+        );
+        if *strict == Some(false) || (strict.is_none() && non_strict_by_default) {
             report.push_projection(
                 protocol,
                 ConversionLocation::ResponseFormat,

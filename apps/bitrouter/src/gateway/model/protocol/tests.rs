@@ -1582,27 +1582,13 @@ fn messages_inbound_legacy_alias_does_not_disturb_output_config_siblings()
 fn messages_outbound_renders_admitted_output_config_format()
 -> crate::gateway::model::error::Result<()> {
     let adapter = adapter_for(ApiProtocol::Messages)?;
-    let mut prompt = sample_prompt_with_schema();
-    let report = request_projection_report(ApiProtocol::Messages, &prompt)?;
-    assert_eq!(report.issues.len(), 2);
-    if let Some(ResponseFormat::JsonSchema {
-        name,
-        description,
-        strict,
-        ..
-    }) = &mut prompt.response_format
-    {
-        *name = None;
-        *description = None;
-        *strict = None;
-    }
-    let rendered = adapter.render_request(&prompt)?;
+    let rendered = adapter.render_request(&sample_prompt_with_schema())?;
     assert_eq!(rendered["output_config"]["format"]["type"], "json_schema");
     assert_eq!(
         rendered["output_config"]["format"]["schema"]["properties"]["location"]["type"],
         "string"
     );
-    // A schema-only request has no metadata to omit on the native wire.
+    // Messages carries enforcement implicitly and has no separate name field.
     assert!(rendered["output_config"]["format"].get("name").is_none());
     assert!(rendered["output_config"]["format"].get("strict").is_none());
     Ok(())
@@ -7391,11 +7377,8 @@ fn function_tool_strict_projection_to_messages() -> crate::gateway::model::error
         provider_metadata: Default::default(),
     };
     let strict_prompt = prompt_with_tools(vec![tool(Some(true))]);
-    let report = request_projection_report(protocol.clone(), &strict_prompt)?;
-    assert_eq!(
-        report.issues[0].reason,
-        ConversionReason::FunctionStrictUnrepresentable
-    );
+    let rendered = adapter.render_request(&strict_prompt)?;
+    assert_eq!(rendered["tools"][0]["strict"], true);
 
     let mut non_strict_tool = tool(Some(false));
     if let Tool::Function {

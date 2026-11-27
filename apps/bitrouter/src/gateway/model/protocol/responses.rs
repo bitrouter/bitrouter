@@ -2377,6 +2377,8 @@ impl InboundAdapter for ResponsesAdapter {
 }
 
 fn render_responses_request(prompt: &Prompt) -> Result<serde_json::Value> {
+    let selection =
+        crate::gateway::model::conversion::function_tool_selection(prompt, &ApiProtocol::Responses);
     let mut input = Vec::new();
     for m in &prompt.messages {
         input.extend(render_message_items(m));
@@ -2393,7 +2395,12 @@ fn render_responses_request(prompt: &Prompt) -> Result<serde_json::Value> {
             prompt
                 .tools
                 .iter()
-                .map(render_responses_tool)
+                .filter(|tool| {
+                    selection
+                        .as_ref()
+                        .is_none_or(|selection| selection.includes(tool))
+                })
+                .map(|tool| render_responses_tool(tool, prompt.params.extra_protocol.as_ref()))
                 .collect::<Vec<_>>()
                 .into(),
         );
@@ -2430,12 +2437,19 @@ fn render_responses_request(prompt: &Prompt) -> Result<serde_json::Value> {
         let mut text = extra_value_for_protocol(&prompt.params, &ApiProtocol::Responses, "text")
             .and_then(|t| t.as_object().cloned())
             .unwrap_or_default();
-        text.insert("format".into(), render_responses_response_format(rf));
+        text.insert(
+            "format".into(),
+            render_responses_response_format(rf, prompt.params.extra_protocol.as_ref()),
+        );
         req.insert("text".into(), serde_json::Value::Object(text));
     }
     // Render the canonical tool_choice into Responses' native shape, before
     // the extras splat so it wins over any leftover `tool_choice`.
-    if let Some(tc) = &prompt.tool_choice {
+    if let Some(tc) = selection
+        .as_ref()
+        .map(|selection| &selection.choice)
+        .or(prompt.tool_choice.as_ref())
+    {
         req.insert("tool_choice".into(), render_responses_tool_choice(tc));
     }
     // Splat Responses-API extras (metadata, include, …) only for a native
@@ -2826,14 +2840,14 @@ fn parse_responses_tool(t: ResponsesTool) -> Option<Tool> {
 /// same-protocol round-trip; a foreign-provider id is preserved verbatim
 /// (faithful passthrough) so the upstream decides.
 /// <https://platform.openai.com/docs/api-reference/responses/create#responses-create-tools>
-fn render_responses_tool(tool: &Tool) -> serde_json::Value {
+fn render_responses_tool(tool: &Tool, source: Option<&ApiProtocol>) -> serde_json::Value {
     match tool {
         Tool::Function {
             name,
             description,
             parameters,
             strict,
-            ..
+            provider_metadata,
         } => {
             let mut obj = serde_json::Map::new();
             obj.insert("type".into(), "function".into());
@@ -2845,8 +2859,17 @@ fn render_responses_tool(tool: &Tool) -> serde_json::Value {
                     .map_or(serde_json::Value::Null, serde_json::Value::String),
             );
             obj.insert("parameters".into(), parameters.clone());
+            // Messages and Chat use non-strict tools by default. Responses
+            // can attempt strict mode when the flag is absent.
+            let strict = match source {
+                Some(ApiProtocol::Messages) => strict
+                    .or_else(|| super::messages::native_function_tool_strict(provider_metadata))
+                    .or(Some(false)),
+                Some(ApiProtocol::ChatCompletions) => strict.or(Some(false)),
+                _ => *strict,
+            };
             if let Some(strict) = strict {
-                obj.insert("strict".into(), (*strict).into());
+                obj.insert("strict".into(), strict.into());
             }
             serde_json::Value::Object(obj)
         }
@@ -2859,7 +2882,10 @@ fn render_responses_tool(tool: &Tool) -> serde_json::Value {
 /// under `text.format`. OpenAI requires `name`; default it. `description` is
 /// emitted only when the canonical slot carries it.
 /// <https://platform.openai.com/docs/api-reference/responses/create>
-fn render_responses_response_format(rf: &ResponseFormat) -> serde_json::Value {
+fn render_responses_response_format(
+    rf: &ResponseFormat,
+    source: Option<&ApiProtocol>,
+) -> serde_json::Value {
     let ResponseFormat::JsonSchema {
         name,
         description,
@@ -2877,8 +2903,11 @@ fn render_responses_response_format(rf: &ResponseFormat) -> serde_json::Value {
     if let Some(description) = description {
         obj.insert("description".into(), description.clone().into());
     }
-    if let Some(strict) = strict {
-        obj.insert("strict".into(), (*strict).into());
+    // A Messages JSON output schema already implies strict enforcement.
+    if let Some(strict) =
+        strict.or_else(|| (source == Some(&ApiProtocol::Messages)).then_some(true))
+    {
+        obj.insert("strict".into(), strict.into());
     }
     obj.insert("schema".into(), schema.clone());
     serde_json::Value::Object(obj)

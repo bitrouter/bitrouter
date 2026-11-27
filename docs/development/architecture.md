@@ -128,10 +128,19 @@ approval parts/reasons and omitted tool-result media/file IDs. Existing native-f
 tool declarations remain eligible; unknown cross-family translation and non-object
 argument loss are refused. Native continuity tokens cannot cross a wire that omits them. Native token
 presence/representation and local denial pairing are not complete authority proofs.
-Projection refuses strict guarantees, schema names/descriptions and file names
-that the selected codec would omit, plus tool-result error/denial status loss.
-Messages can omit a function tool's explicit `strict: false` because non-strict
-tool use is its default. The gateway records this as an equivalent conversion.
+Between Chat Completions, Responses, and Messages, a function allowlist
+projects to just the selected tool definitions with its original choice mode.
+Native selectors stay on their own wire. Foreign selectors without a faithful
+projection exclude that target before dispatch.
+Messages renders strict function tools with `strict: true`. It can omit an
+explicit opt-out because non-strict tool use is the default. OpenAI projections
+preserve Messages tool strictness, including an explicit opt-out when the
+Responses default could otherwise attempt enforcement.
+Messages JSON-schema output implies strict enforcement. OpenAI projections
+render that guarantee explicitly, and Messages can represent an OpenAI strict
+output format using the schema and its description annotation. An OpenAI
+non-strict output mode or a conflicting schema description excludes Messages.
+Unrepresentable file names and tool-result error/denial status remain refusals.
 Google Chat admits a conservative target-scoped schema/option subset without rewriting constraints. Explicit cache resources and unverified strict/schema metadata are refused. A suppressed paired denial cannot lose its supplied reason.
 Malformed argument strings cannot become empty objects on Messages. Chat and
 Messages preserve text-only tool-result arrays, and Chat preserves multiple text parts.

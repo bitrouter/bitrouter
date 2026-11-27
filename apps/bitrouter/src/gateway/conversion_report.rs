@@ -95,6 +95,10 @@ pub enum ConversionReason {
     ProviderToolDefinitionCompatibilityUnknown,
     /// A tagged denial would disappear without its denied approval response.
     ApprovalDenialUnpaired,
+    /// A foreign tool selector has no faithful projection to the selected wire.
+    ToolChoiceUnrepresentable,
+    /// A tool allowlist is represented by the same set of callable definitions.
+    FunctionToolSelection,
     /// The target cannot preserve required function-tool schema enforcement.
     FunctionStrictUnrepresentable,
     /// The target defaults to non-strict function tools, so explicit false is omitted.
@@ -103,7 +107,9 @@ pub enum ConversionReason {
     ToolSchemaProjectionUnclassified,
     /// A structured-output name or description has no target slot.
     ResponseFormatMetadataUnrepresentable,
-    /// An explicit structured-output strict flag has no faithful target slot.
+    /// Structured-output metadata is represented by an annotation or an implicit name.
+    ResponseFormatMetadataProjection,
+    /// The target cannot preserve the source's structured-output enforcement mode.
     ResponseFormatStrictUnrepresentable,
     /// A filename omission has not been classified as nonessential.
     FileNameOmissionUnclassified,
@@ -233,6 +239,8 @@ pub enum ConversionLocation {
     },
     /// The canonical structured-output requirement.
     ResponseFormat,
+    /// A request's constraint on which tools the model may call.
+    ToolChoice,
     /// Target-specific generation controls in the source request.
     GenerationOptions,
 }
