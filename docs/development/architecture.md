@@ -128,15 +128,17 @@ approval parts/reasons and omitted tool-result media/file IDs. Existing native-f
 tool declarations remain eligible; unknown cross-family translation and non-object
 argument loss are refused. Native continuity tokens cannot cross a wire that omits them. Native token
 presence/representation and local denial pairing are not complete authority proofs.
-Projection now also refuses explicit strict flags, schema names/descriptions and file
-names that the selected codec would omit, plus tool-result error/denial status loss.
+Projection refuses strict guarantees, schema names/descriptions and file names
+that the selected codec would omit, plus tool-result error/denial status loss.
+Messages can omit a function tool's explicit `strict: false` because non-strict
+tool use is its default. The gateway records this as an equivalent conversion.
 Google Chat admits a conservative target-scoped schema/option subset without rewriting constraints. Explicit cache resources and unverified strict/schema metadata are refused. A suppressed paired denial cannot lose its supplied reason.
 Malformed argument strings cannot become empty objects on Messages. Chat and
 Messages preserve text-only tool-result arrays, and Chat preserves multiple text parts.
 Unclassified Chat ordering/reasoning concatenation and selected three-wire ingress
 attribute/boundary losses are refused. Value-preserving JSON encoding into
 string-only tool slots remains eligible; error/denial status is checked separately.
-`ConversionReport.admitted` retains classified JSON encoding separately from refusal issues.
+`ConversionReport.admitted` retains equivalent conversions separately from refusal issues.
 Selected-target preparation can return
 the report through `ModelClient::render_request_with_report`; executor preflight returns
 that assessment. The gateway rechecks refusals and invokes `on_conversion_admitted` for
@@ -532,12 +534,10 @@ BITROUTER_TEST_BEHAVIOR_UPSTREAM="$PWD/target/debug/bitrouter-behavior-upstream"
 ```
 
 The deterministic matrix drives Pi and the Vercel AI SDK through streaming
-Responses and Messages ingress, across both outbound protocols. Seven cases
-complete a tool loop. The AI SDK Responses-to-Messages case verifies that the
-gateway rejects the SDK's explicit tool `strict: false` before upstream
-dispatch, as Messages projection currently requires the flag to be absent.
-The suite uses `helpers/behavior-upstream` for the stateful wiremock model
-endpoint. CI supplies the prebuilt gateway and fixture from `build-gateway`.
+Responses and Messages ingress, across both outbound protocols. All eight cases
+complete a tool loop. The suite uses `helpers/behavior-upstream` for the
+stateful wiremock model endpoint. CI supplies the prebuilt gateway and fixture
+from `build-gateway`.
 
 The `behavior-live` workflow on main builds the revision once and runs Pi and
 Vercel AI SDK against DeepSeek's official Responses and Messages APIs using

@@ -95,8 +95,10 @@ pub enum ConversionReason {
     ProviderToolDefinitionCompatibilityUnknown,
     /// A tagged denial would disappear without its denied approval response.
     ApprovalDenialUnpaired,
-    /// The target omits an explicitly supplied function-tool strict flag.
+    /// The target cannot preserve required function-tool schema enforcement.
     FunctionStrictUnrepresentable,
+    /// The target defaults to non-strict function tools, so explicit false is omitted.
+    FunctionStrictDisabledByDefault,
     /// The actual tool-schema rewrite has no proven equivalent representation.
     ToolSchemaProjectionUnclassified,
     /// A structured-output name or description has no target slot.

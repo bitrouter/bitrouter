@@ -52,9 +52,6 @@ function assistantText(message: Record<string, unknown>): string {
 for (const client of CLIENTS) {
   for (const inbound of PROTOCOLS) {
     for (const outbound of PROTOCOLS) {
-      if (client === "ai-sdk" && inbound === "responses" && outbound === "messages") {
-        continue;
-      }
       test(`${client}: streaming ${inbound} inbound → ${outbound} upstream`, async () => {
         const run = await BehaviorRun.start(inbound, outbound);
         try {
@@ -117,20 +114,3 @@ for (const client of CLIENTS) {
     }
   }
 }
-
-test("ai-sdk: Responses tool strict flag is refused before Messages dispatch", async () => {
-  const run = await BehaviorRun.start("responses", "messages");
-  try {
-    await expect(run.runAiSdk()).rejects.toMatchObject({
-      statusCode: 400,
-      data: { error: { code: "model_conversion_incompatible" } },
-      requestBodyValues: {
-        tools: [expect.objectContaining({ name: "read_fixture", strict: false })],
-      },
-    });
-    expect(run.requests()).toEqual([]);
-    expect(run.upstreamErrors()).toEqual([]);
-  } finally {
-    await run.dispose();
-  }
-});

@@ -7373,32 +7373,64 @@ fn function_tool_strict_omitted_when_absent() -> crate::gateway::model::error::R
     Ok(())
 }
 
-/// Explicit strict flags are refused on wires that omit them; the native
-/// declaration without that flag still round-trips.
+/// Messages can use its default for non-strict tools. Explicit enforcement
+/// remains required when requested by the canonical tool.
 #[test]
-fn function_tool_strict_refused_on_anthropic_and_gemini() -> crate::gateway::model::error::Result<()>
-{
+fn function_tool_strict_projection_to_messages() -> crate::gateway::model::error::Result<()> {
+    use crate::gateway::conversion_report::{
+        ConversionDisposition, ConversionEffect, ConversionLocation, ConversionReason,
+    };
+
+    let protocol = ApiProtocol::Messages;
+    let adapter = adapter_for(protocol.clone())?;
+    let tool = |strict| Tool::Function {
+        name: "get_weather".to_string(),
+        description: Some("desc".to_string()),
+        parameters: serde_json::json!({"type":"object"}),
+        strict,
+        provider_metadata: Default::default(),
+    };
+    let strict_prompt = prompt_with_tools(vec![tool(Some(true))]);
+    let report = request_projection_report(protocol.clone(), &strict_prompt)?;
+    assert_eq!(
+        report.issues[0].reason,
+        ConversionReason::FunctionStrictUnrepresentable
+    );
+
+    let mut non_strict_tool = tool(Some(false));
+    if let Tool::Function {
+        provider_metadata, ..
+    } = &mut non_strict_tool
     {
-        let protocol = ApiProtocol::Messages;
-        let mut prompt = prompt_with_tools(vec![Tool::Function {
-            name: "get_weather".to_string(),
-            description: Some("desc".to_string()),
-            parameters: serde_json::json!({"type":"object"}),
-            strict: Some(true),
-            provider_metadata: Default::default(),
-        }]);
-        let report = request_projection_report(protocol.clone(), &prompt)?;
-        assert_eq!(
-            report.issues[0].reason,
-            crate::gateway::conversion_report::ConversionReason::FunctionStrictUnrepresentable
+        set_provider_metadata(
+            provider_metadata,
+            "anthropic",
+            "toolExtra",
+            serde_json::json!({"strict": true}),
         );
-        if let Tool::Function { strict, .. } = &mut prompt.tools[0] {
-            *strict = None;
-        }
-        let adapter = adapter_for(protocol)?;
-        let rendered = adapter.render_request(&prompt)?;
-        assert_eq!(adapter.parse_request(rendered)?.tools, prompt.tools);
     }
+    let non_strict_prompt = prompt_with_tools(vec![non_strict_tool]);
+    let report =
+        crate::gateway::model::conversion::request_admission(&non_strict_prompt, &protocol);
+    assert!(report.issues.is_empty());
+    assert_eq!(report.admitted.len(), 1);
+    assert_eq!(
+        report.admitted[0].location,
+        ConversionLocation::ToolDefinition { tool: 0 }
+    );
+    assert_eq!(
+        report.admitted[0].reason,
+        ConversionReason::FunctionStrictDisabledByDefault
+    );
+    assert_eq!(
+        report.admitted[0].effect,
+        ConversionEffect::EquivalentRepresentation
+    );
+    assert_eq!(report.admitted[0].disposition, ConversionDisposition::Allow);
+
+    let rendered = adapter.render_request(&non_strict_prompt)?;
+    assert!(rendered["tools"][0].get("strict").is_none());
+    assert_eq!(adapter.parse_request(rendered)?.tools, vec![tool(None)]);
     Ok(())
 }
 // --- provider-defined tools: same-protocol round-trips ---

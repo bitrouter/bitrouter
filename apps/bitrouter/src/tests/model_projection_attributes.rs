@@ -24,25 +24,31 @@ fn function(parameters: Value, strict: Option<bool>) -> Tool {
 }
 
 #[test]
-fn explicit_function_strict_flags_need_a_faithful_target_slot() -> TestResult {
+fn function_strict_preserves_required_enforcement_and_target_defaults() -> TestResult {
     for strict in [true, false] {
         let mut source = prompt()?;
         source.tools = vec![function(json!({"type":"object"}), Some(strict))];
         for (protocol, adapter) in adapters() {
-            if matches!(protocol, ApiProtocol::Messages) {
-                let report = refusal(adapter.as_ref(), &source)?;
-                assert_eq!(
-                    report.issues[0].location,
-                    ConversionLocation::ToolDefinition { tool: 0 }
-                );
-            } else {
-                let body = adapter.render_request(&source)?;
-                let flag = if protocol == ApiProtocol::Responses {
-                    &body["tools"][0]["strict"]
-                } else {
-                    &body["tools"][0]["function"]["strict"]
-                };
-                assert_eq!(flag, strict);
+            match protocol {
+                ApiProtocol::Messages if strict => {
+                    let report = refusal(adapter.as_ref(), &source)?;
+                    assert_eq!(
+                        report.issues[0].location,
+                        ConversionLocation::ToolDefinition { tool: 0 }
+                    );
+                }
+                ApiProtocol::Messages => {
+                    let body = adapter.render_request(&source)?;
+                    assert!(body["tools"][0].get("strict").is_none());
+                }
+                ApiProtocol::Responses => {
+                    let body = adapter.render_request(&source)?;
+                    assert_eq!(body["tools"][0]["strict"], strict);
+                }
+                _ => {
+                    let body = adapter.render_request(&source)?;
+                    assert_eq!(body["tools"][0]["function"]["strict"], strict);
+                }
             }
         }
     }

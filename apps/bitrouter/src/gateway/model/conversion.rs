@@ -140,16 +140,27 @@ pub fn request_admission(prompt: &Prompt, protocol: &ApiProtocol) -> ConversionR
         );
     }
     for (tool, definition) in prompt.tools.iter().enumerate() {
-        if let Tool::Function { strict, .. } = definition
-            && strict.is_some()
+        if let Tool::Function {
+            strict: Some(strict),
+            ..
+        } = definition
             && matches!(protocol, ApiProtocol::Messages)
         {
-            report.push_projection(
-                protocol,
-                ConversionLocation::ToolDefinition { tool },
-                ConversionReason::FunctionStrictUnrepresentable,
-                ConversionEffect::TaskSemantics,
-            );
+            let location = ConversionLocation::ToolDefinition { tool };
+            if *strict {
+                report.push_projection(
+                    protocol,
+                    location,
+                    ConversionReason::FunctionStrictUnrepresentable,
+                    ConversionEffect::TaskSemantics,
+                );
+            } else {
+                report.push_equivalent(
+                    protocol,
+                    location,
+                    ConversionReason::FunctionStrictDisabledByDefault,
+                );
+            }
         }
         let Tool::ProviderDefined { id, args, .. } = definition else {
             continue;

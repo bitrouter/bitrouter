@@ -377,7 +377,7 @@ fn parse_messages_tool(mut t: MessagesTool) -> Option<Tool> {
         name,
         description: t.description,
         parameters: t.input_schema,
-        // Anthropic client tools carry no `strict` slot.
+        // The native strict option is retained in provider metadata.
         strict: None,
         provider_metadata,
     })
@@ -387,8 +387,8 @@ fn parse_messages_tool(mut t: MessagesTool) -> Option<Tool> {
 ///
 /// A [`Tool::Function`] becomes `{name, description?, input_schema}` plus any
 /// residual wire fields carried under [`ANTHROPIC_TOOL_EXTRA`] (`defer_loading`,
-/// `input_examples`, …). The current Messages serializer has no `strict` slot, so
-/// [`Tool::Function::strict`] must be absent under shared request admission.
+/// `input_examples`, …). Shared request admission allows omitting canonical
+/// `strict: false` because Messages defaults to non-strict tool use.
 /// A [`Tool::ProviderDefined`] uses [`provider_defined_native`] after admission
 /// has selected its native family; foreign translation is refused before this
 /// serializer. Native schema/model validation remains a separate requirement.
@@ -399,7 +399,7 @@ fn render_messages_tool(tool: &Tool) -> serde_json::Value {
             name,
             description,
             parameters,
-            strict: _,
+            strict,
             provider_metadata,
         } => {
             let mut obj = serde_json::json!({
@@ -410,6 +410,12 @@ fn render_messages_tool(tool: &Tool) -> serde_json::Value {
             // Restore the unmodelled wire fields (`defer_loading`, …) this
             // adapter lifted on parse, then the `cache_control` breakpoint.
             apply_tool_extra(&mut obj, provider_metadata);
+            // An explicit canonical opt-out also overrides any retained native flag.
+            if *strict == Some(false)
+                && let Some(tool) = obj.as_object_mut()
+            {
+                tool.remove("strict");
+            }
             apply_cache_control(&mut obj, provider_metadata);
             obj
         }
