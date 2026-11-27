@@ -2159,9 +2159,8 @@ async fn e2e_mcp_aggregate_and_sse_endpoints() {
 //   Chat Completions:      response_format.json_schema.schema
 //   Responses: text.format.schema
 //   Anthropic:        output_config.format.schema
-// OpenAI name/strict metadata is refused before upstream HTTP on Messages.
-// The two named OpenAI-to-Messages edges are refused. Messages supplies the
-// schema-only positive cells.
+// All nine edges preserve strict schema enforcement. OpenAI-to-Messages
+// also verifies that non-strict output is refused before upstream HTTP.
 //
 // Capability-gate coverage (a `Custom` outbound adapter without
 // `supports_response_format()` produces a 400) lives at the SDK level in
@@ -2457,6 +2456,7 @@ fn assert_native_schema(outbound: Outbound, body: &Value) {
                 "openai chat outbound must carry the schema under \
                  response_format.json_schema.schema; body: {body}",
             );
+            assert_eq!(body["response_format"]["json_schema"]["strict"], true);
             // Chat Completions requires `name`; the renderer must supply a default
             // when the inbound (Anthropic, Google) didn't carry one. Either
             // the caller-supplied name or the default `"response"` is fine.
@@ -2475,7 +2475,7 @@ fn assert_native_schema(outbound: Outbound, body: &Value) {
                 "anthropic outbound must carry the schema under \
                  output_config.format.schema; body: {body}",
             );
-            // Admitted common-subset requests have no name/strict to omit.
+            // Messages carries enforcement implicitly and has no separate format name.
             assert!(
                 body["output_config"]["format"].get("name").is_none(),
                 "anthropic outbound must NOT carry `name` (not in GA shape); body: {body}",
@@ -2500,6 +2500,7 @@ fn assert_native_schema(outbound: Outbound, body: &Value) {
                 body["text"]["format"]["schema"], want,
                 "responses outbound must carry the schema under text.format.schema; body: {body}",
             );
+            assert_eq!(body["text"]["format"]["strict"], true);
             assert!(
                 body["text"]["format"]["name"].is_string(),
                 "responses outbound must always set a name; body: {body}",
@@ -2552,6 +2553,12 @@ async fn run_cell(inbound: Inbound, outbound: Outbound) -> anyhow::Result<()> {
     {
         for streamed in [false, true] {
             let mut incompatible = body.clone();
+            let format = match inbound {
+                Inbound::ChatCompletions => &mut incompatible["response_format"]["json_schema"],
+                Inbound::Responses => &mut incompatible["text"]["format"],
+                _ => return Err(anyhow::anyhow!("unexpected non-strict schema source")),
+            };
+            format["strict"] = false.into();
             incompatible["stream"] = streamed.into();
             let response = match inbound {
                 Inbound::ChatCompletions => {
@@ -2578,11 +2585,10 @@ async fn run_cell(inbound: Inbound, outbound: Outbound) -> anyhow::Result<()> {
                 "incompatible schema must be refused before HTTP"
             );
         }
-    } else {
-        post_inbound(&server, inbound, model, &body).await;
-        let upstream_body = captured_outbound(&upstream, outbound).await;
-        assert_native_schema(outbound, &upstream_body);
     }
+    post_inbound(&server, inbound, model, &body).await;
+    let upstream_body = captured_outbound(&upstream, outbound).await;
+    assert_native_schema(outbound, &upstream_body);
 
     for artifact in identity_artifacts {
         assert!(

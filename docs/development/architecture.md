@@ -130,8 +130,8 @@ argument loss are refused. Native continuity tokens cannot cross a wire that omi
 presence/representation and local denial pairing are not complete authority proofs.
 Between Chat Completions, Responses, and Messages, a function allowlist
 projects to just the selected tool definitions with its original choice mode.
-Native selectors stay on their own wire. Foreign selectors without a faithful
-projection exclude that target before dispatch.
+Native selectors stay on their own wire. A foreign function allowlist without a
+faithful projection excludes that target before dispatch.
 Messages renders strict function tools with `strict: true`. It can omit an
 explicit opt-out because non-strict tool use is the default. OpenAI projections
 preserve Messages tool strictness, including an explicit opt-out when the

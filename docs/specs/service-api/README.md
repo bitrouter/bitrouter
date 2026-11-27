@@ -936,8 +936,10 @@ object. Provider-specific interpretation remains the provider's contract.
 Apply canonical values first, then supplemental parameters, before retained
 configuration defaults and ordinary ordered checks. A parsed caller extra of
 the same name suppresses a supplemental default globally, including explicit
-null; that caller extra still renders only on its source protocol. Existing typed
-caller values, including false, win. Valid boolean `store` and
+null; opaque caller extras still render only on their source protocol. A caller
+function allowlist can project to an equivalent selection on Chat Completions,
+Responses, or Messages. A target with no faithful projection is excluded.
+Existing typed caller values, including false, win. Valid boolean `store` and
 `parallel_tool_calls` fill their existing typed slots. Valid `stream_options`
 fills the existing Chat-only typed options. Invalid/null special values fall
 through to the supplemental map without coercion. Other fields, including raw

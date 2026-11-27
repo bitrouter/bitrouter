@@ -122,7 +122,7 @@ impl ReportAdmission for ConversionReport {
 /// This selector has wire-specific syntax on the two OpenAI APIs. Keep it
 /// unchanged on its original wire and project it only between the
 /// three standard generation wires.
-fn foreign_tool_choice<'a>(
+fn foreign_tool_allowlist<'a>(
     prompt: &'a Prompt,
     target: &ApiProtocol,
 ) -> Option<(&'a ApiProtocol, &'a serde_json::Value)> {
@@ -140,7 +140,7 @@ fn foreign_tool_choice<'a>(
         return None;
     }
     let selector = prompt.params.extra.get("tool_choice")?;
-    (!selector.is_null()).then_some((source, selector))
+    (selector["type"] == "allowed_tools").then_some((source, selector))
 }
 
 pub(crate) struct FunctionToolSelection<'a> {
@@ -160,11 +160,9 @@ pub(crate) fn function_tool_selection<'a>(
     prompt: &'a Prompt,
     target: &ApiProtocol,
 ) -> Option<FunctionToolSelection<'a>> {
-    let (source, selector) = foreign_tool_choice(prompt, target)?;
+    let (source, selector) = foreign_tool_allowlist(prompt, target)?;
     let chat = *source == ApiProtocol::ChatCompletions;
-    if selector["type"] != "allowed_tools"
-        || selector.as_object()?.len() != if chat { 2 } else { 3 }
-    {
+    if selector.as_object()?.len() != if chat { 2 } else { 3 } {
         return None;
     }
     let selection = if chat {
@@ -257,7 +255,7 @@ pub fn request_admission(prompt: &Prompt, protocol: &ApiProtocol) -> ConversionR
             ConversionLocation::ToolChoice,
             ConversionReason::FunctionToolSelection,
         );
-    } else if foreign_tool_choice(prompt, protocol).is_some() {
+    } else if foreign_tool_allowlist(prompt, protocol).is_some() {
         report.push_projection(
             protocol,
             ConversionLocation::ToolChoice,
