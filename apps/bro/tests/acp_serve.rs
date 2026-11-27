@@ -5,7 +5,13 @@ mod binary;
 mod support;
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
-use std::{path::Path, process::Stdio, time::Duration};
+use std::{
+    io::ErrorKind,
+    net::{SocketAddr, TcpListener},
+    path::Path,
+    process::Stdio,
+    time::Duration,
+};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::time::timeout;
@@ -304,14 +310,26 @@ async fn manager_eof_reaps_adapter_descendant_during_unanswered_prompt() -> Resu
     let session = manager.new_session().await?;
     manager.write(json!({"jsonrpc":"2.0","id":"p","method":"session/prompt","params":prompt(&session,"hang-with-child")})).await?;
     wait_file(&manager.dir.path().join("descendant-ready")).await?;
-    let socket = std::fs::read_to_string(manager.dir.path().join("descendant-ready"))?;
+    let socket: SocketAddr =
+        std::fs::read_to_string(manager.dir.path().join("descendant-ready"))?.parse()?;
     ensure!(
-        std::net::TcpListener::bind(&socket).is_err(),
+        matches!(TcpListener::bind(socket), Err(error) if error.kind() == ErrorKind::AddrInUse),
         "fixture did not hold its socket"
     );
     let dir = manager.disconnect().await?;
-    let _released =
-        std::net::TcpListener::bind(socket).context("adapter descendant still owns its socket")?;
+    // BRO waits for the adapter; the kernel can still be closing the descendant's socket.
+    let _released = timeout(Duration::from_secs(2), async {
+        loop {
+            match TcpListener::bind(socket) {
+                Err(error) if error.kind() == ErrorKind::AddrInUse => {
+                    tokio::time::sleep(Duration::from_millis(15)).await;
+                }
+                result => return result,
+            }
+        }
+    })
+    .await
+    .context("adapter descendant still owns its socket")??;
     std::fs::write(dir.path().join("release"), "release")?;
     tokio::time::sleep(Duration::from_millis(300)).await;
     ensure!(
