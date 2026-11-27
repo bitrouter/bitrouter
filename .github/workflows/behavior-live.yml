@@ -56,8 +56,6 @@ jobs:
     timeout-minutes: 45
     env:
       BITROUTER_TEST_GATEWAY_BINARY: ${{ github.workspace }}/behavior-bin/bitrouter
-      BITROUTER_LIVE_OPENAI_MODEL: ${{ vars.BITROUTER_LIVE_OPENAI_MODEL }}
-      BITROUTER_LIVE_ANTHROPIC_MODEL: ${{ vars.BITROUTER_LIVE_ANTHROPIC_MODEL }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/download-artifact@v7
@@ -77,19 +75,9 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - name: Install behavior dependencies
         run: bun install --frozen-lockfile --ignore-scripts
-      - name: Require live behavior inputs
+      - name: Run live agent behavior against DeepSeek
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: |
-          test -n "$OPENAI_API_KEY"
-          test -n "$ANTHROPIC_API_KEY"
-          test -n "$BITROUTER_LIVE_OPENAI_MODEL"
-          test -n "$BITROUTER_LIVE_ANTHROPIC_MODEL"
-      - name: Run live agent behavior
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DEEPSEEK_BEHAVIOR_API_KEY: ${{ secrets.DEEPSEEK_BEHAVIOR_API_KEY }}
         run: |
           export BITROUTER_TEST_NODE="$(command -v node)"
           bun run --bun test:behavior:live

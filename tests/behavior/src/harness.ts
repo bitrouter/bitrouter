@@ -480,8 +480,7 @@ function cleanEnvironment(home: string): NodeJS.ProcessEnv {
   return environment;
 }
 
-export type LiveProvider = "openai" | "anthropic";
-
+const LIVE_MODEL = "deepseek-flash";
 const LIVE_RESULT = "BITROUTER_LIVE_OK";
 
 export class LiveBehaviorRun {
@@ -491,16 +490,11 @@ export class LiveBehaviorRun {
     readonly agentDir: string,
     readonly workspace: string,
     readonly inbound: Protocol,
-    readonly modelId: string,
     readonly bitrouter: ChildProcessWithoutNullStreams,
   ) {}
 
-  static async start(
-    provider: LiveProvider,
-    inbound: Protocol,
-    modelId: string,
-    apiKey: string,
-  ): Promise<LiveBehaviorRun> {
+  static async start(inbound: Protocol): Promise<LiveBehaviorRun> {
+    const apiKey = requiredEnvironment("DEEPSEEK_BEHAVIOR_API_KEY");
     const root = await mkdtemp(join(tmpdir(), "bitrouter-behavior-live-"));
     const workspace = join(root, "workspace");
     const agentDir = join(root, "pi-agent");
@@ -510,7 +504,9 @@ export class LiveBehaviorRun {
     const port = await freePort();
     const endpoint = `http://127.0.0.1:${port}`;
     const baseUrl =
-      provider === "openai" ? "https://api.openai.com/v1" : "https://api.anthropic.com/v1";
+      inbound === "responses"
+        ? "https://api.deepseek.com"
+        : "https://api.deepseek.com/anthropic/v1";
     const configPath = join(root, "bitrouter.yaml");
     await writeFile(
       configPath,
@@ -525,13 +521,13 @@ export class LiveBehaviorRun {
         "database:",
         "  url: 'sqlite://bitrouter.db?mode=rwc'",
         "providers:",
-        `  ${provider}:`,
+        "  deepseek:",
         `    api_base: ${JSON.stringify(baseUrl)}`,
-        `    api_key: ${JSON.stringify(apiKey)}`,
+        "    api_key: ${DEEPSEEK_BEHAVIOR_API_KEY}",
         "    api_protocol:",
         `      - '*': ${inbound}`,
         "    models:",
-        `      - id: ${JSON.stringify(modelId)}`,
+        `      - id: ${LIVE_MODEL}`,
         "",
       ].join("\n"),
     );
@@ -540,7 +536,7 @@ export class LiveBehaviorRun {
       ["serve", "--config", configPath],
       {
         cwd: root,
-        env: cleanEnvironment(root),
+        env: { ...cleanEnvironment(root), DEEPSEEK_BEHAVIOR_API_KEY: apiKey },
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
@@ -559,7 +555,7 @@ export class LiveBehaviorRun {
                     ? "openai-responses"
                     : "anthropic-messages",
                 apiKey: "local-placeholder",
-                models: [{ id: modelId, name: "Live behavior fixture" }],
+                models: [{ id: LIVE_MODEL, name: "DeepSeek Flash" }],
               },
             },
           },
@@ -578,7 +574,6 @@ export class LiveBehaviorRun {
       agentDir,
       workspace,
       inbound,
-      modelId,
       bitrouter,
     );
   }
@@ -599,7 +594,7 @@ export class LiveBehaviorRun {
         "--provider",
         "bitrouter-live",
         "--model",
-        this.modelId,
+        LIVE_MODEL,
         "--tools",
         "write",
         "--no-approve",
@@ -676,15 +671,20 @@ export class LiveBehaviorRun {
         ? createOpenAI({
             baseURL: `${this.endpoint}/v1`,
             apiKey: "local-placeholder",
-          }).responses(this.modelId)
+          }).responses(LIVE_MODEL)
         : createAnthropic({
             baseURL: `${this.endpoint}/v1`,
             apiKey: "local-placeholder",
-          }).messages(this.modelId);
+          }).messages(LIVE_MODEL);
     const result = streamText({
       model,
       maxRetries: 0,
       maxOutputTokens: 4_096,
+      // Use stateless tool history without provider-owned reasoning items.
+      providerOptions:
+        this.inbound === "responses"
+          ? { openai: { store: false, forceReasoning: true, reasoningEffort: "none" } }
+          : undefined,
       stopWhen: isStepCount(4),
       tools: {
         write_result: tool({

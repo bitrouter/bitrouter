@@ -1,48 +1,14 @@
 import { expect, test } from "vitest";
-import {
-  LiveBehaviorRun,
-  type LiveProvider,
-  type Protocol,
-} from "../src/harness";
+import { LiveBehaviorRun, type Protocol } from "../src/harness";
 
 const LIVE_RESULT = "BITROUTER_LIVE_OK";
 
-const CASES: Array<{
-  provider: LiveProvider;
-  protocol: Protocol;
-  keyEnv: "OPENAI_API_KEY" | "ANTHROPIC_API_KEY";
-  modelEnv: "BITROUTER_LIVE_OPENAI_MODEL" | "BITROUTER_LIVE_ANTHROPIC_MODEL";
-}> = [
-  {
-    provider: "openai",
-    protocol: "responses",
-    keyEnv: "OPENAI_API_KEY",
-    modelEnv: "BITROUTER_LIVE_OPENAI_MODEL",
-  },
-  {
-    provider: "anthropic",
-    protocol: "messages",
-    keyEnv: "ANTHROPIC_API_KEY",
-    modelEnv: "BITROUTER_LIVE_ANTHROPIC_MODEL",
-  },
-];
+const PROTOCOLS: Protocol[] = ["responses", "messages"];
 
 for (const client of ["pi", "ai-sdk"] as const) {
-  for (const entry of CASES) {
-    test(`${client}: live ${entry.provider} ${entry.protocol} writes the result`, async () => {
-      const apiKey = process.env[entry.keyEnv];
-      const model = process.env[entry.modelEnv];
-      if (!apiKey || !model) {
-        throw new Error(
-          `${entry.keyEnv} and ${entry.modelEnv} are required for live behavior tests`,
-        );
-      }
-      const run = await LiveBehaviorRun.start(
-        entry.provider,
-        entry.protocol,
-        model,
-        apiKey,
-      );
+  for (const protocol of PROTOCOLS) {
+    test(`${client}: live DeepSeek ${protocol} writes the result`, async () => {
+      const run = await LiveBehaviorRun.start(protocol);
       try {
         if (client === "pi") {
           const result = await run.runPi();

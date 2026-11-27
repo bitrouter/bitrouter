@@ -539,14 +539,13 @@ dispatch, as Messages projection currently requires the flag to be absent.
 The suite uses `helpers/behavior-upstream` for the stateful wiremock model
 endpoint. CI supplies the prebuilt gateway and fixture from `build-gateway`.
 
-The `behavior-live` workflow on main builds the revision once and runs the same
-clients against configured OpenAI and Anthropic models. A successful
-`behavior-live` check for the commit is required before release-plz, tag
-Release, and tag Distribution acceptance can proceed. Live inputs are
-`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
-`BITROUTER_LIVE_OPENAI_MODEL`, and `BITROUTER_LIVE_ANTHROPIC_MODEL`. Run it
-locally with the same `BITROUTER_TEST_NODE` and gateway path variables via
-`bun run --bun test:behavior:live`.
+The `behavior-live` workflow on main builds the revision once and runs Pi and
+Vercel AI SDK against DeepSeek's official Responses and Messages APIs using
+`deepseek-flash`. A successful `behavior-live` check for the commit is required
+before release-plz, tag Release, and tag Distribution acceptance can proceed.
+The workflow reads the `DEEPSEEK_BEHAVIOR_API_KEY` repository secret. To run
+locally, set the same environment variable along with `BITROUTER_TEST_NODE`
+and `BITROUTER_TEST_GATEWAY_BINARY`, then run `bun run --bun test:behavior:live`.
 
 ### HTTP/2 feature isolation
 
