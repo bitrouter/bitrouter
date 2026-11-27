@@ -168,11 +168,21 @@ jobs:
         PROFILE_FEATURES: ${{ matrix.features }}
       run: |
         cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --lib "tests::onboarding::"
-    - name: verify unavailable telemetry before startup side effects
+    - name: verify behavior with optional gateway features disabled
       if: matrix.features == ''
       env:
-        PROFILE_FEATURES: ${{ matrix.features }}
-      run: cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --lib "tests::telemetry_disabled::" --jobs 2 -- --test-threads=2
+        FILTER: >-
+          test(/^tests::telemetry_disabled::/) |
+          test(=assemble::otel_config_tests::disabled_first_party_block_does_not_hide_generic_export) |
+          test(=assemble::trajectory_assembly_tests::no_core_cleans_untracked_observation_without_eval_writes) |
+          test(=cli::shared_tests::bootstrap_rejects_unavailable_feature_before_reading_any_inputs) |
+          test(=config::shared_process::tests::unavailable_mode_fails_before_environment_lookup) |
+          test(=tenancy::tests::configuration::gateway_rejects_activation_and_audit_without_eval_publication) |
+          test(=tests::configuration_state::unavailable_export_reload_preserves_live_configuration) |
+          (binary(=mcp_config) & test(=minimum_gateway_refuses_to_save_unavailable_mcp_servers))
+      run: |
+        cargo nextest run --locked -p bitrouter --no-default-features --lib --test mcp_config \
+          --build-jobs 2 --test-threads 2 --no-tests fail -E "$FILTER"
     - name: verify host shutdown draining
       if: matrix.features == '' || matrix.features == 'eval-publication'
       env:

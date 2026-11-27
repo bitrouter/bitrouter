@@ -23,7 +23,6 @@ jobs:
       shared: ${{ steps.paths.outputs.shared }}
       registry: ${{ steps.paths.outputs.registry }}
       cargo-args: ${{ steps.paths.outputs.cargo-args }}
-      bro-build-runners: ${{ steps.paths.outputs.bro-build-runners }}
     steps:
     - uses: actions/checkout@v6
       with:
@@ -67,7 +66,6 @@ jobs:
         fi
 
         cargo_args=()
-        bro_build_runners='["ubuntu-24.04"]'
         if [[ "$shared" == true ]]; then
           bro=true
           gateway=true
@@ -76,11 +74,8 @@ jobs:
           if [[ "$bro" == true ]]; then cargo_args+=(-p bitrouter-bro); fi
           if [[ "$gateway" == true ]]; then cargo_args+=(-p bitrouter); fi
         fi
-        if [[ "$bro" == true ]]; then
-          bro_build_runners='["ubuntu-24.04","macos-latest","windows-latest"]'
-        fi
         printf '%s\n' "bro=$bro" "gateway=$gateway" "shared=$shared" "registry=$registry" \
-          "cargo-args=${cargo_args[*]}" "bro-build-runners=$bro_build_runners" >> "$GITHUB_OUTPUT"
+          "cargo-args=${cargo_args[*]}" >> "$GITHUB_OUTPUT"
   repository-hygiene:
     name: repository-hygiene
     runs-on: ubuntu-latest
@@ -150,48 +145,31 @@ jobs:
     needs:
     - changes
     if: needs.changes.outputs.cargo-args != ''
-  build-gateway:
-    name: build gateway (${{ matrix.os }}, ${{ matrix.profile }})
+  build-gateway-features:
+    name: build gateway features (${{ matrix.profile }})
     needs: changes
     if: needs.changes.outputs.gateway == 'true'
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         include:
-        - os: ubuntu-24.04
-          profile: full
-          suite: service
+        - profile: full
           production-features: '["mcp", "server-tools", "mcp,server-tools,otel-http,db-postgres,db-mysql"]'
-        - os: ubuntu-24.04
-          profile: minimal
-          suite: service-minimal
+        - profile: minimal
           production-features: '["", "http2"]'
-        - os: ubuntu-24.04
-          profile: default
-          suite: service-default
+        - profile: default
           production-features: '["eval-publication", "guardrails"]'
-        - os: ubuntu-24.04
-          profile: shared
-          suite: service-shared
+        - profile: shared
           production-features: '["db-postgres", "multi-instance", "multi-instance,http2", "db-mysql"]'
-        - os: ubuntu-24.04
-          profile: grpc
-          suite: service-grpc
+        - profile: grpc
           production-features: '["otel-http", "otel-grpc", "otel-http,otel-grpc"]'
-        - os: macos-latest
-          profile: full
-          suite: service
-        - os: windows-latest
-          profile: full
-          suite: service
     defaults:
       run:
         shell: bash
     env:
-      BITROUTER_BUILD_REVISION: ${{ github.sha }}
-      CARGO_BUILD_JOBS: ${{ matrix.os == 'ubuntu-24.04' && '1' || '2' }}
+      CARGO_BUILD_JOBS: '1'
     steps:
     - uses: actions/checkout@v6
     - uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -200,33 +178,18 @@ jobs:
         cache-on-failure: false
         cache-save-if: ${{ github.event_name != 'pull_request' }}
         cache-key: ci-gateway-${{ matrix.profile }}-v4
-    - uses: taiki-e/install-action@v2
-      with:
-        tool: nextest@0.9.114
-    - name: Validate the independent SDK consumer lockfile
-      if: runner.os == 'Linux' && matrix.profile == 'full'
-      run: cargo metadata --locked --manifest-path apps/bitrouter/tests/fixtures/sdk_consumer/Cargo.toml --format-version 1 > /dev/null
-    - name: Check gateway build and test dependency boundaries
-      if: runner.os == 'Linux' && matrix.profile == 'full'
-      run: |
-        for flags in '' '--no-default-features' '--no-default-features --features multi-instance,http2' '--all-features'; do
-          cargo tree --locked -p bitrouter $flags -e normal,build,dev --prefix none > service-tree.txt
-          if grep -E '^(bitrouter-bro|agent-client-protocol[^ ]*) v' service-tree.txt; then
-            echo '::error::The service test or build closure includes BRO/ACP'; exit 1
-          fi
-        done
     - name: Check the default gateway matcher dependency
-      if: runner.os == 'Linux' && matrix.profile == 'default'
+      if: matrix.profile == 'default'
       run: |
         cargo tree --locked -p bitrouter -e normal,build --prefix none > host-tree.txt
         if grep -Eq '^bitrouter-guardrails v' host-tree.txt; then
           echo '::error::default service links the optional matcher'; exit 1
         fi
     - name: Check isolated production feature closures
-      if: runner.os == 'Linux'
       shell: bash
       env:
         CARGO_TARGET_DIR: target/production-features
+        PROFILE: ${{ matrix.profile }}
         FEATURES: ${{ matrix.production-features }}
       run: |
         while IFS= read -r PROFILE_FEATURES; do
@@ -281,9 +244,51 @@ jobs:
         esac
 
         done < <(jq -r '.[]' <<< "$FEATURES")
-        rm -rf "$CARGO_TARGET_DIR"
+
+        # Link each reduced profile independently of test dependencies.
+        case "$PROFILE" in
+          full) ;; # The full binary is linked by build-gateway.
+          minimal) cargo build --locked -p bitrouter --no-default-features --bin bitrouter ;;
+          default) cargo build --locked -p bitrouter --bin bitrouter ;;
+          shared) cargo build --locked -p bitrouter --no-default-features --features multi-instance,http2 --bin bitrouter ;;
+          grpc) cargo build --locked -p bitrouter --no-default-features --features otel-grpc --bin bitrouter ;;
+          *) exit 1 ;;
+        esac
+
+  build-gateway:
+    name: build gateway (ubuntu-24.04, full)
+    needs: changes
+    if: needs.changes.outputs.gateway == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      BITROUTER_BUILD_REVISION: ${{ github.sha }}
+      CARGO_BUILD_JOBS: '1'
+    steps:
+    - uses: actions/checkout@v6
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        toolchain: 1.99.1
+        cache-on-failure: false
+        cache-save-if: ${{ github.event_name != 'pull_request' }}
+        cache-key: ci-gateway-full-v4
+    - uses: taiki-e/install-action@v2
+      with:
+        tool: nextest@0.9.114
+    - name: Validate the independent SDK consumer lockfile
+      run: cargo metadata --locked --manifest-path apps/bitrouter/tests/fixtures/sdk_consumer/Cargo.toml --format-version 1 > /dev/null
+    - name: Check gateway build and test dependency boundaries
+      run: |
+        for flags in '' '--no-default-features' '--no-default-features --features multi-instance,http2' '--all-features'; do
+          cargo tree --locked -p bitrouter $flags -e normal,build,dev --prefix none > service-tree.txt
+          if grep -E '^(bitrouter-bro|agent-client-protocol[^ ]*) v' service-tree.txt; then
+            echo '::error::The service test or build closure includes BRO/ACP'; exit 1
+          fi
+        done
     - name: Build the independent ordered protocol SDK consumer
-      if: runner.os == 'Linux' && matrix.profile == 'full'
       run: |
         cargo build --locked \
           --manifest-path apps/bitrouter/tests/fixtures/native_generate_content_ap/Cargo.toml \
@@ -291,12 +296,9 @@ jobs:
         mkdir -p ci-artifacts
         cp target/native-ap-sdk-consumer/debug/native-ap-sdk-consumer ci-artifacts/
         rm -rf target/native-ap-sdk-consumer
-    - name: Build and archive the gateway feature suite
-      env:
-        SUITE: ${{ matrix.suite }}
-      run: bash .github/actions/test-archive/build.sh "$SUITE"
+    - name: Build and archive the full gateway
+      run: bash .github/actions/test-archive/build.sh service
     - name: Build the behavior upstream fixture
-      if: runner.os == 'Linux' && matrix.profile == 'full'
       run: |
         cargo build --locked -p bitrouter-behavior-upstream
         cp target/debug/bitrouter-behavior-upstream ci-artifacts/
@@ -305,35 +307,64 @@ jobs:
         cd ci-artifacts
         printf '%s\n' "$GITHUB_SHA" > tests.sha
         printf '%s\n' "$GITHUB_WORKSPACE" > tests.workspace
-        if [[ "$RUNNER_OS" == macOS ]]; then
-          shasum -a 256 -- *.tar.zst > checksums.sha256
-        elif [[ "$RUNNER_OS" == Linux ]]; then
-          files=(*.tar.zst)
-          if [[ -f native-ap-sdk-consumer ]]; then files+=(native-ap-sdk-consumer); fi
-          if [[ -f bitrouter-behavior-upstream ]]; then files+=(bitrouter-behavior-upstream); fi
-          sha256sum -- "${files[@]}" > checksums.sha256
-        else
-          sha256sum -- *.tar.zst > checksums.sha256
-        fi
+        sha256sum -- service.tar.zst native-ap-sdk-consumer bitrouter-behavior-upstream > checksums.sha256
     - uses: actions/upload-artifact@v4
       with:
-        name: tests-${{ matrix.suite }}-${{ matrix.os }}-${{ github.sha }}
+        name: tests-service-ubuntu-24.04-${{ github.sha }}
         path: ci-artifacts/
         if-no-files-found: error
         compression-level: 0
         retention-days: 2
         overwrite: true
 
-  build-bro:
-    name: build BRO (${{ matrix.os }})
+  build-bro-companion:
+    name: build Linux BRO companion
     needs: changes
-    if: needs.changes.outputs.bro == 'true' || needs.changes.outputs.gateway == 'true'
+    if: needs.changes.outputs.gateway == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      BITROUTER_BUILD_REVISION: ${{ github.sha }}
+    steps:
+    - uses: actions/checkout@v6
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        toolchain: 1.99.1
+        cache-on-failure: false
+        cache-save-if: ${{ github.event_name != 'pull_request' }}
+        cache-key: ci-bro-v3
+    - name: Build the Linux BRO companion
+      run: bash .github/actions/test-archive/build.sh bro-companion
+    - uses: actions/upload-artifact@v4
+      with:
+        name: tests-bro-companion-${{ github.sha }}
+        path: ci-companion/
+        if-no-files-found: error
+        compression-level: 0
+        retention-days: 2
+        overwrite: true
+  test-bro:
+    name: build and test BRO (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.bro == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(needs.changes.outputs.bro-build-runners) }}
+        include:
+        - os: ubuntu-24.04
+        - os: macos-latest
+          filter: test(/^macos_shell_copy::/) | test(/^tools::shell::macos::tests::/)
+            | test(=tools::tests::dropped_shell_future_stops_unix_descendants) | test(=tools::tests::shell_grant_does_not_follow_a_running_commands_replaced_root)
+            | (binary(=native_boundaries) & (test(=approved_shell_can_work_only_in_its_grant_without_bro_credentials) | test(=timed_out_operator_check_retains_unknown_effect_and_fences_resume)))
+            | (binary(=acp_serve) & test(=manager_eof_reaps_adapter_descendant_during_unanswered_prompt))
+        - os: windows-latest
+          filter: test(/^tools::file_tests::/) | test(=runner_tests::published_tool_intent_keeps_the_open_directory_until_dispatch_finishes)
+            | (binary(=home_owner) & test(=linked_threads_directory_is_rejected_before_any_bro_writes))
+            | (binary(=native_boundaries) & (test(=approved_shell_can_work_only_in_its_grant_without_bro_credentials) | test(=write_and_edit_publish_nested_file_before_checkpoint_confirmation) | test(=approval_is_bound_to_directory_identity_across_processes)))
+            | (binary(=acp_serve) & test(=manager_eof_reaps_adapter_descendant_during_unanswered_prompt))
+            | (binary(=invocation) & test(=renamed_bro_cannot_claim_the_official_receipt))
     defaults:
       run:
         shell: bash
@@ -354,108 +385,39 @@ jobs:
         if grep -E '^(bitrouter|bitrouter-registry|bitrouter-guardrails|sea-orm(-[^ ]*)?|sqlx-(postgres|mysql)|axum|rmcp) v' bro-tree.txt; then
           echo '::error::BRO builds gateway implementation dependencies'; exit 1
         fi
-    - name: Build the Linux BRO companion
-      if: runner.os == 'Linux' && needs.changes.outputs.gateway == 'true'
-      run: bash .github/actions/test-archive/build.sh bro-companion
-    - uses: actions/upload-artifact@v4
-      if: runner.os == 'Linux' && needs.changes.outputs.gateway == 'true'
-      with:
-        name: tests-bro-companion-${{ github.sha }}
-        path: ci-companion/
-        if-no-files-found: error
-        compression-level: 0
-        retention-days: 2
-        overwrite: true
     - uses: taiki-e/install-action@v2
-      if: needs.changes.outputs.bro == 'true'
       with:
         tool: nextest@0.9.114
-    - name: Build and archive the BRO suite
-      if: needs.changes.outputs.bro == 'true'
-      run: |
-        bash .github/actions/test-archive/build.sh bro
-        cd ci-artifacts
-        printf '%s\n' "$GITHUB_SHA" > tests.sha
-        printf '%s\n' "$GITHUB_WORKSPACE" > tests.workspace
-        if [[ "$RUNNER_OS" == macOS ]]; then
-          shasum -a 256 -- bro.tar.zst > checksums.sha256
-        else
-          sha256sum -- bro.tar.zst > checksums.sha256
-        fi
-    - uses: actions/upload-artifact@v4
-      if: needs.changes.outputs.bro == 'true'
-      with:
-        name: tests-bro-${{ matrix.os }}-${{ github.sha }}
-        path: ci-artifacts/
-        if-no-files-found: error
-        compression-level: 0
-        retention-days: 2
-        overwrite: true
-
-  test-bro:
-    name: test BRO (${{ matrix.os }})
-    needs: [changes, build-bro]
-    if: needs.changes.outputs.bro == 'true'
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(needs.changes.outputs.bro-build-runners) }}
-    defaults:
-      run:
-        shell: bash
-    steps:
-    - uses: actions/checkout@v6
-    - uses: actions-rust-lang/setup-rust-toolchain@v1
-      with:
-        toolchain: 1.99.1
-        cache: false
-    - uses: ./.github/actions/test-archive
-      with:
-        product: bro
-        platform: ${{ matrix.os }}
+    - name: Build the BRO test executables
+      run: bash .github/actions/test-archive/build.sh bro
     - name: Provision the Linux workspace sandbox
       if: runner.os == 'Linux'
       run: bash .github/scripts/ci-bro-sandbox.sh
     - name: Run the BRO suite
+      env:
+        FILTER: ${{ matrix.filter }}
       run: |
-        if [[ "$RUNNER_OS" == Linux ]]; then export BRO_TEST_REQUIRE_WORKSPACE_SANDBOX=1; fi
-        bash .github/scripts/ci-test.sh bro --test-threads 2
+        if [[ "$RUNNER_OS" == Linux ]]; then
+          export BRO_TEST_REQUIRE_WORKSPACE_SANDBOX=1
+          bash .github/scripts/ci-test.sh bro --test-threads 2
+        else
+          bash .github/scripts/ci-test.sh bro --test-threads 2 -E "$FILTER"
+        fi
 
-  test-gateway:
-    name: test gateway (${{ matrix.os }}, ${{ matrix.profile }})
-    needs: [changes, build-gateway, build-bro]
+  test-native-gateway:
+    name: build and test gateway (${{ matrix.os }})
+    needs: changes
     if: needs.changes.outputs.gateway == 'true'
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         include:
-        - os: ubuntu-24.04
-          profile: full
-          suite: service
-        - os: ubuntu-24.04
-          profile: minimal
-          suite: service-minimal
-        - os: ubuntu-24.04
-          profile: default
-          suite: service-default
-        - os: ubuntu-24.04
-          profile: shared
-          suite: service-shared
-        - os: ubuntu-24.04
-          profile: grpc
-          suite: service-grpc
         - os: macos-latest
-          profile: full
-          suite: service
           filter: test(=tests::daemon::status_route_and_stop_roundtrip_over_the_control_socket) | test(=tests::daemon::concurrent_clients_are_all_served) | test(=tests::daemon::socket_file_has_owner_only_permissions)
             | test(=tests::host_lifecycle::sigterm_control_error_drains_inflight_inference_before_nonzero_exit) | binary(=mcp_config_pty) | test(/^tests::onboarding_pty::/)
         - os: windows-latest
-          profile: full
-          suite: service
           filter: test(=tenancy::ownership::unsupported_claim_tests::native_recovery_connector_refuses_before_creating_non_unix_authority)
             | test(=providers::cli_install::tests::install_command_is_the_official_native_installer) | test(=paths::tests::replacing_private_file_overwrites_existing_destination_on_windows)
             | test(=tests::daemon::status_route_and_stop_roundtrip_over_the_control_socket)
@@ -468,9 +430,37 @@ jobs:
     defaults:
       run:
         shell: bash
+    env:
+      BITROUTER_BUILD_REVISION: ${{ github.sha }}
+    steps:
+    - uses: actions/checkout@v6
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        toolchain: 1.99.1
+        cache-on-failure: false
+        cache-save-if: ${{ github.event_name != 'pull_request' }}
+        cache-key: ci-gateway-full-v4
+    - uses: taiki-e/install-action@v2
+      with:
+        tool: nextest@0.9.114
+    - name: Build the native gateway test executables
+      run: bash .github/actions/test-archive/build.sh service
+    - name: Exercise native gateway behavior
+      env:
+        FILTER: ${{ matrix.filter }}
+      run: bash .github/scripts/ci-test.sh service --test-threads 2 -E "$FILTER"
+
+  test-gateway:
+    name: test gateway (ubuntu-24.04, full)
+    needs: [build-gateway, build-bro-companion]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
     services:
       postgres:
-        image: ${{ matrix.os == 'ubuntu-24.04' && matrix.profile == 'full' && 'postgres:17' || '' }}
+        image: postgres:17
         env:
           POSTGRES_USER: fixture
           POSTGRES_PASSWORD: fixture-password
@@ -478,7 +468,7 @@ jobs:
         ports: ['5432:5432']
         options: --health-cmd "pg_isready -U fixture -d bitrouter_test" --health-interval 5s --health-timeout 5s --health-retries 30
       mysql:
-        image: ${{ matrix.os == 'ubuntu-24.04' && matrix.profile == 'full' && 'mysql:8.4' || '' }}
+        image: mysql:8.4
         env:
           MYSQL_ROOT_PASSWORD: fixture-password
           MYSQL_USER: fixture
@@ -492,28 +482,22 @@ jobs:
     - id: archives
       uses: ./.github/actions/test-archive
       with:
-        product: ${{ matrix.suite }}
-        platform: ${{ matrix.os }}
-        bro-companion: ${{ runner.os == 'Linux' && matrix.profile == 'full' && 'true' || 'false' }}
-    - name: Exercise native gateway behavior
-      if: runner.os != 'Linux'
-      env:
-        FILTER: ${{ matrix.filter }}
-      run: bash .github/scripts/ci-test.sh service --test-threads 2 -E "$FILTER"
+        product: service
+        platform: ubuntu-24.04
+        bro-companion: 'true'
     - name: Run the all-feature gateway module tests
-      if: runner.os == 'Linux' && matrix.profile == 'full'
       run: bash .github/scripts/ci-test.sh service --test-threads 4 -E 'kind(lib) | kind(bin)'
     - name: Run the all-feature gateway integration tests
-      if: "!cancelled() && runner.os == 'Linux' && matrix.profile == 'full' && steps.archives.outcome == 'success'"
+      if: "!cancelled() && steps.archives.outcome == 'success'"
       run: bash .github/scripts/ci-test.sh service --test-threads 2 -E 'kind(test)'
     - uses: actions/setup-node@v4
-      if: "!cancelled() && runner.os == 'Linux' && matrix.profile == 'full'"
+      if: "!cancelled()"
       with:
         node-version: '22.19.0'
     - uses: oven-sh/setup-bun@v2
-      if: "!cancelled() && runner.os == 'Linux' && matrix.profile == 'full'"
+      if: "!cancelled()"
     - name: Run deterministic client behavior tests
-      if: "!cancelled() && runner.os == 'Linux' && matrix.profile == 'full' && steps.archives.outcome == 'success'"
+      if: "!cancelled() && steps.archives.outcome == 'success'"
       env:
         BITROUTER_TEST_GATEWAY_BINARY: ${{ github.workspace }}/target/debug/bitrouter
         BITROUTER_TEST_BEHAVIOR_UPSTREAM: ${{ github.workspace }}/ci-artifacts/bitrouter-behavior-upstream
@@ -524,23 +508,23 @@ jobs:
         bun run --bun test:behavior
     - name: Install the BRO process-test sandbox
       id: sandbox
-      if: "!cancelled() && runner.os == 'Linux' && matrix.profile == 'full' && steps.archives.outcome == 'success'"
+      if: "!cancelled() && steps.archives.outcome == 'success'"
       run: bash .github/scripts/ci-bro-sandbox.sh
     - name: Run gateway routing through the BRO harness
       if: "!cancelled() && steps.sandbox.outcome == 'success'"
       run: bash .github/scripts/ci-test.sh service --run-ignored only -E 'binary(=product_process)'
     - name: Verify ordered native JSON and SSE with the independent AP SDK
-      if: "!cancelled() && runner.os == 'Linux' && matrix.profile == 'full' && steps.archives.outcome == 'success'"
+      if: "!cancelled() && steps.archives.outcome == 'success'"
       env:
         BITROUTER_NATIVE_AP_CLIENT: ${{ github.workspace }}/ci-artifacts/native-ap-sdk-consumer
       run: |
         bash .github/scripts/ci-test.sh service --run-ignored only --test-threads 1 \
           -E 'kind(lib) & test(=tenancy::tests::execution::receipts::ordered::generate_content_native::boundaries::process_consumer::native_generate_content_actual_ap_sdk_consumer_keeps_original_tokens_json_sse_h1_h2)'
     - name: Verify gateway behavior against PostgreSQL
-      if: "!cancelled() && runner.os == 'Linux' && matrix.profile == 'full' && steps.archives.outcome == 'success'"
+      if: "!cancelled() && steps.archives.outcome == 'success'"
       run: bash .github/scripts/ci-test.sh database postgres
     - name: Verify gateway behavior against MySQL
-      if: "!cancelled() && runner.os == 'Linux' && matrix.profile == 'full' && steps.archives.outcome == 'success'"
+      if: "!cancelled() && steps.archives.outcome == 'success'"
       env:
         MYSQL_CONTAINER: ${{ job.services.mysql.id }}
       run: |
@@ -550,20 +534,10 @@ jobs:
         GRANT ALL PRIVILEGES ON `bitrouter\_eval\_%`.* TO 'fixture'@'%';
         SQL
         bash .github/scripts/ci-test.sh database mysql
-    - name: Test the gateway feature profile
-      if: runner.os == 'Linux' && matrix.profile != 'full' && matrix.profile != 'grpc'
-      env:
-        SUITE: ${{ matrix.suite }}
-      run: bash .github/scripts/ci-test.sh "$SUITE" --test-threads 2
-    - name: Test the gRPC-only telemetry transport
-      if: runner.os == 'Linux' && matrix.profile == 'grpc'
-      run: |
-        bash .github/scripts/ci-test.sh service-grpc --test-threads 1 \
-          -E 'test(/^tests::telemetry_grpc_transport::/) | test(/^assemble::telemetry_opt_in_tests::/)'
     - uses: actions/upload-artifact@v4
-      if: always() && runner.os == 'Linux'
+      if: always()
       with:
-        name: gateway-profile-test-results-${{ matrix.profile }}-${{ github.run_attempt }}
+        name: gateway-profile-test-results-full-${{ github.run_attempt }}
         path: ci-test-results/
 
   test-libraries:
@@ -838,9 +812,11 @@ jobs:
     - fmt
     - agent-plugin
     - clippy
+    - build-gateway-features
     - build-gateway
+    - build-bro-companion
     - test-gateway
-    - build-bro
+    - test-native-gateway
     - test-bro
     - test-libraries
     - feature-isolation
@@ -861,9 +837,9 @@ jobs:
           passed(["changes", "repository-hygiene", "fmt", "agent-plugin"]) and
           all(.[]; .result == "success" or .result == "skipped") and
           (if $paths.bro == "true" or $paths.gateway == "true" then
-             passed(["clippy", "msrv", "doc", "doctest", "build-bro"]) else true end) and
+             passed(["clippy", "msrv", "doc", "doctest"]) else true end) and
           (if $paths.bro == "true" then passed(["test-bro"]) else true end) and
-          (if $paths.gateway == "true" then passed(["build-gateway", "test-gateway"]) else true end) and
+          (if $paths.gateway == "true" then passed(["build-gateway-features", "build-gateway", "build-bro-companion", "test-gateway", "test-native-gateway"]) else true end) and
           (if $paths.shared == "true" then passed(["test-libraries", "feature-isolation", "sdk-public-api"]) else true end) and
           (if $paths.gateway == "true" or $paths.registry == "true" then passed(["dist"]) else true end)
         ' <<< "$RESULTS"
