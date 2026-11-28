@@ -56,13 +56,13 @@
   "models": [
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:05.484313403Z",
+        "checked_at": "2026-11-26T04:03:00.468530705Z",
         "scope": "public",
         "source_url": "https://api.ambient.xyz/v1/models"
       },
-      "description": "Z.ai GLM-5.2.",
+      "description": "DeepSeek V4.1 Flash 1017 is DeepSeek's October 2026 refresh of V4 Flash, a 763B-parameter sparse MoE reasoning model with a 1M-token context window, served with tool calling and reasoning.",
       "interfaces": [],
-      "name": "GLM 5.2",
+      "name": "DeepSeek V4.1 Flash 1017",
       "provider_model_id": "ambient/large",
       "status": "active",
       "sync": {
@@ -84,6 +84,46 @@
       "interfaces": [],
       "name": "qwen3.8-27b-4q",
       "provider_model_id": "ambient/small",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-17T04:24:21.114948687Z",
+        "scope": "public",
+        "source_url": "https://api.ambient.xyz/v1/models"
+      },
+      "description": "DeepSeek V4.1 Flash 1017 is DeepSeek's October 2026 refresh of V4 Flash, a 763B-parameter sparse MoE reasoning model with a 1M-token context window, served with tool calling and reasoning.",
+      "interfaces": [],
+      "name": "DeepSeek V4.1 Flash 1017",
+      "provider_model_id": "deepseek/deepseek-v4.1-flash-1017",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-26T04:03:00.468530705Z",
+        "scope": "public",
+        "source_url": "https://api.ambient.xyz/v1/models"
+      },
+      "description": "Gemma 4 26B A4B instruct - MoE (26B total / 4B active) with image input. Served NVFP4 at 262K context.",
+      "interfaces": [],
+      "name": "Gemma 4 26B A4B",
+      "provider_model_id": "google/gemma-4-26b-a4b-it",
       "status": "active",
       "sync": {
         "field_owners": {
@@ -273,7 +313,6 @@
       }
     },
     {
-      "canonical_id": "xiaomi/mimo-v2.5",
       "interfaces": [
         {
           "operation": "generation",

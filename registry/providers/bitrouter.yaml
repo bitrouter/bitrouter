@@ -1616,7 +1616,6 @@
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
-      "canonical_id": "x-ai/grok-build-0.1",
       "interfaces": [
         {
           "operation": "generation",
@@ -1651,7 +1650,6 @@
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
-      "canonical_id": "xiaomi/mimo-v2.5",
       "interfaces": [
         {
           "operation": "generation",
@@ -1686,7 +1684,6 @@
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
-      "canonical_id": "xiaomi/mimo-v2.5-pro",
       "interfaces": [
         {
           "operation": "generation",

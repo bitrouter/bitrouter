@@ -389,19 +389,19 @@
       }
     },
     {
-      "provider_model_id": "kimi-k3.1-pro",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
+        "scope": "account",
+        "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
+      },
       "interfaces": [],
+      "provider_model_id": "kimi-k3.1-pro",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/status": "catalog"
-        }
-      },
-      "status": "active",
-      "availability": {
-        "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models",
-        "checked_at": "2026-11-14T05:57:02.502130843Z",
-        "scope": "account"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -412,6 +412,22 @@
       },
       "interfaces": [],
       "provider_model_id": "kimi/kimi-k3",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-20T02:55:57.303433173Z",
+        "scope": "account",
+        "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
+      },
+      "interfaces": [],
+      "provider_model_id": "mindlab/macaron-v1.1-venti-pro",
       "status": "active",
       "sync": {
         "field_owners": {
@@ -2495,6 +2511,22 @@
       },
       "interfaces": [],
       "provider_model_id": "qwen3.8-omni-flash-realtime",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-19T03:04:31.276556174Z",
+        "scope": "account",
+        "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
+      },
+      "interfaces": [],
+      "provider_model_id": "qwen4-max",
       "status": "active",
       "sync": {
         "field_owners": {

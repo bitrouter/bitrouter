@@ -147,6 +147,26 @@
         },
         "owner": "directory"
       }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-24T05:51:13.217459772Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Multimodal GLM flagship model for coding, agents, and complex project delivery",
+      "interfaces": [],
+      "name": "GLM-5.4",
+      "provider_model_id": "glm-5.4",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
     }
   ],
   "name": "zai_coding_plan",

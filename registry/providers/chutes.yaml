@@ -53,19 +53,19 @@
   },
   "models": [
     {
-      "provider_model_id": "Qwen/Qwen3.5-27B-TEE",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:10.951390928Z",
+        "scope": "public",
+        "source_url": "https://llm.chutes.ai/v1/models"
+      },
       "interfaces": [],
+      "provider_model_id": "Qwen/Qwen3.5-27B-TEE",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/status": "catalog"
-        }
-      },
-      "status": "active",
-      "availability": {
-        "source_url": "https://llm.chutes.ai/v1/models",
-        "checked_at": "2026-11-14T05:57:10.951390928Z",
-        "scope": "public"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -140,6 +140,22 @@
       },
       "interfaces": [],
       "provider_model_id": "Qwen/Qwen3.8-Max-0902",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-22T02:01:20.912698278Z",
+        "scope": "public",
+        "source_url": "https://llm.chutes.ai/v1/models"
+      },
+      "interfaces": [],
+      "provider_model_id": "Qwen/Qwen4-Max",
       "status": "active",
       "sync": {
         "field_owners": {
@@ -305,19 +321,19 @@
       }
     },
     {
-      "provider_model_id": "tencent/Hy4",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:10.951390928Z",
+        "scope": "public",
+        "source_url": "https://llm.chutes.ai/v1/models"
+      },
       "interfaces": [],
+      "provider_model_id": "tencent/Hy4",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/status": "catalog"
-        }
-      },
-      "status": "active",
-      "availability": {
-        "source_url": "https://llm.chutes.ai/v1/models",
-        "checked_at": "2026-11-14T05:57:10.951390928Z",
-        "scope": "public"
+        },
+        "owner": "catalog"
       }
     },
     {

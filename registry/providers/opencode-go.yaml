@@ -153,6 +153,46 @@
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-24T05:51:01.655285725Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/go/v1/models"
+      },
+      "description": "Google's decision model that returns calibrated probabilities for typed yes/no, choice and score questions about text, images, audio, video and PDFs",
+      "interfaces": [],
+      "name": "Gemini Decision 1",
+      "provider_model_id": "gemini-decision-1",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-24T05:51:01.655285725Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/go/v1/models"
+      },
+      "description": "Multimodal embedding model mapping text, images, video, audio, and PDFs into a unified embedding space",
+      "interfaces": [],
+      "name": "Gemini Embedding 2",
+      "provider_model_id": "gemini-embedding-2",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
       "canonical_id": "z-ai/glm-5.2",
       "description": "Open flagship GLM for long-horizon coding agents and million-token context work",
       "interfaces": [
@@ -248,6 +288,26 @@
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-24T05:51:01.655285725Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/go/v1/models"
+      },
+      "description": "GPT-6 Luna on OpenAI's Decisions API, returning typed yes/no, choice and score answers about text and images",
+      "interfaces": [],
+      "name": "GPT-6 Luna Decision",
+      "provider_model_id": "gpt-6-luna-decision",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
       "canonical_id": "x-ai/grok-4.5",
       "interfaces": [
         {
@@ -290,6 +350,26 @@
     },
     {
       "availability": {
+        "checked_at": "2026-11-24T05:51:01.655285725Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/go/v1/models"
+      },
+      "description": "Stealth reasoning model, free for a limited time",
+      "interfaces": [],
+      "name": "HungerG Free",
+      "provider_model_id": "hungerg-free",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
         "checked_at": "2026-11-14T05:57:18.740533923Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/go/v1/models"
@@ -318,6 +398,26 @@
       "interfaces": [],
       "name": "Hy4",
       "provider_model_id": "hy4",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-17T04:24:32.686152312Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/go/v1/models"
+      },
+      "description": "Tencent's lower-cost Hy4 tier for everyday agent and productivity tasks, with image understanding and a 1M-token context window.",
+      "interfaces": [],
+      "name": "Hy4 flash Free",
+      "provider_model_id": "hy4-flash-free",
       "status": "active",
       "sync": {
         "field_owners": {
@@ -369,6 +469,26 @@
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-24T05:51:01.655285725Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/go/v1/models"
+      },
+      "description": "System One model for fast, typed probabilistic decisions over text or structured state",
+      "interfaces": [],
+      "name": "Jev 1.14",
+      "provider_model_id": "jev-1.14",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
       "canonical_id": "moonshotai/kimi-k2.7-code",
       "description": "Coding-focused Kimi model, stronger on long-horizon repo work with less overthinking",
       "interfaces": [
@@ -389,7 +509,7 @@
     },
     {
       "canonical_id": "moonshotai/kimi-k3",
-      "description": "Multimodal Kimi model with 1M context and toggleable max-effort thinking for long-horizon agent work",
+      "description": "Multimodal Kimi model with 1M context and always-on thinking for long-horizon agent work",
       "interfaces": [
         {
           "operation": "generation",
@@ -447,6 +567,26 @@
     },
     {
       "availability": {
+        "checked_at": "2026-11-23T02:26:44.009680491Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/go/v1/models"
+      },
+      "description": "Meituan's multimodal reasoning model for long-horizon coding and agent tasks, with visual understanding and a 1M-token context window",
+      "interfaces": [],
+      "name": "LongCat-2.5",
+      "provider_model_id": "longcat-2.5",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
         "checked_at": "2026-11-14T05:57:18.740533923Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/go/v1/models"
@@ -486,7 +626,6 @@
       "status": "active"
     },
     {
-      "canonical_id": "xiaomi/mimo-v2.5",
       "interfaces": [
         {
           "operation": "generation",
@@ -497,7 +636,6 @@
       "status": "active"
     },
     {
-      "canonical_id": "xiaomi/mimo-v2.5-pro",
       "interfaces": [
         {
           "operation": "generation",
@@ -635,6 +773,26 @@
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-24T05:51:01.655285725Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/go/v1/models"
+      },
+      "description": "Multilingual text embedding model for retrieval, code search, classification, and clustering",
+      "interfaces": [],
+      "name": "Qwen3 Embedding 8B",
+      "provider_model_id": "qwen3-embedding-8b",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
       "canonical_id": "qwen/qwen3.6-plus",
       "interfaces": [
         {
@@ -742,6 +900,26 @@
       "interfaces": [],
       "name": "Step 5 Preview",
       "provider_model_id": "step-5-preview",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-24T05:51:01.655285725Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/go/v1/models"
+      },
+      "description": "Small, efficient OpenAI text embedding model",
+      "interfaces": [],
+      "name": "text-embedding-3-small",
+      "provider_model_id": "text-embedding-3-small",
       "status": "active",
       "sync": {
         "field_owners": {

@@ -46,11 +46,11 @@
   "models": [
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:16.581838591Z",
+        "checked_at": "2026-11-25T04:51:08.347396371Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
-      "description": "Multimodal Kimi model with 1M context and toggleable max-effort thinking for long-horizon agent work",
+      "description": "Multimodal Kimi model with 1M context and always-on thinking for long-horizon agent work",
       "interfaces": [],
       "name": "Kimi K3",
       "provider_model_id": "k3",
