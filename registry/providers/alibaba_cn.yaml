@@ -181,6 +181,46 @@
     },
     {
       "availability": {
+        "checked_at": "2026-11-25T04:50:54.556435245Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Hybrid-reasoning DeepSeek model with thinking and non-thinking modes, sparse attention, and tool-use",
+      "interfaces": [],
+      "name": "DeepSeek V3.2",
+      "provider_model_id": "deepseek-v3.2",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-25T04:50:54.556435245Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Official DeepSeek V4 Flash release with enhanced agentic capabilities and integrated DSpark speculative decoding",
+      "interfaces": [],
+      "name": "DeepSeek V4 Flash 0731",
+      "provider_model_id": "deepseek-v4-flash-0731",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
         "checked_at": "2026-11-14T05:57:03.959409748Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
@@ -457,6 +497,26 @@
     },
     {
       "availability": {
+        "checked_at": "2026-11-25T04:50:54.556435245Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Flagship GLM model for long-horizon coding, agents, and complex project delivery",
+      "interfaces": [],
+      "name": "GLM-5.3 Prime",
+      "provider_model_id": "glm-5.3-prime",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
         "checked_at": "2026-11-14T05:57:03.959409748Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
@@ -497,7 +557,7 @@
     },
     {
       "canonical_id": "moonshotai/kimi-k3",
-      "description": "Multimodal Kimi model with 1M context and toggleable max-effort thinking for long-horizon agent work",
+      "description": "Multimodal Kimi model with 1M context and always-on thinking for long-horizon agent work",
       "interfaces": [
         {
           "operation": "generation",
@@ -563,6 +623,46 @@
           "/description": "directory",
           "/name": "directory"
         }
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-25T04:50:54.556435245Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Multimodal Kimi model with a 1M-token context window and always-on reasoning, for coding, 3D creation and financial research",
+      "interfaces": [],
+      "name": "Kimi K3.1 Pro",
+      "provider_model_id": "kimi-k3.1-pro",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-25T04:50:54.556435245Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Multimodal Kimi model with a 1M-token context window and always-on reasoning, for coding, 3D creation and financial research",
+      "interfaces": [],
+      "name": "Kimi K3.1 Pro Prime",
+      "provider_model_id": "kimi-k3.1-pro-prime",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
       }
     },
     {
@@ -847,6 +947,66 @@
     },
     {
       "availability": {
+        "checked_at": "2026-11-25T04:50:54.556435245Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Qwen vision-language model for visual reasoning, documents, and agent tasks",
+      "interfaces": [],
+      "name": "Qwen3.5 122B-A10B",
+      "provider_model_id": "qwen3.5-122b-a10b",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-25T04:50:54.556435245Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Qwen vision-language model for visual reasoning, documents, and agent tasks",
+      "interfaces": [],
+      "name": "Qwen3.5 27B",
+      "provider_model_id": "qwen3.5-27b",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-25T04:50:54.556435245Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Qwen vision-language model for visual reasoning, documents, and agent tasks",
+      "interfaces": [],
+      "name": "Qwen3.5 35B-A3B",
+      "provider_model_id": "qwen3.5-35b-a3b",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
         "checked_at": "2026-11-14T05:57:03.959409748Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
@@ -895,6 +1055,46 @@
       "interfaces": [],
       "name": "Qwen3.5 Plus",
       "provider_model_id": "qwen3.5-plus",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-25T04:50:54.556435245Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Qwen vision-language model for visual reasoning, documents, and agent tasks",
+      "interfaces": [],
+      "name": "Qwen3.6 27B",
+      "provider_model_id": "qwen3.6-27b",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-25T04:50:54.556435245Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Open multimodal Qwen MoE for local agents that need vision, audio, and code",
+      "interfaces": [],
+      "name": "Qwen3.6 35B-A3B",
+      "provider_model_id": "qwen3.6-35b-a3b",
       "status": "staging",
       "sync": {
         "field_owners": {
@@ -1707,6 +1907,26 @@
           "/description": "directory",
           "/name": "directory"
         }
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-25T04:50:54.556435245Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Flagship multimodal model for coding, office productivity, frontend design, and complex agentic tasks",
+      "interfaces": [],
+      "name": "Qwen4 Max",
+      "provider_model_id": "qwen4-max",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
       }
     },
     {

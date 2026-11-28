@@ -406,19 +406,35 @@
       }
     },
     {
-      "provider_model_id": "glm-5.3-flashx-legal",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:33.944615813Z",
+        "scope": "account",
+        "source_url": "https://api.z.ai/api/paas/v4/models"
+      },
       "interfaces": [],
+      "provider_model_id": "glm-5.3-flashx-legal",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/status": "catalog"
-        }
-      },
-      "status": "active",
+        },
+        "owner": "catalog"
+      }
+    },
+    {
       "availability": {
-        "source_url": "https://api.z.ai/api/paas/v4/models",
-        "checked_at": "2026-11-14T05:57:33.944615813Z",
-        "scope": "account"
+        "checked_at": "2026-11-24T05:51:12.283288973Z",
+        "scope": "account",
+        "source_url": "https://api.z.ai/api/paas/v4/models"
+      },
+      "interfaces": [],
+      "provider_model_id": "glm-5.4",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/status": "catalog"
+        },
+        "owner": "catalog"
       }
     }
   ],

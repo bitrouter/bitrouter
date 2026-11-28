@@ -46,7 +46,128 @@
   },
   "models": [
     {
+      "availability": {
+        "checked_at": "2026-11-25T04:51:20.407133439Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Open MoE flagship with million-token context for coding and long agent runs",
+      "interfaces": [],
+      "name": "DeepSeek V4 Pro",
+      "provider_model_id": "deepseek-v4-pro",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-25T04:51:20.407133439Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "DeepSeek V4 Pro snapshot with million-token context and support for thinking and non-thinking modes",
+      "interfaces": [],
+      "name": "DeepSeek V4 Pro 0813",
+      "provider_model_id": "deepseek-v4-pro-0813",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-25T04:51:20.407133439Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "DeepSeek V4.1 Flash model for reasoning and agentic coding",
+      "interfaces": [],
+      "name": "DeepSeek V4.1 Flash",
+      "provider_model_id": "deepseek-v4.1-flash",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-25T04:51:20.407133439Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "October 17 update of DeepSeek V4.1 Flash with improved reasoning, coding, agentic tasks, and visual understanding",
+      "interfaces": [],
+      "name": "DeepSeek V4.1 Flash 1017",
+      "provider_model_id": "deepseek-v4.1-flash-1017",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-25T04:51:20.407133439Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "October 17 update of DeepSeek V4.1 Flash with improved reasoning, coding, agentic tasks, and visual understanding",
+      "interfaces": [],
+      "name": "DeepSeek V4.1 Flash 1017",
+      "provider_model_id": "deepseek/deepseek-flash",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-25T04:51:20.407133439Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "DeepSeek V4 Pro snapshot with million-token context and support for thinking and non-thinking modes",
+      "interfaces": [],
+      "name": "DeepSeek V4 Pro 0813",
+      "provider_model_id": "deepseek/deepseek-v4-pro",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
       "canonical_id": "z-ai/glm-5.2",
+      "description": "Open flagship GLM for long-horizon coding agents and million-token context work",
       "interfaces": [
         {
           "capabilities": [
@@ -93,8 +214,55 @@
           }
         }
       ],
+      "name": "GLM-5.2",
       "provider_model_id": "glm-5.2",
-      "status": "active"
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-25T04:51:20.407133439Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Flagship GLM model for long-horizon coding, agents, and complex project delivery",
+      "interfaces": [],
+      "name": "GLM-5.3",
+      "provider_model_id": "glm-5.3",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-25T04:51:20.407133439Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
+      "interfaces": [],
+      "name": "GLM-5.3-Flash",
+      "provider_model_id": "glm-5.3-flash",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
     },
     {
       "availability": {
@@ -137,23 +305,43 @@
       }
     },
     {
-      "provider_model_id": "hy4",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:27.820231140Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "A next-generation multimodal productivity model with significantly enhanced Agent and complex task execution capabilities.",
       "interfaces": [],
+      "name": "Hy4",
+      "provider_model_id": "hy4",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
-        }
-      },
-      "description": "A next-generation multimodal productivity model with significantly enhanced Agent and complex task execution capabilities.",
-      "name": "Hy4",
-      "status": "staging",
+        },
+        "owner": "directory"
+      }
+    },
+    {
       "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-14T05:57:27.820231140Z",
-        "scope": "public"
+        "checked_at": "2026-11-25T04:51:20.407133439Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Tencent's lower-cost Hy4 tier for everyday agent and productivity tasks, with image understanding and a 1M-token context window.",
+      "interfaces": [],
+      "name": "Hy4 flash",
+      "provider_model_id": "hy4-flash",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
       }
     },
     {
@@ -166,6 +354,206 @@
       "interfaces": [],
       "name": "Hy4 preview",
       "provider_model_id": "hy4-preview",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-25T04:51:20.407133439Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Multimodal Kimi workhorse for agent loops, coding tasks, and visual context",
+      "interfaces": [],
+      "name": "Kimi K2.6",
+      "provider_model_id": "kimi-k2.6",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-25T04:51:20.407133439Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Coding-focused Kimi model, stronger on long-horizon repo work with less overthinking",
+      "interfaces": [],
+      "name": "Kimi K2.7 Code",
+      "provider_model_id": "kimi-k2.7-code",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-25T04:51:20.407133439Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Lower-latency Kimi Code variant for interactive edits and coding-agent loops",
+      "interfaces": [],
+      "name": "Kimi K2.7 Code Highspeed",
+      "provider_model_id": "kimi-k2.7-code-highspeed",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-25T04:51:20.407133439Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Kimi coding model with more efficient thinking and up to 1M context, available through Kimi Code",
+      "interfaces": [],
+      "name": "Kimi K2.8 Preview",
+      "provider_model_id": "kimi-k2.8-preview",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-25T04:51:20.407133439Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Multimodal Kimi model with 1M context and always-on thinking for long-horizon agent work",
+      "interfaces": [],
+      "name": "Kimi K3",
+      "provider_model_id": "kimi-k3",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-25T04:51:20.407133439Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Multimodal Kimi model with a 1M-token context window and always-on reasoning, for coding, 3D creation and financial research",
+      "interfaces": [],
+      "name": "Kimi K3.1 Pro",
+      "provider_model_id": "kimi-k3.1-pro",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-27T04:02:04.996593923Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Faster-serving Kimi K3.1 Pro with a 1M-token context window and always-on reasoning",
+      "interfaces": [],
+      "name": "Kimi K3.1 Pro Highspeed",
+      "provider_model_id": "kimi-k3.1-pro-highspeed",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-27T04:02:04.996593923Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Stronger MiMo Pro tier for multimodal reasoning and coding-agent execution",
+      "interfaces": [],
+      "name": "MiMo-V2.5-Pro",
+      "provider_model_id": "mimo-v2.5-pro",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-25T04:51:20.407133439Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "MiMo Flash model for multimodal coding agents and long-context automation",
+      "interfaces": [],
+      "name": "MiMo-V2.6-Flash",
+      "provider_model_id": "mimo-v2.6-flash",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-25T04:51:20.407133439Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Stronger MiMo Pro tier for multimodal reasoning and coding-agent execution",
+      "interfaces": [],
+      "name": "MiMo-V2.6-Pro",
+      "provider_model_id": "mimo-v2.6-pro",
       "status": "staging",
       "sync": {
         "field_owners": {
@@ -229,6 +617,7 @@
     },
     {
       "canonical_id": "minimax/minimax-m3",
+      "description": "MiniMax multimodal model for long-context coding, perception, and agent planning",
       "interfaces": [
         {
           "capabilities": [
@@ -333,8 +722,55 @@
           }
         }
       ],
+      "name": "MiniMax-M3",
       "provider_model_id": "minimax-m3",
-      "status": "active"
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-25T04:51:20.407133439Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Frontier multimodal coding model with 1M context window and tunable thinking depth",
+      "interfaces": [],
+      "name": "MiniMax-M3.1-Flash",
+      "provider_model_id": "minimax-m3.1-flash",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-25T04:51:20.407133439Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "StepFun's next-generation flagship base model for coding and professional knowledge work, with native text, image, and video input and a 1M-token context window",
+      "interfaces": [],
+      "name": "Step 5 Preview",
+      "provider_model_id": "step-5-preview",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
     }
   ],
   "name": "tencent_cn",

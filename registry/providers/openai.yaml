@@ -881,6 +881,26 @@
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-26T04:03:14.717114008Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "GPT-6 Astra paired with a harness tailored to clinical questions; its web search uses a dedicated index of medical sources.",
+      "interfaces": [],
+      "name": "GPT-6 Astra Healthcare",
+      "provider_model_id": "gpt-6-astra-healthcare",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
       "canonical_id": "openai/gpt-6-luna",
       "description": "OpenAI's most efficient model for focused, high-volume tasks",
       "interfaces": [
@@ -1083,6 +1103,26 @@
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-26T04:03:14.717114008Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "GPT-6.1 Sol paired with a harness tailored to clinical questions; its web search uses a dedicated index of medical sources.",
+      "interfaces": [],
+      "name": "GPT-6.1 Sol Healthcare",
+      "provider_model_id": "gpt-6.1-sol-healthcare",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
       "canonical_id": "openai/gpt-6.1-terra",
       "description": "Fast, efficient model for visual reasoning, precise computer use, and clear, natural writing.",
       "interfaces": [
@@ -1162,6 +1202,86 @@
           "/description": "directory",
           "/name": "directory"
         }
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-18T03:32:20.646526642Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "A frontier reasoning model for coding, computer use, and professional work such as slides, spreadsheets, and documents.",
+      "interfaces": [],
+      "name": "GPT-6.2 Astra",
+      "provider_model_id": "gpt-6.2-astra",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-26T04:03:14.717114008Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "GPT-6.2 Astra paired with a harness tailored to clinical questions; its web search uses a dedicated index of medical sources.",
+      "interfaces": [],
+      "name": "GPT-6.2 Astra Healthcare",
+      "provider_model_id": "gpt-6.2-astra-healthcare",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-18T03:32:20.646526642Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "An efficient reasoning model for everyday work, multistep agentic workflows, and coding.",
+      "interfaces": [],
+      "name": "GPT-6.2 Sol",
+      "provider_model_id": "gpt-6.2-sol",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-26T04:03:14.717114008Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "GPT-6.2 Sol paired with a harness tailored to clinical questions; its web search uses a dedicated index of medical sources.",
+      "interfaces": [],
+      "name": "GPT-6.2 Sol Healthcare",
+      "provider_model_id": "gpt-6.2-sol-healthcare",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
       }
     },
     {

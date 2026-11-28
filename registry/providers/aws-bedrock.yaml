@@ -232,23 +232,23 @@
       }
     },
     {
-      "provider_model_id": "anthropic.claude-fable-5-2",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:08.547365445Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Claude model for demanding reasoning and long-horizon agentic work",
       "interfaces": [],
+      "name": "Claude Fable 5.2",
+      "provider_model_id": "anthropic.claude-fable-5-2",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
-        }
-      },
-      "description": "Claude model for demanding reasoning and long-horizon agentic work",
-      "name": "Claude Fable 5.2",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-14T05:57:08.547365445Z",
-        "scope": "public"
+        },
+        "owner": "directory"
       }
     },
     {
@@ -984,6 +984,46 @@
     },
     {
       "availability": {
+        "checked_at": "2026-11-26T04:03:03.519205590Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Fast Claude model for responsive assistance, classification, and lightweight agents",
+      "interfaces": [],
+      "name": "Claude Haiku 5.5 (Canada)",
+      "provider_model_id": "ca.anthropic.claude-haiku-5-5",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-26T04:03:03.519205590Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Fast Claude model for everyday coding, agents, and knowledge work",
+      "interfaces": [],
+      "name": "Claude Sonnet 5.5 (Canada)",
+      "provider_model_id": "ca.anthropic.claude-sonnet-5-5",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
         "checked_at": "2026-11-14T05:57:08.547365445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
@@ -1403,23 +1443,23 @@
       }
     },
     {
-      "provider_model_id": "global.anthropic.claude-fable-5-2",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:08.547365445Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Claude model for demanding reasoning and long-horizon agentic work",
       "interfaces": [],
+      "name": "Claude Fable 5.2 (Global)",
+      "provider_model_id": "global.anthropic.claude-fable-5-2",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
-        }
-      },
-      "description": "Claude model for demanding reasoning and long-horizon agentic work",
-      "name": "Claude Fable 5.2 (Global)",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-14T05:57:08.547365445Z",
-        "scope": "public"
+        },
+        "owner": "directory"
       }
     },
     {
@@ -1644,11 +1684,11 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:08.547365445Z",
+        "checked_at": "2026-11-25T04:50:59.334999678Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
-      "description": "Multimodal Kimi model with 1M context and toggleable max-effort thinking for long-horizon agent work",
+      "description": "Multimodal Kimi model with 1M context and always-on thinking for long-horizon agent work",
       "interfaces": [],
       "name": "Kimi K3 (Global)",
       "provider_model_id": "global.moonshotai.kimi-k3",
@@ -1663,23 +1703,23 @@
       }
     },
     {
-      "provider_model_id": "global.moonshotai.kimi-k3.1",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:08.547365445Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Multimodal Kimi model with a 1M-token context window and always-on reasoning, for coding, 3D creation and financial research",
       "interfaces": [],
+      "name": "Kimi K3.1 Pro Highspeed (Global)",
+      "provider_model_id": "global.moonshotai.kimi-k3.1",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
-        }
-      },
-      "description": "Multimodal Kimi model with a 1M-token context window and always-on reasoning, for coding, 3D creation and financial research",
-      "name": "Kimi K3.1 Pro Highspeed (Global)",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-14T05:57:08.547365445Z",
-        "scope": "public"
+        },
+        "owner": "directory"
       }
     },
     {
@@ -1832,6 +1872,46 @@
       "interfaces": [],
       "name": "GPT-6.1 Terra (Global)",
       "provider_model_id": "global.openai.gpt-6.1-terra",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-19T03:04:36.777116288Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "A frontier reasoning model for coding, computer use, and professional work such as slides, spreadsheets, and documents.",
+      "interfaces": [],
+      "name": "GPT-6.2 Astra (Global)",
+      "provider_model_id": "global.openai.gpt-6.2-astra",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-19T03:04:36.777116288Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "An efficient reasoning model for everyday work, multistep agentic workflows, and coding.",
+      "interfaces": [],
+      "name": "GPT-6.2 Sol (Global)",
+      "provider_model_id": "global.openai.gpt-6.2-sol",
       "status": "staging",
       "sync": {
         "field_owners": {
@@ -2012,6 +2092,46 @@
       "interfaces": [],
       "name": "Claude Sonnet 5 (India)",
       "provider_model_id": "in.anthropic.claude-sonnet-5",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-26T04:03:03.519205590Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Multimodal Kimi model with 1M context and always-on thinking for long-horizon agent work",
+      "interfaces": [],
+      "name": "Kimi K3 (India)",
+      "provider_model_id": "in.moonshotai.kimi-k3",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-26T04:03:03.519205590Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Multimodal Kimi model with a 1M-token context window and always-on reasoning, for coding, 3D creation and financial research",
+      "interfaces": [],
+      "name": "Kimi K3.1 Pro Highspeed (India)",
+      "provider_model_id": "in.moonshotai.kimi-k3.1",
       "status": "staging",
       "sync": {
         "field_owners": {
@@ -2874,6 +2994,46 @@
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-19T03:04:36.777116288Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "A frontier reasoning model for coding, computer use, and professional work such as slides, spreadsheets, and documents.",
+      "interfaces": [],
+      "name": "GPT-6.2 Astra",
+      "provider_model_id": "openai.gpt-6.2-astra",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-19T03:04:36.777116288Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "An efficient reasoning model for everyday work, multistep agentic workflows, and coding.",
+      "interfaces": [],
+      "name": "GPT-6.2 Sol",
+      "provider_model_id": "openai.gpt-6.2-sol",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
       "canonical_id": "openai/gpt-oss-120b",
       "description": "Open GPT reasoning model for self-hosted agents and controllable deployments",
       "interfaces": [
@@ -3283,23 +3443,23 @@
       }
     },
     {
-      "provider_model_id": "us.anthropic.claude-fable-5-2",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:08.547365445Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Claude model for demanding reasoning and long-horizon agentic work",
       "interfaces": [],
+      "name": "Claude Fable 5.2 (US)",
+      "provider_model_id": "us.anthropic.claude-fable-5-2",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
-        }
-      },
-      "description": "Claude model for demanding reasoning and long-horizon agentic work",
-      "name": "Claude Fable 5.2 (US)",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-14T05:57:08.547365445Z",
-        "scope": "public"
+        },
+        "owner": "directory"
       }
     },
     {
@@ -3544,11 +3704,11 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:08.547365445Z",
+        "checked_at": "2026-11-25T04:50:59.334999678Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
-      "description": "Multimodal Kimi model with 1M context and toggleable max-effort thinking for long-horizon agent work",
+      "description": "Multimodal Kimi model with 1M context and always-on thinking for long-horizon agent work",
       "interfaces": [],
       "name": "Kimi K3 (US)",
       "provider_model_id": "us.moonshotai.kimi-k3",
@@ -3563,23 +3723,23 @@
       }
     },
     {
-      "provider_model_id": "us.moonshotai.kimi-k3.1",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:08.547365445Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Multimodal Kimi model with a 1M-token context window and always-on reasoning, for coding, 3D creation and financial research",
       "interfaces": [],
+      "name": "Kimi K3.1 Pro Highspeed (US)",
+      "provider_model_id": "us.moonshotai.kimi-k3.1",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
-        }
-      },
-      "description": "Multimodal Kimi model with a 1M-token context window and always-on reasoning, for coding, 3D creation and financial research",
-      "name": "Kimi K3.1 Pro Highspeed (US)",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-14T05:57:08.547365445Z",
-        "scope": "public"
+        },
+        "owner": "directory"
       }
     },
     {
@@ -3744,6 +3904,46 @@
     },
     {
       "availability": {
+        "checked_at": "2026-11-19T03:04:36.777116288Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "A frontier reasoning model for coding, computer use, and professional work such as slides, spreadsheets, and documents.",
+      "interfaces": [],
+      "name": "GPT-6.2 Astra (US)",
+      "provider_model_id": "us.openai.gpt-6.2-astra",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-19T03:04:36.777116288Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "An efficient reasoning model for everyday work, multistep agentic workflows, and coding.",
+      "interfaces": [],
+      "name": "GPT-6.2 Sol (US)",
+      "provider_model_id": "us.openai.gpt-6.2-sol",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
         "checked_at": "2026-11-14T05:57:08.547365445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
@@ -3792,6 +3992,26 @@
       "interfaces": [],
       "name": "GLM-5.3 (US)",
       "provider_model_id": "us.zai.glm-5.3",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-23T02:26:34.325784823Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Writer's multimodal model for reading handwriting, charts and documents in images",
+      "interfaces": [],
+      "name": "Palmyra Vision 7B",
+      "provider_model_id": "writer.palmyra-vision-7b",
       "status": "staging",
       "sync": {
         "field_owners": {

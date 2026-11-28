@@ -152,23 +152,23 @@
       }
     },
     {
-      "provider_model_id": "claude-fable-5-2",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:09.926609639Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Claude model for demanding reasoning and long-horizon agentic work",
       "interfaces": [],
+      "name": "Claude Fable 5.2",
+      "provider_model_id": "claude-fable-5-2",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
-        }
-      },
-      "description": "Claude model for demanding reasoning and long-horizon agentic work",
-      "name": "Claude Fable 5.2",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-14T05:57:09.926609639Z",
-        "scope": "public"
+        },
+        "owner": "directory"
       }
     },
     {
@@ -955,6 +955,146 @@
     },
     {
       "availability": {
+        "checked_at": "2026-11-26T04:03:05.065832520Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "DeepSeek V4.1 Flash model for reasoning and agentic coding",
+      "interfaces": [],
+      "name": "FW-DeepSeek-V4.1-Flash",
+      "provider_model_id": "fw-deepseek-v4.1-flash",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-26T04:03:05.065832520Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Flagship GLM model for long-horizon coding, agents, and complex project delivery",
+      "interfaces": [],
+      "name": "FW-GLM-5.3",
+      "provider_model_id": "fw-glm-5.3",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-26T04:03:05.065832520Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
+      "interfaces": [],
+      "name": "FW-GLM-5.3-Flash",
+      "provider_model_id": "fw-glm-5.3-flash",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-26T04:03:05.065832520Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Multimodal Kimi model with 1M context and always-on thinking for long-horizon agent work",
+      "interfaces": [],
+      "name": "FW-Kimi-K3",
+      "provider_model_id": "fw-kimi-k3",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-26T04:03:05.065832520Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Multimodal Kimi model with a 1M-token context window and always-on reasoning, for coding, 3D creation and financial research",
+      "interfaces": [],
+      "name": "FW-Kimi-K3.1-Pro",
+      "provider_model_id": "fw-kimi-k3.1-pro",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-26T04:03:05.065832520Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Largest Nemotron 3 model for maximum open-weight reasoning and agent accuracy",
+      "interfaces": [],
+      "name": "FW-Nemotron-3-Ultra-NVFP4",
+      "provider_model_id": "fw-nemotron-3-ultra-nvfp4",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-26T04:03:05.065832520Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Fast NVIDIA Nemotron MoE for reliable agentic tasks across enterprise workloads",
+      "interfaces": [],
+      "name": "FW-Nemotron-Lightning-3.5-30B-A3B",
+      "provider_model_id": "fw-nemotron-lightning-3.5-30b-a3b",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
         "checked_at": "2026-11-14T05:57:09.926609639Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
@@ -1683,6 +1823,46 @@
     },
     {
       "availability": {
+        "checked_at": "2026-11-19T03:04:38.090833591Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "A frontier reasoning model for coding, computer use, and professional work such as slides, spreadsheets, and documents.",
+      "interfaces": [],
+      "name": "GPT-6.2 Astra",
+      "provider_model_id": "gpt-6.2-astra",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-19T03:04:38.090833591Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "An efficient reasoning model for everyday work, multistep agentic workflows, and coding.",
+      "interfaces": [],
+      "name": "GPT-6.2 Sol",
+      "provider_model_id": "gpt-6.2-sol",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
         "checked_at": "2026-11-14T05:57:09.926609639Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
@@ -1711,6 +1891,26 @@
       "interfaces": [],
       "name": "GPT-Image-1",
       "provider_model_id": "gpt-image-1",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-26T04:03:05.065832520Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Cost-efficient GPT Image 1 variant for image generation and editing",
+      "interfaces": [],
+      "name": "GPT-Image-1 Mini",
+      "provider_model_id": "gpt-image-1-mini",
       "status": "staging",
       "sync": {
         "field_owners": {
@@ -1791,6 +1991,26 @@
       "interfaces": [],
       "name": "GPT Image 2.5 Sunburst",
       "provider_model_id": "gpt-image-2.5-sunburst",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-26T04:03:05.065832520Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Open GPT reasoning model for self-hosted agents and controllable deployments",
+      "interfaces": [],
+      "name": "GPT OSS 120B",
+      "provider_model_id": "gpt-oss-120b",
       "status": "staging",
       "sync": {
         "field_owners": {
@@ -2041,6 +2261,26 @@
           "/description": "directory",
           "/name": "directory"
         }
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-26T04:03:05.065832520Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Multimodal Kimi model with a 1M-token context window and always-on reasoning, for coding, 3D creation and financial research",
+      "interfaces": [],
+      "name": "Kimi K3.1 Pro",
+      "provider_model_id": "kimi-k3.1-pro",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
       }
     },
     {

@@ -1,49 +1,10 @@
 [
   {
-    "description": "Xiaomi MiMo V2.5 Pro — high-capability tier of the MiMo V2.5 family.",
-    "family": "mimo",
-    "id": "xiaomi/mimo-v2.5-pro",
-    "input_modalities": [
-      "text"
-    ],
-    "knowledge_cutoff": "2024-12",
-    "max_input_tokens": 262144,
-    "max_output_tokens": 32768,
-    "name": "Xiaomi: MiMo V2.5 Pro",
-    "open_weights": true,
-    "output_modalities": [
-      "text"
-    ],
-    "release_date": "2026-04-22",
     "curation": {
+      "checked_at": "2026-10-22T17:30:00Z",
       "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-10-22T17:30:00Z"
-    }
-  },
-  {
-    "description": "Xiaomi MiMo V2.5 — standard tier of the MiMo V2.5 family.",
-    "family": "mimo",
-    "id": "xiaomi/mimo-v2.5",
-    "input_modalities": [
-      "text"
-    ],
-    "knowledge_cutoff": "2024-12",
-    "max_input_tokens": 262144,
-    "max_output_tokens": 32768,
-    "name": "Xiaomi: MiMo V2.5",
-    "open_weights": true,
-    "output_modalities": [
-      "text"
-    ],
-    "release_date": "2026-04-22",
-    "curation": {
-      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-10-22T17:30:00Z"
-    }
-  },
-  {
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+    },
     "id": "xiaomi/mimo-v2.6-flash",
     "input_modalities": [
       "audio",
@@ -57,14 +18,14 @@
     "output_modalities": [
       "text"
     ],
-    "release_date": "2026-09-21",
-    "curation": {
-      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-10-22T17:30:00Z"
-    }
+    "release_date": "2026-09-21"
   },
   {
+    "curation": {
+      "checked_at": "2026-10-22T17:30:00Z",
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+    },
     "id": "xiaomi/mimo-v2.6-pro",
     "input_modalities": [
       "audio",
@@ -78,14 +39,14 @@
     "output_modalities": [
       "text"
     ],
-    "release_date": "2026-09-21",
-    "curation": {
-      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-10-22T17:30:00Z"
-    }
+    "release_date": "2026-09-21"
   },
   {
+    "curation": {
+      "checked_at": "2026-10-22T17:30:00Z",
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+    },
     "id": "xiaomi/mimo-v2.6-pro-ultraspeed",
     "input_modalities": [
       "audio",
@@ -99,11 +60,26 @@
     "output_modalities": [
       "text"
     ],
-    "release_date": "2026-09-21",
+    "release_date": "2026-09-21"
+  },
+  {
+    "context_window": 1048576,
     "curation": {
-      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-10-22T17:30:00Z"
-    }
+      "checked_at": "2026-11-25T04:51:28.533483343Z",
+      "reason": "Eligible release in approved family retention window",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+    },
+    "description": "MiMo-V2.6-Flash-MOPD is an updated checkpoint of Xiaomi's MiMo-V2.6-Flash, a Mixture-of-Experts model with 309B total and 15B active parameters, a 1M-token context window, and native multimodal input. It adds a multi-teacher...",
+    "id": "xiaomi/mimo-v2.6-flash-mopd",
+    "input_modalities": [
+      "text",
+      "image",
+      "video",
+      "audio"
+    ],
+    "name": "Xiaomi: MiMo-V2.6-Flash-MOPD",
+    "output_modalities": [
+      "text"
+    ]
   }
 ]

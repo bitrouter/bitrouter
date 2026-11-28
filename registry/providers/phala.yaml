@@ -56,23 +56,43 @@
   },
   "models": [
     {
-      "provider_model_id": "black-forest-labs/flux.2-klein-4b",
+      "availability": {
+        "checked_at": "2026-11-23T02:26:45.531204945Z",
+        "scope": "public",
+        "source_url": "https://inference.phala.com/v1/models"
+      },
+      "description": "OvisOCR3 is a 0.8B end-to-end document OCR model published by ATH-MaaS on Hugging Face, built on Qwen3.5-0.8B. It parses full pages into Markdown with tables and LaTeX formulas, and also handles general OCR and key information extraction (96.74 overall on OmniDocBench v1.6, self-reported). Send one page image per request to /v1/chat/completions with the model's prompts from its model card. Served from the upstream weights on Phala GPU TEE.",
       "interfaces": [],
+      "name": "ATH-MaaS: OvisOCR3",
+      "provider_model_id": "ath-maas/ovisocr3",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:20.310111018Z",
+        "scope": "public",
+        "source_url": "https://inference.phala.com/v1/models"
       },
       "description": "FLUX.2 [klein] 4B is Black Forest Labs' compact text-to-image model, built for fast, high-quality image generation in a single small architecture.",
+      "interfaces": [],
       "name": "FLUX.2 klein 4B",
+      "provider_model_id": "black-forest-labs/flux.2-klein-4b",
       "status": "active",
-      "availability": {
-        "source_url": "https://inference.phala.com/v1/models",
-        "checked_at": "2026-11-14T05:57:20.310111018Z",
-        "scope": "public"
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -196,23 +216,23 @@
       }
     },
     {
-      "provider_model_id": "mistralai/voxtral-small-24b-2507",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:20.310111018Z",
+        "scope": "public",
+        "source_url": "https://inference.phala.com/v1/models"
+      },
+      "description": "Voxtral Small 24B is Mistral AI's speech understanding model, transcribing audio in many languages with strong accuracy on long and noisy recordings.",
       "interfaces": [],
+      "name": "Voxtral Small 24B",
+      "provider_model_id": "mistralai/voxtral-small-24b-2507",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
-      },
-      "description": "Voxtral Small 24B is Mistral AI's speech understanding model, transcribing audio in many languages with strong accuracy on long and noisy recordings.",
-      "name": "Voxtral Small 24B",
-      "status": "active",
-      "availability": {
-        "source_url": "https://inference.phala.com/v1/models",
-        "checked_at": "2026-11-14T05:57:20.310111018Z",
-        "scope": "public"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -272,23 +292,23 @@
       }
     },
     {
-      "provider_model_id": "moonshotai/kimi-k3.1-pro",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:20.310111018Z",
+        "scope": "public",
+        "source_url": "https://inference.phala.com/v1/models"
+      },
+      "description": "Kimi K3.1 Pro is Moonshot AI's flagship open-weight multimodal reasoning model and a post-trained successor to Kimi K3, with a 1M-token context window. It is built for long-horizon coding, 3D creation, financial research, and end-to-end agentic knowledge work, with native image and video understanding.",
       "interfaces": [],
+      "name": "MoonshotAI: Kimi K3.1 Pro",
+      "provider_model_id": "moonshotai/kimi-k3.1-pro",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
-      },
-      "description": "Kimi K3.1 Pro is Moonshot AI's flagship open-weight multimodal reasoning model and a post-trained successor to Kimi K3, with a 1M-token context window. It is built for long-horizon coding, 3D creation, financial research, and end-to-end agentic knowledge work, with native image and video understanding.",
-      "name": "MoonshotAI: Kimi K3.1 Pro",
-      "status": "active",
-      "availability": {
-        "source_url": "https://inference.phala.com/v1/models",
-        "checked_at": "2026-11-14T05:57:20.310111018Z",
-        "scope": "public"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -312,23 +332,63 @@
       }
     },
     {
-      "provider_model_id": "openai/whisper-large-v3",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:20.310111018Z",
+        "scope": "public",
+        "source_url": "https://inference.phala.com/v1/models"
+      },
+      "description": "Whisper large-v3 is OpenAI's speech recognition model, transcribing audio in nearly 100 languages into text.",
       "interfaces": [],
+      "name": "Whisper Large v3",
+      "provider_model_id": "openai/whisper-large-v3",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
-      },
-      "description": "Whisper large-v3 is OpenAI's speech recognition model, transcribing audio in nearly 100 languages into text.",
-      "name": "Whisper Large v3",
-      "status": "active",
+        },
+        "owner": "catalog"
+      }
+    },
+    {
       "availability": {
-        "source_url": "https://inference.phala.com/v1/models",
-        "checked_at": "2026-11-14T05:57:20.310111018Z",
-        "scope": "public"
+        "checked_at": "2026-11-23T02:26:45.531204945Z",
+        "scope": "public",
+        "source_url": "https://inference.phala.com/v1/models"
+      },
+      "description": "PaddleOCR-VL 1.6 is a 0.9B document-parsing vision-language model from Baidu's PaddlePaddle team (96.33 on OmniDocBench v1.6). It recognizes text, tables, formulas and charts per element with the prompts 'OCR:', 'Table Recognition:', 'Formula Recognition:' and 'Chart Recognition:'. Page-level parsing uses the PaddleOCR doc-parser pipeline (layout detection on the client) pointed at this endpoint. Served from the upstream weights on Phala GPU TEE.",
+      "interfaces": [],
+      "name": "PaddlePaddle: PaddleOCR-VL 1.6",
+      "provider_model_id": "paddlepaddle/paddleocr-vl-1.6",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-18T03:32:22.808671098Z",
+        "scope": "public",
+        "source_url": "https://inference.phala.com/v1/models"
+      },
+      "description": "Uncensored variant of DeepSeek V4.1 Flash 1017, built as a lightweight LoRA adapter served unmerged on the official FP8 weights. Refuses far less while keeping the base model's capabilities, tool calling, image input and 1M-token context. Served with SGLang in a TDX-attested enclave with NVIDIA confidential computing. Reasoning is on by default and can be turned off or capped per request.",
+      "interfaces": [],
+      "name": "Phala: DeepSeek V4.1 Flash 1017 Uncensored",
+      "provider_model_id": "phala/deepseek-v4.1-flash-1017-uncensored",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -341,6 +401,26 @@
       "interfaces": [],
       "name": "Phala: Gemma-4 26B-A4B Uncensored (Heretic)",
       "provider_model_id": "phala/gemma-4-26b-a4b-uncensored",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-26T04:03:16.440412649Z",
+        "scope": "public",
+        "source_url": "https://inference.phala.com/v1/models"
+      },
+      "description": "Uncensored GLM 5.3: a LoRA adapter on NVIDIA's NVFP4 weights that refuses far less while keeping tool calling and the 1M-token context. Runs in a TEE. Text only; reasoning is always on.",
+      "interfaces": [],
+      "name": "Phala: GLM 5.3 Uncensored",
+      "provider_model_id": "phala/glm-5.3-uncensored",
       "status": "active",
       "sync": {
         "field_owners": {
@@ -381,6 +461,46 @@
       "interfaces": [],
       "name": "Qwen2.5 7B Instruct",
       "provider_model_id": "qwen/qwen-2.5-7b-instruct",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-18T03:32:22.808671098Z",
+        "scope": "public",
+        "source_url": "https://inference.phala.com/v1/models"
+      },
+      "description": "Qwen3-ASR 0.6B is the smaller, lower-cost open-weight speech recognition model in Alibaba's Qwen3-ASR family, transcribing speech in 30 languages and 22 Chinese dialects with automatic language detection. Served on Phala GPU TEE. It returns plain text for audio up to 10 minutes and does not return timestamps.",
+      "interfaces": [],
+      "name": "Qwen: Qwen3 ASR 0.6B",
+      "provider_model_id": "qwen/qwen3-asr-0.6b",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-18T03:32:22.808671098Z",
+        "scope": "public",
+        "source_url": "https://inference.phala.com/v1/models"
+      },
+      "description": "Qwen3-ASR 1.7B is the larger open-weight speech recognition model in Alibaba's Qwen3-ASR family, transcribing speech in 30 languages and 22 Chinese dialects with automatic language detection. Served on Phala GPU TEE. It returns plain text for audio up to 10 minutes and does not return timestamps.",
+      "interfaces": [],
+      "name": "Qwen: Qwen3 ASR 1.7B",
+      "provider_model_id": "qwen/qwen3-asr-1.7b",
       "status": "active",
       "sync": {
         "field_owners": {
@@ -513,6 +633,26 @@
     },
     {
       "availability": {
+        "checked_at": "2026-11-23T02:26:45.531204945Z",
+        "scope": "public",
+        "source_url": "https://inference.phala.com/v1/models"
+      },
+      "description": "Xiaomi-OCR-0 is a 0.8B document OCR model from Xiaomi, built on Qwen3.5-0.8B-Base, for text, tables and formulas in documents (96.83 overall on OmniDocBench v1.6, self-reported). Send one page image per request to /v1/chat/completions with prompts such as 'Extract the text in the image.', 'Parse the table in the image into OTSL.' or 'Identify the formula in the image and represent it using LATEX format.'. Served from the upstream weights on Phala GPU TEE.",
+      "interfaces": [],
+      "name": "Xiaomi: Xiaomi-OCR-0",
+      "provider_model_id": "xiaomi/xiaomi-ocr-0",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
         "checked_at": "2026-11-14T05:57:20.310111018Z",
         "scope": "public",
         "source_url": "https://inference.phala.com/v1/models"
@@ -595,6 +735,26 @@
       "interfaces": [],
       "name": "Z.ai: GLM 5.3 Flash",
       "provider_model_id": "z-ai/glm-5.3-flash",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-23T02:26:45.531204945Z",
+        "scope": "public",
+        "source_url": "https://inference.phala.com/v1/models"
+      },
+      "description": "GLM-OCR is a 0.9B document OCR model from Z.ai (Zhipu). It reads text, tables and formulas with the prompts 'Text Recognition:', 'Table Recognition:' and 'Formula Recognition:', and extracts fields when prompted with its JSON template format ('请按下列JSON格式输出图中信息:' followed by the JSON keys); response_format json_schema is supported. Page-level parsing uses the glmocr SDK (layout detection on the client). Served from the upstream weights on Phala GPU TEE.",
+      "interfaces": [],
+      "name": "Z.ai: GLM-OCR",
+      "provider_model_id": "z-ai/glm-ocr",
       "status": "active",
       "sync": {
         "field_owners": {

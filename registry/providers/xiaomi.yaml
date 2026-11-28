@@ -271,7 +271,6 @@
       "status": "active"
     },
     {
-      "canonical_id": "xiaomi/mimo-v2.5",
       "interfaces": [
         {
           "capabilities": [
@@ -361,7 +360,6 @@
       }
     },
     {
-      "canonical_id": "xiaomi/mimo-v2.5-pro",
       "interfaces": [
         {
           "capabilities": [

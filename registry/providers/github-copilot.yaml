@@ -365,6 +365,26 @@
     },
     {
       "availability": {
+        "checked_at": "2026-11-20T02:56:07.647620611Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Google's Gemini 4 model for fast, frontier-level coding, knowledge work and science workflows, with four thinking levels and a 1M-token context window",
+      "interfaces": [],
+      "name": "Gemini 4 Neon",
+      "provider_model_id": "gemini-4-neon",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
         "checked_at": "2026-11-14T05:57:12.759128313Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
@@ -556,6 +576,46 @@
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-19T03:04:41.436988049Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "A frontier reasoning model for coding, computer use, and professional work such as slides, spreadsheets, and documents.",
+      "interfaces": [],
+      "name": "GPT-6.2 Astra",
+      "provider_model_id": "gpt-6.2-astra",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-19T03:04:41.436988049Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "An efficient reasoning model for everyday work, multistep agentic workflows, and coding.",
+      "interfaces": [],
+      "name": "GPT-6.2 Sol",
+      "provider_model_id": "gpt-6.2-sol",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
       "canonical_id": "x-ai/grok-4.5",
       "description": "xAI's Grok model for chat, coding, agentic tools, and lower hallucination risk",
       "interfaces": [
@@ -625,7 +685,7 @@
     },
     {
       "canonical_id": "moonshotai/kimi-k3",
-      "description": "Multimodal Kimi model with 1M context and toggleable max-effort thinking for long-horizon agent work",
+      "description": "Multimodal Kimi model with 1M context and always-on thinking for long-horizon agent work",
       "interfaces": [
         {
           "operation": "generation",
@@ -652,6 +712,46 @@
       "interfaces": [],
       "name": "MAI-Code-1.1-Flash",
       "provider_model_id": "mai-code-1.1-flash",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-19T03:04:41.436988049Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Microsoft's larger agentic coding model for debugging, multi-file changes and repository-wide reasoning",
+      "interfaces": [],
+      "name": "MAI Code 2",
+      "provider_model_id": "mai-code-2",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-19T03:04:41.436988049Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Microsoft's lightweight coding model for explanations, targeted edits and routine fixes at high volume",
+      "interfaces": [],
+      "name": "MAI Code 2 Flash",
+      "provider_model_id": "mai-code-2-flash",
       "status": "staging",
       "sync": {
         "field_owners": {
